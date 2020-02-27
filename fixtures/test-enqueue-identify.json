@@ -1,0 +1,20 @@
+{
+  "api_key": "Csyjlnlun3OzyNJAafdlv",
+  "batch": [
+    {
+      "$set": {
+        "email": "hey@posthog.com"
+      },
+      "distinct_id": "B",
+      "event": "$identify",
+      "library": "posthog-go",
+      "library_version": "1.0.0",
+      "properties": {
+        "$lib": "posthog-go",
+        "$lib_version": "1.0.0"
+      },
+      "timestamp": "2009-11-10T23:00:00Z",
+      "type": "identify"
+    }
+  ]
+}

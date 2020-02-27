@@ -1,0 +1,18 @@
+{
+  "api_key": "Csyjlnlun3OzyNJAafdlv",
+  "batch": [
+    {
+      "event": "$create_alias",
+      "library": "posthog-go",
+      "library_version": "1.0.0",
+      "properties": {
+        "$lib": "posthog-go",
+        "$lib_version": "1.0.0",
+        "alias": "A",
+        "distinct_id": "B"
+      },
+      "timestamp": "2009-11-10T23:00:00Z",
+      "type": "alias"
+    }
+  ]
+}
