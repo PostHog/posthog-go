@@ -1,6 +1,6 @@
 # PostHog Go
 
-Please see the main [PostHog docs](https://docs.posthog.com).
+Please see the main [PostHog docs](https://posthog.com/docs).
 
-Specifically, the [Go integration](https://docs.posthog.com/#/integrations/go-integration) details.
+Specifically, the [Go integration](https://posthog.com/docs/integrations/go-integration) details.
 
