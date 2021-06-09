@@ -1,7 +1,10 @@
 name: Unit Tests
-on: pull_request
+
+on: 
+  - pull_request
 env:
 	GOPROXY: "https://proxy.golang.org"
+  
 jobs:
   build:
     name: Build
