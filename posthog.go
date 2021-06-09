@@ -36,10 +36,14 @@ type Client interface {
 	// called or if the message was malformed.
 	Enqueue(Message) error
 	//
-	// Method returns if a feature flag is on
+	// Method returns if a feature flag is on for a given user based on their distinct ID
 	IsFeatureEnabled(string, string, bool) bool
 	//
-	Gimme() []FeatureFlag
+	// Method forces a reload of feature flags
+	ReloadFeatureFlags()
+	// 
+	// Get feature flags - for testing only
+	GetFeatureFlags() []FeatureFlag
 }
 
 type client struct {
@@ -403,6 +407,11 @@ func (c *client) notifyFailure(msgs []message, err error) {
 		}
 	}
 }
-func (c *client) Gimme() []FeatureFlag {
+
+func (c *client) ReloadFeatureFlags() {
+	c.featureFlagsPoller.ForceReload()
+}
+
+func (c *client) GetFeatureFlags() []FeatureFlag {
 	return c.featureFlagsPoller.GetFeatureFlags()
 }

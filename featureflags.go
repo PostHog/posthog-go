@@ -2,14 +2,14 @@ package posthog
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
-	"crypto/sha1"
-	"strconv"
 )
 
 const LONG_SCALE = 0xfffffffffffffff
@@ -18,6 +18,7 @@ type FeatureFlagsPoller struct {
 	ticker                       *time.Ticker // periodic ticker
 	loaded                       chan bool
 	shutdown                     chan bool
+	forceReload                  chan bool
 	featureFlags                 []FeatureFlag
 	personalApiKey               string
 	projectApiKey                string
@@ -31,7 +32,7 @@ type FeatureFlagsPoller struct {
 type FeatureFlag struct {
 	Key               string `json:"key"`
 	IsSimpleFlag      bool   `json:"is_simple_flag"`
-	RolloutPercentage *uint8  `json:"rollout_percentage"`
+	RolloutPercentage *uint8 `json:"rollout_percentage"`
 }
 
 type FeatureFlagsResponse struct {
@@ -52,6 +53,7 @@ func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf f
 		ticker:                       time.NewTicker(5 * time.Second),
 		loaded:                       make(chan bool),
 		shutdown:                     make(chan bool),
+		forceReload:                  make(chan bool),
 		personalApiKey:               personalApiKey,
 		projectApiKey:                projectApiKey,
 		Errorf:                       errorf,
@@ -72,9 +74,11 @@ func (poller *FeatureFlagsPoller) run() {
 		select {
 		case <-poller.shutdown:
 			close(poller.shutdown)
+			close(poller.forceReload)
 			close(poller.loaded)
 			poller.ticker.Stop()
 			return
+		case <-poller.forceReload:
 		case <-poller.ticker.C:
 			poller.fetchNewFeatureFlags()
 		}
@@ -101,7 +105,6 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.Errorf("Unable to unmarshal response from api/feature_flag", err)
 		return
 	}
-	fmt.Println(featureFlagsResponse.Results[1].RolloutPercentage)
 	poller.mutex.Lock()
 	if !poller.fetchedFlagsSuccessfullyOnce {
 		poller.loaded <- true
@@ -136,9 +139,9 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 
 	if featureFlag.IsSimpleFlag {
 		rolloutPercentage := uint8(100)
-		if (featureFlag.RolloutPercentage != nil) {
+		if featureFlag.RolloutPercentage != nil {
 			rolloutPercentage = *featureFlag.RolloutPercentage
-		}	
+		}
 		isFlagEnabledResponse = poller.isSimpleFlagEnabled(key, distinctId, rolloutPercentage)
 	} else {
 		requestDataBytes, err := json.Marshal(DecideRequestData{
@@ -159,11 +162,11 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 		defer res.Body.Close()
 		decideResponse := DecideResponse{}
 		err = json.Unmarshal([]byte(resBody), &decideResponse)
-		if (err != nil) {
+		if err != nil {
 			poller.Errorf("Error parsing decide response")
 		}
 		for _, enabledFlag := range decideResponse.FeatureFlags {
-			if (key == enabledFlag) {
+			if key == enabledFlag {
 				isFlagEnabledResponse = true
 			}
 		}
@@ -177,7 +180,7 @@ func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId str
 
 	// `Write` expects bytes. If you have a string `s`,
 	// use `[]byte(s)` to coerce it to bytes.
-	hash.Write([]byte(""+key+"."+distinctId+""))
+	hash.Write([]byte("" + key + "." + distinctId + ""))
 
 	// This gets the finalized hash result as a byte
 	// slice. The argument to `Sum` can be used to append
@@ -186,13 +189,11 @@ func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId str
 	hexString := fmt.Sprintf("%x\n", digest)[:15]
 
 	value, err := strconv.ParseInt(hexString, 16, 64)
-	if (err != nil) {
+	if err != nil {
 		poller.Errorf("Error converting string to int")
 	}
-	fmt.Println(float64(value) / LONG_SCALE)
-	return (float64(value) / LONG_SCALE) <= float64(rolloutPercentage) / 100
+	return (float64(value) / LONG_SCALE) <= float64(rolloutPercentage)/100
 }
-
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 	// ensure flags are loaded on the first call
@@ -232,6 +233,10 @@ func (poller *FeatureFlagsPoller) request(method string, endpoint string, reques
 	}
 
 	return res, err
+}
+
+func (poller *FeatureFlagsPoller) ForceReload() {
+	poller.forceReload <- true
 }
 
 func (poller *FeatureFlagsPoller) shutdownPoller() {
