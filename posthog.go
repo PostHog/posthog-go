@@ -108,10 +108,6 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	return
 }
 
-func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) bool {
-	return c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
-}
-
 func makeHttpClient(transport http.RoundTripper) http.Client {
 	httpClient := http.Client{
 		Transport: transport,
@@ -185,6 +181,18 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	c.msgs <- msg.APIfy()
 	return
+}
+
+func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) bool {
+	return c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
+}
+
+func (c *client) ReloadFeatureFlags() {
+	c.featureFlagsPoller.ForceReload()
+}
+
+func (c *client) GetFeatureFlags() []FeatureFlag {
+	return c.featureFlagsPoller.GetFeatureFlags()
 }
 
 // Close and flush metrics.
@@ -406,12 +414,4 @@ func (c *client) notifyFailure(msgs []message, err error) {
 			c.Callback.Failure(m.msg, err)
 		}
 	}
-}
-
-func (c *client) ReloadFeatureFlags() {
-	c.featureFlagsPoller.ForceReload()
-}
-
-func (c *client) GetFeatureFlags() []FeatureFlag {
-	return c.featureFlagsPoller.GetFeatureFlags()
 }

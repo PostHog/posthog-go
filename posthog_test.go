@@ -84,6 +84,7 @@ func (m testErrorMessage) APIfy() APIMessage {
 
 var (
 	// A control error returned by mock functions to emulate a failure.
+	//lint:ignore ST1012 variable name is fine :D
 	testError = errors.New("test error")
 
 	// HTTP transport that always succeeds.
