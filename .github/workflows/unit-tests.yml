@@ -14,5 +14,5 @@ jobs:
         go-version: ${{ matrix.go-version }}
     - name: Checkout code
       uses: actions/checkout@v2
-    - name: Test
-      run: go test
+    - name: Run unit tests
+      run: go mod init github.com/PostHog/posthog-go && go test
