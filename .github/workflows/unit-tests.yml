@@ -1,5 +1,7 @@
 name: Unit Tests
 on: pull_request
+env:
+	GOPROXY: "https://proxy.golang.org"
 jobs:
   build:
     name: Build
@@ -14,11 +16,7 @@ jobs:
         uses: actions/checkout@v1
 
       - name: Build
-				env:
-					GOPROXY: "https://proxy.golang.org"
         run: go build .
 
       - name: Test
-				env:
-					GOPROXY: "https://proxy.golang.org"
         run: go test -v .
