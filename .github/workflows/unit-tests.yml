@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v1
       
       - name: Get dependencies
-        run: go get github.com/xtgo/uuid 	"github.com/urfave/cli"
+        run: go get github.com/xtgo/uuid github.com/urfave/cli
 
       - name: Build
         run: go build .
