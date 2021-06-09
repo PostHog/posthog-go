@@ -17,6 +17,10 @@ type Config struct {
 	// `DefaultEndpoint` by default.
 	Endpoint string
 
+
+	// Used for feature flags
+	PersonalApiKey string
+
 	// The flushing interval of the client. Messages will be sent when they've
 	// been queued up to the maximum batch size or when the flushing interval
 	// timer triggers.
@@ -147,6 +151,7 @@ func makeConfig(c Config) Config {
 	if c.maxConcurrentRequests == 0 {
 		c.maxConcurrentRequests = 1000
 	}
+
 	return c
 }
 

@@ -53,7 +53,7 @@ type CaptureInApi struct {
 
 func (msg Capture) APIfy() APIMessage {
 	library := "posthog-go"
-	libraryVersion := Version
+	libraryVersion := getVersion()
 
 	myProperties := Properties{}.Set("$lib", library).Set("$lib_version", libraryVersion)
 
