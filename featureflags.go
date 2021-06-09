@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"errors"
 )
 
 const LONG_SCALE = 0xfffffffffffffff
@@ -114,11 +115,12 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 }
 
-func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool) bool {
+func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool) (bool, error) {
 	featureFlags := poller.GetFeatureFlags()
+	errorMessage := "Failed when checking if flag is enabled"
 
 	if len(featureFlags) < 1 {
-		return defaultResult
+		return defaultResult, nil
 	}
 
 	featureFlag := FeatureFlag{Key: ""}
@@ -132,7 +134,7 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 	}
 
 	if featureFlag.Key == "" {
-		return defaultResult
+		return defaultResult, nil
 	}
 
 	isFlagEnabledResponse := false
@@ -149,21 +151,29 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 			DistinctId: distinctId,
 		})
 		if err != nil {
-			poller.Errorf("Unable to marshal decide endpoint request data")
+			errorMessage = "unable to marshal decide endpoint request data"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
 		}
 		res, err := poller.request("POST", "decide", requestDataBytes, [][2]string{})
 		if err != nil || res.StatusCode != http.StatusOK {
-			poller.Errorf("Error calling decide")
+			errorMessage = "Error calling /decide/"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
 		}
 		resBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			poller.Errorf("Error reading decide response")
+			errorMessage = "Error reading response from /decide/"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
 		}
 		defer res.Body.Close()
 		decideResponse := DecideResponse{}
 		err = json.Unmarshal([]byte(resBody), &decideResponse)
 		if err != nil {
-			poller.Errorf("Error parsing decide response")
+			errorMessage = "Error parsing response from /decide/"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
 		}
 		for _, enabledFlag := range decideResponse.FeatureFlags {
 			if key == enabledFlag {
@@ -172,7 +182,7 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 		}
 	}
 
-	return isFlagEnabledResponse
+	return isFlagEnabledResponse, nil
 }
 
 func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) bool {

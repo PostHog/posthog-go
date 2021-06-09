@@ -162,11 +162,20 @@ func mockServer() (chan []byte, *httptest.Server) {
 	done := make(chan []byte, 1)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		buf := bytes.NewBuffer(nil)
-		io.Copy(buf, r.Body)
+		resData := bytes.NewBuffer(nil)
+		io.Copy(resData, r.Body)
+		if r.URL.Path == "/decide/" {
+			resData = bytes.NewBuffer([]byte(fixture("test-decide.json")))
+		}
+
+		if r.URL.Path == "/api/feature_flag/" {
+			resData = bytes.NewBuffer([]byte(fixture("test-api-feature-flag.json")))
+		}
+/* 		buf := bytes.NewBuffer(nil)
+		io.Copy(buf, r.Body) */
 
 		var v interface{}
-		err := json.Unmarshal(buf.Bytes(), &v)
+		err := json.Unmarshal(resData.Bytes(), &v)
 		if err != nil {
 			panic(err)
 		}
@@ -698,4 +707,51 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 	} else if err != ErrTooManyRequests {
 		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
 	}
+}
+
+
+func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
+	// silence Errorf by tossing them in channel and not reading back
+	errchan := make(chan error, 1)
+	defer close(errchan)
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Logger: testLogger{t.Logf, t.Logf},
+		Callback: testCallback{
+			func(m APIMessage) { },
+			func(m APIMessage, e error) { errchan <- e }, 
+		},
+	})
+	defer client.Close()
+
+	receivedErrors := [3]error{}
+	receivedErrors[0] = client.ReloadFeatureFlags()
+	_, receivedErrors[1] = client.IsFeatureEnabled("some key", "some id", false)
+	_, receivedErrors[2] = client.GetFeatureFlags()
+
+	for _, receivedError := range receivedErrors {
+		if receivedError == nil || receivedError.Error() != "specifying a PersonalApiKey is required for using feature flags" {
+			t.Errorf("feature flags methods should return error without personal api key")
+			return
+		}
+	}
+
+}
+
+func TestSimpleFlag(t *testing.T) {
+	_, server := mockServer()
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:  server.URL,
+	})
+	defer client.Close()
+
+	isEnabled, err := client.IsFeatureEnabled("simpleFlag", "hey", false)
+	
+	if err != nil || !isEnabled {
+		t.Errorf("simple flag with null rollout percentage should be on for everyone")
+	}
+
 }

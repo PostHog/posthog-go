@@ -1,13 +1,14 @@
 package posthog
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"sync"
-	"bytes"
-	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -37,13 +38,13 @@ type Client interface {
 	Enqueue(Message) error
 	//
 	// Method returns if a feature flag is on for a given user based on their distinct ID
-	IsFeatureEnabled(string, string, bool) bool
+	IsFeatureEnabled(string, string, bool) (bool, error)
 	//
 	// Method forces a reload of feature flags
-	ReloadFeatureFlags()
+	ReloadFeatureFlags() error
 	// 
 	// Get feature flags - for testing only
-	GetFeatureFlags() []FeatureFlag
+	GetFeatureFlags() ([]FeatureFlag, error)
 }
 
 type client struct {
@@ -185,25 +186,32 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
-func (c *client) requirePersonalApiKeyForFeatureFlags () {
+func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) (bool, error) {
 	if (c.featureFlagsPoller == nil) {
-		c.Errorf("Specifying a PersonalApiKey is required for using feature flags")
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return false, errors.New(errorMessage)
 	}
-}
-
-func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) bool {
-	c.requirePersonalApiKeyForFeatureFlags()
 	return c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
 }
 
-func (c *client) ReloadFeatureFlags() {
-	c.requirePersonalApiKeyForFeatureFlags()
+func (c *client) ReloadFeatureFlags() error {
+	if (c.featureFlagsPoller == nil) {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return errors.New(errorMessage)
+	}
 	c.featureFlagsPoller.ForceReload()
+	return nil
 }
 
-func (c *client) GetFeatureFlags() []FeatureFlag {
-	c.requirePersonalApiKeyForFeatureFlags()
-	return c.featureFlagsPoller.GetFeatureFlags()
+func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
+	if (c.featureFlagsPoller == nil) {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+	return c.featureFlagsPoller.GetFeatureFlags(), nil
 }
 
 // Close and flush metrics.
@@ -428,3 +436,4 @@ func (c *client) notifyFailure(msgs []message, err error) {
 		}
 	}
 }
+
