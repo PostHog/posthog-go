@@ -2,12 +2,10 @@ package posthog
 
 import (
 	"bytes"
-	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 	"errors"
@@ -144,7 +142,11 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 		if featureFlag.RolloutPercentage != nil {
 			rolloutPercentage = *featureFlag.RolloutPercentage
 		}
-		isFlagEnabledResponse = poller.isSimpleFlagEnabled(key, distinctId, rolloutPercentage)
+		var err error
+		isFlagEnabledResponse, err = poller.isSimpleFlagEnabled(key, distinctId, rolloutPercentage)
+		if err != nil {
+			return false, err
+		}
 	} else {
 		requestDataBytes, err := json.Marshal(DecideRequestData{
 			ApiKey:     poller.projectApiKey,
@@ -185,17 +187,14 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 	return isFlagEnabledResponse, nil
 }
 
-func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) bool {
-	hash := sha1.New()
-	hash.Write([]byte("" + key + "." + distinctId + ""))
-	digest := hash.Sum(nil)
-	hexString := fmt.Sprintf("%x\n", digest)[:15]
-
-	value, err := strconv.ParseInt(hexString, 16, 64)
+func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
+	isEnabled, err := checkIfSimpleFlagEnabled(key, distinctId, rolloutPercentage)
 	if err != nil {
-		poller.Errorf("Error converting string to int")
+		errMessage := "Error converting string to int"
+		poller.Errorf(errMessage)
+		return false, errors.New(errMessage)
 	}
-	return (float64(value) / LONG_SCALE) <= float64(rolloutPercentage)/100
+	return isEnabled, nil
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {

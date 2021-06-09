@@ -749,6 +749,20 @@ func TestSimpleFlag(t *testing.T) {
 
 }
 
+func TestSimpleFlagCalculation(t *testing.T) {
+	isEnabled, err := checkIfSimpleFlagEnabled("a", "b", 42)
+	if err != nil || !isEnabled {
+		t.Errorf("calculation for a.b should succeed and be true")
+	}
+
+	isEnabled, err = checkIfSimpleFlagEnabled("a", "b", 40)
+	if err != nil || isEnabled {
+		t.Errorf("calculation for a.b should succeed and be false")
+	}
+
+}
+
+
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/decide/" {
