@@ -162,20 +162,11 @@ func mockServer() (chan []byte, *httptest.Server) {
 	done := make(chan []byte, 1)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resData := bytes.NewBuffer(nil)
-		io.Copy(resData, r.Body)
-		if r.URL.Path == "/decide/" {
-			resData = bytes.NewBuffer([]byte(fixture("test-decide.json")))
-		}
-
-		if r.URL.Path == "/api/feature_flag/" {
-			resData = bytes.NewBuffer([]byte(fixture("test-api-feature-flag.json")))
-		}
-/* 		buf := bytes.NewBuffer(nil)
-		io.Copy(buf, r.Body) */
+		buf := bytes.NewBuffer(nil)
+		io.Copy(buf, r.Body)
 
 		var v interface{}
-		err := json.Unmarshal(resData.Bytes(), &v)
+		err := json.Unmarshal(buf.Bytes(), &v)
 		if err != nil {
 			panic(err)
 		}
@@ -739,7 +730,9 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 }
 
 func TestSimpleFlag(t *testing.T) {
-	_, server := mockServer()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	  w.Write([]byte(fixture("test-api-feature-flag.json")))
+	}))
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
@@ -754,4 +747,29 @@ func TestSimpleFlag(t *testing.T) {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
 	}
 
+}
+
+func TestComplexFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/decide/" {
+			w.Write([]byte(fixture("test-decide.json")))
+		} else if r.URL.Path == "/api/feature_flag/" {
+			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else {
+			t.Errorf("client called an endpoint it shouldn't have")
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:  server.URL,
+	})
+	defer client.Close()
+
+	isEnabled, err := client.IsFeatureEnabled("enabled-flag", "hey", false)
+	
+	if err != nil || !isEnabled {
+		t.Errorf("flag listed in /decide/ response should be marked as enabled")
+	}
 }

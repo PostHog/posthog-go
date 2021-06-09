@@ -243,6 +243,5 @@ func (poller *FeatureFlagsPoller) ForceReload() {
 }
 
 func (poller *FeatureFlagsPoller) shutdownPoller() {
-	fmt.Println("I've been called")
 	poller.shutdown <- true
 }
