@@ -18,7 +18,8 @@ type Config struct {
 	Endpoint string
 
 
-	// Used for feature flags
+	// You must specify a Personal API Key to use feature flags
+	// More information on how to get one: https://posthog.com/docs/api/overview
 	PersonalApiKey string
 
 	// The flushing interval of the client. Messages will be sent when they've

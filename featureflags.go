@@ -177,14 +177,7 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 
 func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) bool {
 	hash := sha1.New()
-
-	// `Write` expects bytes. If you have a string `s`,
-	// use `[]byte(s)` to coerce it to bytes.
 	hash.Write([]byte("" + key + "." + distinctId + ""))
-
-	// This gets the finalized hash result as a byte
-	// slice. The argument to `Sum` can be used to append
-	// to an existing byte slice: it usually isn't needed.
 	digest := hash.Sum(nil)
 	hexString := fmt.Sprintf("%x\n", digest)[:15]
 
