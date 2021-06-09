@@ -67,7 +67,7 @@ type client struct {
 	// HTTP transport provided in the configuration.
 	http http.Client
 
-	// poller
+	// A background poller for fetching feature flags
 	featureFlagsPoller *FeatureFlagsPoller
 }
 
@@ -99,7 +99,9 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		http:     makeHttpClient(config.Transport),
 	}
 
-	c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http)
+	if len(c.PersonalApiKey) > 0 {
+		c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http)
+	}
 
 
 	go c.loop()
@@ -183,15 +185,24 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
+func (c *client) requirePersonalApiKeyForFeatureFlags () {
+	if (c.featureFlagsPoller == nil) {
+		c.Errorf("Specifying a PersonalApiKey is required for using feature flags")
+	}
+}
+
 func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) bool {
+	c.requirePersonalApiKeyForFeatureFlags()
 	return c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
 }
 
 func (c *client) ReloadFeatureFlags() {
+	c.requirePersonalApiKeyForFeatureFlags()
 	c.featureFlagsPoller.ForceReload()
 }
 
 func (c *client) GetFeatureFlags() []FeatureFlag {
+	c.requirePersonalApiKeyForFeatureFlags()
 	return c.featureFlagsPoller.GetFeatureFlags()
 }
 
@@ -313,7 +324,9 @@ func (c *client) report(res *http.Response) (err error) {
 // Batch loop.
 func (c *client) loop() {
 	defer close(c.shutdown)
-	defer c.featureFlagsPoller.shutdownPoller()
+	if (c.featureFlagsPoller != nil) {
+		defer c.featureFlagsPoller.shutdownPoller()
+	}
 
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
