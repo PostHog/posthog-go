@@ -2,13 +2,15 @@ package posthog
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
-	"errors"
 )
 
 const LONG_SCALE = 0xfffffffffffffff
@@ -47,9 +49,9 @@ type DecideResponse struct {
 	FeatureFlags []string `json:"featureFlags"`
 }
 
-func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client) *FeatureFlagsPoller {
+func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client, pollingInterval time.Duration) *FeatureFlagsPoller {
 	poller := FeatureFlagsPoller{
-		ticker:                       time.NewTicker(5 * time.Second),
+		ticker:                       time.NewTicker(pollingInterval),
 		loaded:                       make(chan bool),
 		shutdown:                     make(chan bool),
 		forceReload:                  make(chan bool),
@@ -78,6 +80,7 @@ func (poller *FeatureFlagsPoller) run() {
 			poller.ticker.Stop()
 			return
 		case <-poller.forceReload:
+			poller.fetchNewFeatureFlags()
 		case <-poller.ticker.C:
 			poller.fetchNewFeatureFlags()
 		}
@@ -195,6 +198,20 @@ func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId str
 		return false, errors.New(errMessage)
 	}
 	return isEnabled, nil
+}
+
+// extracted as a regular func for testing purposes
+func checkIfSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
+	hash := sha1.New()
+	hash.Write([]byte("" + key + "." + distinctId + ""))
+	digest := hash.Sum(nil)
+	hexString := fmt.Sprintf("%x\n", digest)[:15]
+
+	value, err := strconv.ParseInt(hexString, 16, 64)
+	if err != nil {
+		return false, err
+	}
+	return (float64(value) / LONG_SCALE) <= float64(rolloutPercentage)/100, nil
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {

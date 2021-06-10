@@ -700,7 +700,6 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 	}
 }
 
-
 func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	// silence Errorf by tossing them in channel and not reading back
 	errchan := make(chan error, 1)
@@ -709,8 +708,8 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Logger: testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
-			func(m APIMessage) { },
-			func(m APIMessage, e error) { errchan <- e }, 
+			func(m APIMessage) {},
+			func(m APIMessage, e error) { errchan <- e },
 		},
 	})
 	defer client.Close()
@@ -731,18 +730,18 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 func TestSimpleFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	  w.Write([]byte(fixture("test-api-feature-flag.json")))
+		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
-		Endpoint:  server.URL,
+		Endpoint:       server.URL,
 	})
 	defer client.Close()
 
 	isEnabled, err := client.IsFeatureEnabled("simpleFlag", "hey", false)
-	
+
 	if err != nil || !isEnabled {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
 	}
@@ -762,7 +761,6 @@ func TestSimpleFlagCalculation(t *testing.T) {
 
 }
 
-
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/decide/" {
@@ -777,12 +775,12 @@ func TestComplexFlag(t *testing.T) {
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
-		Endpoint:  server.URL,
+		Endpoint:       server.URL,
 	})
 	defer client.Close()
 
 	isEnabled, err := client.IsFeatureEnabled("enabled-flag", "hey", false)
-	
+
 	if err != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}

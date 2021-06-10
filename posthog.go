@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-
 const unimplementedError = "not implemented"
 
 // This interface is the main API exposed by the posthog package.
@@ -42,7 +41,7 @@ type Client interface {
 	//
 	// Method forces a reload of feature flags
 	ReloadFeatureFlags() error
-	// 
+	//
 	// Get feature flags - for testing only
 	GetFeatureFlags() ([]FeatureFlag, error)
 }
@@ -101,9 +100,8 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	if len(c.PersonalApiKey) > 0 {
-		c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http)
+		c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http, c.DefaultFeatureFlagsPollingInterval)
 	}
-
 
 	go c.loop()
 
@@ -187,7 +185,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 }
 
 func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) (bool, error) {
-	if (c.featureFlagsPoller == nil) {
+	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
 		return false, errors.New(errorMessage)
@@ -196,7 +194,7 @@ func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValu
 }
 
 func (c *client) ReloadFeatureFlags() error {
-	if (c.featureFlagsPoller == nil) {
+	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
 		return errors.New(errorMessage)
@@ -206,7 +204,7 @@ func (c *client) ReloadFeatureFlags() error {
 }
 
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
-	if (c.featureFlagsPoller == nil) {
+	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
@@ -332,7 +330,7 @@ func (c *client) report(res *http.Response) (err error) {
 // Batch loop.
 func (c *client) loop() {
 	defer close(c.shutdown)
-	if (c.featureFlagsPoller != nil) {
+	if c.featureFlagsPoller != nil {
 		defer c.featureFlagsPoller.shutdownPoller()
 	}
 
@@ -436,4 +434,3 @@ func (c *client) notifyFailure(msgs []message, err error) {
 		}
 	}
 }
-
