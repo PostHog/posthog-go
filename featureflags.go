@@ -144,8 +144,8 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 
 		// json.Unmarshal will convert JSON `null` to a nullish value for each type
 		// which is 0 for uint. However, our feature flags should have rolloutPercentage == 100
-		// if it is set to `null`. Having rollout percentage be a pointer and deferencing it 
-		// here allows its value to be `nil` following json.Unmarhsal, so we can appropriately 
+		// if it is set to `null`. Having rollout percentage be a pointer and deferencing it
+		// here allows its value to be `nil` following json.Unmarhsal, so we can appropriately
 		// set it to 100
 		rolloutPercentage := uint8(100)
 		if featureFlag.RolloutPercentage != nil {

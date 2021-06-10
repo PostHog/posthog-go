@@ -190,7 +190,16 @@ func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValu
 		c.Errorf(errorMessage)
 		return false, errors.New(errorMessage)
 	}
-	return c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
+	isEnabled, err := c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
+	c.Enqueue(Capture{
+		DistinctId: distinctId,
+		Event:      "$feature_flag_called",
+		Properties: NewProperties().
+			Set("$feature_flag", flagKey).
+			Set("$feature_flag_response", isEnabled).
+			Set("$feature_flag_errored", err != nil),
+	})
+	return isEnabled, err
 }
 
 func (c *client) ReloadFeatureFlags() error {

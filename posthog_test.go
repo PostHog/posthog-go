@@ -767,7 +767,7 @@ func TestComplexFlag(t *testing.T) {
 			w.Write([]byte(fixture("test-decide.json")))
 		} else if r.URL.Path == "/api/feature_flag/" {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		} else {
+		} else if r.URL.Path != "/batch/" {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
