@@ -1,19 +1,17 @@
 package posthog
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"sync"
-
-	"bytes"
-	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 )
 
-// Version of the client.
-const Version = "1.0.1"
 const unimplementedError = "not implemented"
 
 // This interface is the main API exposed by the posthog package.
@@ -33,10 +31,19 @@ type Client interface {
 	//	...
 	//	client.Close()
 	//
-	// The method returns an error if the message queue not be queued, which
+	// The method returns an error if the message queue could not be queued, which
 	// happens if the client was already closed at the time the method was
 	// called or if the message was malformed.
 	Enqueue(Message) error
+	//
+	// Method returns if a feature flag is on for a given user based on their distinct ID
+	IsFeatureEnabled(string, string, bool) (bool, error)
+	//
+	// Method forces a reload of feature flags
+	ReloadFeatureFlags() error
+	//
+	// Get feature flags - for testing only
+	GetFeatureFlags() ([]FeatureFlag, error)
 }
 
 type client struct {
@@ -59,6 +66,9 @@ type client struct {
 	// This HTTP client is used to send requests to the backend, it uses the
 	// HTTP transport provided in the configuration.
 	http http.Client
+
+	// A background poller for fetching feature flags
+	featureFlagsPoller *FeatureFlagsPoller
 }
 
 // Instantiate a new client that uses the write key passed as first argument to
@@ -87,6 +97,10 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		quit:     make(chan struct{}),
 		shutdown: make(chan struct{}),
 		http:     makeHttpClient(config.Transport),
+	}
+
+	if len(c.PersonalApiKey) > 0 {
+		c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http, c.DefaultFeatureFlagsPollingInterval)
 	}
 
 	go c.loop()
@@ -170,6 +184,43 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
+func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) (bool, error) {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return false, errors.New(errorMessage)
+	}
+	isEnabled, err := c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
+	c.Enqueue(Capture{
+		DistinctId: distinctId,
+		Event:      "$feature_flag_called",
+		Properties: NewProperties().
+			Set("$feature_flag", flagKey).
+			Set("$feature_flag_response", isEnabled).
+			Set("$feature_flag_errored", err != nil),
+	})
+	return isEnabled, err
+}
+
+func (c *client) ReloadFeatureFlags() error {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return errors.New(errorMessage)
+	}
+	c.featureFlagsPoller.ForceReload()
+	return nil
+}
+
+func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+	return c.featureFlagsPoller.GetFeatureFlags(), nil
+}
+
 // Close and flush metrics.
 func (c *client) Close() (err error) {
 	defer func() {
@@ -195,13 +246,13 @@ func (c *client) sendAsync(msgs []message, wg *sync.WaitGroup, ex *executor) {
 			// a panic, we don't want this to ever crash the application so we
 			// catch it here and log it instead.
 			if err := recover(); err != nil {
-				c.errorf("panic - %s", err)
+				c.Errorf("panic - %s", err)
 			}
 		}()
 		c.send(msgs)
 	}) {
 		wg.Done()
-		c.errorf("sending messages failed - %s", ErrTooManyRequests)
+		c.Errorf("sending messages failed - %s", ErrTooManyRequests)
 		c.notifyFailure(msgs, ErrTooManyRequests)
 	}
 }
@@ -216,7 +267,7 @@ func (c *client) send(msgs []message) {
 	})
 
 	if err != nil {
-		c.errorf("marshalling messages - %s", err)
+		c.Errorf("marshalling messages - %s", err)
 		c.notifyFailure(msgs, err)
 		return
 	}
@@ -231,13 +282,13 @@ func (c *client) send(msgs []message) {
 		select {
 		case <-time.After(c.RetryAfter(i)):
 		case <-c.quit:
-			c.errorf("%d messages dropped because they failed to be sent and the client was closed", len(msgs))
+			c.Errorf("%d messages dropped because they failed to be sent and the client was closed", len(msgs))
 			c.notifyFailure(msgs, err)
 			return
 		}
 	}
 
-	c.errorf("%d messages dropped because they failed to be sent after %d attempts", len(msgs), attempts)
+	c.Errorf("%d messages dropped because they failed to be sent after %d attempts", len(msgs), attempts)
 	c.notifyFailure(msgs, err)
 }
 
@@ -246,18 +297,20 @@ func (c *client) upload(b []byte) error {
 	url := c.Endpoint + "/batch/"
 	req, err := http.NewRequest("POST", url, bytes.NewReader(b))
 	if err != nil {
-		c.errorf("creating request - %s", err)
+		c.Errorf("creating request - %s", err)
 		return err
 	}
 
-	req.Header.Add("User-Agent", "posthog-go (version: "+Version+")")
+	version := getVersion()
+
+	req.Header.Add("User-Agent", "posthog-go (version: "+version+")")
 	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", string(len(b)))
+	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(b)))
 
 	res, err := c.http.Do(req)
 
 	if err != nil {
-		c.errorf("sending request - %s", err)
+		c.Errorf("sending request - %s", err)
 		return err
 	}
 
@@ -275,7 +328,7 @@ func (c *client) report(res *http.Response) (err error) {
 	}
 
 	if body, err = ioutil.ReadAll(res.Body); err != nil {
-		c.errorf("response %d %s - %s", res.StatusCode, res.Status, err)
+		c.Errorf("response %d %s - %s", res.StatusCode, res.Status, err)
 		return
 	}
 
@@ -286,6 +339,9 @@ func (c *client) report(res *http.Response) (err error) {
 // Batch loop.
 func (c *client) loop() {
 	defer close(c.shutdown)
+	if c.featureFlagsPoller != nil {
+		defer c.featureFlagsPoller.shutdownPoller()
+	}
 
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
@@ -331,7 +387,7 @@ func (c *client) push(q *messageQueue, m APIMessage, wg *sync.WaitGroup, ex *exe
 	var err error
 
 	if msg, err = makeMessage(m, maxMessageBytes); err != nil {
-		c.errorf("%s - %v", err, m)
+		c.Errorf("%s - %v", err, m)
 		c.notifyFailure([]message{{m, nil}}, err)
 		return
 	}
@@ -361,7 +417,7 @@ func (c *client) logf(format string, args ...interface{}) {
 	c.Logger.Logf(format, args...)
 }
 
-func (c *client) errorf(format string, args ...interface{}) {
+func (c *client) Errorf(format string, args ...interface{}) {
 	c.Logger.Errorf(format, args...)
 }
 

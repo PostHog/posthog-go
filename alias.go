@@ -59,7 +59,7 @@ type AliasInApi struct {
 
 func (msg Alias) APIfy() APIMessage {
 	library := "posthog-go"
-	libraryVersion := Version
+	libraryVersion := getVersion()
 
 	apified := AliasInApi{
 		Type:           msg.Type,

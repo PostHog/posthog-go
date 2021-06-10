@@ -84,6 +84,7 @@ func (m testErrorMessage) APIfy() APIMessage {
 
 var (
 	// A control error returned by mock functions to emulate a failure.
+	//lint:ignore ST1012 variable name is fine :D
 	testError = errors.New("test error")
 
 	// HTTP transport that always succeeds.
@@ -696,5 +697,91 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 
 	} else if err != ErrTooManyRequests {
 		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
+	}
+}
+
+func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
+	// silence Errorf by tossing them in channel and not reading back
+	errchan := make(chan error, 1)
+	defer close(errchan)
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Logger: testLogger{t.Logf, t.Logf},
+		Callback: testCallback{
+			func(m APIMessage) {},
+			func(m APIMessage, e error) { errchan <- e },
+		},
+	})
+	defer client.Close()
+
+	receivedErrors := [3]error{}
+	receivedErrors[0] = client.ReloadFeatureFlags()
+	_, receivedErrors[1] = client.IsFeatureEnabled("some key", "some id", false)
+	_, receivedErrors[2] = client.GetFeatureFlags()
+
+	for _, receivedError := range receivedErrors {
+		if receivedError == nil || receivedError.Error() != "specifying a PersonalApiKey is required for using feature flags" {
+			t.Errorf("feature flags methods should return error without personal api key")
+			return
+		}
+	}
+
+}
+
+func TestSimpleFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("test-api-feature-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isEnabled, err := client.IsFeatureEnabled("simpleFlag", "hey", false)
+
+	if err != nil || !isEnabled {
+		t.Errorf("simple flag with null rollout percentage should be on for everyone")
+	}
+
+}
+
+func TestSimpleFlagCalculation(t *testing.T) {
+	isEnabled, err := checkIfSimpleFlagEnabled("a", "b", 42)
+	if err != nil || !isEnabled {
+		t.Errorf("calculation for a.b should succeed and be true")
+	}
+
+	isEnabled, err = checkIfSimpleFlagEnabled("a", "b", 40)
+	if err != nil || isEnabled {
+		t.Errorf("calculation for a.b should succeed and be false")
+	}
+
+}
+
+func TestComplexFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/decide/" {
+			w.Write([]byte(fixture("test-decide.json")))
+		} else if r.URL.Path == "/api/feature_flag/" {
+			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else if r.URL.Path != "/batch/" {
+			t.Errorf("client called an endpoint it shouldn't have")
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isEnabled, err := client.IsFeatureEnabled("enabled-flag", "hey", false)
+
+	if err != nil || !isEnabled {
+		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 }

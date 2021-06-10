@@ -1,0 +1,14 @@
+{
+    "config": {
+        "enable_collect_everything": true
+    },
+    "editorParams": {},
+    "isAuthenticated": true,
+    "supportedCompression": [
+        "gzip",
+        "gzip-js",
+        "lz64"
+    ],
+    "featureFlags": ["enabled-flag"],
+    "sessionRecording": false
+}

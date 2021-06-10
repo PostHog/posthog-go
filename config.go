@@ -1,9 +1,9 @@
 package posthog
 
 import (
+	"github.com/xtgo/uuid"
 	"net/http"
 	"time"
-	"github.com/xtgo/uuid"
 )
 
 // Instances of this type carry the different configuration options that may
@@ -17,10 +17,17 @@ type Config struct {
 	// `DefaultEndpoint` by default.
 	Endpoint string
 
+	// You must specify a Personal API Key to use feature flags
+	// More information on how to get one: https://posthog.com/docs/api/overview
+	PersonalApiKey string
+
 	// The flushing interval of the client. Messages will be sent when they've
 	// been queued up to the maximum batch size or when the flushing interval
 	// timer triggers.
 	Interval time.Duration
+
+	// Interval at which to fetch new feature flags, 5min by default
+	DefaultFeatureFlagsPollingInterval time.Duration
 
 	// The HTTP transport used by the client, this allows an application to
 	// redefine how requests are being sent at the HTTP level (for example,
@@ -83,6 +90,9 @@ const DefaultEndpoint = "https://app.posthog.com"
 // none was explicitly set.
 const DefaultInterval = 5 * time.Second
 
+// Specifies the default interval at which to fetch new feature flags
+const DefaultFeatureFlagsPollingInterval = 5 * time.Minute
+
 // This constant sets the default batch size used by client instances if none
 // was explicitly set.
 const DefaultBatchSize = 250
@@ -120,6 +130,10 @@ func makeConfig(c Config) Config {
 		c.Interval = DefaultInterval
 	}
 
+	if c.DefaultFeatureFlagsPollingInterval == 0 {
+		c.DefaultFeatureFlagsPollingInterval = DefaultInterval
+	}
+
 	if c.Transport == nil {
 		c.Transport = http.DefaultTransport
 	}
@@ -147,6 +161,7 @@ func makeConfig(c Config) Config {
 	if c.maxConcurrentRequests == 0 {
 		c.maxConcurrentRequests = 1000
 	}
+
 	return c
 }
 
