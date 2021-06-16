@@ -34,6 +34,7 @@ type FeatureFlag struct {
 	Key               string `json:"key"`
 	IsSimpleFlag      bool   `json:"is_simple_flag"`
 	RolloutPercentage *uint8 `json:"rollout_percentage"`
+	Active            bool   `json:"active"`
 }
 
 type FeatureFlagsResponse struct {
@@ -107,11 +108,17 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.Errorf("Unable to unmarshal response from api/feature_flag", err)
 		return
 	}
-	poller.mutex.Lock()
 	if !poller.fetchedFlagsSuccessfullyOnce {
 		poller.loaded <- true
 	}
-	poller.featureFlags = featureFlagsResponse.Results
+	newFlags := []FeatureFlag{}
+	for _, flag := range featureFlagsResponse.Results {
+		if flag.Active {
+			newFlags = append(newFlags, flag)
+		}
+	}
+	poller.mutex.Lock()
+	poller.featureFlags = newFlags
 	poller.mutex.Unlock()
 
 }
@@ -235,7 +242,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 
 func (poller *FeatureFlagsPoller) request(method string, endpoint string, requestData []byte, headers [][2]string) (*http.Response, error) {
 
-	url := poller.Endpoint + "/" + endpoint + "/"
+	url := poller.Endpoint + "/" + endpoint + "/?token=" + poller.projectApiKey + ""
 	req, err := http.NewRequest(method, url, bytes.NewReader(requestData))
 	if err != nil {
 		poller.Errorf("creating request - %s", err)
