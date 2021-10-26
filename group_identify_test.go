@@ -2,7 +2,7 @@ package posthog
 
 import "testing"
 
-func TestGroupIdentifyBasic(t *testing.T) {
+func TestGroupIdentifyMissingDistinctId(t *testing.T) {
 	groupIdentify := GroupIdentify{}
 
 	if err := groupIdentify.Validate(); err == nil {
@@ -20,6 +20,12 @@ func TestGroupIdentifyBasic(t *testing.T) {
 	}
 }
 
-func TestGroupIdentifyAdvanced(t *testing.T) {
+func TestGroupIdentifyValidWithDistinctId(t *testing.T) {
+	groupIdentify := Identify{
+		DistinctId: "organization_id:5",
+	}
 
+	if err := groupIdentify.Validate(); err != nil {
+		t.Error("validating a valid identify object failed:", groupIdentify, err)
+	}
 }
