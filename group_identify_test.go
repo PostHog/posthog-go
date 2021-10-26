@@ -1,4 +1,4 @@
-package posthog 
+package posthog
 
 import "testing"
 
