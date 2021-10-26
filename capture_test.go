@@ -52,3 +52,15 @@ func TestCaptureValidWithDistinctId(t *testing.T) {
 		t.Error("validating a valid capture object failed:", capture, err)
 	}
 }
+
+func TestGroupsCapture(t *testing.T) {
+	// capture := Capture{
+	// 	Event: "1",
+	// 	DistinctId: "2",
+	// 	Groups: Groups{}.Set("company", "id:5").Set("instance", "app.posthog.com"),
+	// }
+
+	// if e, ok := capture.Validate()(FieldError); !ok {
+	// 	t.Error("???", err)
+	// }
+}
