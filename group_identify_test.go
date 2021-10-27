@@ -19,8 +19,9 @@ func TestGroupIdentifyMissingType(t *testing.T) {
 		t.Error("invalid error value returned when validating group identify:", err)
 	}
 }
+
 func TestGroupIdentifyMissingKey(t *testing.T) {
-	groupIdentify := GroupIdentify{}
+	groupIdentify := GroupIdentify{Type: "organization"}
 
 	if err := groupIdentify.Validate(); err == nil {
 		t.Error("validating an invalid group identify object succeeded:", groupIdentify)
