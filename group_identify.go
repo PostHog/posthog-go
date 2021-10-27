@@ -19,11 +19,19 @@ func (msg GroupIdentify) internal() {
 }
 
 func (msg GroupIdentify) Validate() error {
-	if len(msg.DistinctId) == 0 {
+	if len(msg.Type) == 0 {
 		return FieldError{
 			Type:  "posthog.GroupIdentify",
-			Name:  "DistinctId",
-			Value: msg.DistinctId,
+			Name:  "Type",
+			Value: msg.Type,
+		}
+	}
+
+	if len(msg.Key) == 0 {
+		return FieldError{
+			Type:  "posthog.GroupIdentify",
+			Name:  "Key",
+			Value: msg.Key,
 		}
 	}
 
