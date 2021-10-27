@@ -46,7 +46,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	myProperties := Properties{}.Set("$lib", library).Set("$lib_version", getVersion())
 	myProperties.Set("$group_type", msg.Type).Set("$group_key", msg.Key).Set("$group_set", msg.Properties)
 
-	distinctId := fmt.Sprintf("%s_%s", msg.Type, msg.Key)
+	distinctId := fmt.Sprintf("$%s_%s", msg.Type, msg.Key)
 
 	apified := GroupIdentifyInApi{
 		Event:          "$groupidentify",

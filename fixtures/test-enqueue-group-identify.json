@@ -1,19 +1,19 @@
 {
-    "api_key": "Csyjlnlun3OzyNJAafdlv",
-    "batch": [
-      {
-        "event": "$groupidentify",
-        "properties": {
-          "$group_type": "organization",
-          "$group_key": "id:5",
-          "$group_set": "{}",
-          "$lib": "posthog-go",
-          "$lib_version": "1.0.0"
-        },
-        "distinct_id": "$organization_id:5",
-        "library": "posthog-go",
-        "library_version": "1.0.0",
-        "timestamp": "2009-11-10T23:00:00Z"
-      }
-    ]
-  }
+  "api_key": "Csyjlnlun3OzyNJAafdlv",
+  "batch": [
+    {
+      "distinct_id": "$organization_id:5",
+      "event": "$groupidentify",
+      "library": "posthog-go",
+      "library_version": "1.0.0",
+      "properties": {
+        "$group_key": "id:5",
+        "$group_set": {},
+        "$group_type": "organization",
+        "$lib": "posthog-go",
+        "$lib_version": "1.0.0"
+      },
+      "timestamp": "2009-11-10T23:00:00Z"
+    }
+  ]
+}
