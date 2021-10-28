@@ -14,6 +14,7 @@ type Capture struct {
 	Event      string
 	Timestamp  time.Time
 	Properties Properties
+	Groups 	   Groups
 }
 
 func (msg Capture) internal() {
@@ -61,6 +62,10 @@ func (msg Capture) APIfy() APIMessage {
 		for k, v := range msg.Properties {
 			myProperties[k] = v
 		}
+	}
+
+	if msg.Groups != nil {
+		myProperties.Set("$groups", msg.Groups)
 	}
 
 	apified := CaptureInApi{

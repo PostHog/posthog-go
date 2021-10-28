@@ -247,6 +247,16 @@ func TestEnqueue(t *testing.T) {
 			},
 		},
 
+		"groupIdentify": {
+			strings.TrimSpace(fixture("test-enqueue-group-identify.json")),
+			GroupIdentify{
+				DistinctId: "$organization_id:5",
+				Type:       "organization",
+				Key:        "id:5",
+				Properties: Properties{},
+			},
+		},
+
 		"capture": {
 			strings.TrimSpace(fixture("test-enqueue-capture.json")),
 			Capture{
@@ -269,6 +279,16 @@ func TestEnqueue(t *testing.T) {
 			&Identify{
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
+			},
+		},
+
+		"*groupIdentify": {
+			strings.TrimSpace(fixture("test-enqueue-group-identify.json")),
+			&GroupIdentify{
+				DistinctId: "$organization_id:5",
+				Type:       "organization",
+				Key:        "id:5",
+				Properties: Properties{},
 			},
 		},
 

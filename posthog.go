@@ -131,6 +131,11 @@ func dereferenceMessage(msg Message) Message {
 			return nil
 		}
 		return *m
+	case *GroupIdentify:
+		if m == nil {
+			return nil
+		}
+		return *m
 	case *Capture:
 		if m == nil {
 			return nil
@@ -157,6 +162,10 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	case Identify:
 		m.Type = "identify"
+		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		msg = m
+
+	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		msg = m
 
