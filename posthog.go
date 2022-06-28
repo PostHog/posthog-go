@@ -39,6 +39,10 @@ type Client interface {
 	// Method returns if a feature flag is on for a given user based on their distinct ID
 	IsFeatureEnabled(string, string, bool) (bool, error)
 	//
+	// Method returns variant value if multivariantflag or otherwise a boolean indicating
+	// if the given flag is on or off for the user
+	GetFeatureFlag(string, string, interface{}) (interface{}, error)
+	//
 	// Method forces a reload of feature flags
 	ReloadFeatureFlags() error
 	//
@@ -219,6 +223,24 @@ func (c *client) ReloadFeatureFlags() error {
 	}
 	c.featureFlagsPoller.ForceReload()
 	return nil
+}
+
+func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue interface{}) (interface{}, error) {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return "false", errors.New(errorMessage)
+	}
+	flagValue, err := c.featureFlagsPoller.GetFeatureFlag(flagKey, distinctId, defaultValue)
+	c.Enqueue(Capture{
+		DistinctId: distinctId,
+		Event:      "$feature_flag_called",
+		Properties: NewProperties().
+			Set("$feature_flag", flagKey).
+			Set("$feature_flag_response", flagValue).
+			Set("$feature_flag_errored", err != nil),
+	})
+	return flagValue, err
 }
 
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {

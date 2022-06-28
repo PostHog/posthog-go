@@ -47,7 +47,7 @@ type DecideRequestData struct {
 }
 
 type DecideResponse struct {
-	FeatureFlags []string `json:"featureFlags"`
+	FeatureFlags map[string]interface{} `json:"featureFlags"`
 }
 
 func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client, pollingInterval time.Duration) *FeatureFlagsPoller {
@@ -125,7 +125,6 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool) (bool, error) {
 	featureFlags := poller.GetFeatureFlags()
-	errorMessage := "Failed when checking if flag is enabled"
 
 	if len(featureFlags) < 1 {
 		return defaultResult, nil
@@ -145,62 +144,39 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 		return defaultResult, nil
 	}
 
-	isFlagEnabledResponse := false
+	result, err := poller.getFeatureFlagValue(featureFlag, key, distinctId)
+	if err != nil {
+		return false, err
+	}
+	var flagValueString = fmt.Sprintf("%v", result)
+	if flagValueString != "false" {
+		return true, nil
+	}
+	return false, nil
+}
 
-	if featureFlag.IsSimpleFlag {
+func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}) (interface{}, error) {
+	featureFlags := poller.GetFeatureFlags()
 
-		// json.Unmarshal will convert JSON `null` to a nullish value for each type
-		// which is 0 for uint. However, our feature flags should have rolloutPercentage == 100
-		// if it is set to `null`. Having rollout percentage be a pointer and deferencing it
-		// here allows its value to be `nil` following json.Unmarhsal, so we can appropriately
-		// set it to 100
-		rolloutPercentage := uint8(100)
-		if featureFlag.RolloutPercentage != nil {
-			rolloutPercentage = *featureFlag.RolloutPercentage
-		}
-		var err error
-		isFlagEnabledResponse, err = poller.isSimpleFlagEnabled(key, distinctId, rolloutPercentage)
-		if err != nil {
-			return false, err
-		}
-	} else {
-		requestDataBytes, err := json.Marshal(DecideRequestData{
-			ApiKey:     poller.projectApiKey,
-			DistinctId: distinctId,
-		})
-		if err != nil {
-			errorMessage = "unable to marshal decide endpoint request data"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
-		}
-		res, err := poller.request("POST", "decide", requestDataBytes, [][2]string{})
-		if err != nil || res.StatusCode != http.StatusOK {
-			errorMessage = "Error calling /decide/"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
-		}
-		resBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			errorMessage = "Error reading response from /decide/"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
-		}
-		defer res.Body.Close()
-		decideResponse := DecideResponse{}
-		err = json.Unmarshal([]byte(resBody), &decideResponse)
-		if err != nil {
-			errorMessage = "Error parsing response from /decide/"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
-		}
-		for _, enabledFlag := range decideResponse.FeatureFlags {
-			if key == enabledFlag {
-				isFlagEnabledResponse = true
-			}
+	if len(featureFlags) < 1 {
+		return defaultResult, nil
+	}
+
+	featureFlag := FeatureFlag{Key: ""}
+
+	// avoid using flag for conflicts with Golang's stdlib `flag`
+	for _, storedFlag := range featureFlags {
+		if key == storedFlag.Key {
+			featureFlag = storedFlag
+			break
 		}
 	}
 
-	return isFlagEnabledResponse, nil
+	if featureFlag.Key == "" {
+		return defaultResult, nil
+	}
+
+	return poller.getFeatureFlagValue(featureFlag, key, distinctId)
 }
 
 func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
@@ -243,6 +219,11 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 func (poller *FeatureFlagsPoller) request(method string, endpoint string, requestData []byte, headers [][2]string) (*http.Response, error) {
 
 	url := poller.Endpoint + "/" + endpoint + "/?token=" + poller.projectApiKey + ""
+
+	if endpoint == "decide" {
+		url += "&v=2"
+	}
+
 	req, err := http.NewRequest(method, url, bytes.NewReader(requestData))
 	if err != nil {
 		poller.Errorf("creating request - %s", err)
@@ -273,4 +254,66 @@ func (poller *FeatureFlagsPoller) ForceReload() {
 
 func (poller *FeatureFlagsPoller) shutdownPoller() {
 	poller.shutdown <- true
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlagValue(featureFlag FeatureFlag, key string, distinctId string) (interface{}, error) {
+	var result interface{} = false
+	errorMessage := "Failed when getting flag value"
+
+	if featureFlag.IsSimpleFlag {
+
+		// json.Unmarshal will convert JSON `null` to a nullish value for each type
+		// which is 0 for uint. However, our feature flags should have rolloutPercentage == 100
+		// if it is set to `null`. Having rollout percentage be a pointer and deferencing it
+		// here allows its value to be `nil` following json.Unmarhsal, so we can appropriately
+		// set it to 100
+		rolloutPercentage := uint8(100)
+		if featureFlag.RolloutPercentage != nil {
+			rolloutPercentage = *featureFlag.RolloutPercentage
+		}
+		var err error
+		result, err = poller.isSimpleFlagEnabled(key, distinctId, rolloutPercentage)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		requestDataBytes, err := json.Marshal(DecideRequestData{
+			ApiKey:     poller.projectApiKey,
+			DistinctId: distinctId,
+		})
+		if err != nil {
+			errorMessage = "unable to marshal decide endpoint request data"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
+		}
+		res, err := poller.request("POST", "decide", requestDataBytes, [][2]string{})
+		if err != nil || res.StatusCode != http.StatusOK {
+			errorMessage = "Error calling /decide/"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
+		}
+		resBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			errorMessage = "Error reading response from /decide/"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
+		}
+		defer res.Body.Close()
+		decideResponse := DecideResponse{}
+		err = json.Unmarshal([]byte(resBody), &decideResponse)
+		if err != nil {
+			errorMessage = "Error parsing response from /decide/"
+			poller.Errorf(errorMessage)
+			return false, errors.New(errorMessage)
+		}
+		for flagKey, flagValue := range decideResponse.FeatureFlags {
+			var flagValueString = fmt.Sprintf("%v", flagValue)
+			if key == flagKey && flagValueString != "false" {
+				result = flagValueString
+				break
+			}
+		}
+		return result, nil
+	}
+	return result, nil
 }
