@@ -221,7 +221,11 @@ func (poller *FeatureFlagsPoller) request(method string, endpoint string, reques
 	url := poller.Endpoint + "/" + endpoint + ""
 
 	if endpoint == "decide" {
-		url += "&v=2"
+		url += "/?v=2"
+	}
+
+	if method == "GET" {
+		url += "&token=" + poller.projectApiKey + ""
 	}
 
 	req, err := http.NewRequest(method, url, bytes.NewReader(requestData))
