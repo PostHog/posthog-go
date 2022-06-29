@@ -44,7 +44,7 @@ func main() {
     // Link user contexts
     client.Enqueue(posthog.Alias{
       DistinctId: "user:123",
-      Alias: "user:12345"
+      Alias: "user:12345",
     })
     
     // Capture a pageview

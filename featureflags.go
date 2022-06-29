@@ -45,6 +45,7 @@ type FeatureFlagsResponse struct {
 type DecideRequestData struct {
 	ApiKey     string `json:"api_key"`
 	DistinctId string `json:"distinct_id"`
+	Groups     Groups `json:"groups"`
 }
 
 type DecideResponse struct {
@@ -145,7 +146,7 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 		return defaultResult, nil
 	}
 
-	result, err := poller.getFeatureFlagValue(featureFlag, key, distinctId)
+	result, err := poller.getFeatureFlagVariant(featureFlag, key, distinctId)
 	if err != nil {
 		return false, err
 	}
@@ -177,7 +178,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		return defaultResult, nil
 	}
 
-	return poller.getFeatureFlagValue(featureFlag, key, distinctId)
+	return poller.getFeatureFlagVariant(featureFlag, key, distinctId)
 }
 
 func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
@@ -267,9 +268,45 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 	poller.shutdown <- true
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagValue(featureFlag FeatureFlag, key string, distinctId string) (interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups) (map[string]interface{}, error) {
+	errorMessage := "Failed when getting flag variants"
+	requestDataBytes, err := json.Marshal(DecideRequestData{
+		ApiKey:     poller.projectApiKey,
+		DistinctId: distinctId,
+		Groups:     groups,
+	})
+	headers := [][2]string{{"Authorization", "Bearer " + poller.personalApiKey + ""}}
+	if err != nil {
+		errorMessage = "unable to marshal decide endpoint request data"
+		poller.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+	res, err := poller.request("POST", "decide", requestDataBytes, headers)
+	if err != nil || res.StatusCode != http.StatusOK {
+		errorMessage = "Error calling /decide/"
+		poller.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+	resBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		errorMessage = "Error reading response from /decide/"
+		poller.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+	defer res.Body.Close()
+	decideResponse := DecideResponse{}
+	err = json.Unmarshal([]byte(resBody), &decideResponse)
+	if err != nil {
+		errorMessage = "Error parsing response from /decide/"
+		poller.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+
+	return decideResponse.FeatureFlags, nil
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string) (interface{}, error) {
 	var result interface{} = false
-	errorMessage := "Failed when getting flag value"
 
 	if featureFlag.IsSimpleFlag {
 
@@ -288,36 +325,13 @@ func (poller *FeatureFlagsPoller) getFeatureFlagValue(featureFlag FeatureFlag, k
 			return false, err
 		}
 	} else {
-		requestDataBytes, err := json.Marshal(DecideRequestData{
-			ApiKey:     poller.projectApiKey,
-			DistinctId: distinctId,
-		})
-		if err != nil {
-			errorMessage = "unable to marshal decide endpoint request data"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
+		featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, nil)
+
+		if variantErr != nil {
+			return false, variantErr
 		}
-		res, err := poller.request("POST", "decide", requestDataBytes, [][2]string{})
-		if err != nil || res.StatusCode != http.StatusOK {
-			errorMessage = "Error calling /decide/"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
-		}
-		resBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			errorMessage = "Error reading response from /decide/"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
-		}
-		defer res.Body.Close()
-		decideResponse := DecideResponse{}
-		err = json.Unmarshal([]byte(resBody), &decideResponse)
-		if err != nil {
-			errorMessage = "Error parsing response from /decide/"
-			poller.Errorf(errorMessage)
-			return false, errors.New(errorMessage)
-		}
-		for flagKey, flagValue := range decideResponse.FeatureFlags {
+
+		for flagKey, flagValue := range featureFlagVariants {
 			var flagValueString = fmt.Sprintf("%v", flagValue)
 			if key == flagKey && flagValueString != "false" {
 				result = flagValueString

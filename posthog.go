@@ -176,6 +176,25 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case Capture:
 		m.Type = "capture"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		if m.SendFeatureFlags {
+			// Add all feature variants to event
+			featureVariants, err := c.getFeatureVariants(m.DistinctId, m.Groups)
+			if err != nil {
+				c.Errorf("unable to get feature variants - %s", err)
+			}
+			for feature, variant := range featureVariants {
+				propKey := fmt.Sprintf("$feature/%s", feature)
+				m.Properties[propKey] = variant
+			}
+			// Add all feature flag keys to $active_feature_flags key
+			featureKeys := make([]string, len(featureVariants))
+			i := 0
+			for k := range featureVariants {
+				featureKeys[i] = k
+				i++
+			}
+			m.Properties["$active_feature_flags"] = featureKeys
+		}
 		msg = m
 
 	default:
@@ -194,6 +213,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 	}()
 
 	c.msgs <- msg.APIfy()
+
 	return
 }
 
@@ -473,4 +493,18 @@ func (c *client) notifyFailure(msgs []message, err error) {
 			c.Callback.Failure(m.msg, err)
 		}
 	}
+}
+
+func (c *client) getFeatureVariants(distinctId string, groups Groups) (map[string]interface{}, error) {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+
+	requestData, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, groups)
+	if err != nil {
+		return nil, err
+	}
+	return requestData, nil
 }
