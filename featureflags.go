@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -218,17 +219,23 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 
 func (poller *FeatureFlagsPoller) request(method string, endpoint string, requestData []byte, headers [][2]string) (*http.Response, error) {
 
-	url := poller.Endpoint + "/" + endpoint + ""
+	url, err := url.Parse(poller.Endpoint + "/" + endpoint + "")
 
-	if endpoint == "decide" {
-		url += "/?v=2"
+	if err != nil {
+		poller.Errorf("creating url - %s", err)
 	}
+	searchParams := url.Query()
 
 	if method == "GET" {
-		url += "&token=" + poller.projectApiKey + ""
+		searchParams.Add("token", poller.projectApiKey)
 	}
 
-	req, err := http.NewRequest(method, url, bytes.NewReader(requestData))
+	if endpoint == "decide" {
+		searchParams.Add("v", "2")
+	}
+	url.RawQuery = searchParams.Encode()
+
+	req, err := http.NewRequest(method, url.String(), bytes.NewReader(requestData))
 	if err != nil {
 		poller.Errorf("creating request - %s", err)
 	}
