@@ -218,7 +218,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 
 func (poller *FeatureFlagsPoller) request(method string, endpoint string, requestData []byte, headers [][2]string) (*http.Response, error) {
 
-	url := poller.Endpoint + "/" + endpoint + "/?token=" + poller.projectApiKey + ""
+	url := poller.Endpoint + "/" + endpoint + ""
 
 	if endpoint == "decide" {
 		url += "&v=2"
