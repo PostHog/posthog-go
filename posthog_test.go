@@ -202,6 +202,7 @@ func ExampleCapture() {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
+		SendFeatureFlags: false,
 	})
 
 	fmt.Printf("%s\n", <-body)
@@ -221,6 +222,7 @@ func ExampleCapture() {
 	//         "platform": "macos",
 	//         "version": "1.0.0"
 	//       },
+	//       "send_feature_flags": false,
 	//       "timestamp": "2009-11-10T23:00:00Z",
 	//       "type": "capture"
 	//     }
@@ -267,6 +269,7 @@ func TestEnqueue(t *testing.T) {
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
+				SendFeatureFlags: false,
 			},
 		},
 		"*alias": {
@@ -302,6 +305,7 @@ func TestEnqueue(t *testing.T) {
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
+				SendFeatureFlags: false,
 			},
 		},
 	}
@@ -385,6 +389,7 @@ func TestCaptureWithInterval(t *testing.T) {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
+		SendFeatureFlags: false,
 	})
 
 	// Will flush in 100 milliseconds
@@ -421,7 +426,8 @@ func TestCaptureWithTimestamp(t *testing.T) {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
-		Timestamp: time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
+		SendFeatureFlags: false,
+		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
 	if res := string(<-body); ref != res {
@@ -453,6 +459,7 @@ func TestCaptureMany(t *testing.T) {
 				"application": "PostHog Go",
 				"version":     i,
 			},
+			SendFeatureFlags: false,
 		})
 	}
 
@@ -873,7 +880,7 @@ func TestDisabledFlag(t *testing.T) {
 
 	flagValue, err := client.GetFeatureFlag("disabled-flag", "hey", false)
 
-	if err != nil || flagValue != "false" {
+	if err != nil || flagValue != false {
 		t.Errorf("flag listed in /decide/ response should have value 'false'")
 	}
 }
