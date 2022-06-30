@@ -787,11 +787,11 @@ func TestSimpleFlagCalculation(t *testing.T) {
 
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/decide/" {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if r.URL.Path == "/api/feature_flag/" {
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		} else if r.URL.Path != "/batch/" {
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -811,18 +811,18 @@ func TestComplexFlag(t *testing.T) {
 
 	flagValue, valueErr := client.GetFeatureFlag("enabled-flag", "hey", false)
 
-	if valueErr != nil || flagValue != true {
+	if valueErr != nil || flagValue != "true" {
 		t.Errorf("flag listed in /decide/ response should have value 'true'")
 	}
 }
 
 func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/decide/" {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if r.URL.Path == "/api/feature_flag/" {
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		} else if r.URL.Path != "/batch/" {
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -849,11 +849,11 @@ func TestMultiVariateFlag(t *testing.T) {
 
 func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/decide/" {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if r.URL.Path == "/api/feature_flag/" {
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		} else if r.URL.Path != "/batch/" {
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -873,7 +873,7 @@ func TestDisabledFlag(t *testing.T) {
 
 	flagValue, err := client.GetFeatureFlag("disabled-flag", "hey", false)
 
-	if err != nil || flagValue != false {
+	if err != nil || flagValue != "false" {
 		t.Errorf("flag listed in /decide/ response should have value 'false'")
 	}
 }
