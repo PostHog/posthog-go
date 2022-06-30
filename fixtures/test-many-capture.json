@@ -12,6 +12,7 @@
         "application": "PostHog Go",
         "version": 0
       },
+      "send_feature_flags": false,
       "timestamp": "2009-11-10T23:00:00Z",
       "type": "capture"
     },
@@ -26,6 +27,7 @@
         "application": "PostHog Go",
         "version": 1
       },
+      "send_feature_flags": false,
       "timestamp": "2009-11-10T23:00:00Z",
       "type": "capture"
     },
@@ -40,6 +42,7 @@
         "application": "PostHog Go",
         "version": 2
       },
+      "send_feature_flags": false,
       "timestamp": "2009-11-10T23:00:00Z",
       "type": "capture"
     }
