@@ -502,9 +502,9 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups) (map[strin
 		return nil, errors.New(errorMessage)
 	}
 
-	requestData, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, groups)
+	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, groups)
 	if err != nil {
 		return nil, err
 	}
-	return requestData, nil
+	return featureVariants, nil
 }

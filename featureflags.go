@@ -230,10 +230,6 @@ func (poller *FeatureFlagsPoller) request(method string, endpoint string, reques
 	if method == "GET" {
 		searchParams.Add("token", poller.projectApiKey)
 	}
-
-	if endpoint == "decide" {
-		searchParams.Add("v", "2")
-	}
 	url.RawQuery = searchParams.Encode()
 
 	req, err := http.NewRequest(method, url.String(), bytes.NewReader(requestData))
@@ -281,7 +277,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	res, err := poller.request("POST", "decide", requestDataBytes, headers)
+	res, err := poller.request("POST", "decide/?v=2", requestDataBytes, headers)
 	if err != nil || res.StatusCode != http.StatusOK {
 		errorMessage = "Error calling /decide/"
 		poller.Errorf(errorMessage)

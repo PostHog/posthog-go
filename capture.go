@@ -71,14 +71,13 @@ func (msg Capture) APIfy() APIMessage {
 	}
 
 	apified := CaptureInApi{
-		Type:             msg.Type,
-		Library:          library,
-		LibraryVersion:   libraryVersion,
-		Timestamp:        msg.Timestamp,
-		DistinctId:       msg.DistinctId,
-		Event:            msg.Event,
-		Properties:       myProperties,
-		SendFeatureFlags: msg.SendFeatureFlags,
+		Type:           msg.Type,
+		Library:        library,
+		LibraryVersion: libraryVersion,
+		Timestamp:      msg.Timestamp,
+		DistinctId:     msg.DistinctId,
+		Event:          msg.Event,
+		Properties:     myProperties,
 	}
 
 	return apified
