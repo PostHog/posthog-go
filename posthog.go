@@ -39,6 +39,10 @@ type Client interface {
 	// Method returns if a feature flag is on for a given user based on their distinct ID
 	IsFeatureEnabled(string, string, bool) (bool, error)
 	//
+	// Method returns variant value if multivariantflag or otherwise a boolean indicating
+	// if the given flag is on or off for the user
+	GetFeatureFlag(string, string, interface{}) (interface{}, error)
+	//
 	// Method forces a reload of feature flags
 	ReloadFeatureFlags() error
 	//
@@ -172,6 +176,25 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case Capture:
 		m.Type = "capture"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		if m.SendFeatureFlags {
+			// Add all feature variants to event
+			featureVariants, err := c.getFeatureVariants(m.DistinctId, m.Groups)
+			if err != nil {
+				c.Errorf("unable to get feature variants - %s", err)
+			}
+			for feature, variant := range featureVariants {
+				propKey := fmt.Sprintf("$feature/%s", feature)
+				m.Properties[propKey] = variant
+			}
+			// Add all feature flag keys to $active_feature_flags key
+			featureKeys := make([]string, len(featureVariants))
+			i := 0
+			for k := range featureVariants {
+				featureKeys[i] = k
+				i++
+			}
+			m.Properties["$active_feature_flags"] = featureKeys
+		}
 		msg = m
 
 	default:
@@ -190,6 +213,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 	}()
 
 	c.msgs <- msg.APIfy()
+
 	return
 }
 
@@ -219,6 +243,24 @@ func (c *client) ReloadFeatureFlags() error {
 	}
 	c.featureFlagsPoller.ForceReload()
 	return nil
+}
+
+func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue interface{}) (interface{}, error) {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return "false", errors.New(errorMessage)
+	}
+	flagValue, err := c.featureFlagsPoller.GetFeatureFlag(flagKey, distinctId, defaultValue)
+	c.Enqueue(Capture{
+		DistinctId: distinctId,
+		Event:      "$feature_flag_called",
+		Properties: NewProperties().
+			Set("$feature_flag", flagKey).
+			Set("$feature_flag_response", flagValue).
+			Set("$feature_flag_errored", err != nil),
+	})
+	return flagValue, err
 }
 
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
@@ -451,4 +493,18 @@ func (c *client) notifyFailure(msgs []message, err error) {
 			c.Callback.Failure(m.msg, err)
 		}
 	}
+}
+
+func (c *client) getFeatureVariants(distinctId string, groups Groups) (map[string]interface{}, error) {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+
+	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, groups)
+	if err != nil {
+		return nil, err
+	}
+	return featureVariants, nil
 }

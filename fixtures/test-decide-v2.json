@@ -9,6 +9,10 @@
         "gzip-js",
         "lz64"
     ],
-    "featureFlags": ["enabled-flag"],
+    "featureFlags": {
+        "enabled-flag": true,
+        "disabled-flag": false,
+        "multi-variate-flag": "hello"
+    },
     "sessionRecording": false
 }

@@ -202,6 +202,7 @@ func ExampleCapture() {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
+		SendFeatureFlags: false,
 	})
 
 	fmt.Printf("%s\n", <-body)
@@ -221,6 +222,7 @@ func ExampleCapture() {
 	//         "platform": "macos",
 	//         "version": "1.0.0"
 	//       },
+	//       "send_feature_flags": false,
 	//       "timestamp": "2009-11-10T23:00:00Z",
 	//       "type": "capture"
 	//     }
@@ -267,6 +269,7 @@ func TestEnqueue(t *testing.T) {
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
+				SendFeatureFlags: false,
 			},
 		},
 		"*alias": {
@@ -302,6 +305,7 @@ func TestEnqueue(t *testing.T) {
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
+				SendFeatureFlags: false,
 			},
 		},
 	}
@@ -385,6 +389,7 @@ func TestCaptureWithInterval(t *testing.T) {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
+		SendFeatureFlags: false,
 	})
 
 	// Will flush in 100 milliseconds
@@ -421,7 +426,8 @@ func TestCaptureWithTimestamp(t *testing.T) {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
-		Timestamp: time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
+		SendFeatureFlags: false,
+		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
 	if res := string(<-body); ref != res {
@@ -453,6 +459,7 @@ func TestCaptureMany(t *testing.T) {
 				"application": "PostHog Go",
 				"version":     i,
 			},
+			SendFeatureFlags: false,
 		})
 	}
 
@@ -734,10 +741,11 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	})
 	defer client.Close()
 
-	receivedErrors := [3]error{}
+	receivedErrors := [4]error{}
 	receivedErrors[0] = client.ReloadFeatureFlags()
 	_, receivedErrors[1] = client.IsFeatureEnabled("some key", "some id", false)
-	_, receivedErrors[2] = client.GetFeatureFlags()
+	_, receivedErrors[2] = client.GetFeatureFlag("some key", "some id", false)
+	_, receivedErrors[3] = client.GetFeatureFlags()
 
 	for _, receivedError := range receivedErrors {
 		if receivedError == nil || receivedError.Error() != "specifying a PersonalApiKey is required for using feature flags" {
@@ -760,12 +768,16 @@ func TestSimpleFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, err := client.IsFeatureEnabled("simpleFlag", "hey", false)
+	isEnabled, checkErr := client.IsFeatureEnabled("simpleFlag", "hey", false)
 
-	if err != nil || !isEnabled {
+	if checkErr != nil || !isEnabled {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
 	}
 
+	flagValue, valueError := client.GetFeatureFlag("simpleFlag", "hey", false)
+	if valueError != nil || flagValue != true {
+		t.Errorf("simple flag with null rollout percentage should have value 'true'")
+	}
 }
 
 func TestSimpleFlagCalculation(t *testing.T) {
@@ -778,16 +790,15 @@ func TestSimpleFlagCalculation(t *testing.T) {
 	if err != nil || isEnabled {
 		t.Errorf("calculation for a.b should succeed and be false")
 	}
-
 }
 
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/decide/" {
-			w.Write([]byte(fixture("test-decide.json")))
-		} else if r.URL.Path == "/api/feature_flag/" {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		} else if r.URL.Path != "/batch/" {
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -799,9 +810,77 @@ func TestComplexFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, err := client.IsFeatureEnabled("enabled-flag", "hey", false)
+	isEnabled, checkErr := client.IsFeatureEnabled("enabled-flag", "hey", false)
 
-	if err != nil || !isEnabled {
+	if checkErr != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
+	}
+
+	flagValue, valueErr := client.GetFeatureFlag("enabled-flag", "hey", false)
+
+	if valueErr != nil || flagValue != "true" {
+		t.Errorf("flag listed in /decide/ response should have value 'true'")
+	}
+}
+
+func TestMultiVariateFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
+			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+			t.Errorf("client called an endpoint it shouldn't have")
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isEnabled, checkErr := client.IsFeatureEnabled("multi-variate-flag", "hey", false)
+
+	if checkErr != nil || !isEnabled {
+		t.Errorf("flag listed in /decide/ response should be marked as enabled")
+	}
+
+	flagValue, err := client.GetFeatureFlag("multi-variate-flag", "hey", false)
+
+	if err != nil || flagValue != "hello" {
+		t.Errorf("flag listed in /decide/ response should have value 'hello'")
+	}
+}
+
+func TestDisabledFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
+			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+			t.Errorf("client called an endpoint it shouldn't have")
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isEnabled, checkErr := client.IsFeatureEnabled("disabled-flag", "hey", false)
+
+	if checkErr != nil || isEnabled {
+		t.Errorf("flag listed in /decide/ response should be marked as disabled")
+	}
+
+	flagValue, err := client.GetFeatureFlag("disabled-flag", "hey", false)
+
+	if err != nil || flagValue != false {
+		t.Errorf("flag listed in /decide/ response should have value 'false'")
 	}
 }

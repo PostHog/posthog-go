@@ -13,6 +13,7 @@
         "platform": "macos",
         "version": "1.0.0"
       },
+      "send_feature_flags": false,
       "timestamp": "2015-07-10T23:00:00Z",
       "type": "capture"
     }
