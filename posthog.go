@@ -217,13 +217,13 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
-func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool) (bool, error) {
+func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool, personProperties Properties, groupProperties Properties) (bool, error) {
 	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
 		return false, errors.New(errorMessage)
 	}
-	isEnabled, err := c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue)
+	isEnabled, err := c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue, personProperties, groupProperties)
 	c.Enqueue(Capture{
 		DistinctId: distinctId,
 		Event:      "$feature_flag_called",
@@ -245,13 +245,13 @@ func (c *client) ReloadFeatureFlags() error {
 	return nil
 }
 
-func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue interface{}) (interface{}, error) {
+func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue interface{}, personProperties Properties, groupProperties Properties) (interface{}, error) {
 	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
 		return "false", errors.New(errorMessage)
 	}
-	flagValue, err := c.featureFlagsPoller.GetFeatureFlag(flagKey, distinctId, defaultValue)
+	flagValue, err := c.featureFlagsPoller.GetFeatureFlag(flagKey, distinctId, defaultValue, personProperties, groupProperties)
 	c.Enqueue(Capture{
 		DistinctId: distinctId,
 		Event:      "$feature_flag_called",

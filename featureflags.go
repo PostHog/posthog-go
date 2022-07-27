@@ -36,6 +36,33 @@ type FeatureFlag struct {
 	IsSimpleFlag      bool   `json:"is_simple_flag"`
 	RolloutPercentage *uint8 `json:"rollout_percentage"`
 	Active            bool   `json:"active"`
+	Filters           Filter `json:"filters"`
+}
+
+type Filter struct {
+	AggregationGroupTypeIndex *uint8          `json:"aggregation_group_type_index"`
+	Groups                    []PropertyGroup `json:"groups"`
+	Multivariate              *Variants       `json:"multivariate"`
+}
+
+type Variants struct {
+	Variants []FlagVariant `json:"variants"`
+}
+
+type FlagVariant struct {
+	Key               string `json:"key"`
+	Name              string `json:"name"`
+	RolloutPercentage *uint8 `json:"rollout_percentage"`
+}
+type PropertyGroup struct {
+	Properties        []map[string]interface{} `json:"properties"`
+	RolloutPercentage *uint8                   `json:"rollout_percentage"`
+}
+
+type FlagVariantMeta struct {
+	ValueMin int
+	ValueMax int
+	Key      string
 }
 
 type FeatureFlagsResponse struct {
@@ -125,28 +152,8 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 }
 
-func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool) (bool, error) {
-	featureFlags := poller.GetFeatureFlags()
-
-	if len(featureFlags) < 1 {
-		return defaultResult, nil
-	}
-
-	featureFlag := FeatureFlag{Key: ""}
-
-	// avoid using flag for conflicts with Golang's stdlib `flag`
-	for _, storedFlag := range featureFlags {
-		if key == storedFlag.Key {
-			featureFlag = storedFlag
-			break
-		}
-	}
-
-	if featureFlag.Key == "" {
-		return defaultResult, nil
-	}
-
-	result, err := poller.getFeatureFlagVariant(featureFlag, key, distinctId)
+func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool, personProperties Properties, groupProperties Properties) (bool, error) {
+	result, err := poller.GetFeatureFlag(key, distinctId, defaultResult, personProperties, groupProperties)
 	if err != nil {
 		return false, err
 	}
@@ -157,7 +164,7 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 	return false, nil
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}) (interface{}, error) {
+func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}, personProperties Properties, groupProperties Properties) (interface{}, error) {
 	featureFlags := poller.GetFeatureFlags()
 
 	if len(featureFlags) < 1 {
@@ -178,7 +185,142 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		return defaultResult, nil
 	}
 
+	matchingVariantOrBool, err := matchFeatureFlagProperties(featureFlag, distinctId, personProperties)
+
+	if err != nil {
+		return defaultResult, nil
+	}
+
+	if matchingVariantOrBool != nil {
+		return matchingVariantOrBool, nil
+	}
+
 	return poller.getFeatureFlagVariant(featureFlag, key, distinctId)
+}
+
+func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error) {
+	lookupTable, err := getVariantLookupTable(flag)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, variant := range lookupTable {
+		minHash, err := _hash(flag.Key, distinctId, "variant")
+
+		if err != nil {
+			return nil, err
+		}
+
+		maxHash, err := _hash(flag.Key, distinctId, "variant")
+
+		if err != nil {
+			return nil, err
+		}
+
+		if minHash >= float64(variant.ValueMin) && maxHash < float64(variant.ValueMax) {
+			return variant.Key, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func getVariantLookupTable(flag FeatureFlag) ([]FlagVariantMeta, error) {
+	lookupTable := []FlagVariantMeta{}
+	valueMin := 0
+
+	multivariates := flag.Filters.Multivariate
+
+	if multivariates == nil || multivariates.Variants == nil {
+		errMessage := "No multivariate table provided"
+		return nil, errors.New(errMessage)
+	}
+
+	for _, variant := range multivariates.Variants {
+		valueMax := valueMin + int(*variant.RolloutPercentage)/100
+		_flagVariantMeta := FlagVariantMeta{ValueMin: valueMin, ValueMax: valueMax, Key: variant.Key}
+		lookupTable = append(lookupTable, _flagVariantMeta)
+		valueMin = valueMax
+	}
+
+	return lookupTable, nil
+
+}
+
+func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties Properties) (interface{}, error) {
+	conditions := flag.Filters.Groups
+
+	for _, condition := range conditions {
+		isMatch, err := isConditionMatch(flag, distinctId, condition, properties)
+
+		if err != nil {
+			return nil, err
+		}
+
+		if isMatch {
+			return getMatchingVariant(flag, distinctId)
+		}
+	}
+
+	return false, nil
+}
+
+func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGroup, properties Properties) (bool, error) {
+	if len(condition.Properties) > 0 {
+		for _, prop := range condition.Properties {
+			isMatch, err := matchProperty(prop, properties)
+			if err != nil {
+				return false, err
+			}
+
+			if !isMatch {
+				return false, nil
+			}
+		}
+
+		if condition.RolloutPercentage != nil {
+			return true, nil
+		}
+	}
+
+	if condition.RolloutPercentage != nil {
+		return checkIfSimpleFlagEnabled(flag.Key, distinctId, *condition.RolloutPercentage)
+	}
+
+	return true, nil
+}
+
+func matchProperty(property map[string]interface{}, properties Properties) (bool, error) {
+	// key, exists := property["key"]
+
+	// if !exists {
+	// 	errMessage := "Property needs a key"
+	// 	return false, errors.New(errMessage)
+	// }
+
+	// operator, exists := property["operator"]
+
+	// if !exists {
+	// 	operator = "exact"
+	// }
+
+	// value, exists := property["value"]
+
+	// if _, ok := properties[key.(string)]; !ok {
+	// 	errMessage := "Can't match properties without a given property value"
+	// 	return false, errors.New(errMessage)
+	// }
+
+	// if operator == "is_not_set" {
+	// 	errMessage := "Can't match properties with operator is_not_set"
+	// 	return false, errors.New(errMessage)
+	// }
+
+	// if operator == "exact" {
+
+	// }
+
 }
 
 func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
@@ -193,16 +335,28 @@ func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId str
 
 // extracted as a regular func for testing purposes
 func checkIfSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
+	val, err := _hash(key, distinctId, "")
+
+	if err != nil {
+		return false, err
+	}
+
+	return val <= float64(rolloutPercentage)/100, nil
+}
+
+func _hash(key string, distinctId string, salt string) (float64, error) {
 	hash := sha1.New()
-	hash.Write([]byte("" + key + "." + distinctId + ""))
+	hash.Write([]byte("" + key + "." + distinctId + "" + salt))
 	digest := hash.Sum(nil)
 	hexString := fmt.Sprintf("%x\n", digest)[:15]
 
 	value, err := strconv.ParseInt(hexString, 16, 64)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	return (float64(value) / LONG_SCALE) <= float64(rolloutPercentage)/100, nil
+
+	return float64(value) / LONG_SCALE, nil
+
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
