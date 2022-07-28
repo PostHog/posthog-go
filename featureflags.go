@@ -57,8 +57,15 @@ type FlagVariant struct {
 	RolloutPercentage *uint8 `json:"rollout_percentage"`
 }
 type PropertyGroup struct {
-	Properties        []map[string]interface{} `json:"properties"`
-	RolloutPercentage *uint8                   `json:"rollout_percentage"`
+	Properties        []Property `json:"properties"`
+	RolloutPercentage *uint8     `json:"rollout_percentage"`
+}
+
+type Property struct {
+	Key      string      `json:"key"`
+	Operator string      `json:"operator"`
+	Value    interface{} `json:"value"`
+	Type     string      `json:"type"`
 }
 
 type FlagVariantMeta struct {
@@ -267,6 +274,7 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGroup, properties Properties) (bool, error) {
 	if len(condition.Properties) > 0 {
 		for _, prop := range condition.Properties {
+
 			isMatch, err := matchProperty(prop, properties)
 			if err != nil {
 				return false, err
@@ -289,23 +297,12 @@ func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGro
 	return true, nil
 }
 
-func matchProperty(property map[string]interface{}, properties Properties) (bool, error) {
-	key, exists := property["key"]
+func matchProperty(property Property, properties Properties) (bool, error) {
+	key := property.Key
+	operator := property.Operator
+	value := property.Value
 
-	if !exists {
-		errMessage := "Property needs a key"
-		return false, errors.New(errMessage)
-	}
-
-	operator, exists := property["operator"]
-
-	if !exists {
-		operator = "exact"
-	}
-
-	value, exists := property["value"]
-
-	if _, ok := properties[key.(string)]; !ok {
+	if _, ok := properties[key]; !ok {
 		errMessage := "Can't match properties without a given property value"
 		return false, errors.New(errMessage)
 	}
@@ -315,12 +312,7 @@ func matchProperty(property map[string]interface{}, properties Properties) (bool
 		return false, errors.New(errMessage)
 	}
 
-	override_value, _ := properties[key.(string)]
-
-	if !exists {
-		errMessage := "Can't match properties with operator is_not_set"
-		return false, errors.New(errMessage)
-	}
+	override_value, _ := properties[key]
 
 	if operator == "exact" {
 		switch t := value.(type) {

@@ -9,11 +9,12 @@ import (
 )
 
 func TestMatchPropertyValue(t *testing.T) {
-	property := make(map[string]interface{})
+	property := Property{
+		Key:      "Browser",
+		Value:    "Chrome",
+		Operator: "exact",
+	}
 
-	property["key"] = "Browser"
-	property["value"] = "Chrome"
-	property["operatpr"] = "exact"
 	properties := NewProperties().Set("Browser", "Chrome")
 
 	isMatch, err := matchProperty(property, properties)
@@ -24,11 +25,12 @@ func TestMatchPropertyValue(t *testing.T) {
 
 }
 func TestMatchPropertySlice(t *testing.T) {
-	property := make(map[string]interface{})
 
-	property["key"] = "Browser"
-	property["value"] = []interface{}{"Chrome"}
-	property["operatpr"] = "exact"
+	property := Property{
+		Key:      "Browser",
+		Value:    []interface{}{"Chrome"},
+		Operator: "exact",
+	}
 	properties := NewProperties().Set("Browser", "Chrome")
 
 	isMatch, err := matchProperty(property, properties)
@@ -44,6 +46,28 @@ func TestFallbackToDecide(t *testing.T) {
 }
 
 func TestLocalEvaluationPersonProperty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, NewProperties().Set("region", "USA"), NewProperties())
+
+	if !isMatch {
+		t.Error("Should match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, NewProperties().Set("region", "Canada"), NewProperties())
+
+	if isMatch {
+		t.Error("Should not match")
+	}
 
 }
 

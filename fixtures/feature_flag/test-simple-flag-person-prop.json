@@ -1,0 +1,31 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "id": 719,
+            "name": "",
+            "key": "simple-flag",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "region",
+                                "operator": "exact",
+                                "value": ["USA"],
+                                "type": "person"
+                            }
+                        ],
+                        "rollout_percentage": 100
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": true,
+            "rollout_percentage": null
+        }
+    ]
+}
