@@ -37,11 +37,11 @@ type Client interface {
 	Enqueue(Message) error
 	//
 	// Method returns if a feature flag is on for a given user based on their distinct ID
-	IsFeatureEnabled(string, string, bool) (bool, error)
+	IsFeatureEnabled(string, string, bool, Properties, Properties) (bool, error)
 	//
 	// Method returns variant value if multivariantflag or otherwise a boolean indicating
 	// if the given flag is on or off for the user
-	GetFeatureFlag(string, string, interface{}) (interface{}, error)
+	GetFeatureFlag(string, string, interface{}, Properties, Properties) (interface{}, error)
 	//
 	// Method forces a reload of feature flags
 	ReloadFeatureFlags() error

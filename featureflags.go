@@ -9,7 +9,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -185,6 +187,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		return defaultResult, nil
 	}
 
+	// TODO: handle groups
 	matchingVariantOrBool, err := matchFeatureFlagProperties(featureFlag, distinctId, personProperties)
 
 	if err != nil {
@@ -292,35 +295,163 @@ func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGro
 }
 
 func matchProperty(property map[string]interface{}, properties Properties) (bool, error) {
-	// key, exists := property["key"]
+	key, exists := property["key"]
 
-	// if !exists {
-	// 	errMessage := "Property needs a key"
-	// 	return false, errors.New(errMessage)
-	// }
+	if !exists {
+		errMessage := "Property needs a key"
+		return false, errors.New(errMessage)
+	}
 
-	// operator, exists := property["operator"]
+	operator, exists := property["operator"]
 
-	// if !exists {
-	// 	operator = "exact"
-	// }
+	if !exists {
+		operator = "exact"
+	}
 
-	// value, exists := property["value"]
+	value, exists := property["value"]
 
-	// if _, ok := properties[key.(string)]; !ok {
-	// 	errMessage := "Can't match properties without a given property value"
-	// 	return false, errors.New(errMessage)
-	// }
+	if _, ok := properties[key.(string)]; !ok {
+		errMessage := "Can't match properties without a given property value"
+		return false, errors.New(errMessage)
+	}
 
-	// if operator == "is_not_set" {
-	// 	errMessage := "Can't match properties with operator is_not_set"
-	// 	return false, errors.New(errMessage)
-	// }
+	if operator == "is_not_set" {
+		errMessage := "Can't match properties with operator is_not_set"
+		return false, errors.New(errMessage)
+	}
 
-	// if operator == "exact" {
+	override_value, _ := properties[key.(string)]
 
-	// }
+	if !exists {
+		errMessage := "Can't match properties with operator is_not_set"
+		return false, errors.New(errMessage)
+	}
 
+	if operator == "exact" {
+		switch t := value.(type) {
+		case []interface{}:
+			return contains(t, override_value), nil
+		default:
+			return value == override_value, nil
+		}
+	}
+
+	if operator == "is_not" {
+		switch t := value.(type) {
+		case []interface{}:
+			return !contains(t, override_value), nil
+		default:
+			return value != override_value, nil
+		}
+	}
+
+	if operator == "is_set" {
+		return true, nil
+	}
+
+	if operator == "icontains" {
+		return strings.Contains(strings.ToLower(override_value.(string)), strings.ToLower(value.(string))), nil
+	}
+
+	if operator == "not_icontains" {
+		return !strings.Contains(strings.ToLower(override_value.(string)), strings.ToLower(value.(string))), nil
+	}
+
+	if operator == "regex" {
+		r, err := regexp.Compile(value.(string))
+
+		if err != nil {
+			errMessage := "Invalid regex"
+			return false, errors.New(errMessage)
+		}
+
+		match := r.MatchString(override_value.(string))
+
+		if match {
+			return true, nil
+		} else {
+			return false, nil
+		}
+	}
+
+	if operator == "not_regex" {
+		r, err := regexp.Compile(value.(string))
+
+		if err != nil {
+			errMessage := "Invalid regex"
+			return false, errors.New(errMessage)
+		}
+
+		match := r.MatchString(override_value.(string))
+
+		if !match {
+			return true, nil
+		} else {
+			return false, nil
+		}
+	}
+
+	if operator == "gt" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable > valueOrderable, nil
+	}
+
+	if operator == "lt" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable < valueOrderable, nil
+	}
+
+	if operator == "gte" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable >= valueOrderable, nil
+	}
+
+	if operator == "lte" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable <= valueOrderable, nil
+	}
+
+	return false, nil
+
+}
+
+func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
+	if _, ok := firstValue.(float64); !ok {
+		errMessage := "Value 1 is not orderable"
+		return 0, 0, errors.New(errMessage)
+	}
+	if _, ok := secondValue.(float64); !ok {
+		errMessage := "Value 2 is not orderable"
+		return 0, 0, errors.New(errMessage)
+	}
+
+	return firstValue.(float64), secondValue.(float64), nil
+
+}
+
+func contains(s []interface{}, e interface{}) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
 }
 
 func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
