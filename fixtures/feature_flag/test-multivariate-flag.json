@@ -1,0 +1,28 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "id": 719,
+            "name": "Beta Feature",
+            "key": "multivariate-flag",
+            "filters": {
+                "groups": [{"properties": [], "rollout_percentage": 55}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 20},
+                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 20},
+                        {"key": "fourth-variant", "name": "Fourth Variant", "rollout_percentage": 5},
+                        {"key": "fifth-variant", "name": "Fifth Variant", "rollout_percentage": 5}
+                    ]
+                }
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ]
+}

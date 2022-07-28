@@ -62,8 +62,8 @@ type PropertyGroup struct {
 }
 
 type FlagVariantMeta struct {
-	ValueMin int
-	ValueMax int
+	ValueMin float64
+	ValueMax float64
 	Key      string
 }
 
@@ -202,11 +202,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 }
 
 func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error) {
-	lookupTable, err := getVariantLookupTable(flag)
-
-	if err != nil {
-		return nil, err
-	}
+	lookupTable := getVariantLookupTable(flag)
 
 	for _, variant := range lookupTable {
 		minHash, err := _hash(flag.Key, distinctId, "variant")
@@ -226,28 +222,27 @@ func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error
 		}
 	}
 
-	return nil, nil
+	return true, nil
 }
 
-func getVariantLookupTable(flag FeatureFlag) ([]FlagVariantMeta, error) {
+func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	lookupTable := []FlagVariantMeta{}
-	valueMin := 0
+	valueMin := 0.00
 
 	multivariates := flag.Filters.Multivariate
 
 	if multivariates == nil || multivariates.Variants == nil {
-		errMessage := "No multivariate table provided"
-		return nil, errors.New(errMessage)
+		return lookupTable
 	}
 
 	for _, variant := range multivariates.Variants {
-		valueMax := valueMin + int(*variant.RolloutPercentage)/100
-		_flagVariantMeta := FlagVariantMeta{ValueMin: valueMin, ValueMax: valueMax, Key: variant.Key}
+		valueMax := float64(valueMin) + float64(*variant.RolloutPercentage)/100
+		_flagVariantMeta := FlagVariantMeta{ValueMin: float64(valueMin), ValueMax: valueMax, Key: variant.Key}
 		lookupTable = append(lookupTable, _flagVariantMeta)
-		valueMin = valueMax
+		valueMin = float64(valueMax)
 	}
 
-	return lookupTable, nil
+	return lookupTable
 
 }
 
