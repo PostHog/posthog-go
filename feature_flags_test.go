@@ -116,30 +116,76 @@ func TestMatchPropertyNumber(t *testing.T) {
 }
 
 func TestMatchPropertyRegex(t *testing.T) {
+
+	shouldMatch := []interface{}{"value.com", "value2.com"}
+
 	property := Property{
 		Key:      "key",
 		Value:    "\\.com$",
 		Operator: "regex",
 	}
 
-	isMatch, err := matchProperty(property, NewProperties().Set("key", "value.com"))
+	for _, val := range shouldMatch {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
 
-	if err != nil {
-		t.Error(err)
+		if !isMatch {
+			t.Error("Value is not a match")
+		}
 	}
 
-	if !isMatch {
-		t.Error("Value is not a match")
+	shouldNotMatch := []interface{}{".com343tfvalue5", "Alakazam", 123}
+
+	for _, val := range shouldNotMatch {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if isMatch {
+			t.Error("Value is not a match")
+		}
 	}
 
-	isMatch, err = matchProperty(property, NewProperties().Set("key", ".com343tfvalue5"))
-
-	if err != nil {
-		t.Error(err)
+	// invalid regex
+	property = Property{
+		Key:      "key",
+		Value:    "?*",
+		Operator: "regex",
 	}
 
-	if isMatch {
-		t.Error("Value is not a match")
+	shouldNotMatch = []interface{}{"value", "valu2"}
+	for _, val := range shouldNotMatch {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if isMatch {
+			t.Error("Value is not a match")
+		}
+	}
+
+	// non string value
+
+	property = Property{
+		Key:      "key",
+		Value:    4,
+		Operator: "regex",
+	}
+
+	shouldMatch = []interface{}{"4", 4}
+	for _, val := range shouldMatch {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if !isMatch {
+			t.Error("Value is not a match")
+		}
 	}
 }
 

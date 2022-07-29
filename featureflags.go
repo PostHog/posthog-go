@@ -345,14 +345,35 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	if operator == "regex" {
-		r, err := regexp.Compile(value.(string))
 
-		if err != nil {
-			errMessage := "Invalid regex"
+		var r *regexp.Regexp
+		var err error
+
+		if valueString, ok := value.(string); ok {
+			r, err = regexp.Compile(valueString)
+		} else if valueInt, ok := value.(int); ok {
+			valueString = strconv.Itoa(valueInt)
+			r, err = regexp.Compile(valueString)
+		} else {
+			errMessage := "Regex expression not allowed"
 			return false, errors.New(errMessage)
 		}
 
-		match := r.MatchString(override_value.(string))
+		// invalid regex
+		if err != nil {
+			return false, nil
+		}
+
+		var match bool
+		if valueString, ok := override_value.(string); ok {
+			match = r.MatchString(valueString)
+		} else if valueInt, ok := override_value.(int); ok {
+			valueString = strconv.Itoa(valueInt)
+			match = r.MatchString(valueString)
+		} else {
+			errMessage := "Value type not supported"
+			return false, errors.New(errMessage)
+		}
 
 		if match {
 			return true, nil
@@ -362,14 +383,34 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	if operator == "not_regex" {
-		r, err := regexp.Compile(value.(string))
+		var r *regexp.Regexp
+		var err error
 
-		if err != nil {
-			errMessage := "Invalid regex"
+		if valueString, ok := value.(string); ok {
+			r, err = regexp.Compile(valueString)
+		} else if valueInt, ok := value.(int); ok {
+			valueString = strconv.Itoa(valueInt)
+			r, err = regexp.Compile(valueString)
+		} else {
+			errMessage := "Regex expression not allowed"
 			return false, errors.New(errMessage)
 		}
 
-		match := r.MatchString(override_value.(string))
+		// invalid regex
+		if err != nil {
+			return false, nil
+		}
+
+		var match bool
+		if valueString, ok := override_value.(string); ok {
+			match = r.MatchString(valueString)
+		} else if valueInt, ok := override_value.(int); ok {
+			valueString = strconv.Itoa(valueInt)
+			match = r.MatchString(valueString)
+		} else {
+			errMessage := "Value type not supported"
+			return false, errors.New(errMessage)
+		}
 
 		if !match {
 			return true, nil
