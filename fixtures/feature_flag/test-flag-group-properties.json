@@ -5,27 +5,30 @@
     "flags": [
         {
             "id": 719,
-            "name": "",
-            "key": "simple-flag",
+            "name": "Beta Feature",
+            "key": "group-flag",
             "filters": {
+                "aggregation_group_type_index": 0,
                 "groups": [
                     {
                         "properties": [
                             {
-                                "key": "region",
+                                "group_type_index": 0,
+                                "key": "name",
                                 "operator": "exact",
-                                "value": ["USA"],
-                                "type": "person"
+                                "value": ["Project Name 1"],
+                                "type": "group"
                             }
                         ],
-                        "rollout_percentage": 100
+                        "rollout_percentage": 35
                     }
                 ]
             },
             "deleted": false,
             "active": true,
-            "is_simple_flag": true,
+            "is_simple_flag": false,
             "rollout_percentage": null
         }
-    ]
+    ],
+    "group_type_mapping" : {"0": "company", "1": "project"}
 }

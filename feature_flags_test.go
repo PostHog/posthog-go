@@ -190,7 +190,37 @@ func TestMatchPropertyRegex(t *testing.T) {
 }
 
 func TestMatchPropertyContains(t *testing.T) {
+	shouldMatch := []interface{}{"value", "value2", "value3", "value4", "343tfvalue5"}
 
+	property := Property{
+		Key:      "key",
+		Value:    "valUe",
+		Operator: "icontains",
+	}
+
+	for _, val := range shouldMatch {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if !isMatch {
+			t.Error("Value is not a match")
+		}
+	}
+
+	shouldNotMatch := []interface{}{"Alakazam", 123}
+
+	for _, val := range shouldNotMatch {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if isMatch {
+			t.Error("Value is not a match")
+		}
+	}
 }
 
 func TestFallbackToDecide(t *testing.T) {
@@ -209,13 +239,13 @@ func TestLocalEvaluationPersonProperty(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, NewProperties().Set("region", "USA"), NewProperties())
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, map[string]string{}, NewProperties().Set("region", "USA"), map[string]Properties{})
 
 	if !isMatch {
 		t.Error("Should match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, NewProperties().Set("region", "Canada"), NewProperties())
+	isMatch, _ = client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, map[string]string{}, NewProperties().Set("region", "Canada"), map[string]Properties{})
 
 	if isMatch {
 		t.Error("Should not match")
@@ -224,7 +254,34 @@ func TestLocalEvaluationPersonProperty(t *testing.T) {
 }
 
 func TestLocalEvaluationGroupProperty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+	}))
+	defer server.Close()
 
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("group-flag", "some-distinct-id", false, map[string]string{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, map[string]string{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 2")})
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, map[string]string{"company": "amazon_without_rollout"}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
+
+	if !isMatch {
+		t.Error("Should match")
+	}
 }
 
 func TestExperienceContinuityOverride(t *testing.T) {
@@ -247,7 +304,7 @@ func TestSimpleFlagConsistency(t *testing.T) {
 	results := []bool{false, true, true, false, true}
 
 	for i := 0; i < 5; i++ {
-		isMatch, _ := client.IsFeatureEnabled("simple-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, NewProperties(), NewProperties())
+		isMatch, _ := client.IsFeatureEnabled("simple-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, map[string]string{}, NewProperties(), map[string]Properties{})
 		if results[i] != isMatch {
 			t.Error("Match result is not consistent")
 		}
@@ -270,7 +327,7 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 	results := []interface{}{"second-variant", "second-variant", "first-variant", false, false}
 
 	for i := 0; i < 5; i++ {
-		variant, _ := client.GetFeatureFlag("multivariate-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, NewProperties(), NewProperties())
+		variant, _ := client.GetFeatureFlag("multivariate-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, map[string]string{}, NewProperties(), map[string]Properties{})
 		if results[i] != variant {
 			t.Error("Match result is not consistent")
 		}

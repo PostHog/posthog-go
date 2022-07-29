@@ -24,6 +24,7 @@ type FeatureFlagsPoller struct {
 	shutdown                     chan bool
 	forceReload                  chan bool
 	featureFlags                 []FeatureFlag
+	groups                       map[string]string
 	personalApiKey               string
 	projectApiKey                string
 	Errorf                       func(format string, args ...interface{})
@@ -75,7 +76,8 @@ type FlagVariantMeta struct {
 }
 
 type FeatureFlagsResponse struct {
-	Results []FeatureFlag `json:"results"`
+	Flags            []FeatureFlag      `json:"flags"`
+	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
 }
 
 type DecideRequestData struct {
@@ -130,7 +132,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	requestData := []byte{}
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
-	res, err := poller.request("GET", "api/feature_flag", requestData, headers)
+	res, err := poller.request("GET", "api/feature_flag/local_evaluation", requestData, headers)
 	if err != nil || res.StatusCode != http.StatusOK {
 		poller.Errorf("Unable to fetch feature flags", err)
 	}
@@ -143,26 +145,27 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	featureFlagsResponse := FeatureFlagsResponse{}
 	err = json.Unmarshal([]byte(resBody), &featureFlagsResponse)
 	if err != nil {
-		poller.Errorf("Unable to unmarshal response from api/feature_flag", err)
+		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation", err)
 		return
 	}
 	if !poller.fetchedFlagsSuccessfullyOnce {
 		poller.loaded <- true
 	}
 	newFlags := []FeatureFlag{}
-	for _, flag := range featureFlagsResponse.Results {
+	for _, flag := range featureFlagsResponse.Flags {
 		if flag.Active {
 			newFlags = append(newFlags, flag)
 		}
 	}
 	poller.mutex.Lock()
 	poller.featureFlags = newFlags
+	poller.groups = *featureFlagsResponse.GroupTypeMapping
 	poller.mutex.Unlock()
 
 }
 
-func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool, personProperties Properties, groupProperties Properties) (bool, error) {
-	result, err := poller.GetFeatureFlag(key, distinctId, defaultResult, personProperties, groupProperties)
+func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool, groups map[string]string, personProperties Properties, groupProperties map[string]Properties) (bool, error) {
+	result, err := poller.GetFeatureFlag(key, distinctId, defaultResult, groups, personProperties, groupProperties)
 	if err != nil {
 		return false, err
 	}
@@ -173,7 +176,7 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 	return false, nil
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}, personProperties Properties, groupProperties Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}, groups map[string]string, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	featureFlags := poller.GetFeatureFlags()
 
 	if len(featureFlags) < 1 {
@@ -195,7 +198,30 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 	}
 
 	// TODO: handle groups
-	matchingVariantOrBool, err := matchFeatureFlagProperties(featureFlag, distinctId, personProperties)
+	var matchingVariantOrBool interface{}
+	var err error
+
+	if featureFlag.Filters.AggregationGroupTypeIndex != nil {
+
+		groupName, exists := poller.groups[fmt.Sprintf("%d", *featureFlag.Filters.AggregationGroupTypeIndex)]
+
+		if !exists {
+			errMessage := "Flag has unknown group type index"
+			return nil, errors.New(errMessage)
+		}
+
+		_, exists = groups[groupName]
+
+		if !exists {
+			errMessage := fmt.Sprintf("FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", key)
+			return nil, errors.New(errMessage)
+		}
+
+		focusedGroupProperties := groupProperties[groupName]
+		matchingVariantOrBool, err = matchFeatureFlagProperties(featureFlag, distinctId, focusedGroupProperties)
+	} else {
+		matchingVariantOrBool, err = matchFeatureFlagProperties(featureFlag, distinctId, personProperties)
+	}
 
 	if err != nil {
 		return defaultResult, nil
@@ -337,43 +363,23 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	if operator == "icontains" {
-		return strings.Contains(strings.ToLower(override_value.(string)), strings.ToLower(value.(string))), nil
+		return strings.Contains(strings.ToLower(fmt.Sprintf("%v", override_value)), strings.ToLower(fmt.Sprintf("%v", value))), nil
 	}
 
 	if operator == "not_icontains" {
-		return !strings.Contains(strings.ToLower(override_value.(string)), strings.ToLower(value.(string))), nil
+		return !strings.Contains(strings.ToLower(fmt.Sprintf("%v", override_value)), strings.ToLower(fmt.Sprintf("%v", value))), nil
 	}
 
 	if operator == "regex" {
 
-		var r *regexp.Regexp
-		var err error
-
-		if valueString, ok := value.(string); ok {
-			r, err = regexp.Compile(valueString)
-		} else if valueInt, ok := value.(int); ok {
-			valueString = strconv.Itoa(valueInt)
-			r, err = regexp.Compile(valueString)
-		} else {
-			errMessage := "Regex expression not allowed"
-			return false, errors.New(errMessage)
-		}
+		r, err := regexp.Compile(fmt.Sprintf("%v", value))
 
 		// invalid regex
 		if err != nil {
 			return false, nil
 		}
 
-		var match bool
-		if valueString, ok := override_value.(string); ok {
-			match = r.MatchString(valueString)
-		} else if valueInt, ok := override_value.(int); ok {
-			valueString = strconv.Itoa(valueInt)
-			match = r.MatchString(valueString)
-		} else {
-			errMessage := "Value type not supported"
-			return false, errors.New(errMessage)
-		}
+		match := r.MatchString(fmt.Sprintf("%v", override_value))
 
 		if match {
 			return true, nil

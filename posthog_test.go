@@ -743,8 +743,8 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 	receivedErrors := [4]error{}
 	receivedErrors[0] = client.ReloadFeatureFlags()
-	_, receivedErrors[1] = client.IsFeatureEnabled("some key", "some id", false, NewProperties(), NewProperties())
-	_, receivedErrors[2] = client.GetFeatureFlag("some key", "some id", false, NewProperties(), NewProperties())
+	_, receivedErrors[1] = client.IsFeatureEnabled("some key", "some id", false, map[string]string{}, NewProperties(), map[string]Properties{})
+	_, receivedErrors[2] = client.GetFeatureFlag("some key", "some id", false, map[string]string{}, NewProperties(), map[string]Properties{})
 	_, receivedErrors[3] = client.GetFeatureFlags()
 
 	for _, receivedError := range receivedErrors {
@@ -768,13 +768,13 @@ func TestSimpleFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("simpleFlag", "hey", false, NewProperties(), NewProperties())
+	isEnabled, checkErr := client.IsFeatureEnabled("simpleFlag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
 	}
 
-	flagValue, valueError := client.GetFeatureFlag("simpleFlag", "hey", false, NewProperties(), NewProperties())
+	flagValue, valueError := client.GetFeatureFlag("simpleFlag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 	if valueError != nil || flagValue != true {
 		t.Errorf("simple flag with null rollout percentage should have value 'true'")
 	}
@@ -810,13 +810,13 @@ func TestComplexFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("enabled-flag", "hey", false, NewProperties(), NewProperties())
+	isEnabled, checkErr := client.IsFeatureEnabled("enabled-flag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
-	flagValue, valueErr := client.GetFeatureFlag("enabled-flag", "hey", false, NewProperties(), NewProperties())
+	flagValue, valueErr := client.GetFeatureFlag("enabled-flag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 
 	if valueErr != nil || flagValue != "true" {
 		t.Errorf("flag listed in /decide/ response should have value 'true'")
@@ -841,13 +841,13 @@ func TestMultiVariateFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("multi-variate-flag", "hey", false, NewProperties(), NewProperties())
+	isEnabled, checkErr := client.IsFeatureEnabled("multi-variate-flag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
-	flagValue, err := client.GetFeatureFlag("multi-variate-flag", "hey", false, NewProperties(), NewProperties())
+	flagValue, err := client.GetFeatureFlag("multi-variate-flag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 
 	if err != nil || flagValue != "hello" {
 		t.Errorf("flag listed in /decide/ response should have value 'hello'")
@@ -872,13 +872,13 @@ func TestDisabledFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("disabled-flag", "hey", false, NewProperties(), NewProperties())
+	isEnabled, checkErr := client.IsFeatureEnabled("disabled-flag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 
 	if checkErr != nil || isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as disabled")
 	}
 
-	flagValue, err := client.GetFeatureFlag("disabled-flag", "hey", false, NewProperties(), NewProperties())
+	flagValue, err := client.GetFeatureFlag("disabled-flag", "hey", false, map[string]string{}, NewProperties(), map[string]Properties{})
 
 	if err != nil || flagValue != false {
 		t.Errorf("flag listed in /decide/ response should have value 'false'")
