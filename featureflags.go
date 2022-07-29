@@ -419,17 +419,55 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 }
 
 func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
-	if _, ok := firstValue.(float64); !ok {
+	convertedFirstValue, err := interfaceToFloat(firstValue)
+
+	if err != nil {
 		errMessage := "Value 1 is not orderable"
 		return 0, 0, errors.New(errMessage)
 	}
-	if _, ok := secondValue.(float64); !ok {
+	convertedSecondValue, err := interfaceToFloat(secondValue)
+
+	if err != nil {
 		errMessage := "Value 2 is not orderable"
 		return 0, 0, errors.New(errMessage)
 	}
 
-	return firstValue.(float64), secondValue.(float64), nil
+	return convertedFirstValue, convertedSecondValue, nil
 
+}
+
+func interfaceToFloat(val interface{}) (float64, error) {
+
+	var i float64
+	switch t := val.(type) {
+	case int:
+		i = float64(t)
+	case int8:
+		i = float64(t)
+	case int16:
+		i = float64(t)
+	case int32:
+		i = float64(t)
+	case int64:
+		i = float64(t)
+	case float32:
+		i = float64(t)
+	case float64:
+		i = float64(t)
+	case uint8:
+		i = float64(t)
+	case uint16:
+		i = float64(t)
+	case uint32:
+		i = float64(t)
+	case uint64:
+		i = float64(t)
+	default:
+		errMessage := "Argument not orderable"
+		return 0.0, errors.New(errMessage)
+	}
+
+	return i, nil
 }
 
 func contains(s []interface{}, e interface{}) bool {

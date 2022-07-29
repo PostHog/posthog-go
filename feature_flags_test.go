@@ -41,6 +41,112 @@ func TestMatchPropertySlice(t *testing.T) {
 
 }
 
+func TestMatchPropertyNumber(t *testing.T) {
+	property := Property{
+		Key:      "Number",
+		Value:    5,
+		Operator: "gt",
+	}
+
+	properties := NewProperties().Set("Number", 7)
+
+	isMatch, err := matchProperty(property, properties)
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !isMatch {
+		t.Error("Value is not a match")
+	}
+
+	property = Property{
+		Key:      "Number",
+		Value:    5,
+		Operator: "lt",
+	}
+
+	properties = NewProperties().Set("Number", 4)
+
+	isMatch, err = matchProperty(property, properties)
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !isMatch {
+		t.Error("Value is not a match")
+	}
+
+	property = Property{
+		Key:      "Number",
+		Value:    5,
+		Operator: "gte",
+	}
+
+	properties = NewProperties().Set("Number", 5)
+
+	isMatch, err = matchProperty(property, properties)
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !isMatch {
+		t.Error("Value is not a match")
+	}
+
+	property = Property{
+		Key:      "Number",
+		Value:    5,
+		Operator: "lte",
+	}
+
+	properties = NewProperties().Set("Number", 4)
+
+	isMatch, err = matchProperty(property, properties)
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !isMatch {
+		t.Error("Value is not a match")
+	}
+}
+
+func TestMatchPropertyRegex(t *testing.T) {
+	property := Property{
+		Key:      "key",
+		Value:    "\\.com$",
+		Operator: "regex",
+	}
+
+	isMatch, err := matchProperty(property, NewProperties().Set("key", "value.com"))
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !isMatch {
+		t.Error("Value is not a match")
+	}
+
+	isMatch, err = matchProperty(property, NewProperties().Set("key", ".com343tfvalue5"))
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	if isMatch {
+		t.Error("Value is not a match")
+	}
+}
+
+func TestMatchPropertyContains(t *testing.T) {
+
+}
+
 func TestFallbackToDecide(t *testing.T) {
 
 }
