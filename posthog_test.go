@@ -796,7 +796,7 @@ func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
@@ -818,8 +818,8 @@ func TestComplexFlag(t *testing.T) {
 
 	flagValue, valueErr := client.GetFeatureFlag("enabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
 
-	if valueErr != nil || flagValue != "true" {
-		t.Errorf("flag listed in /decide/ response should have value 'true'")
+	if valueErr != nil || flagValue != true {
+		t.Errorf("flag listed in /decide/ response should be true")
 	}
 }
 
@@ -827,8 +827,8 @@ func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
-			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
@@ -858,8 +858,8 @@ func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag") {
-			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
