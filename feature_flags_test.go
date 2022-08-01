@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	"testing"
 )
@@ -224,12 +225,32 @@ func TestMatchPropertyContains(t *testing.T) {
 }
 
 func TestFallbackToDecide(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte("{}")) // Don't return anything for local eval
+		}
+	}))
 
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+
+	if !isMatch {
+		t.Error("Should match")
+	}
 }
 
-func TestLocalEvaluationPersonProperty(t *testing.T) {
+func TestComplexDefinition(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		w.Write([]byte(fixture("feature_flag/test-complex-definition.json")))
 	}))
 	defer server.Close()
 
@@ -239,18 +260,53 @@ func TestLocalEvaluationPersonProperty(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, map[string]string{}, NewProperties().Set("region", "USA"), map[string]Properties{})
+	isMatch, _ := client.IsFeatureEnabled("complex-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA").Set("name", "Aloha"), map[string]Properties{})
 
 	if !isMatch {
 		t.Error("Should match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, map[string]string{}, NewProperties().Set("region", "Canada"), map[string]Properties{})
+	isMatch, _ = client.IsFeatureEnabled("complex-flag", "some-distinct-id_within_rollou", false, Groups{}, NewProperties().Set("region", "USA").Set("email", "a@b.com"), map[string]Properties{})
+
+	if !isMatch {
+		t.Error("Should match")
+	}
+
+}
+
+func TestDefaultValueAfterError(t *testing.T) {
+
+}
+
+func TestLocalEvaluationPersonProperty(t *testing.T) {
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA"), map[string]Properties{})
+
+	if !isMatch {
+		t.Error("Should match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "Canada"), map[string]Properties{})
 
 	if isMatch {
 		t.Error("Should not match")
 	}
-
 }
 
 func TestLocalEvaluationGroupProperty(t *testing.T) {
@@ -265,19 +321,19 @@ func TestLocalEvaluationGroupProperty(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("group-flag", "some-distinct-id", false, map[string]string{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
+	isMatch, _ := client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
 
 	if isMatch {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, map[string]string{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 2")})
+	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 2")})
 
 	if isMatch {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, map[string]string{"company": "amazon_without_rollout"}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
+	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{"company": "amazon_without_rollout"}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
 
 	if !isMatch {
 		t.Error("Should match")
@@ -285,7 +341,27 @@ func TestLocalEvaluationGroupProperty(t *testing.T) {
 }
 
 func TestExperienceContinuityOverride(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
+		}
+	}))
 
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	featureVariant, _ := client.GetFeatureFlag("beta-feature", "distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+
+	if featureVariant != "decide-fallback-value" {
+		t.Error("Should be decide-fallback-value")
+	}
 }
 
 // TODO: investigate test slowness
@@ -304,7 +380,7 @@ func TestSimpleFlagConsistency(t *testing.T) {
 	results := []bool{false, true, true, false, true}
 
 	for i := 0; i < 5; i++ {
-		isMatch, _ := client.IsFeatureEnabled("simple-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, map[string]string{}, NewProperties(), map[string]Properties{})
+		isMatch, _ := client.IsFeatureEnabled("simple-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, Groups{}, NewProperties(), map[string]Properties{})
 		if results[i] != isMatch {
 			t.Error("Match result is not consistent")
 		}
@@ -327,7 +403,7 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 	results := []interface{}{"second-variant", "second-variant", "first-variant", false, false}
 
 	for i := 0; i < 5; i++ {
-		variant, _ := client.GetFeatureFlag("multivariate-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, map[string]string{}, NewProperties(), map[string]Properties{})
+		variant, _ := client.GetFeatureFlag("multivariate-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, Groups{}, NewProperties(), map[string]Properties{})
 		if results[i] != variant {
 			t.Error("Match result is not consistent")
 		}

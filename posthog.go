@@ -37,17 +37,20 @@ type Client interface {
 	Enqueue(Message) error
 	//
 	// Method returns if a feature flag is on for a given user based on their distinct ID
-	IsFeatureEnabled(string, string, bool, map[string]string, Properties, map[string]Properties) (bool, error)
+	IsFeatureEnabled(string, string, bool, Groups, Properties, map[string]Properties) (bool, error)
 	//
 	// Method returns variant value if multivariantflag or otherwise a boolean indicating
 	// if the given flag is on or off for the user
-	GetFeatureFlag(string, string, interface{}, map[string]string, Properties, map[string]Properties) (interface{}, error)
+	GetFeatureFlag(string, string, interface{}, Groups, Properties, map[string]Properties) (interface{}, error)
 	//
 	// Method forces a reload of feature flags
 	ReloadFeatureFlags() error
 	//
 	// Get feature flags - for testing only
 	GetFeatureFlags() ([]FeatureFlag, error)
+	//
+	// Get all flags - returns all flags for a user
+	GetAllFlags(string, bool, Groups, Properties, map[string]Properties) (map[string]interface{}, error)
 }
 
 type client struct {
@@ -217,7 +220,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
-func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool, groups map[string]string, personProperties Properties, groupProperties map[string]Properties) (bool, error) {
+func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValue bool, groups Groups, personProperties Properties, groupProperties map[string]Properties) (bool, error) {
 	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
@@ -245,7 +248,7 @@ func (c *client) ReloadFeatureFlags() error {
 	return nil
 }
 
-func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue interface{}, groups map[string]string, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
@@ -270,6 +273,15 @@ func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 		return nil, errors.New(errorMessage)
 	}
 	return c.featureFlagsPoller.GetFeatureFlags(), nil
+}
+
+func (c *client) GetAllFlags(distinctId string, defaultValue bool, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return nil, errors.New(errorMessage)
+	}
+	return c.featureFlagsPoller.GetAllFlags(distinctId, defaultValue, groups, personProperties, groupProperties)
 }
 
 // Close and flush metrics.

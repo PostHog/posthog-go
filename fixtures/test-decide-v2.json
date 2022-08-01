@@ -12,7 +12,9 @@
     "featureFlags": {
         "enabled-flag": true,
         "disabled-flag": false,
-        "multi-variate-flag": "hello"
+        "multi-variate-flag": "hello",
+        "simple-flag": true,
+        "beta-feature": "decide-fallback-value"
     },
     "sessionRecording": false
 }

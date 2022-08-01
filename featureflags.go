@@ -35,11 +35,12 @@ type FeatureFlagsPoller struct {
 }
 
 type FeatureFlag struct {
-	Key               string `json:"key"`
-	IsSimpleFlag      bool   `json:"is_simple_flag"`
-	RolloutPercentage *uint8 `json:"rollout_percentage"`
-	Active            bool   `json:"active"`
-	Filters           Filter `json:"filters"`
+	Key                        string `json:"key"`
+	IsSimpleFlag               bool   `json:"is_simple_flag"`
+	RolloutPercentage          *uint8 `json:"rollout_percentage"`
+	Active                     bool   `json:"active"`
+	Filters                    Filter `json:"filters"`
+	EnsureExperienceContinuity *bool  `json:"ensure_experience_continuity"`
 }
 
 type Filter struct {
@@ -88,6 +89,14 @@ type DecideRequestData struct {
 
 type DecideResponse struct {
 	FeatureFlags map[string]interface{} `json:"featureFlags"`
+}
+
+type InconclusiveMatchError struct {
+	msg string
+}
+
+func (e *InconclusiveMatchError) Error() string {
+	return e.msg
 }
 
 func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client, pollingInterval time.Duration) *FeatureFlagsPoller {
@@ -159,12 +168,15 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 	poller.mutex.Lock()
 	poller.featureFlags = newFlags
-	poller.groups = *featureFlagsResponse.GroupTypeMapping
+	if featureFlagsResponse.GroupTypeMapping != nil {
+		poller.groups = *featureFlagsResponse.GroupTypeMapping
+	}
 	poller.mutex.Unlock()
 
 }
 
-func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool, groups map[string]string, personProperties Properties, groupProperties map[string]Properties) (bool, error) {
+func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool, groups Groups, personProperties Properties, groupProperties map[string]Properties) (bool, error) {
+
 	result, err := poller.GetFeatureFlag(key, distinctId, defaultResult, groups, personProperties, groupProperties)
 	if err != nil {
 		return false, err
@@ -176,12 +188,8 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 	return false, nil
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}, groups map[string]string, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	featureFlags := poller.GetFeatureFlags()
-
-	if len(featureFlags) < 1 {
-		return defaultResult, nil
-	}
 
 	featureFlag := FeatureFlag{Key: ""}
 
@@ -193,17 +201,60 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		}
 	}
 
-	if featureFlag.Key == "" {
-		return defaultResult, nil
+	var result interface{}
+	var err error
+
+	if featureFlag.Key != "" {
+		result, err = poller.computeFlagLocally(featureFlag, distinctId, defaultResult, groups, personProperties, groupProperties)
 	}
 
-	// TODO: handle groups
+	if err != nil || result == nil {
+		return poller.getFeatureFlagVariant(featureFlag, key, distinctId)
+	} else {
+		return result, err
+	}
+}
+
+func (poller *FeatureFlagsPoller) GetAllFlags(distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+	response := map[string]interface{}{}
+	featureFlags := poller.GetFeatureFlags()
+	fallbackToDecide := false
+
+	for _, storedFlag := range featureFlags {
+		result, err := poller.computeFlagLocally(storedFlag, distinctId, defaultResult, groups, personProperties, groupProperties)
+		if err != nil {
+			fallbackToDecide = true
+		} else {
+			response[storedFlag.Key] = result
+		}
+	}
+
+	if fallbackToDecide {
+		result, err := poller.getFeatureFlagVariants(distinctId, groups)
+
+		if err != nil {
+			return response, errors.New("Unable to get feature variants")
+		} else {
+			for k, v := range result {
+				response[k] = v
+			}
+		}
+	}
+
+	return response, nil
+}
+
+func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var matchingVariantOrBool interface{}
 	var err error
 
-	if featureFlag.Filters.AggregationGroupTypeIndex != nil {
+	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
+		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
+	}
 
-		groupName, exists := poller.groups[fmt.Sprintf("%d", *featureFlag.Filters.AggregationGroupTypeIndex)]
+	if flag.Filters.AggregationGroupTypeIndex != nil {
+
+		groupName, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
 		if !exists {
 			errMessage := "Flag has unknown group type index"
@@ -213,14 +264,14 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		_, exists = groups[groupName]
 
 		if !exists {
-			errMessage := fmt.Sprintf("FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", key)
+			errMessage := fmt.Sprintf("FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
 			return nil, errors.New(errMessage)
 		}
 
 		focusedGroupProperties := groupProperties[groupName]
-		matchingVariantOrBool, err = matchFeatureFlagProperties(featureFlag, distinctId, focusedGroupProperties)
+		matchingVariantOrBool, err = matchFeatureFlagProperties(flag, distinctId, focusedGroupProperties)
 	} else {
-		matchingVariantOrBool, err = matchFeatureFlagProperties(featureFlag, distinctId, personProperties)
+		matchingVariantOrBool, err = matchFeatureFlagProperties(flag, distinctId, personProperties)
 	}
 
 	if err != nil {
@@ -231,7 +282,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		return matchingVariantOrBool, nil
 	}
 
-	return poller.getFeatureFlagVariant(featureFlag, key, distinctId)
+	return defaultResult, nil
 }
 
 func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error) {
@@ -281,12 +332,17 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 
 func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties Properties) (interface{}, error) {
 	conditions := flag.Filters.Groups
+	isInconclusive := false
 
 	for _, condition := range conditions {
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties)
 
 		if err != nil {
-			return nil, err
+			if _, ok := err.(*InconclusiveMatchError); ok {
+				isInconclusive = true
+			} else {
+				return nil, err
+			}
 		}
 
 		if isMatch {
@@ -294,10 +350,15 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 		}
 	}
 
+	if isInconclusive {
+		return false, &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+	}
+
 	return false, nil
 }
 
 func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGroup, properties Properties) (bool, error) {
+
 	if len(condition.Properties) > 0 {
 		for _, prop := range condition.Properties {
 
@@ -327,15 +388,12 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	key := property.Key
 	operator := property.Operator
 	value := property.Value
-
 	if _, ok := properties[key]; !ok {
-		errMessage := "Can't match properties without a given property value"
-		return false, errors.New(errMessage)
+		return false, &InconclusiveMatchError{"Can't match properties without a given property value"}
 	}
 
 	if operator == "is_not_set" {
-		errMessage := "Can't match properties with operator is_not_set"
-		return false, errors.New(errMessage)
+		return false, &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
 	}
 
 	override_value, _ := properties[key]
