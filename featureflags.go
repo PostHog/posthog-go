@@ -171,6 +171,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
+	poller.fetchedFlagsSuccessfullyOnce = true
 	poller.mutex.Unlock()
 
 }
