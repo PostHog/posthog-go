@@ -175,9 +175,9 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 }
 
-func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool, groups Groups, personProperties Properties, groupProperties map[string]Properties) (bool, error) {
+func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string, defaultResult bool, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (bool, error) {
 
-	result, err := poller.GetFeatureFlag(key, distinctId, defaultResult, groups, personProperties, groupProperties)
+	result, err := poller.GetFeatureFlag(key, distinctId, defaultResult, groups, personProperties, groupProperties, onlyEvaluateLocally)
 	if err != nil {
 		return false, err
 	}
@@ -188,7 +188,7 @@ func (poller *FeatureFlagsPoller) IsFeatureEnabled(key string, distinctId string
 	return false, nil
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (interface{}, error) {
 
 	featureFlags := poller.GetFeatureFlags()
 
@@ -209,7 +209,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		result, err = poller.computeFlagLocally(featureFlag, distinctId, defaultResult, groups, personProperties, groupProperties)
 	}
 
-	if err != nil || result == nil {
+	if (err != nil || result == nil) && !onlyEvaluateLocally {
 
 		result, err = poller.getFeatureFlagVariant(featureFlag, key, distinctId)
 		if err != nil {
@@ -220,7 +220,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 	return result, err
 }
 
-func (poller *FeatureFlagsPoller) GetAllFlags(distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+func (poller *FeatureFlagsPoller) GetAllFlags(distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (map[string]interface{}, error) {
 	response := map[string]interface{}{}
 	featureFlags := poller.GetFeatureFlags()
 	fallbackToDecide := false
@@ -238,7 +238,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(distinctId string, defaultResult i
 		}
 	}
 
-	if fallbackToDecide {
+	if fallbackToDecide && !onlyEvaluateLocally {
 		result, err := poller.getFeatureFlagVariants(distinctId, groups)
 
 		if err != nil {

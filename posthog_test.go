@@ -743,8 +743,8 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 	receivedErrors := [4]error{}
 	receivedErrors[0] = client.ReloadFeatureFlags()
-	_, receivedErrors[1] = client.IsFeatureEnabled("some key", "some id", false, Groups{}, NewProperties(), map[string]Properties{})
-	_, receivedErrors[2] = client.GetFeatureFlag("some key", "some id", false, Groups{}, NewProperties(), map[string]Properties{})
+	_, receivedErrors[1] = client.IsFeatureEnabled("some key", "some id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+	_, receivedErrors[2] = client.GetFeatureFlag("some key", "some id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 	_, receivedErrors[3] = client.GetFeatureFlags()
 
 	for _, receivedError := range receivedErrors {
@@ -768,7 +768,7 @@ func TestSimpleFlagOld(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("simpleFlag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
+	isEnabled, checkErr := client.IsFeatureEnabled("simpleFlag", "hey", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
@@ -810,13 +810,13 @@ func TestComplexFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("enabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
+	isEnabled, checkErr := client.IsFeatureEnabled("enabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
-	flagValue, valueErr := client.GetFeatureFlag("enabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
+	flagValue, valueErr := client.GetFeatureFlag("enabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if valueErr != nil || flagValue != true {
 		t.Errorf("flag listed in /decide/ response should be true")
@@ -841,13 +841,13 @@ func TestMultiVariateFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("multi-variate-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
+	isEnabled, checkErr := client.IsFeatureEnabled("multi-variate-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
-	flagValue, err := client.GetFeatureFlag("multi-variate-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
+	flagValue, err := client.GetFeatureFlag("multi-variate-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if err != nil || flagValue != "hello" {
 		t.Errorf("flag listed in /decide/ response should have value 'hello'")
@@ -872,13 +872,13 @@ func TestDisabledFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled("disabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
+	isEnabled, checkErr := client.IsFeatureEnabled("disabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if checkErr != nil || isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as disabled")
 	}
 
-	flagValue, err := client.GetFeatureFlag("disabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
+	flagValue, err := client.GetFeatureFlag("disabled-flag", "hey", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if err != nil || flagValue != false {
 		t.Errorf("flag listed in /decide/ response should have value 'false'")

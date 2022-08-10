@@ -241,7 +241,7 @@ func TestFallbackToDecide(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if !isMatch {
 		t.Error("Should match")
@@ -264,13 +264,13 @@ func TestComplexDefinition(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("complex-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA").Set("name", "Aloha"), map[string]Properties{})
+	isMatch, _ := client.IsFeatureEnabled("complex-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA").Set("name", "Aloha"), map[string]Properties{}, false, true)
 
 	if !isMatch {
 		t.Error("Should match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("complex-flag", "some-distinct-id_within_rollou", false, Groups{}, NewProperties().Set("region", "USA").Set("email", "a@b.com"), map[string]Properties{})
+	isMatch, _ = client.IsFeatureEnabled("complex-flag", "some-distinct-id_within_rollou", false, Groups{}, NewProperties().Set("region", "USA").Set("email", "a@b.com"), map[string]Properties{}, false, true)
 
 	if !isMatch {
 		t.Error("Should match")
@@ -294,25 +294,25 @@ func TestDefaultDoesntAffectEval(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("false-flag", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{})
+	isMatch, _ := client.IsFeatureEnabled("false-flag", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if isMatch {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("false-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	isMatch, _ = client.IsFeatureEnabled("false-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if isMatch {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{})
+	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if isMatch {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if isMatch {
 		t.Error("Should not match")
@@ -342,13 +342,13 @@ func TestLocalEvaluationPersonProperty(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA"), map[string]Properties{})
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA"), map[string]Properties{}, false, true)
 
 	if !isMatch {
 		t.Error("Should match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "Canada"), map[string]Properties{})
+	isMatch, _ = client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "Canada"), map[string]Properties{}, false, true)
 
 	if isMatch {
 		t.Error("Should not match")
@@ -367,19 +367,19 @@ func TestLocalEvaluationGroupProperty(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
+	isMatch, _ := client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")}, false, true)
 
 	if isMatch {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 2")})
+	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 2")}, false, true)
 
 	if isMatch {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{"company": "amazon_without_rollout"}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")})
+	isMatch, _ = client.IsFeatureEnabled("group-flag", "some-distinct-id", false, Groups{"company": "amazon_without_rollout"}, NewProperties(), map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")}, false, true)
 
 	if !isMatch {
 		t.Error("Should match")
@@ -403,7 +403,7 @@ func TestExperienceContinuityOverride(t *testing.T) {
 	})
 	defer client.Close()
 
-	featureVariant, _ := client.GetFeatureFlag("beta-feature", "distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	featureVariant, _ := client.GetFeatureFlag("beta-feature", "distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 
 	if featureVariant != "decide-fallback-value" {
 		t.Error("Should be decide-fallback-value")
@@ -427,7 +427,7 @@ func TestGetAllFlags(t *testing.T) {
 	})
 	defer client.Close()
 
-	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false)
 
 	if featureVariants["beta-feature"] != "decide-fallback-value" || featureVariants["beta-feature2"] != "variant-2" {
 		t.Error("Should match decide values")
@@ -451,7 +451,7 @@ func TestGetAllFlagsEmptyLocal(t *testing.T) {
 	})
 	defer client.Close()
 
-	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false)
 
 	if featureVariants["beta-feature"] != "decide-fallback-value" || featureVariants["beta-feature2"] != "variant-2" {
 		t.Error("Should match decide values")
@@ -475,7 +475,7 @@ func TestGetAllFlagsNoDecide(t *testing.T) {
 	})
 	defer client.Close()
 
-	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false)
 
 	if featureVariants["beta-feature"] != true || featureVariants["disabled-feature"] != false {
 		t.Error("Should match")
@@ -494,7 +494,7 @@ func TestSimpleFlagWithoutRollout(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled("simple-flag", "distinct-id", false, Groups{}, NewProperties(), map[string]Properties{})
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 	if !isMatch {
 		t.Error("Should be enabled")
 	}
@@ -516,7 +516,7 @@ func TestSimpleFlagConsistency(t *testing.T) {
 	results := []bool{false, true, true, false, true}
 
 	for i := 0; i < 5; i++ {
-		isMatch, _ := client.IsFeatureEnabled("simple-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, Groups{}, NewProperties(), map[string]Properties{})
+		isMatch, _ := client.IsFeatureEnabled("simple-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 		if results[i] != isMatch {
 			t.Error("Match result is not consistent")
 		}
@@ -539,7 +539,7 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 	results := []interface{}{"second-variant", "second-variant", "first-variant", false, false}
 
 	for i := 0; i < 5; i++ {
-		variant, _ := client.GetFeatureFlag("multivariate-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, Groups{}, NewProperties(), map[string]Properties{})
+		variant, _ := client.GetFeatureFlag("multivariate-flag", fmt.Sprintf("%s%d", "distinct_id_", i), false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
 		if results[i] != variant {
 			t.Error("Match result is not consistent")
 		}
