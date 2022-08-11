@@ -224,106 +224,6 @@ func TestMatchPropertyContains(t *testing.T) {
 	}
 }
 
-func TestFallbackToDecide(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-			w.Write([]byte("{}")) // Don't return anything for local eval
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
-
-	if !isMatch {
-		t.Error("Should match")
-	}
-}
-
-func TestComplexDefinition(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-			w.Write([]byte(fixture("feature_flag/test-complex-definition.json"))) // Don't return anything for local eval
-		}
-	}))
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	isMatch, _ := client.IsFeatureEnabled("complex-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA").Set("name", "Aloha"), map[string]Properties{}, false, true)
-
-	if !isMatch {
-		t.Error("Should match")
-	}
-
-	isMatch, _ = client.IsFeatureEnabled("complex-flag", "some-distinct-id_within_rollou", false, Groups{}, NewProperties().Set("region", "USA").Set("email", "a@b.com"), map[string]Properties{}, false, true)
-
-	if !isMatch {
-		t.Error("Should match")
-	}
-
-}
-
-func TestDefaultDoesntAffectEval(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-			w.Write([]byte(fixture("feature_flag/test-false.json")))
-		}
-	}))
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	isMatch, _ := client.IsFeatureEnabled("false-flag", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
-
-	if isMatch {
-		t.Error("Should not match")
-	}
-
-	isMatch, _ = client.IsFeatureEnabled("false-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
-
-	if isMatch {
-		t.Error("Should not match")
-	}
-
-	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
-
-	if isMatch {
-		t.Error("Should not match")
-	}
-
-	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
-
-	if isMatch {
-		t.Error("Should not match")
-	}
-
-}
-
-func TestDefaultValueAfterError(t *testing.T) {
-
-}
-
 func TestFlagPersonProperty(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -384,6 +284,147 @@ func TestFlagGroupProperty(t *testing.T) {
 	if !isMatch {
 		t.Error("Should match")
 	}
+}
+
+func TestComplexDefinition(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-complex-definition.json"))) // Don't return anything for local eval
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("complex-flag", "some-distinct-id", false, Groups{}, NewProperties().Set("region", "USA").Set("name", "Aloha"), map[string]Properties{}, false, true)
+
+	if !isMatch {
+		t.Error("Should match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("complex-flag", "some-distinct-id_within_rollou", false, Groups{}, NewProperties().Set("region", "USA").Set("email", "a@b.com"), map[string]Properties{}, false, true)
+
+	if !isMatch {
+		t.Error("Should match")
+	}
+
+}
+
+func TestFallbackToDecide(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte("{}")) // Don't return anything for local eval
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("simple-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if !isMatch {
+		t.Error("Should match")
+	}
+}
+
+func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte("test-decide-v2.json"))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-feature-flags-dont-fallback-to-decide-when-only-local-evaluation-is-true.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	matchedVariant, _ := client.GetFeatureFlag("beta-feature", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, true, true)
+
+	if matchedVariant != nil {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ := client.IsFeatureEnabled("beta-feature", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, true, true)
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+	matchedVariant, _ = client.GetFeatureFlag("beta-feature2", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, true, true)
+
+	if matchedVariant != nil {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("beta-feature2", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, true, true)
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+}
+
+func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-false.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("false-flag", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("false-flag", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("false-flag-2", "some-distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+}
+
+func TestFeatureFlagDefaultsComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
+
 }
 
 func TestExperienceContinuityOverride(t *testing.T) {
@@ -482,7 +523,77 @@ func TestGetAllFlagsNoDecide(t *testing.T) {
 	}
 }
 
-func TestSimpleFlagWithoutRollout(t *testing.T) {
+func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-get-all-flags-with-fallback-but-only-local-evaluation-set.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, true)
+
+	if featureVariants["beta-feature"] != true || featureVariants["disabled-feature"] != false || featureVariants["beta-feature2"] != nil {
+		t.Error("Should match")
+	}
+}
+
+func TestComputeInactiveFlagsLocally(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	featureVariants, _ := client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, true)
+
+	if featureVariants["beta-feature"] != true || featureVariants["disabled-feature"] != false {
+		t.Error("Should match")
+	}
+
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally-2.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ = NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	featureVariants, _ = client.GetAllFlags("distinct-id", false, Groups{}, NewProperties(), map[string]Properties{}, true)
+
+	if featureVariants["beta-feature"] != false || featureVariants["disabled-feature"] != true {
+		t.Error("Should match")
+	}
+}
+
+func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fixture("feature_flag/test-simple-flag-without-rollout.json")))
 	}))
@@ -498,6 +609,68 @@ func TestSimpleFlagWithoutRollout(t *testing.T) {
 	if !isMatch {
 		t.Error("Should be enabled")
 	}
+}
+
+func TestGetFeatureFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlag("test-get-feature", "distinct_id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if variant != "variant-1" {
+		t.Error("Should match")
+	}
+}
+
+func TestFeatureEnabledDoesntExist(t *testing.T) {
+	// server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 	w.Write([]byte("{}"))
+	// }))
+
+	// defer server.Close()
+
+	// client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	// 	PersonalApiKey: "some very secret key",
+	// 	Endpoint:       server.URL,
+	// })
+	// defer client.Close()
+
+	// // isMatch, _ := client.IsFeatureEnabled("test-get-feature", "distinct_id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	// // if isMatch {
+	// // 	t.Error("Should not match")
+	// // }
+
+	// isMatch, _ := client.IsFeatureEnabled("test-get-feature", "distinct_id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	// if !isMatch {
+	// 	t.Error("Should match")
+	// }
+}
+
+func TestLoadFeatureFlagsError(t *testing.T) {
+
+}
+
+func TestCaptureIsCalled(t *testing.T) {
+
+}
+
+func TestCaptureMultipleUsersDoesntOutOfMemory(t *testing.T) {
+
 }
 
 func TestSimpleFlagConsistency(t *testing.T) {

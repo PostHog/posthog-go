@@ -16,7 +16,8 @@
         "simple-flag": true,
         "beta-feature": "decide-fallback-value",
         "beta-feature2": "variant-2",
-        "false-flag-2": false
+        "false-flag-2": false,
+        "test-get-feature": "variant-1"
     },
     "sessionRecording": false
 }

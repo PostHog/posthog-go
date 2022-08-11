@@ -162,9 +162,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 	newFlags := []FeatureFlag{}
 	for _, flag := range featureFlagsResponse.Flags {
-		if flag.Active {
-			newFlags = append(newFlags, flag)
-		}
+		newFlags = append(newFlags, flag)
 	}
 	poller.mutex.Lock()
 	poller.featureFlags = newFlags
@@ -257,6 +255,10 @@ func (poller *FeatureFlagsPoller) GetAllFlags(distinctId string, defaultResult i
 func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
+	}
+
+	if !flag.Active {
+		return false, nil
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {

@@ -1,0 +1,41 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 100
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": false,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        },
+        {
+            "id": 2,
+            "name": "Beta Feature",
+            "key": "disabled-feature",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 100
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ]
+}
