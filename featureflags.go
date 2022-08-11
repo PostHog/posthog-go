@@ -143,17 +143,20 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
 	res, err := poller.request("GET", "api/feature_flag/local_evaluation", requestData, headers)
 	if err != nil || res.StatusCode != http.StatusOK {
+		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
 	}
 	defer res.Body.Close()
 	resBody, err := ioutil.ReadAll(res.Body)
 	if err != nil {
+		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
 		return
 	}
 	featureFlagsResponse := FeatureFlagsResponse{}
 	err = json.Unmarshal([]byte(resBody), &featureFlagsResponse)
 	if err != nil {
+		poller.loaded <- false
 		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation", err)
 		return
 	}
@@ -208,6 +211,10 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(key string, distinctId string, 
 		result, err = poller.computeFlagLocally(featureFlag, distinctId, defaultResult, groups, personProperties, groupProperties)
 	}
 
+	if err != nil {
+		poller.Errorf("Unable to compute flag locally - %s", err)
+	}
+
 	if (err != nil || result == nil) && !onlyEvaluateLocally {
 
 		result, err = poller.getFeatureFlagVariant(featureFlag, key, distinctId)
@@ -230,6 +237,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(distinctId string, defaultResult i
 		for _, storedFlag := range featureFlags {
 			result, err := poller.computeFlagLocally(storedFlag, distinctId, defaultResult, groups, personProperties, groupProperties)
 			if err != nil {
+				poller.Errorf("Unable to compute flag locally - %s", err)
 				fallbackToDecide = true
 			} else {
 				response[storedFlag.Key] = result
@@ -241,7 +249,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(distinctId string, defaultResult i
 		result, err := poller.getFeatureFlagVariants(distinctId, groups)
 
 		if err != nil {
-			return response, errors.New("Unable to get feature variants")
+			return response, err
 		} else {
 			for k, v := range result {
 				response[k] = v
@@ -621,13 +629,10 @@ func _hash(key string, distinctId string, salt string) (float64, error) {
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 	// ensure flags are loaded on the first call
+
 	if !poller.fetchedFlagsSuccessfullyOnce {
 		<-poller.loaded
 	}
-
-	poller.mutex.RLock()
-
-	defer poller.mutex.RUnlock()
 
 	return poller.featureFlags
 }

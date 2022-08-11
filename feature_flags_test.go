@@ -424,7 +424,29 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 }
 
 func TestFeatureFlagDefaultsComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("{ads}"))
+	}))
 
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled("test-get-feature", "distinct_id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if isMatch {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled("test-get-feature", "distinct_id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
+
+	if !isMatch {
+		t.Error("Should match")
+	}
 }
 
 func TestExperienceContinuityOverride(t *testing.T) {
@@ -633,36 +655,6 @@ func TestGetFeatureFlag(t *testing.T) {
 	if variant != "variant-1" {
 		t.Error("Should match")
 	}
-}
-
-func TestFeatureEnabledDoesntExist(t *testing.T) {
-	// server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	w.Write([]byte("{}"))
-	// }))
-
-	// defer server.Close()
-
-	// client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-	// 	PersonalApiKey: "some very secret key",
-	// 	Endpoint:       server.URL,
-	// })
-	// defer client.Close()
-
-	// // isMatch, _ := client.IsFeatureEnabled("test-get-feature", "distinct_id", false, Groups{}, NewProperties(), map[string]Properties{}, false, true)
-
-	// // if isMatch {
-	// // 	t.Error("Should not match")
-	// // }
-
-	// isMatch, _ := client.IsFeatureEnabled("test-get-feature", "distinct_id", true, Groups{}, NewProperties(), map[string]Properties{}, false, true)
-
-	// if !isMatch {
-	// 	t.Error("Should match")
-	// }
-}
-
-func TestLoadFeatureFlagsError(t *testing.T) {
-
 }
 
 func TestCaptureIsCalled(t *testing.T) {
