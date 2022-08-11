@@ -76,6 +76,8 @@ type client struct {
 
 	// A background poller for fetching feature flags
 	featureFlagsPoller *FeatureFlagsPoller
+
+	distinctIdsFeatureFlagsReported *SizeLimitedMap
 }
 
 // Instantiate a new client that uses the write key passed as first argument to
@@ -98,12 +100,13 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	c := &client{
-		Config:   makeConfig(config),
-		key:      apiKey,
-		msgs:     make(chan APIMessage, 100),
-		quit:     make(chan struct{}),
-		shutdown: make(chan struct{}),
-		http:     makeHttpClient(config.Transport),
+		Config:                          makeConfig(config),
+		key:                             apiKey,
+		msgs:                            make(chan APIMessage, 100),
+		quit:                            make(chan struct{}),
+		shutdown:                        make(chan struct{}),
+		http:                            makeHttpClient(config.Transport),
+		distinctIdsFeatureFlagsReported: newSizeLimitedMap(),
 	}
 
 	if len(c.PersonalApiKey) > 0 {
@@ -228,7 +231,7 @@ func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValu
 	}
 	isEnabled, err := c.featureFlagsPoller.IsFeatureEnabled(flagKey, distinctId, defaultValue, groups, personProperties, groupProperties, onlyEvaluateLocally)
 
-	if sendFeatureFlagEvents {
+	if sendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(distinctId, flagKey) {
 		c.Enqueue(Capture{
 			DistinctId: distinctId,
 			Event:      "$feature_flag_called",
@@ -237,6 +240,7 @@ func (c *client) IsFeatureEnabled(flagKey string, distinctId string, defaultValu
 				Set("$feature_flag_response", isEnabled).
 				Set("$feature_flag_errored", err != nil),
 		})
+		c.distinctIdsFeatureFlagsReported.add(distinctId, flagKey)
 	}
 	return isEnabled, err
 }
@@ -258,7 +262,7 @@ func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue 
 		return "false", errors.New(errorMessage)
 	}
 	flagValue, err := c.featureFlagsPoller.GetFeatureFlag(flagKey, distinctId, defaultValue, groups, personProperties, groupProperties, onlyEvaluateLocally)
-	if sendFeatureFlagEvents {
+	if sendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(distinctId, flagKey) {
 		c.Enqueue(Capture{
 			DistinctId: distinctId,
 			Event:      "$feature_flag_called",
@@ -267,6 +271,7 @@ func (c *client) GetFeatureFlag(flagKey string, distinctId string, defaultValue 
 				Set("$feature_flag_response", flagValue).
 				Set("$feature_flag_errored", err != nil),
 		})
+		c.distinctIdsFeatureFlagsReported.add(distinctId, flagKey)
 	}
 	return flagValue, err
 }
