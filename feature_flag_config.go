@@ -1,56 +1,86 @@
 package posthog
 
-type FeatureFlagConfig struct {
-	key                   string
-	distinctId            string
-	defaultResult         bool
-	groups                Groups
-	personProperties      Properties
-	groupProperties       map[string]Properties
-	onlyEvaluateLocally   bool
-	sendFeatureFlagEvents *bool
+type FeatureFlagPayload struct {
+	Key                   string
+	DistinctId            string
+	DefaultResult         bool
+	Groups                Groups
+	PersonProperties      Properties
+	GroupProperties       map[string]Properties
+	OnlyEvaluateLocally   bool
+	SendFeatureFlagEvents *bool
 }
 
-const DEFAULT_RESULT = false
-
-func (c *FeatureFlagConfig) validate() error {
-	if len(c.key) == 0 {
+func (c *FeatureFlagPayload) validate() error {
+	if len(c.Key) == 0 {
 		return ConfigError{
-			Reason: "Feature Flag key required",
-			Field:  "key",
-			Value:  c.key,
+			Reason: "Feature Flag Key required",
+			Field:  "Key",
+			Value:  c.Key,
 		}
 	}
 
-	if len(c.distinctId) == 0 {
+	if len(c.DistinctId) == 0 {
 		return ConfigError{
 			Reason: "DistinctId required",
 			Field:  "Distinct Id",
-			Value:  c.distinctId,
+			Value:  c.DistinctId,
 		}
 	}
 
+	if c.Groups == nil {
+		c.Groups = Groups{}
+	}
+
+	if c.PersonProperties == nil {
+		c.PersonProperties = NewProperties()
+	}
+
+	if c.GroupProperties == nil {
+		c.GroupProperties = map[string]Properties{}
+	}
+
+	if c.SendFeatureFlagEvents == nil {
+		tempTrue := true
+		c.SendFeatureFlagEvents = &tempTrue
+	}
 	return nil
 }
 
-func makeFeatureFlagConfig(c FeatureFlagConfig) FeatureFlagConfig {
+type FeatureFlagPayloadNoKey struct {
+	DistinctId            string
+	DefaultResult         bool
+	Groups                Groups
+	PersonProperties      Properties
+	GroupProperties       map[string]Properties
+	OnlyEvaluateLocally   bool
+	SendFeatureFlagEvents *bool
+}
 
-	if c.groups == nil {
-		c.groups = Groups{}
+func (c *FeatureFlagPayloadNoKey) validate() error {
+	if len(c.DistinctId) == 0 {
+		return ConfigError{
+			Reason: "DistinctId required",
+			Field:  "Distinct Id",
+			Value:  c.DistinctId,
+		}
 	}
 
-	if c.personProperties == nil {
-		c.personProperties = NewProperties()
+	if c.Groups == nil {
+		c.Groups = Groups{}
 	}
 
-	if c.groupProperties == nil {
-		c.groupProperties = map[string]Properties{}
+	if c.PersonProperties == nil {
+		c.PersonProperties = NewProperties()
 	}
 
-	if c.sendFeatureFlagEvents == nil {
+	if c.GroupProperties == nil {
+		c.GroupProperties = map[string]Properties{}
+	}
+
+	if c.SendFeatureFlagEvents == nil {
 		tempTrue := true
-		c.sendFeatureFlagEvents = &tempTrue
+		c.SendFeatureFlagEvents = &tempTrue
 	}
-
-	return c
+	return nil
 }

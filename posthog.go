@@ -37,11 +37,11 @@ type Client interface {
 	Enqueue(Message) error
 	//
 	// Method returns if a feature flag is on for a given user based on their distinct ID
-	IsFeatureEnabled(FeatureFlagConfig) (bool, error)
+	IsFeatureEnabled(FeatureFlagPayload) (bool, error)
 	//
 	// Method returns variant value if multivariantflag or otherwise a boolean indicating
 	// if the given flag is on or off for the user
-	GetFeatureFlag(FeatureFlagConfig) (interface{}, error)
+	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 	//
 	// Method forces a reload of feature flags
 	ReloadFeatureFlags() error
@@ -50,7 +50,7 @@ type Client interface {
 	GetFeatureFlags() ([]FeatureFlag, error)
 	//
 	// Get all flags - returns all flags for a user
-	GetAllFlags(string, bool, Groups, Properties, map[string]Properties, bool) (map[string]interface{}, error)
+	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 }
 
 type client struct {
@@ -223,7 +223,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
-func (c *client) IsFeatureEnabled(flagConfig FeatureFlagConfig) (bool, error) {
+func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (bool, error) {
 	if err := flagConfig.validate(); err != nil {
 		return false, err
 	}
@@ -235,16 +235,16 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagConfig) (bool, error) {
 	}
 	isEnabled, err := c.featureFlagsPoller.IsFeatureEnabled(flagConfig)
 
-	if *flagConfig.sendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.distinctId, flagConfig.key) {
+	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
 		c.Enqueue(Capture{
-			DistinctId: flagConfig.distinctId,
+			DistinctId: flagConfig.DistinctId,
 			Event:      "$feature_flag_called",
 			Properties: NewProperties().
-				Set("$feature_flag", flagConfig.key).
+				Set("$feature_flag", flagConfig.Key).
 				Set("$feature_flag_response", isEnabled).
 				Set("$feature_flag_errored", err != nil),
 		})
-		c.distinctIdsFeatureFlagsReported.add(flagConfig.distinctId, flagConfig.key)
+		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
 	}
 	return isEnabled, err
 }
@@ -259,7 +259,7 @@ func (c *client) ReloadFeatureFlags() error {
 	return nil
 }
 
-func (c *client) GetFeatureFlag(flagConfig FeatureFlagConfig) (interface{}, error) {
+func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
 	if err := flagConfig.validate(); err != nil {
 		return false, err
 	}
@@ -270,16 +270,16 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagConfig) (interface{}, erro
 		return "false", errors.New(errorMessage)
 	}
 	flagValue, err := c.featureFlagsPoller.GetFeatureFlag(flagConfig)
-	if *flagConfig.sendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.distinctId, flagConfig.key) {
+	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
 		c.Enqueue(Capture{
-			DistinctId: flagConfig.distinctId,
+			DistinctId: flagConfig.DistinctId,
 			Event:      "$feature_flag_called",
 			Properties: NewProperties().
-				Set("$feature_flag", flagConfig.key).
+				Set("$feature_flag", flagConfig.Key).
 				Set("$feature_flag_response", flagValue).
 				Set("$feature_flag_errored", err != nil),
 		})
-		c.distinctIdsFeatureFlagsReported.add(flagConfig.distinctId, flagConfig.key)
+		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
 	}
 	return flagValue, err
 }
@@ -293,13 +293,18 @@ func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	return c.featureFlagsPoller.GetFeatureFlags(), nil
 }
 
-func (c *client) GetAllFlags(distinctId string, defaultValue bool, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (map[string]interface{}, error) {
+func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+
+	if err := flagConfig.validate(); err != nil {
+		return nil, err
+	}
+
 	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	return c.featureFlagsPoller.GetAllFlags(distinctId, defaultValue, groups, personProperties, groupProperties, onlyEvaluateLocally)
+	return c.featureFlagsPoller.GetAllFlags(flagConfig)
 }
 
 // Close and flush metrics.

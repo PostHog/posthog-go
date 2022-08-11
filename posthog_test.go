@@ -743,18 +743,18 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 	receivedErrors := [4]error{}
 	receivedErrors[0] = client.ReloadFeatureFlags()
-	_, receivedErrors[1] = client.IsFeatureEnabled(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "some key",
-			distinctId: "some id",
+	_, receivedErrors[1] = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "some key",
+			DistinctId: "some id",
 		},
-	))
-	_, receivedErrors[2] = client.GetFeatureFlag(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "some key",
-			distinctId: "some id",
+	)
+	_, receivedErrors[2] = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "some key",
+			DistinctId: "some id",
 		},
-	))
+	)
 	_, receivedErrors[3] = client.GetFeatureFlags()
 
 	for _, receivedError := range receivedErrors {
@@ -778,12 +778,12 @@ func TestSimpleFlagOld(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "simpleFlag",
-			distinctId: "hey",
+	isEnabled, checkErr := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "simpleFlag",
+			DistinctId: "hey",
 		},
-	))
+	)
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
@@ -825,23 +825,23 @@ func TestComplexFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "enabled-flag",
-			distinctId: "hey",
+	isEnabled, checkErr := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "hey",
 		},
-	))
+	)
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
-	flagValue, valueErr := client.GetFeatureFlag(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "enabled-flag",
-			distinctId: "hey",
+	flagValue, valueErr := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "hey",
 		},
-	))
+	)
 
 	if valueErr != nil || flagValue != true {
 		t.Errorf("flag listed in /decide/ response should be true")
@@ -866,23 +866,23 @@ func TestMultiVariateFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "multi-variate-flag",
-			distinctId: "hey",
+	isEnabled, checkErr := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "multi-variate-flag",
+			DistinctId: "hey",
 		},
-	))
+	)
 
 	if checkErr != nil || !isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
-	flagValue, err := client.GetFeatureFlag(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "multi-variate-flag",
-			distinctId: "hey",
+	flagValue, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multi-variate-flag",
+			DistinctId: "hey",
 		},
-	))
+	)
 
 	if err != nil || flagValue != "hello" {
 		t.Errorf("flag listed in /decide/ response should have value 'hello'")
@@ -907,23 +907,23 @@ func TestDisabledFlag(t *testing.T) {
 	})
 	defer client.Close()
 
-	isEnabled, checkErr := client.IsFeatureEnabled(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "disabled-flag",
-			distinctId: "hey",
+	isEnabled, checkErr := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "disabled-flag",
+			DistinctId: "hey",
 		},
-	))
+	)
 
 	if checkErr != nil || isEnabled {
 		t.Errorf("flag listed in /decide/ response should be marked as disabled")
 	}
 
-	flagValue, err := client.GetFeatureFlag(makeFeatureFlagConfig(
-		FeatureFlagConfig{
-			key:        "disabled-flag",
-			distinctId: "hey",
+	flagValue, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "disabled-flag",
+			DistinctId: "hey",
 		},
-	))
+	)
 
 	if err != nil || flagValue != false {
 		t.Errorf("flag listed in /decide/ response should have value 'false'")
