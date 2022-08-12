@@ -208,7 +208,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	var err error
 
 	if featureFlag.Key != "" {
-		result, err = poller.computeFlagLocally(featureFlag, flagConfig.DistinctId, flagConfig.DefaultResult, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.computeFlagLocally(featureFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
 	if err != nil {
@@ -219,7 +219,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 
 		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId)
 		if err != nil {
-			return flagConfig.DefaultResult, nil
+			return nil, nil
 		}
 	}
 
@@ -235,7 +235,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		fallbackToDecide = true
 	} else {
 		for _, storedFlag := range featureFlags {
-			result, err := poller.computeFlagLocally(storedFlag, flagConfig.DistinctId, flagConfig.DefaultResult, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+			result, err := poller.computeFlagLocally(storedFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 			if err != nil {
 				poller.Errorf("Unable to compute flag locally - %s", err)
 				fallbackToDecide = true
@@ -260,7 +260,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	return response, nil
 }
 
-func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctId string, defaultResult interface{}, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
 	}

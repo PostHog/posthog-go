@@ -515,7 +515,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 
 }
 
-func TestFeatureFlagDefaultsComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
+func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("{ads}"))
 	}))
@@ -528,27 +528,14 @@ func TestFeatureFlagDefaultsComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 	})
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
-			Key:           "test-get-feature",
-			DistinctId:    "distinct_id",
-			DefaultResult: false,
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
 		},
 	)
 
-	if isMatch {
-		t.Error("Should not match")
-	}
-
-	isMatch, _ = client.IsFeatureEnabled(
-		FeatureFlagPayload{
-			Key:           "test-get-feature",
-			DistinctId:    "distinct_id",
-			DefaultResult: true,
-		},
-	)
-
-	if !isMatch {
+	if isMatch != nil {
 		t.Error("Should match")
 	}
 }
