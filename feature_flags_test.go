@@ -2867,7 +2867,7 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 		"first-variant",
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 1000; i++ {
 
 		variant, _ := client.GetFeatureFlag(
 			FeatureFlagPayload{
