@@ -820,10 +820,6 @@ func TestCaptureIsCalled(t *testing.T) {
 
 }
 
-func TestCaptureMultipleUsersDoesntOutOfMemory(t *testing.T) {
-
-}
-
 func TestSimpleFlagConsistency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))

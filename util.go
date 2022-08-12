@@ -5,12 +5,10 @@ type SizeLimitedMap struct {
 	size int
 }
 
-const SIZE_DEFAULT = 50_000
-
-func newSizeLimitedMap() *SizeLimitedMap {
+func newSizeLimitedMap(size int) *SizeLimitedMap {
 	newMap := SizeLimitedMap{
 		ids:  map[string][]string{},
-		size: SIZE_DEFAULT,
+		size: size,
 	}
 
 	return &newMap
@@ -19,7 +17,7 @@ func newSizeLimitedMap() *SizeLimitedMap {
 func (sizeLimitedMap *SizeLimitedMap) add(key string, element string) {
 
 	if len(sizeLimitedMap.ids) >= sizeLimitedMap.size {
-		sizeLimitedMap.ids = nil
+		sizeLimitedMap.ids = map[string][]string{}
 	}
 
 	if val, ok := sizeLimitedMap.ids[key]; ok {
@@ -39,4 +37,8 @@ func (sizeLimitedMap *SizeLimitedMap) contains(key string, element string) bool 
 	}
 
 	return false
+}
+
+func (sizeLimitedMap *SizeLimitedMap) count() int {
+	return len(sizeLimitedMap.ids)
 }

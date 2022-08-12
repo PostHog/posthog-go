@@ -13,6 +13,7 @@ import (
 )
 
 const unimplementedError = "not implemented"
+const SIZE_DEFAULT = 50_000
 
 // This interface is the main API exposed by the posthog package.
 // Values that satsify this interface are returned by the client constructors
@@ -106,7 +107,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
 		http:                            makeHttpClient(config.Transport),
-		distinctIdsFeatureFlagsReported: newSizeLimitedMap(),
+		distinctIdsFeatureFlagsReported: newSizeLimitedMap(SIZE_DEFAULT),
 	}
 
 	if len(c.PersonalApiKey) > 0 {
