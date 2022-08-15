@@ -82,9 +82,11 @@ type FeatureFlagsResponse struct {
 }
 
 type DecideRequestData struct {
-	ApiKey     string `json:"api_key"`
-	DistinctId string `json:"distinct_id"`
-	Groups     Groups `json:"groups"`
+	ApiKey           string                `json:"api_key"`
+	DistinctId       string                `json:"distinct_id"`
+	Groups           Groups                `json:"groups"`
+	PersonProperties Properties            `json:"person_properties"`
+	GroupProperties  map[string]Properties `json:"group_properties"`
 }
 
 type DecideResponse struct {
@@ -177,19 +179,6 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 }
 
-func (poller *FeatureFlagsPoller) IsFeatureEnabled(flagConfig FeatureFlagPayload) (bool, error) {
-
-	result, err := poller.GetFeatureFlag(flagConfig)
-	if err != nil {
-		return false, err
-	}
-	var flagValueString = fmt.Sprintf("%v", result)
-	if flagValueString != "false" {
-		return true, nil
-	}
-	return false, nil
-}
-
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
 
 	featureFlags := poller.GetFeatureFlags()
@@ -217,7 +206,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
 
-		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId)
+		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, nil
 		}
@@ -246,7 +235,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	}
 
 	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
-		result, err := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.Groups)
+		result, err := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 
 		if err != nil {
 			return response, err
@@ -286,7 +275,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctI
 		}
 
 		focusedGroupProperties := groupProperties[groupName]
-		return matchFeatureFlagProperties(flag, distinctId, focusedGroupProperties)
+		return matchFeatureFlagProperties(flag, groups[groupName].(string), focusedGroupProperties)
 	} else {
 		return matchFeatureFlagProperties(flag, distinctId, personProperties)
 	}
@@ -295,20 +284,14 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctI
 func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error) {
 	lookupTable := getVariantLookupTable(flag)
 
+	hashValue, err := _hash(flag.Key, distinctId, "variant")
+
+	if err != nil {
+		return nil, err
+	}
+
 	for _, variant := range lookupTable {
-		minHash, err := _hash(flag.Key, distinctId, "variant")
-
-		if err != nil {
-			return nil, err
-		}
-
-		maxHash, err := _hash(flag.Key, distinctId, "variant")
-
-		if err != nil {
-			return nil, err
-		}
-
-		if minHash >= float64(variant.ValueMin) && maxHash < float64(variant.ValueMax) {
+		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
 			return variant.Key, nil
 		}
 	}
@@ -683,12 +666,14 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 	poller.shutdown <- true
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups) (map[string]interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
 	errorMessage := "Failed when getting flag variants"
 	requestDataBytes, err := json.Marshal(DecideRequestData{
-		ApiKey:     poller.projectApiKey,
-		DistinctId: distinctId,
-		Groups:     groups,
+		ApiKey:           poller.projectApiKey,
+		DistinctId:       distinctId,
+		Groups:           groups,
+		PersonProperties: personProperties,
+		GroupProperties:  groupProperties,
 	})
 	headers := [][2]string{{"Authorization", "Bearer " + poller.personalApiKey + ""}}
 	if err != nil {
@@ -720,7 +705,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 	return decideResponse.FeatureFlags, nil
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string) (interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
 	if featureFlag.IsSimpleFlag {
@@ -740,7 +725,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 			return false, err
 		}
 	} else {
-		featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, nil)
+		featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, nil, personProperties, groupProperties)
 
 		if variantErr != nil {
 			return false, variantErr
