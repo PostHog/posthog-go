@@ -141,9 +141,8 @@ func (poller *FeatureFlagsPoller) run() {
 
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
-	requestData := []byte{}
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
-	res, err := poller.request("GET", "api/feature_flag/local_evaluation", requestData, headers)
+	res, err := poller.localEvaluationFlags(headers)
 	if err != nil || res.StatusCode != http.StatusOK {
 		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
@@ -620,19 +619,34 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 	return poller.featureFlags
 }
 
-func (poller *FeatureFlagsPoller) request(method string, endpoint string, requestData []byte, headers [][2]string) (*http.Response, error) {
+func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, error) {
+	localEvaluationEndpoint := "decide/?v=2"
 
-	url, err := url.Parse(poller.Endpoint + "/" + endpoint + "")
+	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
+
+	if err != nil {
+		poller.Errorf("creating url - %s", err)
+	}
+
+	return poller.request("POST", url, requestData, headers)
+}
+
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error) {
+	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
+
+	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
 
 	if err != nil {
 		poller.Errorf("creating url - %s", err)
 	}
 	searchParams := url.Query()
-
-	if method == "GET" {
-		searchParams.Add("token", poller.projectApiKey)
-	}
+	searchParams.Add("token", poller.projectApiKey)
 	url.RawQuery = searchParams.Encode()
+
+	return poller.request("GET", url, []byte{}, headers)
+}
+
+func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string) (*http.Response, error) {
 
 	req, err := http.NewRequest(method, url.String(), bytes.NewReader(requestData))
 	if err != nil {
@@ -681,7 +695,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	res, err := poller.request("POST", "decide/?v=2", requestDataBytes, headers)
+	res, err := poller.decide(requestDataBytes, headers)
 	if err != nil || res.StatusCode != http.StatusOK {
 		errorMessage = "Error calling /decide/"
 		poller.Errorf(errorMessage)
