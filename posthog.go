@@ -235,7 +235,7 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (bool, error) {
 		return false, errors.New(errorMessage)
 	}
 
-	result, err := c.featureFlagsPoller.GetFeatureFlag(flagConfig)
+	result, err := c.GetFeatureFlag(flagConfig)
 	if err != nil {
 		return false, err
 	}
@@ -244,19 +244,6 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (bool, error) {
 	var flagValueString = fmt.Sprintf("%v", result)
 	if flagValueString != "false" {
 		finalValue = true
-	}
-
-	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
-		c.Enqueue(Capture{
-			DistinctId: flagConfig.DistinctId,
-			Event:      "$feature_flag_called",
-			Properties: NewProperties().
-				Set("$feature_flag", flagConfig.Key).
-				Set("$feature_flag_response", finalValue).
-				Set("$feature_flag_errored", err != nil),
-			Groups: flagConfig.Groups,
-		})
-		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
 	}
 
 	return finalValue, nil
