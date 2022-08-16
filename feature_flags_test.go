@@ -250,7 +250,7 @@ func TestFlagPersonProperty(t *testing.T) {
 		},
 	)
 
-	if !isMatch {
+	if isMatch != true {
 		t.Error("Should match")
 	}
 
@@ -262,7 +262,7 @@ func TestFlagPersonProperty(t *testing.T) {
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 }
@@ -287,7 +287,7 @@ func TestFlagGroupProperty(t *testing.T) {
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 
@@ -299,7 +299,7 @@ func TestFlagGroupProperty(t *testing.T) {
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 
@@ -312,7 +312,7 @@ func TestFlagGroupProperty(t *testing.T) {
 		},
 	)
 
-	if !isMatch {
+	if isMatch != true {
 		t.Error("Should match")
 	}
 }
@@ -341,7 +341,7 @@ func TestComplexDefinition(t *testing.T) {
 		},
 	)
 
-	if !isMatch {
+	if isMatch != true {
 		t.Error("Should match")
 	}
 
@@ -353,7 +353,7 @@ func TestComplexDefinition(t *testing.T) {
 		},
 	)
 
-	if !isMatch {
+	if isMatch != true {
 		t.Error("Should match")
 	}
 
@@ -383,7 +383,7 @@ func TestFallbackToDecide(t *testing.T) {
 		},
 	)
 
-	if !isMatch {
+	if isMatch != true {
 		t.Error("Should match")
 	}
 }
@@ -424,7 +424,7 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 
@@ -448,7 +448,7 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 }
@@ -476,7 +476,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 
@@ -487,7 +487,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 
@@ -498,7 +498,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 
@@ -509,7 +509,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 		},
 	)
 
-	if isMatch {
+	if isMatch == true {
 		t.Error("Should not match")
 	}
 
@@ -536,7 +536,18 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 	)
 
 	if isMatch != nil {
-		t.Error("Should match")
+		t.Error("Should be nil")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if isMatch != nil {
+		t.Error("Should be nil")
 	}
 }
 
@@ -742,7 +753,7 @@ func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
 			DistinctId: "distinct-id",
 		},
 	)
-	if !isMatch {
+	if isMatch != true {
 		t.Error("Should be enabled")
 	}
 }

@@ -785,7 +785,7 @@ func TestSimpleFlagOld(t *testing.T) {
 		},
 	)
 
-	if checkErr != nil || !isEnabled {
+	if checkErr != nil || isEnabled != true {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
 	}
 
@@ -832,7 +832,7 @@ func TestComplexFlag(t *testing.T) {
 		},
 	)
 
-	if checkErr != nil || !isEnabled {
+	if checkErr != nil || isEnabled != true {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
@@ -873,7 +873,7 @@ func TestMultiVariateFlag(t *testing.T) {
 		},
 	)
 
-	if checkErr != nil || !isEnabled {
+	if checkErr != nil || isEnabled == false {
 		t.Errorf("flag listed in /decide/ response should be marked as enabled")
 	}
 
@@ -914,7 +914,7 @@ func TestDisabledFlag(t *testing.T) {
 		},
 	)
 
-	if checkErr != nil || isEnabled {
+	if checkErr != nil || isEnabled == true {
 		t.Errorf("flag listed in /decide/ response should be marked as disabled")
 	}
 

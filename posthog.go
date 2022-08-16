@@ -38,7 +38,7 @@ type Client interface {
 	Enqueue(Message) error
 	//
 	// Method returns if a feature flag is on for a given user based on their distinct ID
-	IsFeatureEnabled(FeatureFlagPayload) (bool, error)
+	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
 	//
 	// Method returns variant value if multivariantflag or otherwise a boolean indicating
 	// if the given flag is on or off for the user
@@ -224,7 +224,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
-func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (bool, error) {
+func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
 	if err := flagConfig.validate(); err != nil {
 		return false, err
 	}
@@ -237,16 +237,16 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (bool, error) {
 
 	result, err := c.GetFeatureFlag(flagConfig)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	finalValue := false
-	var flagValueString = fmt.Sprintf("%v", result)
-	if flagValueString != "false" {
-		finalValue = true
+	if result == "false" {
+		result = false
+	} else if result == "true" {
+		result = true
 	}
 
-	return finalValue, nil
+	return result, nil
 }
 
 func (c *client) ReloadFeatureFlags() error {
