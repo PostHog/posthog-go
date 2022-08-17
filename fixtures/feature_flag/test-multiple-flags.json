@@ -4,31 +4,14 @@
     "previous": null,
     "flags": [
         {
-            "id": 719,
-            "name": "",
-            "key": "simpleFlag",
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature",
             "filters": {
                 "groups": [
                     {
                         "properties": [],
-                        "rollout_percentage": null
-                    }
-                ]
-            },
-            "deleted": false,
-            "active": true,
-            "is_simple_flag": true,
-            "rollout_percentage": null
-        },
-        {
-            "id": 720,
-            "name": "",
-            "key": "enabled-flag",
-            "filters": {
-                "groups": [
-                    {
-                        "properties": [],
-                        "rollout_percentage": null
+                        "rollout_percentage": 100
                     }
                 ]
             },
@@ -38,14 +21,14 @@
             "rollout_percentage": null
         },
         {
-            "id": 721,
-            "name": "",
-            "key": "disabled-flag",
+            "id": 2,
+            "name": "Beta Feature",
+            "key": "disabled-feature",
             "filters": {
                 "groups": [
                     {
                         "properties": [],
-                        "rollout_percentage": null
+                        "rollout_percentage": 0
                     }
                 ]
             },
@@ -55,14 +38,14 @@
             "rollout_percentage": null
         },
         {
-            "id": 722,
-            "name": "",
-            "key": "multi-variate-flag",
+            "id": 3,
+            "name": "Beta Feature",
+            "key": "beta-feature2",
             "filters": {
                 "groups": [
                     {
-                        "properties": [],
-                        "rollout_percentage": null
+                        "properties": [{"key": "country", "value": "US"}],
+                        "rollout_percentage": 0
                     }
                 ]
             },
@@ -71,5 +54,6 @@
             "is_simple_flag": false,
             "rollout_percentage": null
         }
-    ]
+    ],
+    "group_type_mapping" : {"0": "company", "1": "project"}
 }

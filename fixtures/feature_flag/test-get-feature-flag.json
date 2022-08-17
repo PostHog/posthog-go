@@ -1,0 +1,30 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 719,
+            "name": "",
+            "key": "test-get-feature",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 100
+                    }
+                ],
+                "multivariate": {
+                    "variants": [
+                        {"key": "variant-1", "rollout_percentage": 50},
+                        {"key": "variant-2", "rollout_percentage": 50}
+                    ]
+                }
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": true,
+            "rollout_percentage": null
+        }
+    ]
+}

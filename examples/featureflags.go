@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/posthog/posthog-go"
 	"time"
+
+	"github.com/posthog/posthog-go"
 )
 
 func TestIsFeatureEnabled() {
@@ -15,7 +16,11 @@ func TestIsFeatureEnabled() {
 	})
 	defer client.Close()
 
-	boolResult, boolErr := client.IsFeatureEnabled("multivariate-test", "hello", false)
+	boolResult, boolErr := client.IsFeatureEnabled(
+		posthog.FeatureFlagPayload{
+			Key:        "multivariate-test",
+			DistinctId: "hello",
+		})
 
 	if boolErr != nil || !boolResult {
 		fmt.Println("error:", boolErr)
@@ -23,21 +28,30 @@ func TestIsFeatureEnabled() {
 	}
 
 	// Simple flag
-	simpleResult, simpleErr := client.GetFeatureFlag("simple-test", "hello", false)
+	simpleResult, simpleErr := client.GetFeatureFlag(posthog.FeatureFlagPayload{
+		Key:        "simple-test",
+		DistinctId: "hello",
+	})
 	if simpleErr != nil || simpleResult == false {
 		fmt.Println("error:", simpleErr)
 		return
 	}
 
 	// Multivariate flag
-	variantResult, variantErr := client.GetFeatureFlag("multivariate-test", "hello", false)
+	variantResult, variantErr := client.GetFeatureFlag(posthog.FeatureFlagPayload{
+		Key:        "multivariate-test",
+		DistinctId: "hello",
+	})
 	if variantErr != nil || variantResult != "variant-value" {
 		fmt.Println("error:", variantErr)
 		return
 	}
 
 	// Multivariate + simple flag
-	variantResult, variantErr = client.GetFeatureFlag("multivariate-simple-test", "hello", false)
+	variantResult, variantErr = client.GetFeatureFlag(posthog.FeatureFlagPayload{
+		Key:        "multivariate-simple-test",
+		DistinctId: "hello",
+	})
 	if variantErr != nil || variantResult == true {
 		fmt.Println("error:", variantErr)
 		return

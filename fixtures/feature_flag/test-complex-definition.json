@@ -1,0 +1,60 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 719,
+            "name": "Beta Feature",
+            "key": "complex-flag",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "region",
+                                "operator": "exact",
+                                "value": ["USA"],
+                                "type": "person"
+                            },
+                            {
+                                "key": "name",
+                                "operator": "exact",
+                                "value": ["Aloha"],
+                                "type": "person"
+                            }
+                        ],
+                        "rollout_percentage": 100
+                    },
+                    {
+                        "properties": [
+                            {
+                                "key": "email",
+                                "operator": "exact",
+                                "value": ["a@b.com", "b@c.com"],
+                                "type": "person"
+                            }
+                        ],
+                        "rollout_percentage": 30
+                    },
+                    {
+                        "properties": [
+                            {
+                                "key": "doesnt_matter",
+                                "operator": "exact",
+                                "value": ["1", "2"],
+                                "type": "person"
+                            }
+                        ],
+                        "rollout_percentage": 0
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ],
+    "group_type_mapping" : {"0": "company", "1": "project"}
+}
