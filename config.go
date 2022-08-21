@@ -1,9 +1,12 @@
 package posthog
 
 import (
-	"github.com/xtgo/uuid"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+
+	"github.com/xtgo/uuid"
 )
 
 // Instances of this type carry the different configuration options that may
@@ -13,8 +16,9 @@ import (
 // default value defined by the library.
 type Config struct {
 
-	// The endpoint to which the client connect and send their messages, set to
-	// `DefaultEndpoint` by default.
+	// The endpoint to which the client connects and send their messages to;
+	// endpoint should be a URL such as https://your.domain.com;
+	// set to `DefaultEndpoint` by default.
 	Endpoint string
 
 	// You must specify a Personal API Key to use feature flags
@@ -114,6 +118,29 @@ func (c *Config) validate() error {
 			Field:  "BatchSize",
 			Value:  c.BatchSize,
 		}
+	}
+
+	if c.Endpoint != "" {
+		u, err := url.ParseRequestURI(c.Endpoint)
+		if err != nil {
+			return ConfigError{
+				Reason: "invalid endpoint URL",
+				Field:  "Endpoint",
+				Value:  c.Endpoint,
+			}
+		}
+
+		// Need a stricter check because url.ParseRequestURI() can parse a host
+		// address as the scheme in some situations (ie. "localhost:8080")
+		if u.Scheme != "" && u.Host == "" {
+			return ConfigError{
+				Reason: "missing URL scheme in endpoint URL",
+				Field:  "Endpoint",
+				Value:  c.Endpoint,
+			}
+		}
+
+		c.Endpoint = strings.TrimSuffix(c.Endpoint, "/")
 	}
 
 	return nil
