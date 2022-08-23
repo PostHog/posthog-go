@@ -1,5 +1,7 @@
 # PostHog Go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/posthog/posthog-go.svg)](https://pkg.go.dev/github.com/posthog/posthog-go)
+
 Please see the main [PostHog docs](https://posthog.com/docs).
 
 Specifically, the [Go integration](https://posthog.com/docs/integrations/go-integration) details.
