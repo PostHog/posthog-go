@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -536,6 +537,98 @@ func TestClientCallback(t *testing.T) {
 	case err := <-errchan:
 		t.Error("failure callback triggered:", err)
 	}
+}
+
+func TestClientFlush(t *testing.T) {
+	cbChan := make(chan flushCBResult)
+
+	client, _ := NewWithConfig("0123456789", Config{
+		Transport: testTransportOK,
+
+		// set explicitly in-case defaults change
+		Interval:     5 * time.Second,
+		BatchSize:    100,
+		FlushMaxWait: 5 * time.Second,
+
+		Callback: &flushCB{
+			c: cbChan,
+		},
+	})
+
+	client.Enqueue(Capture{
+		DistinctId: "AFlush",
+		Event:      "BFlush",
+	})
+
+	// Deferring since Close will cause a flush and we don't want that
+	defer client.Close()
+
+	// Wait for a bit, flush should not have occurred
+	var received bool
+	var result flushCBResult
+
+	select {
+	case result = <-cbChan:
+		received = true
+	case <-time.After(100 * time.Millisecond):
+		break
+	}
+
+	if received {
+		t.Fatalf("received data on callback channel before expected flush interval: %+v", result)
+	}
+
+	// Ask to flush
+	err := client.Flush(context.Background())
+	if err != nil {
+		t.Fatalf("Flush() should not return an error: %s", err)
+	}
+
+	var timeout bool
+	received = false
+
+	// Flush should've occurred immediately
+	select {
+	case <-cbChan:
+		received = true
+	case <-time.After(time.Second):
+		timeout = true
+	}
+
+	if !received {
+		t.Error("Did not receive callback after flush")
+	}
+
+	if timeout {
+		t.Error("Reached timeout waiting for callbacks after Flush()")
+	}
+
+}
+
+type flushCBResult struct {
+	APIMessage APIMessage
+	Error      error
+}
+
+type flushCB struct {
+	c chan flushCBResult
+}
+
+func (fc *flushCB) Success(msg APIMessage) {
+	go func() {
+		fc.c <- flushCBResult{
+			APIMessage: msg,
+		}
+	}()
+}
+
+func (fc *flushCB) Failure(msg APIMessage, err error) {
+	go func() {
+		fc.c <- flushCBResult{
+			APIMessage: msg,
+			Error:      err,
+		}
+	}()
 }
 
 func TestClientMarshalMessageError(t *testing.T) {

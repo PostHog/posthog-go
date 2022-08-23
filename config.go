@@ -1,9 +1,10 @@
 package posthog
 
 import (
-	"github.com/xtgo/uuid"
 	"net/http"
 	"time"
+
+	"github.com/xtgo/uuid"
 )
 
 // Instances of this type carry the different configuration options that may
@@ -62,6 +63,10 @@ type Config struct {
 	// again.
 	// If not set the client will fallback to use a default retry policy.
 	RetryAfter func(int) time.Duration
+
+	// How long Flush() will attempt to flush its queue for. If FlushMaxWait is
+	// exceeded, Flush() will return FlushMaxWaitErr, nil otherwise.
+	FlushMaxWait time.Duration
 
 	// A function called by the client to generate unique message identifiers.
 	// The client uses a UUID generator if none is provided.

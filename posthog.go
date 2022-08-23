@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,8 +13,15 @@ import (
 	"time"
 )
 
-const unimplementedError = "not implemented"
-const SIZE_DEFAULT = 50_000
+const (
+	unimplementedError  = "not implemented"
+	SIZE_DEFAULT        = 50_000
+	DefaultFlushMaxWait = 5 * time.Second
+)
+
+var (
+	FlushMaxWaitErr = errors.New("FlushMaxWait reached")
+)
 
 // This interface is the main API exposed by the posthog package.
 // Values that satsify this interface are returned by the client constructors
@@ -52,6 +60,11 @@ type Client interface {
 	//
 	// Get all flags - returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
+	//
+	// Flush will flush any pending enqueue events right away; use context to
+	// set a timeout or cancel the flush. This is useful for making sure that
+	// all events are sent at backend shutdown time.
+	Flush(ctx context.Context) error
 }
 
 type client struct {
@@ -70,6 +83,7 @@ type client struct {
 	// that it has finished flushing all queued messages.
 	quit     chan struct{}
 	shutdown chan struct{}
+	flushCh  chan struct{}
 
 	// This HTTP client is used to send requests to the backend, it uses the
 	// HTTP transport provided in the configuration.
@@ -106,6 +120,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		msgs:                            make(chan APIMessage, 100),
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
+		flushCh:                         make(chan struct{}),
 		http:                            makeHttpClient(config.Transport),
 		distinctIdsFeatureFlagsReported: newSizeLimitedMap(SIZE_DEFAULT),
 	}
@@ -118,6 +133,41 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 
 	cli = c
 	return
+}
+
+// Flush will attempt to flush the message queue before next loop tick and before
+// having reached max pending and/or batch size. Will attempt to flush for the
+// duration defined in FlushMaxWait.
+// Returns nil on success, context.Cancelled if ctx is cancelled or FlushMaxWaitErr
+// when FlushMaxWait is reached/exceeded.
+func (c *client) Flush(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	var err error
+
+	go func() {
+		defer wg.Done()
+
+		select {
+		// Flush succeeded
+		case c.flushCh <- struct{}{}:
+		// Context cancelled
+		case <-ctx.Done():
+			err = context.Canceled
+		// Timed out waiting to send signal to flush channel
+		case <-time.After(c.FlushMaxWait):
+			err = FlushMaxWaitErr
+		}
+	}()
+
+	wg.Wait()
+
+	return err
 }
 
 func makeHttpClient(transport http.RoundTripper) http.Client {
@@ -450,6 +500,9 @@ func (c *client) loop() {
 			c.push(&mq, msg, wg, ex)
 
 		case <-tick.C:
+			c.flush(&mq, wg, ex)
+
+		case <-c.flushCh:
 			c.flush(&mq, wg, ex)
 
 		case <-c.quit:
