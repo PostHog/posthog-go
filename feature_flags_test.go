@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"time"
 
 	"testing"
 )
@@ -221,6 +222,58 @@ func TestMatchPropertyContains(t *testing.T) {
 		if isMatch {
 			t.Error("Value is not a match")
 		}
+	}
+}
+
+func TestMatchPropertyDate(t *testing.T) {
+	shouldMatchA := []interface{}{"2022-04-30T00:00:00+00:00", "2022-04-30T00:00:00+02:00", time.Date(2022, 3, 20, 20, 34, 58, 651387237, time.UTC)}
+	shouldNotMatchA := NewProperties().Set("key", "2022-05-30T00:00:00+00:00")
+	propertyA := Property{
+		Key:      "key",
+		Value:    "2022-05-01",
+		Operator: "is_date_before",
+	}
+	for _, val := range shouldMatchA {
+		isMatch, err := matchProperty(propertyA, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if !isMatch {
+			t.Error(("Value is not a match"))
+		}
+	}
+	isMatchA, errA := matchProperty(propertyA, shouldNotMatchA)
+	if errA != nil {
+		t.Error(errA)
+	}
+	if isMatchA {
+		t.Error("Value is not a match")
+	}
+
+	shouldMatchB := []interface{}{"2022-05-30T00:00:00+00:00", time.Date(2022, 5, 30, 20, 34, 58, 651387237, time.UTC)}
+	shouldNotMatchB := NewProperties().Set("key", "2022-04-29T00:00:00+00:00")
+	propertyB := Property{
+		Key:      "key",
+		Value:    "2022-05-01T00:00:00+00:00",
+		Operator: "is_date_after",
+	}
+	for _, val := range shouldMatchB {
+		isMatch, err := matchProperty(propertyB, NewProperties().Set("key", val))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if !isMatch {
+			t.Error(("Value is not a match"))
+		}
+	}
+	isMatchB, errB := matchProperty(propertyB, shouldNotMatchB)
+	if errB != nil {
+		t.Error(errB)
+	}
+	if isMatchB {
+		t.Error("Value is not a match")
 	}
 }
 
