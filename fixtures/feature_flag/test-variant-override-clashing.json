@@ -1,0 +1,42 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 719,
+            "name": "Beta Feature",
+            "key": "beta-feature",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                        ],
+                        "rollout_percentage": 100,
+                        "variant": "second-variant"
+                    },
+                    {
+                        "properties": [
+                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                        ],
+                        "rollout_percentage": 100,
+                        "variant": "first-variant"
+                    },
+                    {"rollout_percentage": 50, "variant": "first-variant"}
+                ],
+                "multivariate": {
+                    "variants": [
+                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25}
+                    ]
+                }
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ]
+}
