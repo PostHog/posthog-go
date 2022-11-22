@@ -787,6 +787,190 @@ func TestGetFeatureFlag(t *testing.T) {
 	}
 }
 
+
+func TestFlagWithVariantOverrides(t *testing.T) {
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-variant-override.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if variant != "second-variant" {
+		t.Error("Should match", variant, "second-variant")
+	}
+
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "example_id",
+		},
+	)
+
+	if variant != "first-variant" {
+		t.Error("Should match", variant, "first-variant")
+	}
+}
+
+
+func TestFlagWithClashingVariantOverrides(t *testing.T) {
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-variant-override-clashing.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if variant != "second-variant" {
+		t.Error("Should match", variant, "second-variant")
+	}
+
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "example_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if variant != "second-variant" {
+		t.Error("Should match", variant, "second-variant")
+	}
+}
+
+
+func TestFlagWithInvalidVariantOverrides(t *testing.T) {
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-variant-override-invalid.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if variant != "third-variant" {
+		t.Error("Should match", variant, "third-variant")
+	}
+
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "example_id",
+		},
+	)
+
+	if variant != "second-variant" {
+		t.Error("Should match", variant, "third-variant")
+	}
+}
+
+
+func TestFlagWithMultipleVariantOverrides(t *testing.T) {
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-variant-override-multiple.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if variant != "second-variant" {
+		t.Error("Should match", variant, "second-variant")
+	}
+
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "example_id",
+		},
+	)
+
+	if variant != "third-variant" {
+		t.Error("Should match", variant, "third-variant")
+	}
+
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "another_id",
+		},
+	)
+
+	if variant != "second-variant" {
+		t.Error("Should match", variant, "second-variant")
+	}
+}
+
 func TestCaptureIsCalled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {

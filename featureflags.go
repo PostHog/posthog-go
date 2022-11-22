@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"sort"
 )
 
 const LONG_SCALE = 0xfffffffffffffff
@@ -61,6 +62,7 @@ type FlagVariant struct {
 type PropertyGroup struct {
 	Properties        []Property `json:"properties"`
 	RolloutPercentage *uint8     `json:"rollout_percentage"`
+	Variant 		  *string    `json:"variant"`
 }
 
 type Property struct {
@@ -323,7 +325,27 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 	conditions := flag.Filters.Groups
 	isInconclusive := false
 
-	for _, condition := range conditions {
+	// # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
+    // # evaluated first, and the variant override is applied to the first matching condition.
+	// conditionsCopy := make([]PropertyGroup, len(conditions))
+	sortedConditions := append([]PropertyGroup{}, conditions...)
+
+	sort.SliceStable(sortedConditions, func(i, j int) bool {
+		iValue := 1
+		jValue := 1
+		if sortedConditions[i].Variant != nil {
+			iValue = -1
+		}
+
+		if sortedConditions[j].Variant != nil {
+			jValue = -1
+		}
+
+		return iValue < jValue
+	})
+
+	for _, condition := range sortedConditions {
+
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties)
 
 		if err != nil {
@@ -335,7 +357,14 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 		}
 
 		if isMatch {
-			return getMatchingVariant(flag, distinctId)
+			variantOverride := condition.Variant
+			multivariates := flag.Filters.Multivariate
+
+			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil && containsVariant(multivariates.Variants, *variantOverride) {
+				return *variantOverride, nil
+			} else {
+				return getMatchingVariant(flag, distinctId)
+			}
 		}
 	}
 
@@ -567,6 +596,15 @@ func interfaceToFloat(val interface{}) (float64, error) {
 func contains(s []interface{}, e interface{}) bool {
 	for _, a := range s {
 		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func containsVariant(variantList []FlagVariant, key string) bool {
+	for _, variant := range variantList {
+		if variant.Key == key {
 			return true
 		}
 	}
