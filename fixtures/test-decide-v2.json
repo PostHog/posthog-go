@@ -11,6 +11,7 @@
     ],
     "featureFlags": {
         "enabled-flag": true,
+        "group-flag": true,
         "disabled-flag": false,
         "multi-variate-flag": "hello",
         "simple-flag": true,

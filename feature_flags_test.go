@@ -267,6 +267,35 @@ func TestFlagPersonProperty(t *testing.T) {
 	}
 }
 
+func TestFlagGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "group-flag",
+			DistinctId: "some-distinct-id",
+			Groups:     Groups{"company": "abc"},
+		},
+	)
+
+	if isMatch != true {
+		t.Error("Should match")
+	}
+}
+
 func TestFlagGroupProperty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
@@ -787,7 +816,6 @@ func TestGetFeatureFlag(t *testing.T) {
 	}
 }
 
-
 func TestFlagWithVariantOverrides(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -820,8 +848,8 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "example_id",
+			Key:        "beta-feature",
+			DistinctId: "example_id",
 		},
 	)
 
@@ -829,7 +857,6 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "first-variant")
 	}
 }
-
 
 func TestFlagWithClashingVariantOverrides(t *testing.T) {
 
@@ -874,7 +901,6 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 	}
 }
 
-
 func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -907,8 +933,8 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "example_id",
+			Key:        "beta-feature",
+			DistinctId: "example_id",
 		},
 	)
 
@@ -916,7 +942,6 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "third-variant")
 	}
 }
-
 
 func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 
@@ -950,8 +975,8 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "example_id",
+			Key:        "beta-feature",
+			DistinctId: "example_id",
 		},
 	)
 
@@ -961,8 +986,8 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "another_id",
+			Key:        "beta-feature",
+			DistinctId: "another_id",
 		},
 	)
 

@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"sort"
 )
 
 const LONG_SCALE = 0xfffffffffffffff
@@ -62,7 +62,7 @@ type FlagVariant struct {
 type PropertyGroup struct {
 	Properties        []Property `json:"properties"`
 	RolloutPercentage *uint8     `json:"rollout_percentage"`
-	Variant 		  *string    `json:"variant"`
+	Variant           *string    `json:"variant"`
 }
 
 type Property struct {
@@ -207,7 +207,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
 
-		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, nil
 		}
@@ -326,7 +326,7 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 	isInconclusive := false
 
 	// # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
-    // # evaluated first, and the variant override is applied to the first matching condition.
+	// # evaluated first, and the variant override is applied to the first matching condition.
 	// conditionsCopy := make([]PropertyGroup, len(conditions))
 	sortedConditions := append([]PropertyGroup{}, conditions...)
 
@@ -757,7 +757,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 	return decideResponse.FeatureFlags, nil
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
 	if featureFlag.IsSimpleFlag {
@@ -777,7 +777,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 			return false, err
 		}
 	} else {
-		featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, nil, personProperties, groupProperties)
+		featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
 
 		if variantErr != nil {
 			return false, variantErr
