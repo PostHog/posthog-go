@@ -12,7 +12,6 @@ package posthog
 //			.Set("revenue", 10.0)
 //			.Set("currency", "USD"),
 //	}
-//
 type Properties map[string]interface{}
 
 func NewProperties() Properties {

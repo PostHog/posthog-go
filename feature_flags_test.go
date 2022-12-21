@@ -1,9 +1,11 @@
 package posthog
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 
 	"testing"
@@ -270,9 +272,45 @@ func TestFlagPersonProperty(t *testing.T) {
 func TestFlagGroup(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			var reqBody DecideRequestData
+			err := decoder.Decode(&reqBody)
+			if err != nil {
+				t.Error(err)
+			}
+
+			groupsEquality := reflect.DeepEqual(reqBody.Groups, Groups{"company": "abc"})
+			if !groupsEquality {
+				t.Errorf("Expected groups to be map[company:abc], got %s", reqBody.Groups)
+			}
+
+			distinctIdEquality := reflect.DeepEqual(reqBody.DistinctId, "-")
+			if !distinctIdEquality {
+				t.Errorf("Expected distinctId to be -, got %s", reqBody.DistinctId)
+			}
+
+			apiKeyEquality := reflect.DeepEqual(reqBody.ApiKey, "Csyjlnlun3OzyNJAafdlv")
+			if !apiKeyEquality {
+				t.Errorf("Expected apiKey to be Csyjlnlun3OzyNJAafdlv, got %s", reqBody.ApiKey)
+			}
+
+			personPropertiesEquality := reflect.DeepEqual(reqBody.PersonProperties, Properties{"region": "Canada"})
+			if !personPropertiesEquality {
+				t.Errorf("Expected personProperties to be map[region:Canada], got %s", reqBody.PersonProperties)
+			}
+
+			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": Properties{"name": "Project Name 1"}})
+			if !groupPropertiesEquality {
+				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1]], got %s", reqBody.GroupProperties)
+			}
 			w.Write([]byte(fixture("test-decide-v2.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// Ignore batch requests
+		} else {
+			t.Error("Unknown request made by library")
 		}
 	}))
 	defer server.Close()
@@ -285,14 +323,17 @@ func TestFlagGroup(t *testing.T) {
 
 	isMatch, _ := client.IsFeatureEnabled(
 		FeatureFlagPayload{
-			Key:        "group-flag",
-			DistinctId: "some-distinct-id",
-			Groups:     Groups{"company": "abc"},
+			Key:                 "unknown-flag",
+			DistinctId:          "-",
+			Groups:              Groups{"company": "abc"},
+			PersonProperties:    NewProperties().Set("region", "Canada"),
+			GroupProperties:     map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")},
+			OnlyEvaluateLocally: false,
 		},
 	)
 
-	if isMatch != true {
-		t.Error("Should match")
+	if isMatch != false {
+		t.Error("Unknown flag shouldn't match known flags")
 	}
 }
 
