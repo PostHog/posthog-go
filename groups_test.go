@@ -1,4 +1,4 @@
-package posthog 
+package posthog
 
 import (
 	"reflect"
@@ -9,7 +9,7 @@ func TestGroups(t *testing.T) {
 	number := 5
 
 	tests := map[string]struct {
-		ref Groups 
+		ref Groups
 		run func(Groups)
 	}{
 		"company": {Groups{"company": number}, func(g Groups) { g.Set("company", number) }},
