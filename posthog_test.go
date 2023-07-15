@@ -503,6 +503,56 @@ func TestClientConfigError(t *testing.T) {
 	}
 }
 
+func TestNewWithConfigEndpoints(t *testing.T) {
+	type testCase struct {
+		description string
+		value       string
+		mustError   bool
+	}
+
+	testCases := []testCase{
+		{
+			description: "valid config 1",
+			value:       "http://localhost:9999",
+		},
+		{
+			description: "valid config 2",
+			value:       "https://some-domain/",
+		},
+		{
+			description: "invalid url",
+			value:       "invalid-url",
+			mustError:   true,
+		},
+		{
+			description: "URL without scheme",
+			value:       "localhost:9999",
+			mustError:   true,
+		},
+	}
+
+	for _, v := range testCases {
+		client, err := NewWithConfig("0123456789", Config{
+			Endpoint: v.value,
+		})
+		if client != nil {
+			defer client.Close()
+		}
+
+		if err != nil && !v.mustError {
+			t.Errorf("expected no error, got error (case: '%s', value: '%s'): %s",
+				v.description, v.value, err)
+			continue
+		}
+
+		if err == nil && v.mustError {
+			t.Errorf("expected error, got nil (case: '%s', value: '%s'): %s",
+				v.description, v.value, err)
+			continue
+		}
+	}
+}
+
 func TestClientEnqueueError(t *testing.T) {
 	client := New("0123456789")
 	defer client.Close()
