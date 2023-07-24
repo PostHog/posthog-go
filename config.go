@@ -1,9 +1,10 @@
 package posthog
 
 import (
-	"github.com/xtgo/uuid"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Instances of this type carry the different configuration options that may
@@ -168,5 +169,9 @@ func makeConfig(c Config) Config {
 // This function returns a string representation of a UUID, it's the default
 // function used for generating unique IDs.
 func uid() string {
-	return uuid.NewRandom().String()
+	new_uuid, err := uuid.NewRandom()
+	if err != nil {
+		return ""
+	}
+	return new_uuid.String()
 }
