@@ -169,9 +169,6 @@ func makeConfig(c Config) Config {
 // This function returns a string representation of a UUID, it's the default
 // function used for generating unique IDs.
 func uid() string {
-	new_uuid, err := uuid.NewRandom()
-	if err != nil {
-		return ""
-	}
+	new_uuid, _ := uuid.NewRandom()
 	return new_uuid.String()
 }
