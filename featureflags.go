@@ -148,6 +148,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	if err != nil || res.StatusCode != http.StatusOK {
 		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
+		return
 	}
 	defer res.Body.Close()
 	resBody, err := ioutil.ReadAll(res.Body)
@@ -177,11 +178,9 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 	poller.fetchedFlagsSuccessfullyOnce = true
 	poller.mutex.Unlock()
-
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
-
 	featureFlags := poller.GetFeatureFlags()
 
 	featureFlag := FeatureFlag{Key: ""}
@@ -286,7 +285,6 @@ func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error
 	lookupTable := getVariantLookupTable(flag)
 
 	hashValue, err := _hash(flag.Key, distinctId, "variant")
-
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +316,6 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	}
 
 	return lookupTable
-
 }
 
 func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties Properties) (interface{}, error) {
@@ -347,7 +344,6 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 	for _, condition := range sortedConditions {
 
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties)
-
 		if err != nil {
 			if _, ok := err.(*InconclusiveMatchError); ok {
 				isInconclusive = true
@@ -376,7 +372,6 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 }
 
 func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGroup, properties Properties) (bool, error) {
-
 	if len(condition.Properties) > 0 {
 		for _, prop := range condition.Properties {
 
@@ -449,7 +444,6 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	if operator == "regex" {
 
 		r, err := regexp.Compile(fmt.Sprintf("%v", value))
-
 		// invalid regex
 		if err != nil {
 			return false, nil
@@ -538,29 +532,24 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	return false, nil
-
 }
 
 func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
 	convertedFirstValue, err := interfaceToFloat(firstValue)
-
 	if err != nil {
 		errMessage := "Value 1 is not orderable"
 		return 0, 0, errors.New(errMessage)
 	}
 	convertedSecondValue, err := interfaceToFloat(secondValue)
-
 	if err != nil {
 		errMessage := "Value 2 is not orderable"
 		return 0, 0, errors.New(errMessage)
 	}
 
 	return convertedFirstValue, convertedSecondValue, nil
-
 }
 
 func interfaceToFloat(val interface{}) (float64, error) {
-
 	var i float64
 	switch t := val.(type) {
 	case int:
@@ -624,7 +613,6 @@ func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId str
 // extracted as a regular func for testing purposes
 func checkIfSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
 	val, err := _hash(key, distinctId, "")
-
 	if err != nil {
 		return false, err
 	}
@@ -644,7 +632,6 @@ func _hash(key string, distinctId string, salt string) (float64, error) {
 	}
 
 	return float64(value) / LONG_SCALE, nil
-
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
@@ -661,7 +648,6 @@ func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string
 	localEvaluationEndpoint := "decide/?v=2"
 
 	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
-
 	if err != nil {
 		poller.Errorf("creating url - %s", err)
 	}
@@ -673,7 +659,6 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*ht
 	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
 
 	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
-
 	if err != nil {
 		poller.Errorf("creating url - %s", err)
 	}
@@ -685,7 +670,6 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*ht
 }
 
 func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string) (*http.Response, error) {
-
 	req, err := http.NewRequest(method, url.String(), bytes.NewReader(requestData))
 	if err != nil {
 		poller.Errorf("creating request - %s", err)
@@ -702,7 +686,6 @@ func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestDa
 	}
 
 	res, err := poller.http.Do(req)
-
 	if err != nil {
 		poller.Errorf("sending request - %s", err)
 	}
@@ -784,7 +767,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 		}
 
 		for flagKey, flagValue := range featureFlagVariants {
-			var flagValueString = fmt.Sprintf("%v", flagValue)
+			flagValueString := fmt.Sprintf("%v", flagValue)
 			if key == flagKey && flagValueString != "false" {
 				result = flagValueString
 				break
