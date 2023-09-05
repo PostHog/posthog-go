@@ -24,6 +24,7 @@ type FeatureFlagsPoller struct {
 	loaded                       chan bool
 	shutdown                     chan bool
 	forceReload                  chan bool
+	featureFlagsHat              sync.Mutex
 	featureFlags                 []FeatureFlag
 	groups                       map[string]string
 	personalApiKey               string
@@ -172,7 +173,9 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		newFlags = append(newFlags, flag)
 	}
 	poller.mutex.Lock()
+	poller.featureFlagsHat.Lock()
 	poller.featureFlags = newFlags
+	defer poller.featureFlagsHat.Unlock()
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
@@ -641,6 +644,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 		<-poller.loaded
 	}
 
+	poller.featureFlagsHat.Lock()
+	defer poller.featureFlagsHat.Unlock()
 	return poller.featureFlags
 }
 
