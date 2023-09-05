@@ -22,7 +22,7 @@ func TestIsFeatureEnabled() {
 			DistinctId: "hello",
 		})
 
-	if boolErr != nil || !boolResult {
+	if result, ok := boolResult.(bool); !ok || boolErr != nil || !result {
 		fmt.Println("error:", boolErr)
 		return
 	}
