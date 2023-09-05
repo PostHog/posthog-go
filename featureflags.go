@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -145,6 +146,7 @@ func (poller *FeatureFlagsPoller) run() {
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
+
 	res, err := poller.localEvaluationFlags(headers)
 	if err != nil || res.StatusCode != http.StatusOK {
 		poller.loaded <- false
@@ -152,40 +154,43 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 	defer res.Body.Close()
+
 	resBody, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
 		return
 	}
+
 	featureFlagsResponse := FeatureFlagsResponse{}
-	err = json.Unmarshal([]byte(resBody), &featureFlagsResponse)
-	if err != nil {
+	if err = json.Unmarshal(resBody, &featureFlagsResponse); err != nil {
 		poller.loaded <- false
 		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation", err)
 		return
 	}
+
 	if !poller.fetchedFlagsSuccessfullyOnce {
 		poller.loaded <- true
 	}
+
 	newFlags := []FeatureFlag{}
 	for _, flag := range featureFlagsResponse.Flags {
 		newFlags = append(newFlags, flag)
 	}
+
 	poller.mutex.Lock()
 	poller.featureFlagsHat.Lock()
 	poller.featureFlags = newFlags
-	defer poller.featureFlagsHat.Unlock()
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
 	poller.fetchedFlagsSuccessfullyOnce = true
+	poller.featureFlagsHat.Unlock()
 	poller.mutex.Unlock()
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
 	featureFlags := poller.GetFeatureFlags()
-
 	featureFlag := FeatureFlag{Key: ""}
 
 	// avoid using flag for conflicts with Golang's stdlib `flag`
@@ -196,8 +201,10 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 		}
 	}
 
-	var result interface{}
-	var err error
+	var (
+		result interface{}
+		err    error
+	)
 
 	if featureFlag.Key != "" {
 		result, err = poller.computeFlagLocally(featureFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
@@ -208,7 +215,6 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-
 		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, nil
@@ -262,7 +268,6 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctI
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
-
 		groupName, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
 		if !exists {
@@ -270,9 +275,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctI
 			return nil, errors.New(errMessage)
 		}
 
-		_, exists = groups[groupName]
-
-		if !exists {
+		if _, exists = groups[groupName]; !exists {
 			errMessage := fmt.Sprintf("FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
 			return nil, errors.New(errMessage)
 		}
@@ -293,7 +296,7 @@ func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error
 	}
 
 	for _, variant := range lookupTable {
-		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
+		if hashValue >= variant.ValueMin && hashValue < variant.ValueMax {
 			return variant.Key, nil
 		}
 	}
@@ -306,16 +309,15 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	valueMin := 0.00
 
 	multivariates := flag.Filters.Multivariate
-
 	if multivariates == nil || multivariates.Variants == nil {
 		return lookupTable
 	}
 
 	for _, variant := range multivariates.Variants {
-		valueMax := float64(valueMin) + float64(*variant.RolloutPercentage)/100
-		_flagVariantMeta := FlagVariantMeta{ValueMin: float64(valueMin), ValueMax: valueMax, Key: variant.Key}
+		valueMax := valueMin + float64(*variant.RolloutPercentage)/100
+		_flagVariantMeta := FlagVariantMeta{ValueMin: valueMin, ValueMax: valueMax, Key: variant.Key}
 		lookupTable = append(lookupTable, _flagVariantMeta)
-		valueMin = float64(valueMax)
+		valueMin = valueMax
 	}
 
 	return lookupTable
@@ -348,10 +350,9 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties)
 		if err != nil {
-			if _, ok := err.(*InconclusiveMatchError); ok {
+			var inconclusiveMatchError *InconclusiveMatchError
+			if errors.As(err, &inconclusiveMatchError) {
 				isInconclusive = true
-			} else {
-				return nil, err
 			}
 		}
 
@@ -377,7 +378,6 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGroup, properties Properties) (bool, error) {
 	if len(condition.Properties) > 0 {
 		for _, prop := range condition.Properties {
-
 			isMatch, err := matchProperty(prop, properties)
 			if err != nil {
 				return false, err
@@ -412,23 +412,23 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 		return false, &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
 	}
 
-	override_value, _ := properties[key]
+	overrideValue, _ := properties[key]
 
 	if operator == "exact" {
 		switch t := value.(type) {
 		case []interface{}:
-			return contains(t, override_value), nil
+			return contains(t, overrideValue), nil
 		default:
-			return value == override_value, nil
+			return value == overrideValue, nil
 		}
 	}
 
 	if operator == "is_not" {
 		switch t := value.(type) {
 		case []interface{}:
-			return !contains(t, override_value), nil
+			return !contains(t, overrideValue), nil
 		default:
-			return value != override_value, nil
+			return value != overrideValue, nil
 		}
 	}
 
@@ -437,33 +437,28 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	if operator == "icontains" {
-		return strings.Contains(strings.ToLower(fmt.Sprintf("%v", override_value)), strings.ToLower(fmt.Sprintf("%v", value))), nil
+		return strings.Contains(strings.ToLower(fmt.Sprintf("%v", overrideValue)), strings.ToLower(fmt.Sprintf("%v", value))), nil
 	}
 
 	if operator == "not_icontains" {
-		return !strings.Contains(strings.ToLower(fmt.Sprintf("%v", override_value)), strings.ToLower(fmt.Sprintf("%v", value))), nil
+		return !strings.Contains(strings.ToLower(fmt.Sprintf("%v", overrideValue)), strings.ToLower(fmt.Sprintf("%v", value))), nil
 	}
 
 	if operator == "regex" {
-
 		r, err := regexp.Compile(fmt.Sprintf("%v", value))
 		// invalid regex
 		if err != nil {
 			return false, nil
 		}
 
-		match := r.MatchString(fmt.Sprintf("%v", override_value))
-
-		if match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return r.MatchString(fmt.Sprintf("%v", overrideValue)), nil
 	}
 
 	if operator == "not_regex" {
-		var r *regexp.Regexp
-		var err error
+		var (
+			r   *regexp.Regexp
+			err error
+		)
 
 		if valueString, ok := value.(string); ok {
 			r, err = regexp.Compile(valueString)
@@ -481,9 +476,9 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 		}
 
 		var match bool
-		if valueString, ok := override_value.(string); ok {
+		if valueString, ok := overrideValue.(string); ok {
 			match = r.MatchString(valueString)
-		} else if valueInt, ok := override_value.(int); ok {
+		} else if valueInt, ok := overrideValue.(int); ok {
 			valueString = strconv.Itoa(valueInt)
 			match = r.MatchString(valueString)
 		} else {
@@ -491,15 +486,11 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 			return false, errors.New(errMessage)
 		}
 
-		if !match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return !match, nil
 	}
 
 	if operator == "gt" {
-		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, overrideValue)
 		if err != nil {
 			return false, err
 		}
@@ -508,7 +499,7 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	if operator == "lt" {
-		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, overrideValue)
 		if err != nil {
 			return false, err
 		}
@@ -517,7 +508,7 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	if operator == "gte" {
-		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, overrideValue)
 		if err != nil {
 			return false, err
 		}
@@ -526,7 +517,7 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 	}
 
 	if operator == "lte" {
-		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, overrideValue)
 		if err != nil {
 			return false, err
 		}
@@ -543,6 +534,7 @@ func validateOrderable(firstValue interface{}, secondValue interface{}) (float64
 		errMessage := "Value 1 is not orderable"
 		return 0, 0, errors.New(errMessage)
 	}
+
 	convertedSecondValue, err := interfaceToFloat(secondValue)
 	if err != nil {
 		errMessage := "Value 2 is not orderable"
@@ -639,7 +631,6 @@ func _hash(key string, distinctId string, salt string) (float64, error) {
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 	// ensure flags are loaded on the first call
-
 	if !poller.fetchedFlagsSuccessfullyOnce {
 		<-poller.loaded
 	}
@@ -652,26 +643,26 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, error) {
 	localEvaluationEndpoint := "decide/?v=2"
 
-	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
+	u, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
 	if err != nil {
 		poller.Errorf("creating url - %s", err)
 	}
 
-	return poller.request("POST", url, requestData, headers)
+	return poller.request("POST", u, requestData, headers)
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error) {
 	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
 
-	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
+	u, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
 	if err != nil {
 		poller.Errorf("creating url - %s", err)
 	}
-	searchParams := url.Query()
+	searchParams := u.Query()
 	searchParams.Add("token", poller.projectApiKey)
-	url.RawQuery = searchParams.Encode()
+	u.RawQuery = searchParams.Encode()
 
-	return poller.request("GET", url, []byte{}, headers)
+	return poller.request("GET", u, []byte{}, headers)
 }
 
 func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string) (*http.Response, error) {
@@ -715,28 +706,31 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		PersonProperties: personProperties,
 		GroupProperties:  groupProperties,
 	})
+
 	headers := [][2]string{{"Authorization", "Bearer " + poller.personalApiKey + ""}}
 	if err != nil {
 		errorMessage = "unable to marshal decide endpoint request data"
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
+
 	res, err := poller.decide(requestDataBytes, headers)
 	if err != nil || res.StatusCode != http.StatusOK {
 		errorMessage = "Error calling /decide/"
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	resBody, err := ioutil.ReadAll(res.Body)
+
+	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		errorMessage = "Error reading response from /decide/"
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
 	defer res.Body.Close()
+
 	decideResponse := DecideResponse{}
-	err = json.Unmarshal([]byte(resBody), &decideResponse)
-	if err != nil {
+	if err = json.Unmarshal(resBody, &decideResponse); err != nil {
 		errorMessage = "Error parsing response from /decide/"
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
@@ -749,7 +743,6 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 	var result interface{} = false
 
 	if featureFlag.IsSimpleFlag {
-
 		// json.Unmarshal will convert JSON `null` to a nullish value for each type
 		// which is 0 for uint. However, our feature flags should have rolloutPercentage == 100
 		// if it is set to `null`. Having rollout percentage be a pointer and deferencing it

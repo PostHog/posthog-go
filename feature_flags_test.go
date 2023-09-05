@@ -25,10 +25,9 @@ func TestMatchPropertyValue(t *testing.T) {
 	if err != nil || !isMatch {
 		t.Error("Value is not a match")
 	}
-
 }
-func TestMatchPropertySlice(t *testing.T) {
 
+func TestMatchPropertySlice(t *testing.T) {
 	property := Property{
 		Key:      "Browser",
 		Value:    []interface{}{"Chrome"},
@@ -41,7 +40,6 @@ func TestMatchPropertySlice(t *testing.T) {
 	if err != nil || !isMatch {
 		t.Error("Value is not a match")
 	}
-
 }
 
 func TestMatchPropertyNumber(t *testing.T) {
@@ -119,7 +117,6 @@ func TestMatchPropertyNumber(t *testing.T) {
 }
 
 func TestMatchPropertyRegex(t *testing.T) {
-
 	shouldMatch := []interface{}{"value.com", "value2.com"}
 
 	property := Property{
@@ -227,7 +224,6 @@ func TestMatchPropertyContains(t *testing.T) {
 }
 
 func TestFlagPersonProperty(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
@@ -238,13 +234,13 @@ func TestFlagPersonProperty(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "simple-flag",
 			DistinctId:       "some-distinct-id",
@@ -256,7 +252,7 @@ func TestFlagPersonProperty(t *testing.T) {
 		t.Error("Should match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "simple-flag",
 			DistinctId:       "some-distinct-id",
@@ -300,7 +296,7 @@ func TestFlagGroup(t *testing.T) {
 				t.Errorf("Expected personProperties to be map[region:Canada], got %s", reqBody.PersonProperties)
 			}
 
-			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": Properties{"name": "Project Name 1"}})
+			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": {"name": "Project Name 1"}})
 			if !groupPropertiesEquality {
 				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1]], got %s", reqBody.GroupProperties)
 			}
@@ -315,13 +311,13 @@ func TestFlagGroup(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:                 "unknown-flag",
 			DistinctId:          "-",
@@ -343,13 +339,13 @@ func TestFlagGroupProperty(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:             "group-flag",
 			DistinctId:      "some-distinct-id",
@@ -361,7 +357,7 @@ func TestFlagGroupProperty(t *testing.T) {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:             "group-flag",
 			DistinctId:      "some-distinct-id",
@@ -373,7 +369,7 @@ func TestFlagGroupProperty(t *testing.T) {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:             "group-flag",
 			DistinctId:      "some-distinct-id",
@@ -397,13 +393,13 @@ func TestComplexDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "complex-flag",
 			DistinctId:       "some-distinct-id",
@@ -415,7 +411,7 @@ func TestComplexDefinition(t *testing.T) {
 		t.Error("Should match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "complex-flag",
 			DistinctId:       "some-distinct-id_within_rollou",
@@ -440,13 +436,13 @@ func TestFallbackToDecide(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:        "simple-flag",
 			DistinctId: "some-distinct-id",
@@ -468,13 +464,13 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	matchedVariant, _ := client.GetFeatureFlag(
+	matchedVariant, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:                 "beta-feature",
 			DistinctId:          "some-distinct-id",
@@ -486,7 +482,7 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 		t.Error("Should not match")
 	}
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:                 "beta-feature",
 			DistinctId:          "some-distinct-id",
@@ -498,7 +494,7 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 		t.Error("Should not match")
 	}
 
-	matchedVariant, _ = client.GetFeatureFlag(
+	matchedVariant, _ = c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:                 "beta-feature2",
 			DistinctId:          "some-distinct-id",
@@ -510,7 +506,7 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:                 "beta-feature2",
 			DistinctId:          "some-distinct-id",
@@ -533,13 +529,13 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:        "false-flag",
 			DistinctId: "some-distinct-id",
@@ -550,7 +546,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:        "false-flag",
 			DistinctId: "some-distinct-id",
@@ -561,7 +557,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:        "false-flag-2",
 			DistinctId: "some-distinct-id",
@@ -572,7 +568,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 		t.Error("Should not match")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:        "false-flag-2",
 			DistinctId: "some-distinct-id",
@@ -592,13 +588,13 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.GetFeatureFlag(
+	isMatch, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "test-get-feature",
 			DistinctId: "distinct_id",
@@ -609,7 +605,7 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 		t.Error("Should be nil")
 	}
 
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, _ = c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:        "test-get-feature",
 			DistinctId: "distinct_id",
@@ -632,13 +628,13 @@ func TestExperienceContinuityOverride(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	featureVariant, _ := client.GetFeatureFlag(
+	featureVariant, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
 			DistinctId: "distinct_id",
@@ -661,13 +657,13 @@ func TestGetAllFlags(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+	featureVariants, _ := c.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId: "distinct-id",
 	})
 
@@ -687,13 +683,13 @@ func TestGetAllFlagsEmptyLocal(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+	featureVariants, _ := c.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId: "distinct-id",
 	})
 
@@ -713,13 +709,13 @@ func TestGetAllFlagsNoDecide(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+	featureVariants, _ := c.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId: "distinct-id",
 	})
 
@@ -739,13 +735,13 @@ func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+	featureVariants, _ := c.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId:          "distinct-id",
 		OnlyEvaluateLocally: true,
 	})
@@ -766,13 +762,13 @@ func TestComputeInactiveFlagsLocally(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+	featureVariants, _ := c.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId: "distinct-id",
 	})
 
@@ -790,13 +786,13 @@ func TestComputeInactiveFlagsLocally(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ = NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ = NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	featureVariants, _ = client.GetAllFlags(FeatureFlagPayloadNoKey{
+	featureVariants, _ = c.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId: "distinct-id",
 	})
 
@@ -811,13 +807,13 @@ func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, _ := c.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:        "simple-flag",
 			DistinctId: "distinct-id",
@@ -839,13 +835,13 @@ func TestGetFeatureFlag(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	variant, _ := client.GetFeatureFlag(
+	variant, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "test-get-feature",
 			DistinctId: "distinct_id",
@@ -858,7 +854,6 @@ func TestGetFeatureFlag(t *testing.T) {
 }
 
 func TestFlagWithVariantOverrides(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
@@ -869,13 +864,13 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	variant, _ := client.GetFeatureFlag(
+	variant, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:              "beta-feature",
 			DistinctId:       "test_id",
@@ -887,7 +882,7 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
-	variant, _ = client.GetFeatureFlag(
+	variant, _ = c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
 			DistinctId: "example_id",
@@ -911,13 +906,13 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	variant, _ := client.GetFeatureFlag(
+	variant, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:              "beta-feature",
 			DistinctId:       "test_id",
@@ -929,7 +924,7 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
-	variant, _ = client.GetFeatureFlag(
+	variant, _ = c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:              "beta-feature",
 			DistinctId:       "example_id",
@@ -954,13 +949,13 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	variant, _ := client.GetFeatureFlag(
+	variant, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:              "beta-feature",
 			DistinctId:       "test_id",
@@ -972,7 +967,7 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "third-variant")
 	}
 
-	variant, _ = client.GetFeatureFlag(
+	variant, _ = c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
 			DistinctId: "example_id",
@@ -996,13 +991,13 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	variant, _ := client.GetFeatureFlag(
+	variant, _ := c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:              "beta-feature",
 			DistinctId:       "test_id",
@@ -1014,7 +1009,7 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
-	variant, _ = client.GetFeatureFlag(
+	variant, _ = c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
 			DistinctId: "example_id",
@@ -1025,7 +1020,7 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "third-variant")
 	}
 
-	variant, _ = client.GetFeatureFlag(
+	variant, _ = c.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
 			DistinctId: "another_id",
@@ -1048,13 +1043,13 @@ func TestCaptureIsCalled(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
-	variant, _ := client.GetFeatureFlag(
+	variant, _ := c.GetFeatureFlag(
 
 		FeatureFlagPayload{
 			Key:        "test-get-feature",
@@ -1074,11 +1069,11 @@ func TestSimpleFlagConsistency(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
 	results := []bool{
 		false,
@@ -2084,7 +2079,7 @@ func TestSimpleFlagConsistency(t *testing.T) {
 	}
 
 	for i := 0; i < 1000; i++ {
-		isMatch, _ := client.IsFeatureEnabled(
+		isMatch, _ := c.IsFeatureEnabled(
 			FeatureFlagPayload{
 				Key:        "simple-flag",
 				DistinctId: fmt.Sprintf("%s%d", "distinct_id_", i),
@@ -2102,11 +2097,11 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	c, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer c.Close()
 
 	results := []interface{}{
 		"second-variant",
@@ -3112,8 +3107,7 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 	}
 
 	for i := 0; i < 1000; i++ {
-
-		variant, _ := client.GetFeatureFlag(
+		variant, _ := c.GetFeatureFlag(
 			FeatureFlagPayload{
 				Key:        "multivariate-flag",
 				DistinctId: fmt.Sprintf("%s%d", "distinct_id_", i),
