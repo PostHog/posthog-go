@@ -24,7 +24,6 @@ type FeatureFlagsPoller struct {
 	loaded                       chan bool
 	shutdown                     chan bool
 	forceReload                  chan bool
-	featureFlagsHat              sync.Mutex
 	featureFlags                 []FeatureFlag
 	groups                       map[string]string
 	personalApiKey               string
@@ -178,13 +177,11 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 
 	poller.mutex.Lock()
-	poller.featureFlagsHat.Lock()
 	poller.featureFlags = newFlags
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
 	poller.fetchedFlagsSuccessfullyOnce = true
-	poller.featureFlagsHat.Unlock()
 	poller.mutex.Unlock()
 }
 
@@ -267,7 +264,9 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctI
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
+		poller.mutex.RLock()
 		groupName, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
+		poller.mutex.RUnlock()
 
 		if !exists {
 			errMessage := "Flag has unknown group type index"
@@ -634,8 +633,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 		<-poller.loaded
 	}
 
-	poller.featureFlagsHat.Lock()
-	defer poller.featureFlagsHat.Unlock()
+	poller.mutex.Lock()
+	defer poller.mutex.Unlock()
 	return poller.featureFlags
 }
 
