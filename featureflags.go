@@ -531,7 +531,8 @@ func matchProperty(property Property, properties Properties) (bool, error) {
 		return overrideValueOrderable <= valueOrderable, nil
 	}
 
-	return false, nil
+	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
+
 }
 
 func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
