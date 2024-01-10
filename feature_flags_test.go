@@ -27,6 +27,28 @@ func TestMatchPropertyValue(t *testing.T) {
 	}
 
 }
+
+
+func TestMatchPropertyInvalidOperator(t *testing.T) {
+	property := Property{
+		Key:      "Browser",
+		Value:    "Chrome",
+		Operator: "is_unknown",
+	}
+
+	properties := NewProperties().Set("Browser", "Chrome")
+
+	isMatch, err := matchProperty(property, properties)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+	if _, ok := err.(*InconclusiveMatchError); !ok {
+		t.Error("Error type is not a match")
+	}
+
+}
 func TestMatchPropertySlice(t *testing.T) {
 
 	property := Property{
