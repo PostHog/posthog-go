@@ -132,7 +132,7 @@ func makeConfig(c Config) Config {
 	}
 
 	if c.DefaultFeatureFlagsPollingInterval == 0 {
-		c.DefaultFeatureFlagsPollingInterval = DefaultInterval
+		c.DefaultFeatureFlagsPollingInterval = DefaultFeatureFlagsPollingInterval
 	}
 
 	if c.Transport == nil {
