@@ -15,6 +15,14 @@ type Identify struct {
 	Properties Properties
 }
 
+func (msg Identify) SetProperty(name string, value interface{}) {
+	if msg.Properties == nil {
+		msg.Properties = Properties{}
+	}
+
+	msg.Properties.Set(name, value)
+}
+
 func (msg Identify) internal() {
 	panic(unimplementedError)
 }

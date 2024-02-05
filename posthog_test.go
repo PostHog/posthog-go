@@ -73,6 +73,8 @@ var _ Message = (*testErrorMessage)(nil)
 type testErrorMessage struct{}
 type testAPIErrorMessage struct{}
 
+func (m testErrorMessage) SetProperty(name string, value interface{}) {}
+
 func (m testErrorMessage) internal() {
 }
 
@@ -341,6 +343,8 @@ type customMessage struct {
 }
 type customAPIMessage struct {
 }
+
+func (c *customMessage) SetProperty(name string, value interface{}) {}
 
 func (c *customMessage) internal() {
 }

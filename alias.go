@@ -13,6 +13,15 @@ type Alias struct {
 	Alias      string
 	DistinctId string
 	Timestamp  time.Time
+	properties Properties
+}
+
+func (msg Alias) SetProperty(name string, value interface{}) {
+	if msg.properties == nil {
+		msg.properties = Properties{}
+	}
+
+	msg.properties.Set(name, value)
 }
 
 func (msg Alias) internal() {
@@ -40,10 +49,11 @@ func (msg Alias) Validate() error {
 }
 
 type AliasInApiProperties struct {
-	DistinctId string `json:"distinct_id"`
-	Alias      string `json:"alias"`
-	Lib        string `json:"$lib"`
-	LibVersion string `json:"$lib_version"`
+	DistinctId   string `json:"distinct_id"`
+	Alias        string `json:"alias"`
+	Lib          string `json:"$lib"`
+	LibVersion   string `json:"$lib_version"`
+	GeoIPDisable bool   `json:"$geoip_disable"`
 }
 
 type AliasInApi struct {
@@ -61,18 +71,27 @@ func (msg Alias) APIfy() APIMessage {
 	library := "posthog-go"
 	libraryVersion := getVersion()
 
+	properties := AliasInApiProperties{
+		DistinctId: msg.DistinctId,
+		Alias:      msg.Alias,
+		Lib:        library,
+		LibVersion: libraryVersion,
+	}
+
+	if msg.properties != nil {
+		geoIPDisable, exist := msg.properties.Get(GeoIPDisableKey)
+		if exist {
+			properties.GeoIPDisable = geoIPDisable.(bool)
+		}
+	}
+
 	apified := AliasInApi{
 		Type:           msg.Type,
 		Event:          "$create_alias",
 		Library:        library,
 		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp,
-		Properties: AliasInApiProperties{
-			DistinctId: msg.DistinctId,
-			Alias:      msg.Alias,
-			Lib:        library,
-			LibVersion: libraryVersion,
-		},
+		Properties:     properties,
 	}
 
 	return apified

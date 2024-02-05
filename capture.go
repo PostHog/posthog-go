@@ -18,6 +18,14 @@ type Capture struct {
 	SendFeatureFlags bool
 }
 
+func (msg Capture) SetProperty(name string, value interface{}) {
+	if msg.Properties == nil {
+		msg.Properties = Properties{}
+	}
+
+	msg.Properties.Set(name, value)
+}
+
 func (msg Capture) internal() {
 	panic(unimplementedError)
 }
