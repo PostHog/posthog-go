@@ -169,23 +169,29 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case Alias:
 		m.Type = "alias"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
-		if c.Config.DisableGeoIP != nil {
-			m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+		if _, ok := m.properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
 		}
 		msg = m
 
 	case Identify:
 		m.Type = "identify"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
-		if c.Config.DisableGeoIP != nil {
-			m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
 		}
 		msg = m
 
 	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
-		if c.Config.DisableGeoIP != nil {
-			m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
 		}
 		msg = m
 
@@ -211,8 +217,10 @@ func (c *client) Enqueue(msg Message) (err error) {
 			}
 			m.Properties["$active_feature_flags"] = featureKeys
 		}
-		if c.Config.DisableGeoIP != nil {
-			m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
 		}
 		msg = m
 
