@@ -54,7 +54,11 @@ type IdentifyInApi struct {
 func (msg Identify) APIfy() APIMessage {
 	library := "posthog-go"
 
-	myProperties := Properties{}.Set("$lib", library).Set("$lib_version", getVersion())
+	if msg.Properties == nil {
+		msg.Properties = Properties{}
+	}
+
+	myProperties := msg.Properties.Set("$lib", library).Set("$lib_version", getVersion())
 
 	apified := IdentifyInApi{
 		Type:           msg.Type,
