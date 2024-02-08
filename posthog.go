@@ -189,6 +189,11 @@ func (c *client) Enqueue(msg Message) (err error) {
 			if err != nil {
 				c.Errorf("unable to get feature variants - %s", err)
 			}
+
+			if m.Properties == nil {
+				m.Properties = NewProperties()
+			}
+
 			for feature, variant := range featureVariants {
 				propKey := fmt.Sprintf("$feature/%s", feature)
 				m.Properties[propKey] = variant
