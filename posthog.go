@@ -171,7 +171,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		if _, ok := m.properties[GeoIPDisableKey]; !ok {
 			if c.Config.DisableGeoIP != nil {
-				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+				m.properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
 			}
 		}
 		msg = m
@@ -181,7 +181,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
 			if c.Config.DisableGeoIP != nil {
-				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+				m.Properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
 			}
 		}
 		msg = m
@@ -190,7 +190,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
 			if c.Config.DisableGeoIP != nil {
-				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+				m.Properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
 			}
 		}
 		msg = m
@@ -219,7 +219,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		}
 		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
 			if c.Config.DisableGeoIP != nil {
-				m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+				m.Properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
 			}
 		}
 		msg = m

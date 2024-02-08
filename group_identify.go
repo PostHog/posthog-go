@@ -14,12 +14,14 @@ type GroupIdentify struct {
 	Properties Properties
 }
 
-func (msg GroupIdentify) SetProperty(name string, value interface{}) {
+func (msg GroupIdentify) SetProperty(name string, value interface{}) Properties {
 	if msg.Properties == nil {
 		msg.Properties = Properties{}
 	}
 
 	msg.Properties.Set(name, value)
+
+	return msg.Properties
 }
 
 func (msg GroupIdentify) internal() {

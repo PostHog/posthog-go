@@ -16,12 +16,14 @@ type Alias struct {
 	properties Properties
 }
 
-func (msg Alias) SetProperty(name string, value interface{}) {
+func (msg Alias) SetProperty(name string, value interface{}) Properties {
 	if msg.properties == nil {
 		msg.properties = Properties{}
 	}
 
 	msg.properties.Set(name, value)
+
+	return msg.properties
 }
 
 func (msg Alias) internal() {
@@ -53,7 +55,7 @@ type AliasInApiProperties struct {
 	Alias        string `json:"alias"`
 	Lib          string `json:"$lib"`
 	LibVersion   string `json:"$lib_version"`
-	GeoIPDisable bool   `json:"$geoip_disable"`
+	GeoIPDisable bool   `json:"$geoip_disable,omitempty"`
 }
 
 type AliasInApi struct {

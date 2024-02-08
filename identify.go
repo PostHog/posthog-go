@@ -15,12 +15,14 @@ type Identify struct {
 	Properties Properties
 }
 
-func (msg Identify) SetProperty(name string, value interface{}) {
+func (msg Identify) SetProperty(name string, value interface{}) Properties {
 	if msg.Properties == nil {
 		msg.Properties = Properties{}
 	}
 
 	msg.Properties.Set(name, value)
+
+	return msg.Properties
 }
 
 func (msg Identify) internal() {
