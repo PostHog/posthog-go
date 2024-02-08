@@ -201,7 +201,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	if err != nil {
-		poller.Errorf("Unable to compute flag locally - %s", err)
+		poller.Errorf("Unable to compute flag locally (%s) - %s", featureFlag.Key, err)
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
@@ -226,7 +226,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		for _, storedFlag := range featureFlags {
 			result, err := poller.computeFlagLocally(storedFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 			if err != nil {
-				poller.Errorf("Unable to compute flag locally - %s", err)
+				poller.Errorf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
 				fallbackToDecide = true
 			} else {
 				response[storedFlag.Key] = result
