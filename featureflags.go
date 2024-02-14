@@ -657,7 +657,7 @@ func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error) {
-	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
+	localEvaluationEndpoint := "api/feature_flag/local_evaluation?send_cohorts"
 
 	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
 	if err != nil {
