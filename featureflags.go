@@ -812,7 +812,7 @@ func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error) {
-	localEvaluationEndpoint := "api/feature_flag/local_evaluation?send_cohorts"
+	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
 
 	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
 	if err != nil {
@@ -820,6 +820,7 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*ht
 	}
 	searchParams := url.Query()
 	searchParams.Add("token", poller.projectApiKey)
+	searchParams.Add("send_cohorts", "true")
 	url.RawQuery = searchParams.Encode()
 
 	return poller.request("GET", url, []byte{}, headers)
