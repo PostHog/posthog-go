@@ -25,6 +25,7 @@ type FeatureFlagsPoller struct {
 	shutdown                     chan bool
 	forceReload                  chan bool
 	featureFlags                 []FeatureFlag
+	cohorts                      map[string]PropertyGroup
 	groups                       map[string]string
 	personalApiKey               string
 	projectApiKey                string
@@ -45,9 +46,9 @@ type FeatureFlag struct {
 }
 
 type Filter struct {
-	AggregationGroupTypeIndex *uint8          `json:"aggregation_group_type_index"`
-	Groups                    []PropertyGroup `json:"groups"`
-	Multivariate              *Variants       `json:"multivariate"`
+	AggregationGroupTypeIndex *uint8                 `json:"aggregation_group_type_index"`
+	Groups                    []FeatureFlagCondition `json:"groups"`
+	Multivariate              *Variants              `json:"multivariate"`
 }
 
 type Variants struct {
@@ -59,17 +60,25 @@ type FlagVariant struct {
 	Name              string `json:"name"`
 	RolloutPercentage *uint8 `json:"rollout_percentage"`
 }
-type PropertyGroup struct {
-	Properties        []Property `json:"properties"`
-	RolloutPercentage *uint8     `json:"rollout_percentage"`
-	Variant           *string    `json:"variant"`
+
+type FeatureFlagCondition struct {
+	Properties        []FlagProperty `json:"properties"`
+	RolloutPercentage *uint8         `json:"rollout_percentage"`
+	Variant           *string        `json:"variant"`
 }
 
-type Property struct {
+type FlagProperty struct {
 	Key      string      `json:"key"`
 	Operator string      `json:"operator"`
 	Value    interface{} `json:"value"`
 	Type     string      `json:"type"`
+	Negation bool        `json:"negation"`
+}
+
+type PropertyGroup struct {
+	Type string `json:"type"`
+	// []PropertyGroup or []FlagProperty
+	Values []any `json:"values"`
 }
 
 type FlagVariantMeta struct {
@@ -79,8 +88,9 @@ type FlagVariantMeta struct {
 }
 
 type FeatureFlagsResponse struct {
-	Flags            []FeatureFlag      `json:"flags"`
-	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
+	Flags            []FeatureFlag            `json:"flags"`
+	GroupTypeMapping *map[string]string       `json:"group_type_mapping"`
+	Cohorts          map[string]PropertyGroup `json:"cohorts"`
 }
 
 type DecideRequestData struct {
@@ -173,6 +183,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 	poller.mutex.Lock()
 	poller.featureFlags = newFlags
+	poller.cohorts = featureFlagsResponse.Cohorts
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
@@ -182,6 +193,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
 	featureFlags := poller.GetFeatureFlags()
+	cohorts := poller.cohorts
 
 	featureFlag := FeatureFlag{Key: ""}
 
@@ -197,7 +209,14 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	var err error
 
 	if featureFlag.Key != "" {
-		result, err = poller.computeFlagLocally(featureFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.computeFlagLocally(
+			featureFlag,
+			flagConfig.DistinctId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			cohorts,
+		)
 	}
 
 	if err != nil {
@@ -219,12 +238,20 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	response := map[string]interface{}{}
 	featureFlags := poller.GetFeatureFlags()
 	fallbackToDecide := false
+	cohorts := poller.cohorts
 
 	if len(featureFlags) == 0 {
 		fallbackToDecide = true
 	} else {
 		for _, storedFlag := range featureFlags {
-			result, err := poller.computeFlagLocally(storedFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+			result, err := poller.computeFlagLocally(
+				storedFlag,
+				flagConfig.DistinctId,
+				flagConfig.Groups,
+				flagConfig.PersonProperties,
+				flagConfig.GroupProperties,
+				cohorts,
+			)
 			if err != nil {
 				poller.Errorf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
 				fallbackToDecide = true
@@ -249,7 +276,14 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	return response, nil
 }
 
-func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) computeFlagLocally(
+	flag FeatureFlag,
+	distinctId string,
+	groups Groups,
+	personProperties Properties,
+	groupProperties map[string]Properties,
+	cohorts map[string]PropertyGroup,
+) (interface{}, error) {
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
 	}
@@ -275,9 +309,9 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctI
 		}
 
 		focusedGroupProperties := groupProperties[groupName]
-		return matchFeatureFlagProperties(flag, groups[groupName].(string), focusedGroupProperties)
+		return matchFeatureFlagProperties(flag, groups[groupName].(string), focusedGroupProperties, cohorts)
 	} else {
-		return matchFeatureFlagProperties(flag, distinctId, personProperties)
+		return matchFeatureFlagProperties(flag, distinctId, personProperties, cohorts)
 	}
 }
 
@@ -318,14 +352,19 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	return lookupTable
 }
 
-func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties Properties) (interface{}, error) {
+func matchFeatureFlagProperties(
+	flag FeatureFlag,
+	distinctId string,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+) (interface{}, error) {
 	conditions := flag.Filters.Groups
 	isInconclusive := false
 
 	// # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
 	// # evaluated first, and the variant override is applied to the first matching condition.
 	// conditionsCopy := make([]PropertyGroup, len(conditions))
-	sortedConditions := append([]PropertyGroup{}, conditions...)
+	sortedConditions := append([]FeatureFlagCondition{}, conditions...)
 
 	sort.SliceStable(sortedConditions, func(i, j int) bool {
 		iValue := 1
@@ -343,7 +382,7 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 
 	for _, condition := range sortedConditions {
 
-		isMatch, err := isConditionMatch(flag, distinctId, condition, properties)
+		isMatch, err := isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
 			if _, ok := err.(*InconclusiveMatchError); ok {
 				isInconclusive = true
@@ -371,11 +410,24 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 	return false, nil
 }
 
-func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGroup, properties Properties) (bool, error) {
+func isConditionMatch(
+	flag FeatureFlag,
+	distinctId string,
+	condition FeatureFlagCondition,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+) (bool, error) {
 	if len(condition.Properties) > 0 {
 		for _, prop := range condition.Properties {
+			var isMatch bool
+			var err error
 
-			isMatch, err := matchProperty(prop, properties)
+			if prop.Type == "cohort" {
+				isMatch, err = matchCohort(prop, properties, cohorts)
+			} else {
+				isMatch, err = matchProperty(prop, properties)
+			}
+
 			if err != nil {
 				return false, err
 			}
@@ -397,7 +449,110 @@ func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGro
 	return true, nil
 }
 
-func matchProperty(property Property, properties Properties) (bool, error) {
+func matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+	cohortId := fmt.Sprint(property.Value)
+	propertyGroup, ok := cohorts[cohortId]
+	if !ok {
+		return false, fmt.Errorf("Can't match cohort: cohort %s not found", cohortId)
+	}
+
+	return matchPropertyGroup(propertyGroup, properties, cohorts)
+}
+
+func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+	groupType := propertyGroup.Type
+	values := propertyGroup.Values
+
+	if len(values) == 0 {
+		// empty groups are no-ops, always match
+		return true, nil
+	}
+
+	errorMatchingLocally := false
+
+	for _, value := range values {
+		switch prop := value.(type) {
+		case map[string]any:
+			if _, ok := prop["values"]; ok {
+				// PropertyGroup
+				matches, err := matchPropertyGroup(PropertyGroup{
+					Type:   getSafeProp[string](prop, "type"),
+					Values: getSafeProp[[]any](prop, "values"),
+				}, properties, cohorts)
+				if err != nil {
+					if _, ok := err.(*InconclusiveMatchError); ok {
+						errorMatchingLocally = true
+					} else {
+						return false, err
+					}
+				}
+
+				if groupType == "AND" {
+					if !matches {
+						return false, nil
+					}
+				} else {
+					// OR group
+					if matches {
+						return true, nil
+					}
+				}
+			} else {
+				// FlagProperty
+				var matches bool
+				var err error
+				flagProperty := FlagProperty{
+					Key:      getSafeProp[string](prop, "key"),
+					Operator: getSafeProp[string](prop, "operator"),
+					Value:    getSafeProp[any](prop, "value"),
+					Type:     getSafeProp[string](prop, "type"),
+					Negation: getSafeProp[bool](prop, "negation"),
+				}
+				if prop["type"] == "cohort" {
+					matches, err = matchCohort(flagProperty, properties, cohorts)
+				} else {
+					matches, err = matchProperty(flagProperty, properties)
+				}
+
+				if err != nil {
+					if _, ok := err.(*InconclusiveMatchError); ok {
+						errorMatchingLocally = true
+					} else {
+						return false, err
+					}
+				}
+
+				negation := flagProperty.Negation
+				if groupType == "AND" {
+					// if negated property, do the inverse
+					if !matches && !negation {
+						return false, nil
+					}
+					if matches && negation {
+						return false, nil
+					}
+				} else {
+					// OR group
+					if matches && !negation {
+						return true, nil
+					}
+					if !matches && negation {
+						return true, nil
+					}
+				}
+			}
+		}
+	}
+
+	if errorMatchingLocally {
+		return false, &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+	}
+
+	// if we get here, all matched in AND case, or none matched in OR case
+	return groupType == "AND", nil
+}
+
+func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	key := property.Key
 	operator := property.Operator
 	value := property.Value
@@ -665,6 +820,7 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*ht
 	}
 	searchParams := url.Query()
 	searchParams.Add("token", poller.projectApiKey)
+	searchParams.Add("send_cohorts", "true")
 	url.RawQuery = searchParams.Encode()
 
 	return poller.request("GET", url, []byte{}, headers)
@@ -777,4 +933,14 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 		return result, nil
 	}
 	return result, nil
+}
+
+func getSafeProp[T any](properties map[string]any, key string) T {
+	switch v := properties[key].(type) {
+	case T:
+		return v
+	default:
+		var defaultValue T
+		return defaultValue
+	}
 }
