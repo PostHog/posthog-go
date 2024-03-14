@@ -30,6 +30,10 @@ type Config struct {
 	// Interval at which to fetch new feature flags, 5min by default
 	DefaultFeatureFlagsPollingInterval time.Duration
 
+	// Calculate when feature flags should be polled next. Setting this property
+	// will override DefaultFeatureFlagsPollingInterval.
+	NextFeatureFlagsPollingTick func() time.Duration
+
 	// The HTTP transport used by the client, this allows an application to
 	// redefine how requests are being sent at the HTTP level (for example,
 	// to change the connection pooling policy).
