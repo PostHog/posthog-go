@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,7 @@ type FeatureFlagsPoller struct {
 	http                         http.Client
 	mutex                        sync.RWMutex
 	fetchedFlagsSuccessfullyOnce bool
+	flagTimeout                  time.Duration
 }
 
 type FeatureFlag struct {
@@ -113,7 +115,7 @@ func (e *InconclusiveMatchError) Error() string {
 	return e.msg
 }
 
-func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client, pollingInterval time.Duration) *FeatureFlagsPoller {
+func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client, pollingInterval time.Duration, flagTimeout time.Duration) *FeatureFlagsPoller {
 	poller := FeatureFlagsPoller{
 		ticker:                       time.NewTicker(pollingInterval),
 		loaded:                       make(chan bool),
@@ -126,6 +128,7 @@ func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf f
 		http:                         httpClient,
 		mutex:                        sync.RWMutex{},
 		fetchedFlagsSuccessfullyOnce: false,
+		flagTimeout:                  flagTimeout,
 	}
 
 	go poller.run()
@@ -154,7 +157,8 @@ func (poller *FeatureFlagsPoller) run() {
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
-	res, err := poller.localEvaluationFlags(headers)
+	res, err, cancel := poller.localEvaluationFlags(headers)
+	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
 		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
@@ -178,9 +182,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.loaded <- true
 	}
 	newFlags := []FeatureFlag{}
-	for _, flag := range featureFlagsResponse.Flags {
-		newFlags = append(newFlags, flag)
-	}
+	newFlags = append(newFlags, featureFlagsResponse.Flags...)
 	poller.mutex.Lock()
 	poller.featureFlags = newFlags
 	poller.cohorts = featureFlagsResponse.Cohorts
@@ -731,7 +733,7 @@ func interfaceToFloat(val interface{}) (float64, error) {
 	case uint64:
 		i = float64(t)
 	default:
-		errMessage := "Argument not orderable"
+		errMessage := "argument not orderable"
 		return 0.0, errors.New(errMessage)
 	}
 
@@ -800,18 +802,18 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 	return poller.featureFlags
 }
 
-func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, error) {
-	localEvaluationEndpoint := "decide/?v=2"
+func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, error, context.CancelFunc) {
+	decideEndpoint := "decide/?v=2"
 
-	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
+	url, err := url.Parse(poller.Endpoint + "/" + decideEndpoint + "")
 	if err != nil {
 		poller.Errorf("creating url - %s", err)
 	}
 
-	return poller.request("POST", url, requestData, headers)
+	return poller.request("POST", url, requestData, headers, poller.flagTimeout)
 }
 
-func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error) {
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error, context.CancelFunc) {
 	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
 
 	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
@@ -823,11 +825,13 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*ht
 	searchParams.Add("send_cohorts", "true")
 	url.RawQuery = searchParams.Encode()
 
-	return poller.request("GET", url, []byte{}, headers)
+	return poller.request("GET", url, []byte{}, headers, time.Duration(10)*time.Second)
 }
 
-func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string) (*http.Response, error) {
-	req, err := http.NewRequest(method, url.String(), bytes.NewReader(requestData))
+func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string, timeout time.Duration) (*http.Response, error, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	req, err := http.NewRequestWithContext(ctx, method, url.String(), bytes.NewReader(requestData))
 	if err != nil {
 		poller.Errorf("creating request - %s", err)
 	}
@@ -847,7 +851,7 @@ func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestDa
 		poller.Errorf("sending request - %s", err)
 	}
 
-	return res, err
+	return res, err, cancel
 }
 
 func (poller *FeatureFlagsPoller) ForceReload() {
@@ -873,7 +877,8 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	res, err := poller.decide(requestDataBytes, headers)
+	res, err, cancel := poller.decide(requestDataBytes, headers)
+	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
 		errorMessage = "Error calling /decide/"
 		poller.Errorf(errorMessage)

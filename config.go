@@ -30,6 +30,9 @@ type Config struct {
 	// Interval at which to fetch new feature flags, 5min by default
 	DefaultFeatureFlagsPollingInterval time.Duration
 
+	// Timeout for fetching feature flags, 3 seconds by default
+	FeatureFlagRequestTimeout time.Duration
+
 	// The HTTP transport used by the client, this allows an application to
 	// redefine how requests are being sent at the HTTP level (for example,
 	// to change the connection pooling policy).
@@ -94,6 +97,9 @@ const DefaultInterval = 5 * time.Second
 // Specifies the default interval at which to fetch new feature flags
 const DefaultFeatureFlagsPollingInterval = 5 * time.Minute
 
+// Specifies the default timeout for fetching feature flags
+const DefaultFeatureFlagRequestTimeout = 3 * time.Second
+
 // This constant sets the default batch size used by client instances if none
 // was explicitly set.
 const DefaultBatchSize = 250
@@ -133,6 +139,10 @@ func makeConfig(c Config) Config {
 
 	if c.DefaultFeatureFlagsPollingInterval == 0 {
 		c.DefaultFeatureFlagsPollingInterval = DefaultFeatureFlagsPollingInterval
+	}
+
+	if c.FeatureFlagRequestTimeout == 0 {
+		c.FeatureFlagRequestTimeout = DefaultFeatureFlagRequestTimeout
 	}
 
 	if c.Transport == nil {

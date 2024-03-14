@@ -111,7 +111,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	if len(c.PersonalApiKey) > 0 {
-		c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http, c.DefaultFeatureFlagsPollingInterval)
+		c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http, c.DefaultFeatureFlagsPollingInterval, c.FeatureFlagRequestTimeout)
 	}
 
 	go c.loop()

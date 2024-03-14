@@ -8,11 +8,13 @@ import (
 )
 
 func TestIsFeatureEnabled() {
-	client, _ := posthog.NewWithConfig("phc_X8B6bhR1QgQKP1WdpFLN82LxLxgZ7WPXDgJyRyvIpib", posthog.Config{
-		Interval:       30 * time.Second,
-		BatchSize:      100,
-		Verbose:        true,
-		PersonalApiKey: "phx_vXZ7AOnFjDrCxfWLyo9V6P0SWLLfXT2d5euy3U0nRGk",
+	client, _ := posthog.NewWithConfig("phc_36WfBWNJEQcYotMZ7Ui7EWzqKLbIo2LWJFG5fIg1EER", posthog.Config{
+		Interval:                  30 * time.Second,
+		BatchSize:                 100,
+		Verbose:                   true,
+		PersonalApiKey:            "phx_n79cT52OfsxAWDhZs9j3w67aRoBCZ7l5ksRRKmAi5nr",
+		Endpoint:                  "http://localhost:8000",
+		FeatureFlagRequestTimeout: 3 * time.Second,
 	})
 	defer client.Close()
 
@@ -22,9 +24,11 @@ func TestIsFeatureEnabled() {
 			DistinctId: "hello",
 		})
 
+	fmt.Println("boolResult:", boolResult)
+
 	if boolErr != nil || boolResult == nil {
 		fmt.Println("error:", boolErr)
-		return
+		// return
 	}
 
 	// Simple flag
@@ -32,9 +36,11 @@ func TestIsFeatureEnabled() {
 		Key:        "simple-test",
 		DistinctId: "hello",
 	})
+
+	fmt.Println("simpleResult:", simpleResult)
 	if simpleErr != nil || simpleResult == false {
 		fmt.Println("error:", simpleErr)
-		return
+		// return
 	}
 
 	// Multivariate flag
@@ -42,9 +48,10 @@ func TestIsFeatureEnabled() {
 		Key:        "multivariate-test",
 		DistinctId: "hello",
 	})
+	fmt.Println("variantResult:", variantResult)
 	if variantErr != nil || variantResult != "variant-value" {
 		fmt.Println("error:", variantErr)
-		return
+		// return
 	}
 
 	// Multivariate + simple flag
@@ -52,8 +59,9 @@ func TestIsFeatureEnabled() {
 		Key:        "multivariate-simple-test",
 		DistinctId: "hello",
 	})
+	fmt.Println("variantResult:", variantResult)
 	if variantErr != nil || variantResult == true {
 		fmt.Println("error:", variantErr)
-		return
+		// return
 	}
 }
