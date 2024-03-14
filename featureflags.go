@@ -21,7 +21,6 @@ import (
 const LONG_SCALE = 0xfffffffffffffff
 
 type FeatureFlagsPoller struct {
-	ticker                       *time.Ticker // periodic ticker
 	loaded                       chan bool
 	shutdown                     chan bool
 	forceReload                  chan bool
@@ -35,6 +34,7 @@ type FeatureFlagsPoller struct {
 	http                         http.Client
 	mutex                        sync.RWMutex
 	fetchedFlagsSuccessfullyOnce bool
+	nextPollTick                 func() time.Duration
 	flagTimeout                  time.Duration
 }
 
@@ -115,9 +115,22 @@ func (e *InconclusiveMatchError) Error() string {
 	return e.msg
 }
 
-func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client, pollingInterval time.Duration, flagTimeout time.Duration) *FeatureFlagsPoller {
+func newFeatureFlagsPoller(
+	projectApiKey string,
+	personalApiKey string,
+	errorf func(format string, args ...interface{}),
+	endpoint string,
+	httpClient http.Client,
+	pollingInterval time.Duration,
+	nextPollTick func() time.Duration,
+	flagTimeout time.Duration,
+) *FeatureFlagsPoller {
+
+	if nextPollTick == nil {
+		nextPollTick = func() time.Duration { return pollingInterval }
+	}
+
 	poller := FeatureFlagsPoller{
-		ticker:                       time.NewTicker(pollingInterval),
 		loaded:                       make(chan bool),
 		shutdown:                     make(chan bool),
 		forceReload:                  make(chan bool),
@@ -128,6 +141,7 @@ func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf f
 		http:                         httpClient,
 		mutex:                        sync.RWMutex{},
 		fetchedFlagsSuccessfullyOnce: false,
+		nextPollTick:                 nextPollTick,
 		flagTimeout:                  flagTimeout,
 	}
 
@@ -139,16 +153,18 @@ func (poller *FeatureFlagsPoller) run() {
 	poller.fetchNewFeatureFlags()
 
 	for {
+		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
 			close(poller.shutdown)
 			close(poller.forceReload)
 			close(poller.loaded)
-			poller.ticker.Stop()
+			timer.Stop()
 			return
 		case <-poller.forceReload:
+			timer.Stop()
 			poller.fetchNewFeatureFlags()
-		case <-poller.ticker.C:
+		case <-timer.C:
 			poller.fetchNewFeatureFlags()
 		}
 	}

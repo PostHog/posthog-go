@@ -27,11 +27,15 @@ type Config struct {
 	// timer triggers.
 	Interval time.Duration
 
-	// Interval at which to fetch new feature flags, 5min by default
+	// Interval at which to fetch new feature flag definitions, 5min by default
 	DefaultFeatureFlagsPollingInterval time.Duration
 
 	// Timeout for fetching feature flags, 3 seconds by default
 	FeatureFlagRequestTimeout time.Duration
+
+	// Calculate when feature flag definitions should be polled next. Setting this property
+	// will override DefaultFeatureFlagsPollingInterval.
+	NextFeatureFlagsPollingTick func() time.Duration
 
 	// The HTTP transport used by the client, this allows an application to
 	// redefine how requests are being sent at the HTTP level (for example,
