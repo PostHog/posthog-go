@@ -1,12 +1,15 @@
 package posthog
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"time"
 
 	"testing"
 )
@@ -613,9 +616,13 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 
 	defer server.Close()
 
+	// TODO: Make this nicer, right now if all local evaluation requests fail, we block
+	// on waiting for atleast one request to happen before returning flags,
+	//  which can be suboptimal
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		PersonalApiKey:                     "some very secret key",
+		Endpoint:                           server.URL,
+		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 	})
 	defer client.Close()
 
@@ -3230,5 +3237,150 @@ func TestComplexCohortsWithNegationLocally(t *testing.T) {
 	isMatch, _ = client.IsFeatureEnabled(payload)
 	if isMatch != true {
 		t.Error("Should match")
+	}
+}
+
+func TestFlagWithTimeoutExceeded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			time.Sleep(1 * time.Second)
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// Ignore batch requests
+		} else {
+			t.Error("Unknown request made by library")
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey:            "some very secret key",
+		Endpoint:                  server.URL,
+		FeatureFlagRequestTimeout: 10 * time.Millisecond,
+	})
+	defer client.Close()
+
+	isMatch, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "-",
+		},
+	)
+
+	if err == nil {
+		t.Error("Expected error")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Error("Expected context deadline exceeded error")
+	}
+	if isMatch != nil {
+		t.Error("Flag shouldn't match")
+	}
+
+	// get all flags with no local evaluation possible
+	variants, err := client.GetAllFlags(
+		FeatureFlagPayloadNoKey{
+			DistinctId: "-",
+			Groups:     Groups{"company": "posthog"},
+		},
+	)
+
+	if err == nil {
+		t.Error("Expected error")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Error("Expected context deadline exceeded error")
+	}
+
+	if variants == nil || len(variants) != 0 {
+		t.Error("Flag shouldn't match")
+	}
+
+	// get all flags with partial local evaluation possible
+	variants, err = client.GetAllFlags(
+		FeatureFlagPayloadNoKey{
+			DistinctId:       "-",
+			Groups:           Groups{"company": "posthog"},
+			PersonProperties: NewProperties().Set("region", "USA"),
+		},
+	)
+
+	if err == nil {
+		t.Error("Expected error")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Error("Expected context deadline exceeded error")
+	}
+
+	if variants == nil || len(variants) != 1 || variants["simple-flag"] != true {
+		t.Error("should return locally evaluated flag")
+	}
+
+	// get all flags with full local evaluation possible
+	variants, err = client.GetAllFlags(
+		FeatureFlagPayloadNoKey{
+			DistinctId:       "-",
+			Groups:           Groups{"company": "posthog"},
+			PersonProperties: NewProperties().Set("region", "USA"),
+			GroupProperties:  map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")},
+		},
+	)
+
+	if err != nil {
+		t.Error("Unexpected error")
+	}
+	fmt.Println(variants)
+
+	if variants == nil || len(variants) != 2 || variants["simple-flag"] != true || variants["group-flag"] != true {
+		t.Error("should return locally evaluated flag")
+	}
+}
+
+func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
+
+	// create buffer to write logs to
+	var buf bytes.Buffer
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			time.Sleep(11 * time.Second)
+			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// Ignore batch requests
+		} else {
+			t.Error("Unknown request made by library")
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey:            "some very secret key",
+		Endpoint:                  server.URL,
+		FeatureFlagRequestTimeout: 10 * time.Millisecond,
+		Logger:                    StdLogger(log.New(&buf, "posthog-test", log.LstdFlags)),
+	})
+	defer client.Close()
+
+	_, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "-",
+		},
+	)
+	if err != nil {
+		t.Error("Unexpected error")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Unable to fetch feature flags") {
+		t.Error("Expected error fetching flags")
+	}
+
+	if !strings.Contains(output, "context deadline exceeded") {
+		t.Error("Expected timeout error fetching flags")
 	}
 }

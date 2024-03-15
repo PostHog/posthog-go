@@ -245,7 +245,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 
 		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
 	}
 
@@ -897,6 +897,9 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
 		errorMessage = "Error calling /decide/"
+		if err != nil {
+			errorMessage += " - " + err.Error()
+		}
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
