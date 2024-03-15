@@ -1,7 +1,7 @@
 package main
 
 func main() {
-	// TestCapture()
-	// TestCaptureWithSendFeatureFlagOption()
+	TestCapture()
+	TestCaptureWithSendFeatureFlagOption()
 	TestIsFeatureEnabled()
 }

@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/posthog/posthog-go"
 	"time"
+
+	"github.com/posthog/posthog-go"
 )
 
 func TestCapture() {
