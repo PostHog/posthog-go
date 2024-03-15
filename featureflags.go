@@ -173,7 +173,7 @@ func (poller *FeatureFlagsPoller) run() {
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
-	res, err, cancel := poller.localEvaluationFlags(headers)
+	res, cancel, err := poller.localEvaluationFlags(headers)
 	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
 		poller.loaded <- false
@@ -818,7 +818,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
 	return poller.featureFlags
 }
 
-func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, error, context.CancelFunc) {
+func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, context.CancelFunc, error) {
 	decideEndpoint := "decide/?v=2"
 
 	url, err := url.Parse(poller.Endpoint + "/" + decideEndpoint + "")
@@ -829,7 +829,7 @@ func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string
 	return poller.request("POST", url, requestData, headers, poller.flagTimeout)
 }
 
-func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error, context.CancelFunc) {
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, context.CancelFunc, error) {
 	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
 
 	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
@@ -844,7 +844,7 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*ht
 	return poller.request("GET", url, []byte{}, headers, time.Duration(10)*time.Second)
 }
 
-func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string, timeout time.Duration) (*http.Response, error, context.CancelFunc) {
+func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
 	req, err := http.NewRequestWithContext(ctx, method, url.String(), bytes.NewReader(requestData))
@@ -867,7 +867,7 @@ func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestDa
 		poller.Errorf("sending request - %s", err)
 	}
 
-	return res, err, cancel
+	return res, cancel, err
 }
 
 func (poller *FeatureFlagsPoller) ForceReload() {
@@ -893,7 +893,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	res, err, cancel := poller.decide(requestDataBytes, headers)
+	res, cancel, err := poller.decide(requestDataBytes, headers)
 	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
 		errorMessage = "Error calling /decide/"
