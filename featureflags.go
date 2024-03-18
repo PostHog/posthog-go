@@ -21,21 +21,20 @@ import (
 const LONG_SCALE = 0xfffffffffffffff
 
 type FeatureFlagsPoller struct {
-	loaded                       chan bool
-	shutdown                     chan bool
-	forceReload                  chan bool
-	featureFlags                 []FeatureFlag
-	cohorts                      map[string]PropertyGroup
-	groups                       map[string]string
-	personalApiKey               string
-	projectApiKey                string
-	Errorf                       func(format string, args ...interface{})
-	Endpoint                     string
-	http                         http.Client
-	mutex                        sync.RWMutex
-	fetchedFlagsSuccessfullyOnce bool
-	nextPollTick                 func() time.Duration
-	flagTimeout                  time.Duration
+	loaded         chan bool
+	shutdown       chan bool
+	forceReload    chan bool
+	featureFlags   []FeatureFlag
+	cohorts        map[string]PropertyGroup
+	groups         map[string]string
+	personalApiKey string
+	projectApiKey  string
+	Errorf         func(format string, args ...interface{})
+	Endpoint       string
+	http           http.Client
+	mutex          sync.RWMutex
+	nextPollTick   func() time.Duration
+	flagTimeout    time.Duration
 }
 
 type FeatureFlag struct {
@@ -131,18 +130,17 @@ func newFeatureFlagsPoller(
 	}
 
 	poller := FeatureFlagsPoller{
-		loaded:                       make(chan bool),
-		shutdown:                     make(chan bool),
-		forceReload:                  make(chan bool),
-		personalApiKey:               personalApiKey,
-		projectApiKey:                projectApiKey,
-		Errorf:                       errorf,
-		Endpoint:                     endpoint,
-		http:                         httpClient,
-		mutex:                        sync.RWMutex{},
-		fetchedFlagsSuccessfullyOnce: false,
-		nextPollTick:                 nextPollTick,
-		flagTimeout:                  flagTimeout,
+		loaded:         make(chan bool),
+		shutdown:       make(chan bool),
+		forceReload:    make(chan bool),
+		personalApiKey: personalApiKey,
+		projectApiKey:  projectApiKey,
+		Errorf:         errorf,
+		Endpoint:       endpoint,
+		http:           httpClient,
+		mutex:          sync.RWMutex{},
+		nextPollTick:   nextPollTick,
+		flagTimeout:    flagTimeout,
 	}
 
 	go poller.run()
@@ -151,6 +149,7 @@ func newFeatureFlagsPoller(
 
 func (poller *FeatureFlagsPoller) run() {
 	poller.fetchNewFeatureFlags()
+	close(poller.loaded)
 
 	for {
 		timer := time.NewTimer(poller.nextPollTick())
@@ -158,7 +157,6 @@ func (poller *FeatureFlagsPoller) run() {
 		case <-poller.shutdown:
 			close(poller.shutdown)
 			close(poller.forceReload)
-			close(poller.loaded)
 			timer.Stop()
 			return
 		case <-poller.forceReload:
@@ -176,26 +174,20 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	res, cancel, err := poller.localEvaluationFlags(headers)
 	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
-		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
 		return
 	}
 	defer res.Body.Close()
 	resBody, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
 		return
 	}
 	featureFlagsResponse := FeatureFlagsResponse{}
 	err = json.Unmarshal([]byte(resBody), &featureFlagsResponse)
 	if err != nil {
-		poller.loaded <- false
 		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation", err)
 		return
-	}
-	if !poller.fetchedFlagsSuccessfullyOnce {
-		poller.loaded <- true
 	}
 	newFlags := []FeatureFlag{}
 	newFlags = append(newFlags, featureFlagsResponse.Flags...)
@@ -205,12 +197,14 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
-	poller.fetchedFlagsSuccessfullyOnce = true
 	poller.mutex.Unlock()
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
-	featureFlags := poller.GetFeatureFlags()
+	featureFlags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
 	cohorts := poller.cohorts
 
 	featureFlag := FeatureFlag{Key: ""}
@@ -224,7 +218,6 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	var result interface{}
-	var err error
 
 	if featureFlag.Key != "" {
 		result, err = poller.computeFlagLocally(
@@ -254,7 +247,10 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
 	response := map[string]interface{}{}
-	featureFlags := poller.GetFeatureFlags()
+	featureFlags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
 	fallbackToDecide := false
 	cohorts := poller.cohorts
 
@@ -808,14 +804,15 @@ func _hash(key string, distinctId string, salt string) (float64, error) {
 	return float64(value) / LONG_SCALE, nil
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
-	// ensure flags are loaded on the first call
-
-	if !poller.fetchedFlagsSuccessfullyOnce {
-		<-poller.loaded
+func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
+	// When channel is open this will block. When channel is closed it will immediately exit.
+	_, closed := <-poller.loaded
+	if closed && poller.featureFlags == nil {
+		// There was an error with initial flag fetching
+		return nil, fmt.Errorf("Flags were not successfully fetched yet")
 	}
 
-	return poller.featureFlags
+	return poller.featureFlags, nil
 }
 
 func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, context.CancelFunc, error) {

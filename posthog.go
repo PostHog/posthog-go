@@ -305,7 +305,7 @@ func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 		c.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	return c.featureFlagsPoller.GetFeatureFlags(), nil
+	return c.featureFlagsPoller.GetFeatureFlags()
 }
 
 func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
