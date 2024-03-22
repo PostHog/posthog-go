@@ -3388,16 +3388,16 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 
 func TestFetchFlagsFails(t *testing.T) {
 	// This test verifies that even in presence of HTTP errors flags continue to be fetched.
-	var called atomic.Uint32
+	var called uint32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if called.Load() == 0 {
+		if atomic.LoadUint32(&called) == 0 {
 			// Load initial flags successfully
 			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
 		} else {
 			// Fail all next requests
 			w.WriteHeader(http.StatusInternalServerError)
 		}
-		called.Add(1)
+		atomic.AddUint32(&called, 1)
 
 	}))
 	defer server.Close()
@@ -3426,7 +3426,8 @@ func TestFetchFlagsFails(t *testing.T) {
 	<-time.After(50 * time.Millisecond)
 
 	const expectedCalls = 3
-	if called.Load() != expectedCalls {
-		t.Error("Expected to be called", expectedCalls, "times but got", called.Load())
+	actualCalls := atomic.LoadUint32(&called)
+	if actualCalls != expectedCalls {
+		t.Error("Expected to be called", expectedCalls, "times but got", actualCalls)
 	}
 }
