@@ -617,13 +617,9 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 
 	defer server.Close()
 
-	// TODO: Make this nicer, right now if all local evaluation requests fail, we block
-	// on waiting for atleast one request to happen before returning flags,
-	//  which can be suboptimal
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey:                     "some very secret key",
-		Endpoint:                           server.URL,
-		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
 	})
 	defer client.Close()
 
