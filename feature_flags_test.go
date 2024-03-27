@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"testing"
@@ -616,13 +617,9 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 
 	defer server.Close()
 
-	// TODO: Make this nicer, right now if all local evaluation requests fail, we block
-	// on waiting for atleast one request to happen before returning flags,
-	//  which can be suboptimal
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey:                     "some very secret key",
-		Endpoint:                           server.URL,
-		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
 	})
 	defer client.Close()
 
@@ -3382,5 +3379,51 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 
 	if !strings.Contains(output, "context deadline exceeded") {
 		t.Error("Expected timeout error fetching flags")
+	}
+}
+
+func TestFetchFlagsFails(t *testing.T) {
+	// This test verifies that even in presence of HTTP errors flags continue to be fetched.
+	var called uint32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadUint32(&called) == 0 {
+			// Load initial flags successfully
+			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
+		} else {
+			// Fail all next requests
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		atomic.AddUint32(&called, 1)
+
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	_, err := client.GetFeatureFlags()
+	if err != nil {
+		t.Error("Should not fail", err)
+	}
+	client.ReloadFeatureFlags()
+	client.ReloadFeatureFlags()
+
+	_, err = client.GetAllFlags(FeatureFlagPayloadNoKey{
+		DistinctId: "my-id",
+	})
+	if err != nil {
+		t.Error("Should not fail", err)
+	}
+
+	// Wait for the last request to complete
+	<-time.After(50 * time.Millisecond)
+
+	const expectedCalls = 3
+	actualCalls := atomic.LoadUint32(&called)
+	if actualCalls != expectedCalls {
+		t.Error("Expected to be called", expectedCalls, "times but got", actualCalls)
 	}
 }
