@@ -60,6 +60,10 @@ type Config struct {
 	// which is independent from the number of embedded messages.
 	BatchSize int
 
+	// This parameter allow you stop using the GeoIP plugin or feature,
+	// which enriches your event data with geo information based on IP addresses.
+	DisableGeoIP *bool
+
 	// When set to true the client will send more frequent and detailed messages
 	// to its logger.
 	Verbose bool
@@ -107,6 +111,14 @@ const DefaultFeatureFlagRequestTimeout = 3 * time.Second
 // This constant sets the default batch size used by client instances if none
 // was explicitly set.
 const DefaultBatchSize = 250
+
+// This constant sets the default value for DisableGeoIP and it is true, because same behaviour in nodejs client.
+const DefaultDisableGeoIP = true
+
+func defaultGeoIPDisable() *bool {
+	val := DefaultDisableGeoIP
+	return &val
+}
 
 // Verifies that fields that don't have zero-values are set to valid values,
 // returns an error describing the problem if a field was invalid.
@@ -163,6 +175,10 @@ func makeConfig(c Config) Config {
 
 	if c.RetryAfter == nil {
 		c.RetryAfter = DefaultBacko().Duration
+	}
+
+	if c.DisableGeoIP == nil {
+		c.DisableGeoIP = defaultGeoIPDisable()
 	}
 
 	if c.uid == nil {

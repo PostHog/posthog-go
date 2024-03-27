@@ -178,15 +178,30 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case Alias:
 		m.Type = "alias"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		if _, ok := m.properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
+		}
 		msg = m
 
 	case Identify:
 		m.Type = "identify"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.Properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
+		}
 		msg = m
 
 	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.Properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
+		}
 		msg = m
 
 	case Capture:
@@ -215,6 +230,11 @@ func (c *client) Enqueue(msg Message) (err error) {
 				i++
 			}
 			m.Properties["$active_feature_flags"] = featureKeys
+		}
+		if _, ok := m.Properties[GeoIPDisableKey]; !ok {
+			if c.Config.DisableGeoIP != nil {
+				m.Properties = m.SetProperty(GeoIPDisableKey, *c.Config.DisableGeoIP)
+			}
 		}
 		msg = m
 

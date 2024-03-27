@@ -44,3 +44,38 @@ func TestConfigInvalidBatchSize(t *testing.T) {
 		t.Error("invalid field error reported:", e)
 	}
 }
+
+func TestConfigDisableGeoIP(t *testing.T) {
+	positiveVal := true
+	negativeVal := false
+
+	c := Config{}
+
+	if c.DisableGeoIP != nil {
+		t.Error("invalid value for DisableGeoIP:", c.DisableGeoIP)
+	}
+
+	c = makeConfig(c)
+
+	if *c.DisableGeoIP != positiveVal {
+		t.Error("invalid value for DisableGeoIP:", *c.DisableGeoIP)
+	}
+
+	c = Config{
+		DisableGeoIP: &positiveVal,
+	}
+
+	c = makeConfig(c)
+
+	if *c.DisableGeoIP != positiveVal {
+		t.Error("invalid value for DisableGeoIP:", *c.DisableGeoIP)
+	}
+
+	c.DisableGeoIP = &negativeVal
+
+	c = makeConfig(c)
+
+	if *c.DisableGeoIP != negativeVal {
+		t.Error("invalid value for DisableGeoIP:", *c.DisableGeoIP)
+	}
+}

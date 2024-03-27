@@ -1,5 +1,7 @@
 package posthog
 
+const GeoIPDisableKey = "$geoip_disable"
+
 // This type is used to represent properties in messages that support it.
 // It is a free-form object so the application can set any value it sees fit but
 // a few helper method are defined to make it easier to instantiate properties with
@@ -21,4 +23,9 @@ func NewProperties() Properties {
 func (p Properties) Set(name string, value interface{}) Properties {
 	p[name] = value
 	return p
+}
+
+func (p Properties) Get(name string) (interface{}, bool) {
+	value, ok := p[name]
+	return value, ok
 }
