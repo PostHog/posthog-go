@@ -1,0 +1,68 @@
+{
+  "flags": [
+    {
+      "id": 1,
+      "name": "Beta Feature",
+      "key": "beta-feature",
+      "is_simple_flag": false,
+      "active": true,
+      "rollout_percentage": 100,
+      "filters": {
+        "groups": [
+          {
+            "properties": [
+              {
+                "key": "region",
+                "operator": "exact",
+                "value": [
+                  "USA"
+                ],
+                "type": "person"
+              },
+              {
+                "key": "id",
+                "value": 98,
+                "type": "cohort"
+              }
+            ],
+            "rollout_percentage": 100
+          }
+        ]
+      }
+    }
+  ],
+  "cohorts": {
+    "1": {
+      "type": "AND",
+      "values": [
+        {
+          "key": "other",
+          "operator": "exact",
+          "value": [
+            "thing"
+          ],
+          "type": "person",
+          "negation": true
+        }
+      ]
+    },
+    "98": {
+      "type": "OR",
+      "values": [
+        {
+          "key": "id",
+          "value": 1,
+          "type": "cohort"
+        },
+        {
+          "key": "nation",
+          "operator": "exact",
+          "value": [
+            "UK"
+          ],
+          "type": "person"
+        }
+      ]
+    }
+  }
+}

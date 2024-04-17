@@ -1,5 +1,5 @@
 {
-    "count": 1,
+    "count": 2,
     "next": null,
     "previous": null,
     "flags": [
@@ -27,6 +27,30 @@
             "deleted": false,
             "active": true,
             "is_simple_flag": false,
+            "rollout_percentage": null
+        },
+        {
+            "id": 719,
+            "name": "",
+            "key": "simple-flag",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "region",
+                                "operator": "exact",
+                                "value": ["USA"],
+                                "type": "person"
+                            }
+                        ],
+                        "rollout_percentage": 100
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": true,
             "rollout_percentage": null
         }
     ],

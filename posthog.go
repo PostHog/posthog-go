@@ -111,7 +111,16 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	if len(c.PersonalApiKey) > 0 {
-		c.featureFlagsPoller = newFeatureFlagsPoller(c.key, c.Config.PersonalApiKey, c.Errorf, c.Endpoint, c.http, c.DefaultFeatureFlagsPollingInterval)
+		c.featureFlagsPoller = newFeatureFlagsPoller(
+			c.key,
+			c.Config.PersonalApiKey,
+			c.Errorf,
+			c.Endpoint,
+			c.http,
+			c.DefaultFeatureFlagsPollingInterval,
+			c.NextFeatureFlagsPollingTick,
+			c.FeatureFlagRequestTimeout,
+		)
 	}
 
 	go c.loop()
@@ -204,6 +213,11 @@ func (c *client) Enqueue(msg Message) (err error) {
 			if err != nil {
 				c.Errorf("unable to get feature variants - %s", err)
 			}
+
+			if m.Properties == nil {
+				m.Properties = NewProperties()
+			}
+
 			for feature, variant := range featureVariants {
 				propKey := fmt.Sprintf("$feature/%s", feature)
 				m.Properties[propKey] = variant
@@ -311,7 +325,7 @@ func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 		c.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	return c.featureFlagsPoller.GetFeatureFlags(), nil
+	return c.featureFlagsPoller.GetFeatureFlags()
 }
 
 func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {

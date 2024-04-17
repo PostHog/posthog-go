@@ -979,3 +979,41 @@ func TestDisabledFlag(t *testing.T) {
 		t.Errorf("flag listed in /decide/ response should have value 'false'")
 	}
 }
+
+func TestCaptureSendFlags(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("test-api-feature-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint:  server.URL,
+		Verbose:   true,
+		Logger:    t,
+		BatchSize: 1,
+		now:       mockTime,
+		uid:       mockId,
+
+		PersonalApiKey: "some very secret key",
+	})
+	defer client.Close()
+
+	// Without this call client.Close hangs forever
+	// Ref: https://github.com/PostHog/posthog-go/issues/28
+	client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "simpleFlag",
+			DistinctId: "hey",
+		},
+	)
+
+	err := client.Enqueue(Capture{
+		Event:            "Download",
+		DistinctId:       "123456",
+		SendFeatureFlags: true,
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+}
