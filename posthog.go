@@ -44,6 +44,10 @@ type Client interface {
 	// if the given flag is on or off for the user
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 	//
+	// Method returns the feature flag payload, if the feature flag is active and has a
+	// payload. If it is not active, or has no payload, returns an error.
+	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
+	//
 	// Method forces a reload of feature flags
 	ReloadFeatureFlags() error
 	//
@@ -297,6 +301,19 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
 	}
 	return flagValue, err
+}
+
+func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
+	if err := flagConfig.validate(); err != nil {
+		return "", err
+	}
+
+	if c.featureFlagsPoller == nil {
+		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
+		c.Errorf(errorMessage)
+		return "", errors.New(errorMessage)
+	}
+	return c.featureFlagsPoller.GetFeatureFlagPayload(flagConfig)
 }
 
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {

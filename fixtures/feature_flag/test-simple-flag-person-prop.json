@@ -26,6 +26,45 @@
             "active": true,
             "is_simple_flag": true,
             "rollout_percentage": null
-        }
+        },
+        {
+            "active" : true,
+            "deleted" : false,
+            "ensure_experience_continuity" : false,
+            "filters" : {
+               "groups" : [
+                  {
+                     "properties" : [],
+                     "rollout_percentage" : 100,
+                     "variant" : null
+                  }
+               ],
+               "multivariate" : null,
+               "payloads" : {
+                  "true" : "{ \"key\": \"value\" }"
+               }
+            },
+            "id" : 44289,
+            "key" : "payload-flag",
+            "team_id" : 12345
+         },
+         {
+            "active" : true,
+            "deleted" : false,
+            "ensure_experience_continuity" : false,
+            "filters" : {
+               "groups" : [
+                  {
+                     "properties" : [],
+                     "rollout_percentage" : 100,
+                     "variant" : null
+                  }
+               ],
+               "multivariate" : null
+            },
+            "id" : 44290,
+            "key" : "no-payload-flag",
+            "team_id" : 12345
+         }
     ]
 }

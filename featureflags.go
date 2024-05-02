@@ -50,6 +50,7 @@ type Filter struct {
 	AggregationGroupTypeIndex *uint8                 `json:"aggregation_group_type_index"`
 	Groups                    []FeatureFlagCondition `json:"groups"`
 	Multivariate              *Variants              `json:"multivariate"`
+	Payloads                  map[string]string      `json:"payloads"`
 }
 
 type Variants struct {
@@ -200,14 +201,14 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	poller.mutex.Unlock()
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagInternal(flagConfig FeatureFlagPayload) (FeatureFlag, interface{}, error) {
+	var featureFlag FeatureFlag
+
 	featureFlags, err := poller.GetFeatureFlags()
 	if err != nil {
-		return nil, err
+		return featureFlag, nil, err
 	}
 	cohorts := poller.cohorts
-
-	featureFlag := FeatureFlag{Key: ""}
 
 	// avoid using flag for conflicts with Golang's stdlib `flag`
 	for _, storedFlag := range featureFlags {
@@ -238,11 +239,30 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 
 		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
-			return nil, err
+			return featureFlag, nil, err
 		}
 	}
 
+	return featureFlag, result, err
+}
+
+func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
+	_, result, err := poller.getFeatureFlagInternal(flagConfig)
 	return result, err
+}
+
+func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
+	ff, result, err := poller.getFeatureFlagInternal(flagConfig)
+	if err != nil {
+		return "", err
+	}
+
+	payload, ok := ff.Filters.Payloads[fmt.Sprintf("%v", result)]
+	if !ok {
+		return "", errors.New("payload not found")
+	}
+
+	return payload, nil
 }
 
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
