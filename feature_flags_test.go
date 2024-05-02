@@ -3427,3 +3427,51 @@ func TestFetchFlagsFails(t *testing.T) {
 		t.Error("Expected to be called", expectedCalls, "times but got", actualCalls)
 	}
 }
+
+func TestFlagWithPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	t.Run("Enabled flag with payload should return payload", func(t *testing.T) {
+		payload, err := client.GetFeatureFlagPayload(
+			FeatureFlagPayload{
+				Key:        "payload-flag",
+				DistinctId: "foobar",
+			},
+		)
+
+		if err != nil {
+			t.Error("Should not fail", err)
+		}
+
+		if payload != "{ \"key\": \"value\" }" {
+			t.Error("Should match", payload)
+		}
+	})
+
+	t.Run("Enabled flag without payload should return error", func(t *testing.T) {
+		_, err := client.GetFeatureFlagPayload(
+			FeatureFlagPayload{
+				Key:        "no-payload-flag",
+				DistinctId: "foobar",
+			},
+		)
+
+		if err == nil {
+			t.Error("should fail", err)
+		}
+	})
+}
