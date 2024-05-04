@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/json"
 	"errors"
@@ -20,19 +21,20 @@ import (
 const LONG_SCALE = 0xfffffffffffffff
 
 type FeatureFlagsPoller struct {
-	ticker                       *time.Ticker // periodic ticker
-	loaded                       chan bool
-	shutdown                     chan bool
-	forceReload                  chan bool
-	featureFlags                 []FeatureFlag
-	groups                       map[string]string
-	personalApiKey               string
-	projectApiKey                string
-	Errorf                       func(format string, args ...interface{})
-	Endpoint                     string
-	http                         http.Client
-	mutex                        sync.RWMutex
-	fetchedFlagsSuccessfullyOnce bool
+	loaded         chan bool
+	shutdown       chan bool
+	forceReload    chan bool
+	featureFlags   []FeatureFlag
+	cohorts        map[string]PropertyGroup
+	groups         map[string]string
+	personalApiKey string
+	projectApiKey  string
+	Errorf         func(format string, args ...interface{})
+	Endpoint       string
+	http           http.Client
+	mutex          sync.RWMutex
+	nextPollTick   func() time.Duration
+	flagTimeout    time.Duration
 }
 
 type FeatureFlag struct {
@@ -45,9 +47,9 @@ type FeatureFlag struct {
 }
 
 type Filter struct {
-	AggregationGroupTypeIndex *uint8          `json:"aggregation_group_type_index"`
-	Groups                    []PropertyGroup `json:"groups"`
-	Multivariate              *Variants       `json:"multivariate"`
+	AggregationGroupTypeIndex *uint8                 `json:"aggregation_group_type_index"`
+	Groups                    []FeatureFlagCondition `json:"groups"`
+	Multivariate              *Variants              `json:"multivariate"`
 }
 
 type Variants struct {
@@ -59,17 +61,25 @@ type FlagVariant struct {
 	Name              string `json:"name"`
 	RolloutPercentage *uint8 `json:"rollout_percentage"`
 }
-type PropertyGroup struct {
-	Properties        []Property `json:"properties"`
-	RolloutPercentage *uint8     `json:"rollout_percentage"`
-	Variant           *string    `json:"variant"`
+
+type FeatureFlagCondition struct {
+	Properties        []FlagProperty `json:"properties"`
+	RolloutPercentage *uint8         `json:"rollout_percentage"`
+	Variant           *string        `json:"variant"`
 }
 
-type Property struct {
+type FlagProperty struct {
 	Key      string      `json:"key"`
 	Operator string      `json:"operator"`
 	Value    interface{} `json:"value"`
 	Type     string      `json:"type"`
+	Negation bool        `json:"negation"`
+}
+
+type PropertyGroup struct {
+	Type string `json:"type"`
+	// []PropertyGroup or []FlagProperty
+	Values []any `json:"values"`
 }
 
 type FlagVariantMeta struct {
@@ -79,8 +89,9 @@ type FlagVariantMeta struct {
 }
 
 type FeatureFlagsResponse struct {
-	Flags            []FeatureFlag      `json:"flags"`
-	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
+	Flags            []FeatureFlag            `json:"flags"`
+	GroupTypeMapping *map[string]string       `json:"group_type_mapping"`
+	Cohorts          map[string]PropertyGroup `json:"cohorts"`
 }
 
 type DecideRequestData struct {
@@ -103,19 +114,33 @@ func (e *InconclusiveMatchError) Error() string {
 	return e.msg
 }
 
-func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf func(format string, args ...interface{}), endpoint string, httpClient http.Client, pollingInterval time.Duration) *FeatureFlagsPoller {
+func newFeatureFlagsPoller(
+	projectApiKey string,
+	personalApiKey string,
+	errorf func(format string, args ...interface{}),
+	endpoint string,
+	httpClient http.Client,
+	pollingInterval time.Duration,
+	nextPollTick func() time.Duration,
+	flagTimeout time.Duration,
+) *FeatureFlagsPoller {
+
+	if nextPollTick == nil {
+		nextPollTick = func() time.Duration { return pollingInterval }
+	}
+
 	poller := FeatureFlagsPoller{
-		ticker:                       time.NewTicker(pollingInterval),
-		loaded:                       make(chan bool),
-		shutdown:                     make(chan bool),
-		forceReload:                  make(chan bool),
-		personalApiKey:               personalApiKey,
-		projectApiKey:                projectApiKey,
-		Errorf:                       errorf,
-		Endpoint:                     endpoint,
-		http:                         httpClient,
-		mutex:                        sync.RWMutex{},
-		fetchedFlagsSuccessfullyOnce: false,
+		loaded:         make(chan bool),
+		shutdown:       make(chan bool),
+		forceReload:    make(chan bool),
+		personalApiKey: personalApiKey,
+		projectApiKey:  projectApiKey,
+		Errorf:         errorf,
+		Endpoint:       endpoint,
+		http:           httpClient,
+		mutex:          sync.RWMutex{},
+		nextPollTick:   nextPollTick,
+		flagTimeout:    flagTimeout,
 	}
 
 	go poller.run()
@@ -124,18 +149,20 @@ func newFeatureFlagsPoller(projectApiKey string, personalApiKey string, errorf f
 
 func (poller *FeatureFlagsPoller) run() {
 	poller.fetchNewFeatureFlags()
+	close(poller.loaded)
 
 	for {
+		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
 			close(poller.shutdown)
 			close(poller.forceReload)
-			close(poller.loaded)
-			poller.ticker.Stop()
+			timer.Stop()
 			return
 		case <-poller.forceReload:
+			timer.Stop()
 			poller.fetchNewFeatureFlags()
-		case <-poller.ticker.C:
+		case <-timer.C:
 			poller.fetchNewFeatureFlags()
 		}
 	}
@@ -144,44 +171,41 @@ func (poller *FeatureFlagsPoller) run() {
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
-	res, err := poller.localEvaluationFlags(headers)
+	res, cancel, err := poller.localEvaluationFlags(headers)
+	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
-		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
 		return
 	}
 	defer res.Body.Close()
 	resBody, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		poller.loaded <- false
 		poller.Errorf("Unable to fetch feature flags", err)
 		return
 	}
 	featureFlagsResponse := FeatureFlagsResponse{}
 	err = json.Unmarshal([]byte(resBody), &featureFlagsResponse)
 	if err != nil {
-		poller.loaded <- false
 		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation", err)
 		return
 	}
-	if !poller.fetchedFlagsSuccessfullyOnce {
-		poller.loaded <- true
-	}
 	newFlags := []FeatureFlag{}
-	for _, flag := range featureFlagsResponse.Flags {
-		newFlags = append(newFlags, flag)
-	}
+	newFlags = append(newFlags, featureFlagsResponse.Flags...)
 	poller.mutex.Lock()
 	poller.featureFlags = newFlags
+	poller.cohorts = featureFlagsResponse.Cohorts
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
-	poller.fetchedFlagsSuccessfullyOnce = true
 	poller.mutex.Unlock()
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
-	featureFlags := poller.GetFeatureFlags()
+	featureFlags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
+	cohorts := poller.cohorts
 
 	featureFlag := FeatureFlag{Key: ""}
 
@@ -194,21 +218,27 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	var result interface{}
-	var err error
 
 	if featureFlag.Key != "" {
-		result, err = poller.computeFlagLocally(featureFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.computeFlagLocally(
+			featureFlag,
+			flagConfig.DistinctId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			cohorts,
+		)
 	}
 
 	if err != nil {
-		poller.Errorf("Unable to compute flag locally - %s", err)
+		poller.Errorf("Unable to compute flag locally (%s) - %s", featureFlag.Key, err)
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
 
 		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
 	}
 
@@ -217,16 +247,27 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
 	response := map[string]interface{}{}
-	featureFlags := poller.GetFeatureFlags()
+	featureFlags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
 	fallbackToDecide := false
+	cohorts := poller.cohorts
 
 	if len(featureFlags) == 0 {
 		fallbackToDecide = true
 	} else {
 		for _, storedFlag := range featureFlags {
-			result, err := poller.computeFlagLocally(storedFlag, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+			result, err := poller.computeFlagLocally(
+				storedFlag,
+				flagConfig.DistinctId,
+				flagConfig.Groups,
+				flagConfig.PersonProperties,
+				flagConfig.GroupProperties,
+				cohorts,
+			)
 			if err != nil {
-				poller.Errorf("Unable to compute flag locally - %s", err)
+				poller.Errorf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
 				fallbackToDecide = true
 			} else {
 				response[storedFlag.Key] = result
@@ -249,7 +290,14 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	return response, nil
 }
 
-func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) computeFlagLocally(
+	flag FeatureFlag,
+	distinctId string,
+	groups Groups,
+	personProperties Properties,
+	groupProperties map[string]Properties,
+	cohorts map[string]PropertyGroup,
+) (interface{}, error) {
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
 	}
@@ -275,9 +323,9 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(flag FeatureFlag, distinctI
 		}
 
 		focusedGroupProperties := groupProperties[groupName]
-		return matchFeatureFlagProperties(flag, groups[groupName].(string), focusedGroupProperties)
+		return matchFeatureFlagProperties(flag, groups[groupName].(string), focusedGroupProperties, cohorts)
 	} else {
-		return matchFeatureFlagProperties(flag, distinctId, personProperties)
+		return matchFeatureFlagProperties(flag, distinctId, personProperties, cohorts)
 	}
 }
 
@@ -318,14 +366,19 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	return lookupTable
 }
 
-func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties Properties) (interface{}, error) {
+func matchFeatureFlagProperties(
+	flag FeatureFlag,
+	distinctId string,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+) (interface{}, error) {
 	conditions := flag.Filters.Groups
 	isInconclusive := false
 
 	// # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
 	// # evaluated first, and the variant override is applied to the first matching condition.
 	// conditionsCopy := make([]PropertyGroup, len(conditions))
-	sortedConditions := append([]PropertyGroup{}, conditions...)
+	sortedConditions := append([]FeatureFlagCondition{}, conditions...)
 
 	sort.SliceStable(sortedConditions, func(i, j int) bool {
 		iValue := 1
@@ -343,7 +396,7 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 
 	for _, condition := range sortedConditions {
 
-		isMatch, err := isConditionMatch(flag, distinctId, condition, properties)
+		isMatch, err := isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
 			if _, ok := err.(*InconclusiveMatchError); ok {
 				isInconclusive = true
@@ -371,11 +424,24 @@ func matchFeatureFlagProperties(flag FeatureFlag, distinctId string, properties 
 	return false, nil
 }
 
-func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGroup, properties Properties) (bool, error) {
+func isConditionMatch(
+	flag FeatureFlag,
+	distinctId string,
+	condition FeatureFlagCondition,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+) (bool, error) {
 	if len(condition.Properties) > 0 {
 		for _, prop := range condition.Properties {
+			var isMatch bool
+			var err error
 
-			isMatch, err := matchProperty(prop, properties)
+			if prop.Type == "cohort" {
+				isMatch, err = matchCohort(prop, properties, cohorts)
+			} else {
+				isMatch, err = matchProperty(prop, properties)
+			}
+
 			if err != nil {
 				return false, err
 			}
@@ -397,7 +463,110 @@ func isConditionMatch(flag FeatureFlag, distinctId string, condition PropertyGro
 	return true, nil
 }
 
-func matchProperty(property Property, properties Properties) (bool, error) {
+func matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+	cohortId := fmt.Sprint(property.Value)
+	propertyGroup, ok := cohorts[cohortId]
+	if !ok {
+		return false, fmt.Errorf("Can't match cohort: cohort %s not found", cohortId)
+	}
+
+	return matchPropertyGroup(propertyGroup, properties, cohorts)
+}
+
+func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+	groupType := propertyGroup.Type
+	values := propertyGroup.Values
+
+	if len(values) == 0 {
+		// empty groups are no-ops, always match
+		return true, nil
+	}
+
+	errorMatchingLocally := false
+
+	for _, value := range values {
+		switch prop := value.(type) {
+		case map[string]any:
+			if _, ok := prop["values"]; ok {
+				// PropertyGroup
+				matches, err := matchPropertyGroup(PropertyGroup{
+					Type:   getSafeProp[string](prop, "type"),
+					Values: getSafeProp[[]any](prop, "values"),
+				}, properties, cohorts)
+				if err != nil {
+					if _, ok := err.(*InconclusiveMatchError); ok {
+						errorMatchingLocally = true
+					} else {
+						return false, err
+					}
+				}
+
+				if groupType == "AND" {
+					if !matches {
+						return false, nil
+					}
+				} else {
+					// OR group
+					if matches {
+						return true, nil
+					}
+				}
+			} else {
+				// FlagProperty
+				var matches bool
+				var err error
+				flagProperty := FlagProperty{
+					Key:      getSafeProp[string](prop, "key"),
+					Operator: getSafeProp[string](prop, "operator"),
+					Value:    getSafeProp[any](prop, "value"),
+					Type:     getSafeProp[string](prop, "type"),
+					Negation: getSafeProp[bool](prop, "negation"),
+				}
+				if prop["type"] == "cohort" {
+					matches, err = matchCohort(flagProperty, properties, cohorts)
+				} else {
+					matches, err = matchProperty(flagProperty, properties)
+				}
+
+				if err != nil {
+					if _, ok := err.(*InconclusiveMatchError); ok {
+						errorMatchingLocally = true
+					} else {
+						return false, err
+					}
+				}
+
+				negation := flagProperty.Negation
+				if groupType == "AND" {
+					// if negated property, do the inverse
+					if !matches && !negation {
+						return false, nil
+					}
+					if matches && negation {
+						return false, nil
+					}
+				} else {
+					// OR group
+					if matches && !negation {
+						return true, nil
+					}
+					if !matches && negation {
+						return true, nil
+					}
+				}
+			}
+		}
+	}
+
+	if errorMatchingLocally {
+		return false, &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+	}
+
+	// if we get here, all matched in AND case, or none matched in OR case
+	return groupType == "AND", nil
+}
+
+func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	key := property.Key
 	operator := property.Operator
 	value := property.Value
@@ -576,7 +745,7 @@ func interfaceToFloat(val interface{}) (float64, error) {
 	case uint64:
 		i = float64(t)
 	default:
-		errMessage := "Argument not orderable"
+		errMessage := "argument not orderable"
 		return 0.0, errors.New(errMessage)
 	}
 
@@ -635,28 +804,29 @@ func _hash(key string, distinctId string, salt string) (float64, error) {
 	return float64(value) / LONG_SCALE, nil
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlags() []FeatureFlag {
-	// ensure flags are loaded on the first call
-
-	if !poller.fetchedFlagsSuccessfullyOnce {
-		<-poller.loaded
+func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
+	// When channel is open this will block. When channel is closed it will immediately exit.
+	_, closed := <-poller.loaded
+	if closed && poller.featureFlags == nil {
+		// There was an error with initial flag fetching
+		return nil, fmt.Errorf("Flags were not successfully fetched yet")
 	}
 
-	return poller.featureFlags
+	return poller.featureFlags, nil
 }
 
-func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, error) {
-	localEvaluationEndpoint := "decide/?v=2"
+func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, context.CancelFunc, error) {
+	decideEndpoint := "decide/?v=2"
 
-	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
+	url, err := url.Parse(poller.Endpoint + "/" + decideEndpoint + "")
 	if err != nil {
 		poller.Errorf("creating url - %s", err)
 	}
 
-	return poller.request("POST", url, requestData, headers)
+	return poller.request("POST", url, requestData, headers, poller.flagTimeout)
 }
 
-func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, error) {
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, context.CancelFunc, error) {
 	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
 
 	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
@@ -665,13 +835,16 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*ht
 	}
 	searchParams := url.Query()
 	searchParams.Add("token", poller.projectApiKey)
+	searchParams.Add("send_cohorts", "true")
 	url.RawQuery = searchParams.Encode()
 
-	return poller.request("GET", url, []byte{}, headers)
+	return poller.request("GET", url, []byte{}, headers, time.Duration(10)*time.Second)
 }
 
-func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string) (*http.Response, error) {
-	req, err := http.NewRequest(method, url.String(), bytes.NewReader(requestData))
+func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	req, err := http.NewRequestWithContext(ctx, method, url.String(), bytes.NewReader(requestData))
 	if err != nil {
 		poller.Errorf("creating request - %s", err)
 	}
@@ -691,7 +864,7 @@ func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestDa
 		poller.Errorf("sending request - %s", err)
 	}
 
-	return res, err
+	return res, cancel, err
 }
 
 func (poller *FeatureFlagsPoller) ForceReload() {
@@ -717,9 +890,13 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	res, err := poller.decide(requestDataBytes, headers)
+	res, cancel, err := poller.decide(requestDataBytes, headers)
+	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
 		errorMessage = "Error calling /decide/"
+		if err != nil {
+			errorMessage += " - " + err.Error()
+		}
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
@@ -777,4 +954,14 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 		return result, nil
 	}
 	return result, nil
+}
+
+func getSafeProp[T any](properties map[string]any, key string) T {
+	switch v := properties[key].(type) {
+	case T:
+		return v
+	default:
+		var defaultValue T
+		return defaultValue
+	}
 }
