@@ -17,6 +17,52 @@ import (
 	"time"
 )
 
+func TestClient_Enqueue(t *testing.T) {
+	c := New("")
+
+	err := c.Enqueue(GroupIdentify{
+		DistinctId: "1",
+		Type:       "abc",
+		Key:        "def",
+	})
+	if err != nil {
+		t.Error("enqueue failed:", err)
+	}
+
+	err = c.Enqueue(Identify{
+		DistinctId: "1",
+		Type:       "abc",
+	})
+	if err != nil {
+		t.Error("enqueue failed:", err)
+	}
+
+	err = c.Enqueue(Capture{
+		DistinctId: "1",
+		Event:      "abc",
+	})
+	if err != nil {
+		t.Error("enqueue failed:", err)
+	}
+
+	err = c.Enqueue(Capture{
+		DistinctId: "1",
+		Event:      "abc",
+		Properties: NewProperties().Set(GeoIPDisableKey, false),
+	})
+	if err != nil {
+		t.Error("enqueue failed:", err)
+	}
+
+	err = c.Enqueue(Alias{
+		DistinctId: "1",
+		Alias:      "abc",
+	})
+	if err != nil {
+		t.Error("enqueue failed:", err)
+	}
+}
+
 // Helper type used to implement the io.Reader interface on function values.
 type readFunc func([]byte) (int, error)
 
@@ -72,6 +118,8 @@ var _ Message = (*testErrorMessage)(nil)
 // tests.
 type testErrorMessage struct{}
 type testAPIErrorMessage struct{}
+
+func (m testErrorMessage) SetProperty(name string, value interface{}) Properties { return Properties{} }
 
 func (m testErrorMessage) internal() {
 }
@@ -341,6 +389,8 @@ type customMessage struct {
 }
 type customAPIMessage struct {
 }
+
+func (c *customMessage) SetProperty(name string, value interface{}) Properties { return Properties{} }
 
 func (c *customMessage) internal() {
 }

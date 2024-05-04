@@ -14,6 +14,16 @@ type GroupIdentify struct {
 	Properties Properties
 }
 
+func (msg GroupIdentify) SetProperty(name string, value interface{}) Properties {
+	if msg.Properties == nil {
+		msg.Properties = Properties{}
+	}
+
+	msg.Properties.Set(name, value)
+
+	return msg.Properties
+}
+
 func (msg GroupIdentify) internal() {
 	panic(unimplementedError)
 }
@@ -51,7 +61,11 @@ type GroupIdentifyInApi struct {
 func (msg GroupIdentify) APIfy() APIMessage {
 	library := "posthog-go"
 
-	myProperties := Properties{}.Set("$lib", library).Set("$lib_version", getVersion())
+	if msg.Properties == nil {
+		msg.Properties = Properties{}
+	}
+
+	myProperties := msg.Properties.Set("$lib", library).Set("$lib_version", getVersion())
 	myProperties.Set("$group_type", msg.Type).Set("$group_key", msg.Key).Set("$group_set", msg.Properties)
 
 	distinctId := fmt.Sprintf("$%s_%s", msg.Type, msg.Key)

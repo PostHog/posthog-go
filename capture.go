@@ -10,12 +10,23 @@ type Capture struct {
 	// the application, its value is always overwritten by the library.
 	Type string
 
+	Uuid             string
 	DistinctId       string
 	Event            string
 	Timestamp        time.Time
 	Properties       Properties
 	Groups           Groups
 	SendFeatureFlags bool
+}
+
+func (msg Capture) SetProperty(name string, value interface{}) Properties {
+	if msg.Properties == nil {
+		msg.Properties = Properties{}
+	}
+
+	msg.Properties.Set(name, value)
+
+	return msg.Properties
 }
 
 func (msg Capture) internal() {
@@ -48,6 +59,7 @@ type CaptureInApi struct {
 	LibraryVersion string    `json:"library_version"`
 	Timestamp      time.Time `json:"timestamp"`
 
+	Uuid             string     `json:"uuid"`
 	DistinctId       string     `json:"distinct_id"`
 	Event            string     `json:"event"`
 	Properties       Properties `json:"properties"`
@@ -71,6 +83,7 @@ func (msg Capture) APIfy() APIMessage {
 	}
 
 	apified := CaptureInApi{
+		Uuid:           msg.Uuid,
 		Type:           msg.Type,
 		Library:        library,
 		LibraryVersion: libraryVersion,
