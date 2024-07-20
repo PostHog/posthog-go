@@ -60,4 +60,4 @@ func main() {
 
 ## Questions?
 
-### [Ask away in the community forum.](https://posthog.com/questions)
+### [Visit the community forum.](https://posthog.com/questions)
