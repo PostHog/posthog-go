@@ -325,7 +325,7 @@ func TestFlagGroup(t *testing.T) {
 				t.Errorf("Expected personProperties to be map[region:Canada], got %s", reqBody.PersonProperties)
 			}
 
-			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": Properties{"name": "Project Name 1"}})
+			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": {"name": "Project Name 1"}})
 			if !groupPropertiesEquality {
 				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1]], got %s", reqBody.GroupProperties)
 			}
