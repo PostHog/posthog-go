@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"sync"
 	"time"
@@ -428,7 +427,7 @@ func (c *client) report(res *http.Response) (err error) {
 		return
 	}
 
-	if body, err = ioutil.ReadAll(res.Body); err != nil {
+	if body, err = io.ReadAll(res.Body); err != nil {
 		c.Errorf("response %d %s - %s", res.StatusCode, res.Status, err)
 		return
 	}
