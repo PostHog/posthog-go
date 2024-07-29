@@ -620,11 +620,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 
 		match := r.MatchString(fmt.Sprintf("%v", override_value))
 
-		if match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return match, nil
 	}
 
 	if operator == "not_regex" {
@@ -657,11 +653,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 			return false, errors.New(errMessage)
 		}
 
-		if !match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return !match, nil
 	}
 
 	if operator == "gt" {
