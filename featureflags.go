@@ -539,18 +539,12 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 				negation := flagProperty.Negation
 				if groupType == "AND" {
 					// if negated property, do the inverse
-					if !matches && !negation {
-						return false, nil
-					}
-					if matches && negation {
+					if matches == negation {
 						return false, nil
 					}
 				} else {
 					// OR group
-					if matches && !negation {
-						return true, nil
-					}
-					if !matches && negation {
+					if matches != negation {
 						return true, nil
 					}
 				}
