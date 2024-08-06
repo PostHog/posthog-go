@@ -174,19 +174,23 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	res, cancel, err := poller.localEvaluationFlags(headers)
 	defer cancel()
 	if err != nil || res.StatusCode != http.StatusOK {
-		poller.Errorf("Unable to fetch feature flags", err)
+		if err != nil {
+			poller.Errorf("Unable to fetch feature flags: %s", err)
+		} else {
+			poller.Errorf("Unable to fetch feature flags, status: %s", res.Status)
+		}
 		return
 	}
 	defer res.Body.Close()
 	resBody, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		poller.Errorf("Unable to fetch feature flags", err)
+		poller.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
 	featureFlagsResponse := FeatureFlagsResponse{}
 	err = json.Unmarshal([]byte(resBody), &featureFlagsResponse)
 	if err != nil {
-		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation", err)
+		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
 		return
 	}
 	newFlags := []FeatureFlag{}
