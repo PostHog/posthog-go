@@ -18,8 +18,11 @@ type Config struct {
 	// `DefaultEndpoint` by default.
 	Endpoint string
 
-	// You must specify a Personal API Key to use feature flags
-	// More information on how to get one: https://posthog.com/docs/api/overview
+	// Specifying a Personal API key will make feature flag evaluation more performant,
+	// but it's not required for feature flags.  If you don't have a personal API key,
+	// you can leave this field empty, and all of the relevant feature flag evaluation
+	// methods will still work.
+	// Information on how to get a personal API key: https://posthog.com/docs/api/overview
 	PersonalApiKey string
 
 	// The flushing interval of the client. Messages will be sent when they've
