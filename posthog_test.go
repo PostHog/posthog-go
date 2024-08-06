@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -705,7 +706,7 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 			func(m APIMessage, e error) { errchan <- e },
 		},
 		Transport: testTransportDelayed,
-		// Only one concurreny request can be submitted, because the transport
+		// Only one concurrency request can be submitted, because the transport
 		// introduces a short delay one of the uploads should fail.
 		BatchSize:             1,
 		maxConcurrentRequests: 1,
@@ -741,21 +742,9 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	})
 	defer client.Close()
 
-	receivedErrors := [4]error{}
+	receivedErrors := [2]error{}
 	receivedErrors[0] = client.ReloadFeatureFlags()
-	_, receivedErrors[1] = client.IsFeatureEnabled(
-		FeatureFlagPayload{
-			Key:        "some key",
-			DistinctId: "some id",
-		},
-	)
-	_, receivedErrors[2] = client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:        "some key",
-			DistinctId: "some id",
-		},
-	)
-	_, receivedErrors[3] = client.GetFeatureFlags()
+	_, receivedErrors[1] = client.GetFeatureFlags()
 
 	for _, receivedError := range receivedErrors {
 		if receivedError == nil || receivedError.Error() != "specifying a PersonalApiKey is required for using feature flags" {
@@ -764,6 +753,442 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 		}
 	}
 
+}
+
+func TestIsFeatureEnabled(t *testing.T) {
+	tests := []struct {
+		name           string
+		flagConfig     FeatureFlagPayload
+		mockResponse   string
+		expectedResult interface{}
+		expectedError  string
+	}{
+		{
+			name: "Feature flag is enabled",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:   `{"featureFlags": {"test-flag": true}}`,
+			expectedResult: true,
+		},
+		{
+			name: "Feature flag is disabled",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user456",
+			},
+			mockResponse:   `{"featureFlags": {"test-flag": false}}`,
+			expectedResult: false,
+		},
+		{
+			name: "Feature flag is a string 'true'",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user789",
+			},
+			mockResponse:   `{"featureFlags": {"test-flag": "true"}}`,
+			expectedResult: true,
+		},
+		{
+			name: "Feature flag is a string 'false'",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user101",
+			},
+			mockResponse:   `{"featureFlags": {"test-flag": "false"}}`,
+			expectedResult: false,
+		},
+		{
+			name: "Feature flag is a variant string",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user202",
+			},
+			mockResponse:   `{"featureFlags": {"test-flag": "variant-a"}}`,
+			expectedResult: "variant-a",
+		},
+		{
+			name: "Feature flag doesn't exist",
+			flagConfig: FeatureFlagPayload{
+				Key:        "non-existent-flag",
+				DistinctId: "user303",
+			},
+			mockResponse:   `{"featureFlags": {}}`,
+			expectedResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/decide/" {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(tt.mockResponse))
+				} else {
+					t.Errorf("Unexpected request to %s", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-api-key", Config{
+				Endpoint: server.URL,
+			})
+
+			result, err := client.IsFeatureEnabled(tt.flagConfig)
+
+			if tt.expectedError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.expectedError) {
+					t.Errorf("Expected error containing '%s', got '%v'", tt.expectedError, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if result != tt.expectedResult {
+					t.Errorf("Expected result %v, got %v", tt.expectedResult, result)
+				}
+			}
+		})
+	}
+}
+
+func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v2.json")))
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint: server.URL,
+		Logger:   testLogger{t.Logf, t.Logf},
+		Callback: testCallback{
+			func(m APIMessage) {},
+			func(m APIMessage, e error) {},
+		},
+	})
+	defer client.Close()
+
+	// Test GetFeatureFlag single scenario
+	flagValue, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:        "beta-feature",
+		DistinctId: "test-user",
+	})
+
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+
+	// Check that the flag value is as expected (should match the value in the fixture)
+	expectedValue := "decide-fallback-value"
+	if flagValue != expectedValue {
+		t.Errorf("Expected flag value %v, got: %v", expectedValue, flagValue)
+	}
+
+	lastEvent := client.GetLastCapturedEvent()
+	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
+		t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
+	}
+
+	// Check that the properties of the captured event match the response from /decide
+	if lastEvent != nil {
+		if lastEvent.Properties["$feature_flag"] != "beta-feature" {
+			t.Errorf("Expected feature flag key 'beta-feature', got: %v", lastEvent.Properties["$feature_flag"])
+		}
+		if lastEvent.Properties["$feature_flag_response"] != expectedValue {
+			t.Errorf("Expected feature flag response %v, got: %v", expectedValue, lastEvent.Properties["$feature_flag_response"])
+		}
+	}
+
+	// Test a bunch of GetFeatureFlag scenarios
+	tests := []struct {
+		name          string
+		flagConfig    FeatureFlagPayload
+		mockResponse  string
+		expectedValue interface{}
+		expectedError string
+	}{
+		{
+			name: "Flag exists and is true",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": true}}`,
+			expectedValue: true,
+		},
+		{
+			name: "Flag exists and is false",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": false}}`,
+			expectedValue: false,
+		},
+		{
+			name: "Flag exists with string value",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": "variant-a"}}`,
+			expectedValue: "variant-a",
+		},
+		{
+			name: "Flag doesn't exist",
+			flagConfig: FeatureFlagPayload{
+				Key:        "non-existent-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"other-flag": true}}`,
+			expectedValue: false,
+		},
+		{
+			name: "Empty response",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{}`,
+			expectedValue: false,
+		},
+		{
+			name: "Invalid JSON response",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{invalid-json}`,
+			expectedError: "error parsing response from /decide/",
+		},
+		{
+			name: "Non-200 status code",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  ``,
+			expectedError: "unexpected status code from /decide/: 500",
+		},
+		{
+			name: "With groups and properties",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+				Groups: Groups{
+					"company": "test-company",
+				},
+				PersonProperties: Properties{
+					"plan": "enterprise",
+				},
+				GroupProperties: map[string]Properties{
+					"company": {
+						"size": "large",
+					},
+				},
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": "enterprise-variant"}}`,
+			expectedValue: "enterprise-variant",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Check request method and path
+				if r.Method != "POST" || r.URL.Path != "/decide/" {
+					t.Errorf("Expected POST /decide/, got %s %s", r.Method, r.URL.Path)
+				}
+
+				// Check headers
+				if r.Header.Get("Content-Type") != "application/json" {
+					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
+				}
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
+				}
+
+				// Check request body
+				body, _ := ioutil.ReadAll(r.Body)
+				var requestData DecideRequestData
+				json.Unmarshal(body, &requestData)
+				if requestData.DistinctId != tt.flagConfig.DistinctId {
+					t.Errorf("Expected distinctId %s, got %s", tt.flagConfig.DistinctId, requestData.DistinctId)
+				}
+
+				// Send mock response
+				if tt.expectedError == "unexpected status code from /decide/: 500" {
+					w.WriteHeader(http.StatusInternalServerError)
+				} else {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(tt.mockResponse))
+				}
+			}))
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-api-key", Config{
+				Endpoint: server.URL,
+			})
+
+			value, err := client.GetFeatureFlag(tt.flagConfig)
+
+			if tt.expectedError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.expectedError) {
+					t.Errorf("Expected error containing '%s', got '%v'", tt.expectedError, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if value != tt.expectedValue {
+					t.Errorf("Expected value %v, got %v", tt.expectedValue, value)
+				}
+			}
+		})
+	}
+}
+
+func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
+	tests := []struct {
+		name          string
+		flagConfig    FeatureFlagPayloadNoKey
+		mockResponse  string
+		expectedFlags map[string]interface{}
+		expectedError string
+	}{
+		{
+			name: "Multiple feature flags",
+			flagConfig: FeatureFlagPayloadNoKey{
+				DistinctId: "user123",
+			},
+			mockResponse: `{
+				"featureFlags": {
+					"flag1": true,
+					"flag2": false,
+					"flag3": "variant-a"
+				}
+			}`,
+			expectedFlags: map[string]interface{}{
+				"flag1": true,
+				"flag2": false,
+				"flag3": "variant-a",
+			},
+		},
+		{
+			name: "No feature flags",
+			flagConfig: FeatureFlagPayloadNoKey{
+				DistinctId: "user456",
+			},
+			mockResponse: `{
+				"featureFlags": {}
+			}`,
+			expectedFlags: map[string]interface{}{},
+		},
+		{
+			name: "Invalid JSON response",
+			flagConfig: FeatureFlagPayloadNoKey{
+				DistinctId: "user789",
+			},
+			mockResponse:  `{invalid-json}`,
+			expectedError: "error parsing response from /decide/",
+		},
+		{
+			name: "Non-200 status code",
+			flagConfig: FeatureFlagPayloadNoKey{
+				DistinctId: "user101",
+			},
+			mockResponse:  ``,
+			expectedError: "unexpected status code from /decide/: 500",
+		},
+		{
+			name: "With groups and properties",
+			flagConfig: FeatureFlagPayloadNoKey{
+				DistinctId: "user102",
+				Groups: Groups{
+					"company": "test-company",
+				},
+				PersonProperties: Properties{
+					"plan": "enterprise",
+				},
+				GroupProperties: map[string]Properties{
+					"company": {
+						"size": "large",
+					},
+				},
+			},
+			mockResponse: `{
+				"featureFlags": {
+					"enterprise_flag": true,
+					"company_size_flag": "large"
+				}
+			}`,
+			expectedFlags: map[string]interface{}{
+				"enterprise_flag":   true,
+				"company_size_flag": "large",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Check request method and path
+				if r.Method != "POST" || r.URL.Path != "/decide/" {
+					t.Errorf("Expected POST /decide/, got %s %s", r.Method, r.URL.Path)
+				}
+
+				// Check headers
+				if r.Header.Get("Content-Type") != "application/json" {
+					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
+				}
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
+				}
+
+				// Check request body
+				body, _ := ioutil.ReadAll(r.Body)
+				var requestData DecideRequestData
+				json.Unmarshal(body, &requestData)
+				if requestData.DistinctId != tt.flagConfig.DistinctId {
+					t.Errorf("Expected distinctId %s, got %s", tt.flagConfig.DistinctId, requestData.DistinctId)
+				}
+
+				// Send mock response
+				if tt.expectedError == "unexpected status code from /decide/: 500" {
+					w.WriteHeader(http.StatusInternalServerError)
+				} else {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(tt.mockResponse))
+				}
+			}))
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-api-key", Config{
+				Endpoint: server.URL,
+				// Note: No PersonalApiKey is set, so it will fall back to using the decide endpoint
+			})
+
+			flags, err := client.GetAllFlags(tt.flagConfig)
+
+			if tt.expectedError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.expectedError) {
+					t.Errorf("Expected error containing '%s', got '%v'", tt.expectedError, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if !reflect.DeepEqual(flags, tt.expectedFlags) {
+					t.Errorf("Expected flags %v, got %v", tt.expectedFlags, flags)
+				}
+			}
+		})
+	}
 }
 
 func TestSimpleFlagOld(t *testing.T) {
@@ -788,11 +1213,6 @@ func TestSimpleFlagOld(t *testing.T) {
 	if checkErr != nil || isEnabled != true {
 		t.Errorf("simple flag with null rollout percentage should be on for everyone")
 	}
-
-	// flagValue, valueError := client.GetFeatureFlag("simpleFlag", "hey", false, Groups{}, NewProperties(), map[string]Properties{})
-	// if valueError != nil || flagValue != true {
-	// 	t.Errorf("simple flag with null rollout percentage should have value 'true'")
-	// }
 }
 
 func TestSimpleFlagCalculation(t *testing.T) {

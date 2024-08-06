@@ -311,7 +311,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		groupName, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
 		if !exists {
-			errMessage := "Flag has unknown group type index"
+			errMessage := "flag has unknown group type index"
 			return nil, errors.New(errMessage)
 		}
 
@@ -467,7 +467,7 @@ func matchCohort(property FlagProperty, properties Properties, cohorts map[strin
 	cohortId := fmt.Sprint(property.Value)
 	propertyGroup, ok := cohorts[cohortId]
 	if !ok {
-		return false, fmt.Errorf("Can't match cohort: cohort %s not found", cohortId)
+		return false, fmt.Errorf("can't match cohort: cohort %s not found", cohortId)
 	}
 
 	return matchPropertyGroup(propertyGroup, properties, cohorts)
@@ -578,7 +578,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return false, &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
 	}
 
-	override_value, _ := properties[key]
+	override_value := properties[key]
 
 	if operator == "exact" {
 		switch t := value.(type) {
@@ -637,7 +637,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 			valueString = strconv.Itoa(valueInt)
 			r, err = regexp.Compile(valueString)
 		} else {
-			errMessage := "Regex expression not allowed"
+			errMessage := "regex expression not allowed"
 			return false, errors.New(errMessage)
 		}
 
@@ -653,7 +653,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 			valueString = strconv.Itoa(valueInt)
 			match = r.MatchString(valueString)
 		} else {
-			errMessage := "Value type not supported"
+			errMessage := "value type not supported"
 			return false, errors.New(errMessage)
 		}
 
@@ -707,12 +707,12 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
 	convertedFirstValue, err := interfaceToFloat(firstValue)
 	if err != nil {
-		errMessage := "Value 1 is not orderable"
+		errMessage := "value 1 is not orderable"
 		return 0, 0, errors.New(errMessage)
 	}
 	convertedSecondValue, err := interfaceToFloat(secondValue)
 	if err != nil {
-		errMessage := "Value 2 is not orderable"
+		errMessage := "value 2 is not orderable"
 		return 0, 0, errors.New(errMessage)
 	}
 
@@ -809,7 +809,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	_, closed := <-poller.loaded
 	if closed && poller.featureFlags == nil {
 		// There was an error with initial flag fetching
-		return nil, fmt.Errorf("Flags were not successfully fetched yet")
+		return nil, fmt.Errorf("flags were not successfully fetched yet")
 	}
 
 	return poller.featureFlags, nil

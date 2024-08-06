@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -44,14 +45,19 @@ type Client interface {
 	// if the given flag is on or off for the user
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 	//
+	// Get all flags - returns all flags for a user
+	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
+	//
 	// Method forces a reload of feature flags
+	// NB: This is only available when using a PersonalApiKey
 	ReloadFeatureFlags() error
 	//
 	// Get feature flags - for testing only
+	// NB: This is only available when using a PersonalApiKey
 	GetFeatureFlags() ([]FeatureFlag, error)
 	//
-	// Get all flags - returns all flags for a user
-	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
+	// Get the last captured event
+	GetLastCapturedEvent() *Capture
 }
 
 type client struct {
@@ -79,6 +85,11 @@ type client struct {
 	featureFlagsPoller *FeatureFlagsPoller
 
 	distinctIdsFeatureFlagsReported *SizeLimitedMap
+
+	// Last captured event
+	lastCapturedEvent *Capture
+	// Mutex to protect last captured event
+	lastEventMutex sync.RWMutex
 }
 
 // Instantiate a new client that uses the write key passed as first argument to
@@ -216,6 +227,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 			}
 			m.Properties["$active_feature_flags"] = featureKeys
 		}
+		c.setLastCapturedEvent(m)
 		msg = m
 
 	default:
@@ -238,15 +250,26 @@ func (c *client) Enqueue(msg Message) (err error) {
 	return
 }
 
+func (c *client) setLastCapturedEvent(event Capture) {
+	c.lastEventMutex.Lock()
+	defer c.lastEventMutex.Unlock()
+	c.lastCapturedEvent = &event
+}
+
+func (c *client) GetLastCapturedEvent() *Capture {
+	c.lastEventMutex.RLock()
+	defer c.lastEventMutex.RUnlock()
+	if c.lastCapturedEvent == nil {
+		return nil
+	}
+	// Return a copy to avoid data races
+	eventCopy := *c.lastCapturedEvent
+	return &eventCopy
+}
+
 func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
 	if err := flagConfig.validate(); err != nil {
 		return false, err
-	}
-
-	if c.featureFlagsPoller == nil {
-		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
-		c.Errorf(errorMessage)
-		return false, errors.New(errorMessage)
 	}
 
 	result, err := c.GetFeatureFlag(flagConfig)
@@ -278,12 +301,17 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 		return false, err
 	}
 
-	if c.featureFlagsPoller == nil {
-		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
-		c.Errorf(errorMessage)
-		return "false", errors.New(errorMessage)
+	var flagValue interface{}
+	var err error
+
+	if c.featureFlagsPoller != nil {
+		// get feature flags from the poller, which uses the personal api key
+		flagValue, err = c.featureFlagsPoller.GetFeatureFlag(flagConfig)
+	} else {
+		// if there's no poller, get the feature flag from the decide endpoint
+		flagValue, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
-	flagValue, err := c.featureFlagsPoller.GetFeatureFlag(flagConfig)
+
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
 		c.Enqueue(Capture{
 			DistinctId: flagConfig.DistinctId,
@@ -296,6 +324,7 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 		})
 		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
 	}
+
 	return flagValue, err
 }
 
@@ -314,12 +343,16 @@ func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]int
 		return nil, err
 	}
 
-	if c.featureFlagsPoller == nil {
-		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
-		c.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
+	var flagsValue map[string]interface{}
+	var err error
+
+	if c.featureFlagsPoller != nil {
+		flagsValue, err = c.featureFlagsPoller.GetAllFlags(flagConfig)
+	} else {
+		flagsValue, err = c.getAllFeatureFlagsFromDecide(flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
-	return c.featureFlagsPoller.GetAllFlags(flagConfig)
+
+	return flagsValue, err
 }
 
 // Close and flush metrics.
@@ -336,7 +369,7 @@ func (c *client) Close() (err error) {
 	return
 }
 
-// Asychronously send a batched requests.
+// Asynchronously send a batched requests.
 func (c *client) sendAsync(msgs []message, wg *sync.WaitGroup, ex *executor) {
 	wg.Add(1)
 
@@ -557,4 +590,78 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups, personProp
 		return nil, err
 	}
 	return featureVariants, nil
+}
+
+func (c *client) makeDecideRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error) {
+	requestData := DecideRequestData{
+		ApiKey:           c.key,
+		DistinctId:       distinctId,
+		Groups:           groups,
+		PersonProperties: personProperties,
+		GroupProperties:  groupProperties,
+	}
+
+	requestDataBytes, err := json.Marshal(requestData)
+	if err != nil {
+		return nil, fmt.Errorf("unable to marshal decide endpoint request data: %v", err)
+	}
+
+	decideEndpoint := "decide/?v=2"
+	url, err := url.Parse(c.Endpoint + "/" + decideEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("creating url: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url.String(), bytes.NewReader(requestDataBytes))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "posthog-go (version: "+Version+")")
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code from /decide/: %d", res.StatusCode)
+	}
+
+	resBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response from /decide/: %v", err)
+	}
+
+	var decideResponse DecideResponse
+	err = json.Unmarshal(resBody, &decideResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing response from /decide/: %v", err)
+	}
+
+	return &decideResponse, nil
+}
+
+func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
+	if err != nil {
+		return nil, err
+	}
+
+	if value, ok := decideResponse.FeatureFlags[key]; ok {
+		return value, nil
+	}
+
+	return false, nil
+}
+
+func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
+	if err != nil {
+		return nil, err
+	}
+
+	return decideResponse.FeatureFlags, nil
 }
