@@ -305,10 +305,12 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	var err error
 
 	if c.featureFlagsPoller != nil {
-		// get feature flags from the poller, which uses the personal api key
+		// get feature flag from the poller, which uses the personal api key
+		// this is only available when using a PersonalApiKey
 		flagValue, err = c.featureFlagsPoller.GetFeatureFlag(flagConfig)
 	} else {
 		// if there's no poller, get the feature flag from the decide endpoint
+		c.debugf("getting feature flag from decide endpoint")
 		flagValue, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
@@ -347,8 +349,12 @@ func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]int
 	var err error
 
 	if c.featureFlagsPoller != nil {
+		// get feature flags from the poller, which uses the personal api key
+		// this is only available when using a PersonalApiKey
 		flagsValue, err = c.featureFlagsPoller.GetAllFlags(flagConfig)
 	} else {
+		// if there's no poller, get the feature flags from the decide endpoint
+		c.debugf("getting all feature flags from decide endpoint")
 		flagsValue, err = c.getAllFeatureFlagsFromDecide(flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
