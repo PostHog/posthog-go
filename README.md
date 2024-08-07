@@ -21,7 +21,15 @@ import (
 )
 
 func main() {
-    client := posthog.New(os.Getenv("POSTHOG_API_KEY"))
+    client := posthog.New(os.Getenv("POSTHOG_API_KEY")) // This value must be set to the project API key in PostHog
+    // alternatively, you can do 
+    // client, _ := posthog.NewWithConfig(
+    //     os.Getenv("POSTHOG_API_KEY"),
+    //     posthog.Config{
+    //         PersonalApiKey: "your personal API key", // Set this to your personal API token you want feature flag evaluation to be more performant.  This will incur more costs, though
+    //         Endpoint:       "https://us.i.posthog.com",
+    //     },
+    // )
     defer client.Close()
 
     // Capture an event
@@ -54,8 +62,35 @@ func main() {
       Properties: posthog.NewProperties().
         Set("$current_url", "https://example.com"),
     })
+
+    // Check if a feature flag is enabled
+    isMyFlagEnabled, err := client.IsFeatureEnabled(
+            FeatureFlagPayload{
+                Key:        "flag-key",
+                DistinctId: "distinct_id_of_your_user",
+            })
+
+    if isMyFlagEnabled == true {
+        // Do something differently for this user
+    }
 }
 
+```
+
+## Testing Locally
+
+You can run your Go app against a local build of `posthog-go` by making the following change to your `go.mod` file for whichever your app, e.g.
+
+```Go
+module example/posthog-go-app
+
+go 1.22.5
+
+require github.com/posthog/posthog-go v0.0.0-20240327112532-87b23fe11103
+
+require github.com/google/uuid v1.3.0 // indirect
+
+replace github.com/posthog/posthog-go => /path-to-your-local/posthog-go
 ```
 
 ## Questions?
