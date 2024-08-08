@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.2 - 2024-08-08
+
+1. Adds logging to error responses from the PostHog API so that users can see how a call failed (e.g. rate limiting) from the SDK itself.
+2. Better string formatting in `poller.Errorf`
+
 ## 1.2.1 - 2024-08-07
 
 1. The client will fall back to the `/decide` endpoint when evaluating feature flags if the user does not wish to provide a PersonalApiKey.  This fixes an issue where users were unable to use this SDK without providing a PersonalApiKey.  This fallback will make feature flag usage less performant, but will save users money by not making them pay for public API access.
