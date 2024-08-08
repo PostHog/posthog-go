@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -182,7 +182,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 	defer res.Body.Close()
-	resBody, err := ioutil.ReadAll(res.Body)
+	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		poller.Errorf("Unable to fetch feature flags: %s", err)
 		return
@@ -904,7 +904,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		poller.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
 	}
-	resBody, err := ioutil.ReadAll(res.Body)
+	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		errorMessage = "Error reading response from /decide/"
 		poller.Errorf(errorMessage)
