@@ -1,9 +1,7 @@
 name: Bump Version
 
 on:
-  push:
-    branches:
-      - master
+  - merge_group
 
 jobs:
   bump-version:
@@ -24,7 +22,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
         run: |
-          pr_number=$(gh pr list --base master --state merged --limit 1 --json number --jq '.[0].number')
+          pr_number=$(jq --raw-output .number "$GITHUB_EVENT_PATH")
           if [[ $(gh pr view $pr_number --json labels -q '.labels[].name' | grep -q "minor") ]]; then
             echo "type=minor" >> $GITHUB_OUTPUT
           else
@@ -64,7 +62,7 @@ jobs:
           git config --local user.name "GitHub Action"
           git add version.go CHANGELOG.md
           git commit -m "Bump version to ${{ steps.bump-version.outputs.new_version }}"
-          git push https://$PAT@github.com/${{ github.repository }}.git HEAD:master
+          git push
 
       - name: Create tag
         run: |
