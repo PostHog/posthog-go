@@ -22,7 +22,7 @@ jobs:
       - name: Determine version bump type
         id: bump-type
         env:
-        GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
         run: |
           if [[ $(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' | grep -q "minor") ]]; then
             echo "type=minor" >> $GITHUB_OUTPUT
