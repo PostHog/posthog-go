@@ -21,7 +21,7 @@ jobs:
       - name: Determine version bump type
         id: bump-type
         run: |
-          if [[ $(GITHUB_TOKEN=${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }} gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' | grep -q "minor") ]]; then
+          if [[ $(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' | grep -q "minor") ]]; then
             echo "type=minor" >> $GITHUB_OUTPUT
           else
             echo "type=patch" >> $GITHUB_OUTPUT
@@ -51,12 +51,14 @@ jobs:
           echo -e "## $new_version\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 
       - name: Commit and push changes
+        env:
+          PAT: ${{ secrets.PAT_WITH_PUSH_ACCESS }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add version.go CHANGELOG.md
           git commit -m "Bump version to ${{ steps.bump-version.outputs.new_version }}"
-          git push
+          git push https://$PAT@github.com/${{ github.repository }}.git HEAD:master
 
       - name: Create tag
         run: |
