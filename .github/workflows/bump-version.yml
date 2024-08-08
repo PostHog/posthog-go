@@ -1,0 +1,64 @@
+name: Bump Version
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.x'
+
+      - name: Determine version bump type
+        id: bump-type
+        run: |
+          if [[ $(GITHUB_TOKEN=${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }} gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' | grep -q "minor") ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump version
+        id: bump-version
+        run: |
+          current_version=$(grep -oP 'const Version = "\K[^"]+' version.go)
+          IFS='.' read -ra version_parts <<< "$current_version"
+          major=${version_parts[0]}
+          minor=${version_parts[1]}
+          patch=${version_parts[2]}
+
+          if [ "${{ steps.bump-type.outputs.type }}" == "minor" ]; then
+            new_version="$major.$((minor + 1)).0"
+          else
+            new_version="$major.$minor.$((patch + 1))"
+          fi
+
+          sed -i "s/const Version = \"$current_version\"/const Version = \"$new_version\"/" version.go
+          echo "::set-output name=new_version::$new_version"
+
+      - name: Update CHANGELOG.md
+        run: |
+          new_version="${{ steps.bump-version.outputs.new_version }}"
+          echo -e "## $new_version\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add version.go CHANGELOG.md
+          git commit -m "Bump version to ${{ steps.bump-version.outputs.new_version }}"
+          git push
+
+      - name: Create tag
+        run: |
+          git tag v${{ steps.bump-version.outputs.new_version }}
+          git push --tags
