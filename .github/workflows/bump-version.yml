@@ -65,7 +65,7 @@ jobs:
           git config --local user.name "Max Hedgehog"
           git add version.go CHANGELOG.md
           git commit -m "Bump version to ${{ steps.bump-version.outputs.new_version }}"
-          git push https://x-access-token:${{ steps.generate_token.outputs.token }}@github.com/${{ github.repository }}.git HEAD:${{ github.event.pull_request.base.ref }}
+          git push https://x-access-token:${{ steps.generate_token.outputs.token }}@github.com/${{ github.repository }}.git HEAD:master
 
       - name: Create tag
         run: |
