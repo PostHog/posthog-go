@@ -311,17 +311,13 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
-
 		groupName, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
-
 		if !exists {
 			errMessage := "flag has unknown group type index"
 			return nil, errors.New(errMessage)
 		}
 
-		_, exists = groups[groupName]
-
-		if !exists {
+		if _, ok := groups[groupName]; !ok {
 			errMessage := fmt.Sprintf("FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
 			return nil, errors.New(errMessage)
 		}
@@ -399,7 +395,6 @@ func matchFeatureFlagProperties(
 	})
 
 	for _, condition := range sortedConditions {
-
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
 			if _, ok := err.(*InconclusiveMatchError); ok {
@@ -543,18 +538,12 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 				negation := flagProperty.Negation
 				if groupType == "AND" {
 					// if negated property, do the inverse
-					if !matches && !negation {
-						return false, nil
-					}
-					if matches && negation {
+					if matches == negation {
 						return false, nil
 					}
 				} else {
 					// OR group
-					if matches && !negation {
-						return true, nil
-					}
-					if !matches && negation {
+					if matches != negation {
 						return true, nil
 					}
 				}
@@ -615,7 +604,6 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	if operator == "regex" {
-
 		r, err := regexp.Compile(fmt.Sprintf("%v", value))
 		// invalid regex
 		if err != nil {
@@ -623,12 +611,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		}
 
 		match := r.MatchString(fmt.Sprintf("%v", override_value))
-
-		if match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return match, nil
 	}
 
 	if operator == "not_regex" {
@@ -661,11 +644,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 			return false, errors.New(errMessage)
 		}
 
-		if !match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return !match, nil
 	}
 
 	if operator == "gt" {
@@ -705,7 +684,6 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
-
 }
 
 func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
