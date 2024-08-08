@@ -3,7 +3,7 @@ package posthog
 import "flag"
 
 // Version of the client.
-const Version = "2.0.0"
+const Version = "1.2.1"
 
 // make tests easier by using a constant version
 func getVersion() string {
