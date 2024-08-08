@@ -1,7 +1,8 @@
 name: Bump Version
 
 on:
-  - merge_group
+  merge_group:
+  workflow_dispatch:
 
 jobs:
   bump-version:
