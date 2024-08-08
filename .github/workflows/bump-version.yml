@@ -24,7 +24,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
         run: |
-          if [[ $(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' | grep -q "minor") ]]; then
+          pr_number=$(gh pr list --base master --state merged --limit 1 --json number --jq '.[0].number')
+          if [[ $(gh pr view $pr_number --json labels -q '.labels[].name' | grep -q "minor") ]]; then
             echo "type=minor" >> $GITHUB_OUTPUT
           else
             echo "type=patch" >> $GITHUB_OUTPUT
