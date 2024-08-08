@@ -22,9 +22,6 @@ jobs:
 
       - name: Determine version bump type
         id: bump-type
-        if: |
-          github.event.label.name == 'patch' ||
-          github.event.label.name == 'minor'
         env:
           GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
         run: |
