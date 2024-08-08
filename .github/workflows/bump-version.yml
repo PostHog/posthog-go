@@ -9,16 +9,17 @@ jobs:
   bump-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
       - name: Generate token
         id: generate_token
         uses: tibdex/github-app-token@v1
         with:
           app_id: ${{ secrets.MAX_APP_ID }}
           private_key: ${{ secrets.MAX_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate_token.outputs.token }}
 
       - name: Determine version bump type
         id: bump-type
@@ -65,7 +66,7 @@ jobs:
           git config --local user.name "Max Hedgehog"
           git add version.go CHANGELOG.md
           git commit -m "Bump version to ${{ steps.bump-version.outputs.new_version }}"
-          git push https://x-access-token:${{ steps.generate_token.outputs.token }}@github.com/${{ github.repository }}.git HEAD:master
+          git push
 
       - name: Create tag
         run: |
