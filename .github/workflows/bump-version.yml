@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          token: secrets.POSTHOG_BOT_GITHUB_TOKEN
+          token: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
 
       - name: Set up Go
         uses: actions/setup-go@v3
@@ -34,6 +34,7 @@ jobs:
         id: bump-version
         run: |
           current_version=$(grep -oP 'const Version = "\K[^"]+' version.go)
+          echo "current_version=$current_version" >> $GITHUB_OUTPUT
           IFS='.' read -ra version_parts <<< "$current_version"
           major=${version_parts[0]}
           minor=${version_parts[1]}
@@ -46,10 +47,11 @@ jobs:
           fi
 
           sed -i "s/const Version = \"$current_version\"/const Version = \"$new_version\"/" version.go
-          echo "::set-output name=new_version::$new_version"
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
 
       - name: Update CHANGELOG.md
         run: |
+          current_version="${{ steps.bump-version.output.current_version }}"
           new_version="${{ steps.bump-version.outputs.new_version }}"
           echo -e "## $new_version\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 
