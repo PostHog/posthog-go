@@ -1,12 +1,13 @@
 name: Bump Version
 
 on:
-  push:
-    branches:
-      - main
+  pull_request:
+    types:
+      - closed
 
 jobs:
   bump-version:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: ubuntu-latest
     steps:
       - name: Generate token
@@ -37,7 +38,6 @@ jobs:
         id: bump-version
         run: |
           current_version=$(grep -oP 'const Version = "\K[^"]+' version.go)
-          echo "current_version=$current_version" >> $GITHUB_OUTPUT
           IFS='.' read -ra version_parts <<< "$current_version"
           major=${version_parts[0]}
           minor=${version_parts[1]}
@@ -50,11 +50,12 @@ jobs:
           fi
 
           sed -i "s/const Version = \"$current_version\"/const Version = \"$new_version\"/" version.go
+          echo "current_version=$current_version" >> $GITHUB_OUTPUT
           echo "new_version=$new_version" >> $GITHUB_OUTPUT
 
       - name: Update CHANGELOG.md
         run: |
-          current_version="${{ steps.bump-version.output.current_version }}"
+          current_version="${{ steps.bump-version.outputs.current_version }}"
           new_version="${{ steps.bump-version.outputs.new_version }}"
           echo -e "## $new_version\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 
