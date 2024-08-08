@@ -1,13 +1,15 @@
 name: Bump Version
 
 on:
-  pull_request:
-    types:
-      - closed
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - 'version.go'
+      - 'CHANGELOG.md'
 
 jobs:
   bump-version:
-    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: ubuntu-latest
     steps:
       - name: Generate token
