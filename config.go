@@ -53,8 +53,8 @@ type Config struct {
 	Logger Logger
 
 	// Properties that will be included in every event sent by the client.
-	// This is useful for adding common metadata like service name or app version
-	// across all events.
+	// This is useful for adding common metadata like service name or app version across all events.
+	// If a property conflict occurs, the value from DefaultEventProperties will overwrite any existing value.
 	DefaultEventProperties Properties
 
 	// The callback object that will be used by the client to notify the
