@@ -52,6 +52,11 @@ type Config struct {
 	// `os.Stderr`.
 	Logger Logger
 
+	// Properties that will be included
+	// in every event sent by the client. This is useful for adding common metadata
+	// like service name or app version across all events.
+	DefaultProperties Properties
+
 	// The callback object that will be used by the client to notify the
 	// application when messages sends to the backend API succeeded or failed.
 	Callback Callback

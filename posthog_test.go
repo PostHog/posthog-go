@@ -436,6 +436,40 @@ func TestCaptureWithTimestamp(t *testing.T) {
 	}
 }
 
+func TestCaptureWithDefaultProperties(t *testing.T) {
+	var ref = strings.TrimSpace(fixture("test-merge-capture.json"))
+
+	body, server := mockServer()
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint:          server.URL,
+		Verbose:           true,
+		DefaultProperties: NewProperties().Set("service", "api"),
+		Logger:            t,
+		BatchSize:         1,
+		now:               mockTime,
+		uid:               mockId,
+	})
+	defer client.Close()
+
+	client.Enqueue(Capture{
+		Event:      "Download",
+		DistinctId: "123456",
+		Properties: Properties{
+			"application": "PostHog Go",
+			"version":     "1.0.0",
+			"platform":    "macos", // :)
+		},
+		SendFeatureFlags: false,
+		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
+	})
+
+	if res := string(<-body); ref != res {
+		t.Errorf("invalid response:\n- expected %s\n- received: %s", ref, res)
+	}
+}
+
 func TestCaptureMany(t *testing.T) {
 	var ref = strings.TrimSpace(fixture("test-many-capture.json"))
 
