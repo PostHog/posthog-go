@@ -443,13 +443,13 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Endpoint:          server.URL,
-		Verbose:           true,
-		DefaultProperties: NewProperties().Set("service", "api"),
-		Logger:            t,
-		BatchSize:         1,
-		now:               mockTime,
-		uid:               mockId,
+		Endpoint:               server.URL,
+		Verbose:                true,
+		DefaultEventProperties: NewProperties().Set("service", "api"),
+		Logger:                 t,
+		BatchSize:              1,
+		now:                    mockTime,
+		uid:                    mockId,
 	})
 	defer client.Close()
 
