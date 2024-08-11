@@ -1,33 +1,40 @@
 {
-    "config": {
-        "enable_collect_everything": true
-    },
-    "editorParams": {},
-    "isAuthenticated": true,
-    "supportedCompression": [
-        "gzip",
-        "gzip-js",
-        "lz64"
-    ],
-    "featureFlags": {
-        "enabled-flag": true,
-        "group-flag": true,
-        "disabled-flag": false,
-        "multi-variate-flag": "hello",
-        "simple-flag": true,
-        "beta-feature": "decide-fallback-value",
-        "beta-feature2": "variant-2",
-        "false-flag-2": false,
-        "test-get-feature": "variant-1",
-        "continuation-flag": true
-    },
-    "featureFlagPayloads": {
-        "enabled-flag": "{\"foo\": 1}",
-        "simple-flag": "{\"bar\": 2}",
-        "continuation-flag": "{\"foo\": \"bar\"}",
-        "beta-feature": "{\"foo\": \"bar\"}",
-        "test-get-feature": "this is a string",
-        "multi-variate-flag": "this is the payload"
-    },
-    "sessionRecording": false
+  "config": {
+    "enable_collect_everything": true
+  },
+  "editorParams": {},
+  "isAuthenticated": true,
+  "supportedCompression": ["gzip", "gzip-js", "lz64"],
+  "toolbarParams": {},
+  "featureFlags": {
+    "enabled-flag": true,
+    "group-flag": true,
+    "disabled-flag": false,
+    "multi-variate-flag": "hello",
+    "simple-flag": true,
+    "beta-feature": "decide-fallback-value",
+    "beta-feature2": "variant-2",
+    "false-flag-2": false,
+    "test-get-feature": "variant-1",
+    "continuation-flag": true
+  },
+  "featureFlagPayloads": {
+    "enabled-flag": "{\"foo\": 1}",
+    "simple-flag": "{\"bar\": 2}",
+    "continuation-flag": "{\"foo\": \"bar\"}",
+    "beta-feature": "{\"foo\": \"bar\"}",
+    "test-get-feature": "this is a string",
+    "multi-variate-flag": "this is the payload"
+  },
+  "sessionRecording": false,
+  "errorsWhileComputingFlags": false,
+  "capturePerformance": false,
+  "autocapture_opt_out": true,
+  "autocaptureExceptions": false,
+  "analytics": { "endpoint": "/i/v0/e/" },
+  "__preview_ingestion_endpoints": true,
+  "elementsChainAsString": true,
+  "surveys": false,
+  "heatmaps": false,
+  "siteApps": []
 }

@@ -1058,7 +1058,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
@@ -1606,7 +1606,7 @@ func TestMultiVariateFlag(t *testing.T) {
 func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
