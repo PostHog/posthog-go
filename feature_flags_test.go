@@ -486,7 +486,7 @@ func TestFallbackToDecide(t *testing.T) {
 func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte("test-decide-v2.json"))
+			w.Write([]byte("test-decide-v3.json"))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-feature-flags-dont-fallback-to-decide-when-only-local-evaluation-is-true.json")))
 		}
@@ -498,6 +498,18 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 		Endpoint:       server.URL,
 	})
 	defer client.Close()
+
+	matchedPayload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:                 "beta-feature",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if matchedPayload != nil {
+		t.Error("Should not match")
+	}
 
 	matchedVariant, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
@@ -623,6 +635,17 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 	})
 	defer client.Close()
 
+	matchedPayload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if matchedPayload != nil {
+		t.Error("Should not match")
+	}
+
 	isMatch, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "test-get-feature",
@@ -649,7 +672,7 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 func TestExperienceContinuityOverride(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
 		}
@@ -672,6 +695,17 @@ func TestExperienceContinuityOverride(t *testing.T) {
 
 	if featureVariant != "decide-fallback-value" {
 		t.Error("Should be decide-fallback-value")
+	}
+
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if payload != "{\"foo\": \"bar\"}" {
+		t.Error(`Should be "{"foo": "bar"}"`)
 	}
 }
 
@@ -882,6 +916,35 @@ func TestGetFeatureFlag(t *testing.T) {
 	}
 }
 
+func TestGetFeatureFlagPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if variant != "this is a string" {
+		t.Error("Should match")
+	}
+}
+
 func TestFlagWithVariantOverrides(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -912,6 +975,18 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
@@ -922,10 +997,20 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 	if variant != "first-variant" {
 		t.Error("Should match", variant, "first-variant")
 	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "example_id",
+		},
+	)
+
+	if payload != "{\"test\": 1}" {
+		t.Error("Should match", payload, "{\"test\": 1}")
+	}
 }
 
 func TestFlagWithClashingVariantOverrides(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
@@ -954,6 +1039,18 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:              "beta-feature",
@@ -965,10 +1062,21 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 	if variant != "second-variant" {
 		t.Error("Should match", variant, "second-variant")
 	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "example_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
 }
 
 func TestFlagWithInvalidVariantOverrides(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
@@ -997,6 +1105,18 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "third-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 3}" {
+		t.Error("Should match", payload, "{\"test\": 3}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
@@ -1005,12 +1125,22 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 	)
 
 	if variant != "second-variant" {
-		t.Error("Should match", variant, "third-variant")
+		t.Error("Should match", variant, "second-variant")
+	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "example_id",
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
 	}
 }
 
 func TestFlagWithMultipleVariantOverrides(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			w.Write([]byte(fixture("test-decide-v2.json")))
@@ -1039,6 +1169,18 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
@@ -1050,6 +1192,17 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "third-variant")
 	}
 
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "example_id",
+		},
+	)
+
+	if payload != "{\"test\": 3}" {
+		t.Error("Should match", payload, "{\"test\": 3}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
@@ -1059,6 +1212,17 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 
 	if variant != "second-variant" {
 		t.Error("Should match", variant, "second-variant")
+	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "another_id",
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
 	}
 }
 
@@ -3146,6 +3310,1035 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 		)
 		if results[i] != variant {
 			t.Error("Match result is not consistent")
+		}
+	}
+}
+
+func TestMultivariateFlagConsistencyPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-multivariate-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	results := []interface{}{
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 5}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 4}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 4}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 5}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 4}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 4}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 4}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 4}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 5}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 5}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 5}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 2}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		nil,
+		nil,
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		nil,
+		nil,
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		nil,
+		"{\"test\": 1}",
+	}
+
+	for i := 0; i < 1000; i++ {
+
+		variant, _ := client.GetFeatureFlagPayload(
+			FeatureFlagPayload{
+				Key:        "multivariate-flag",
+				DistinctId: fmt.Sprintf("%s%d", "distinct_id_", i),
+			},
+		)
+		if results[i] != variant {
+			t.Errorf("Match result is not consistent, expected %s, got %s", results[i], variant)
 		}
 	}
 }

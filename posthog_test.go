@@ -853,6 +853,208 @@ func TestIsFeatureEnabled(t *testing.T) {
 	}
 }
 
+func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v3.json")))
+		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint: server.URL,
+		Logger:   testLogger{t.Logf, t.Logf},
+		Callback: testCallback{
+			func(m APIMessage) {},
+			func(m APIMessage, e error) {},
+		},
+	})
+	defer client.Close()
+
+	// Test GetFeatureFlagPayload single scenario
+	payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{
+		Key:        "enabled-flag",
+		DistinctId: "test-user",
+	})
+
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+
+	// Check that the flag payload is as expected (should match the value in the fixture)
+	expectedPayload := "{\"foo\": 1}"
+	if payload != expectedPayload {
+		t.Errorf("Expected flag payload %v, got: %v", expectedPayload, payload)
+	}
+
+	// should we be capturing an event here?
+	// lastEvent := client.GetLastCapturedEvent()
+	// if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
+	// 	t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
+	// }
+
+	// Check that the properties of the captured event match the response from /decide
+	// if lastEvent != nil {
+	// 	if lastEvent.Properties["$feature_flag"] != "beta-feature" {
+	// 		t.Errorf("Expected feature flag key 'beta-feature', got: %v", lastEvent.Properties["$feature_flag"])
+	// 	}
+	// 	if lastEvent.Properties["$feature_flag_response"] != expectedPayload {
+	// 		t.Errorf("Expected feature flag response %v, got: %v", expectedPayload, lastEvent.Properties["$feature_flag_response"])
+	// 	}
+	// }
+
+	// Test a bunch of GetFeatureFlagPayload scenarios
+	tests := []struct {
+		name          string
+		flagConfig    FeatureFlagPayload
+		mockResponse  string
+		expectedValue string
+		expectedError string
+	}{
+		{
+			name: "Flag exists and there is a payload",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": true}, "featureFlagPayloads": {"test-flag": "{\"test\": 1}"}}`,
+			expectedValue: "{\"test\": 1}",
+		},
+		{
+			name: "Flag exists and payload object is not present",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": false}}`,
+			expectedValue: "",
+		},
+		{
+			name: "Flag exists and there is no payload",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": false}, "featureFlagPayloads": {}}`,
+			expectedValue: "",
+		},
+
+		{
+			name: "Flag doesn't exist",
+			flagConfig: FeatureFlagPayload{
+				Key:        "non-existent-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{"featureFlags": {"other-flag": true}}`,
+			expectedValue: "",
+		},
+		{
+			name: "Empty response",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{}`,
+			expectedValue: "",
+		},
+		{
+			name: "Invalid JSON response",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  `{invalid-json}`,
+			expectedError: "error parsing response from /decide/",
+		},
+		{
+			name: "Non-200 status code",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+			},
+			mockResponse:  ``,
+			expectedError: "unexpected status code from /decide/: 500",
+		},
+		{
+			name: "With groups and properties",
+			flagConfig: FeatureFlagPayload{
+				Key:        "test-flag",
+				DistinctId: "user123",
+				Groups: Groups{
+					"company": "test-company",
+				},
+				PersonProperties: Properties{
+					"plan": "enterprise",
+				},
+				GroupProperties: map[string]Properties{
+					"company": {
+						"size": "large",
+					},
+				},
+			},
+			mockResponse:  `{"featureFlags": {"test-flag": "enterprise-variant"}, "featureFlagPayloads": {"test-flag": "{\"test\": 3}"}}`,
+			expectedValue: "{\"test\": 3}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Check request method and path
+				if r.Method != "POST" || r.URL.Path != "/decide/" {
+					t.Errorf("Expected POST /decide/, got %s %s", r.Method, r.URL.Path)
+				}
+
+				// Check headers
+				if r.Header.Get("Content-Type") != "application/json" {
+					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
+				}
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
+				}
+
+				// Check request body
+				body, _ := ioutil.ReadAll(r.Body)
+				var requestData DecideRequestData
+				json.Unmarshal(body, &requestData)
+				if requestData.DistinctId != tt.flagConfig.DistinctId {
+					t.Errorf("Expected distinctId %s, got %s", tt.flagConfig.DistinctId, requestData.DistinctId)
+				}
+
+				// Send mock response
+				if tt.expectedError == "unexpected status code from /decide/: 500" {
+					w.WriteHeader(http.StatusInternalServerError)
+				} else {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(tt.mockResponse))
+				}
+			}))
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-api-key", Config{
+				Endpoint: server.URL,
+			})
+
+			value, err := client.GetFeatureFlagPayload(tt.flagConfig)
+
+			if tt.expectedError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.expectedError) {
+					t.Errorf("Expected error containing '%s', got '%v'", tt.expectedError, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if value != tt.expectedValue {
+					t.Errorf("Expected value %v, got %v", tt.expectedValue, value)
+				}
+			}
+		})
+	}
+}
+
 func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
@@ -1191,6 +1393,76 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	}
 }
 
+func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			t.Fatal("expected local evaluations endpoint to be called")
+		}
+		w.Write([]byte(fixture("test-api-feature-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	payload, checkErr := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "simpleFlag",
+			DistinctId: "hey",
+		},
+	)
+
+	expectedPayload := "{\"test\": 1}"
+
+	if checkErr != nil || payload != expectedPayload {
+		t.Errorf("expected payload %v, got %v", expectedPayload, payload)
+	}
+}
+
+func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing.T) {
+	apiCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apiCalls == 0 && strings.HasPrefix(r.URL.Path, "/decide") {
+			t.Fatal("expected local evaluations endpoint to be called first")
+		} else if apiCalls == 1 && !strings.HasPrefix(r.URL.Path, "/decide") {
+			t.Fatal("expected decide endpoint to be called second")
+		}
+
+		if !strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else {
+			w.Write([]byte(fixture("test-decide-v3.json")))
+		}
+		apiCalls++
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	payload, checkErr := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "continuation-flag",
+			DistinctId: "hey",
+		},
+	)
+	if checkErr != nil {
+		t.Error("expected no error, got", checkErr)
+	}
+
+	expectedPayload := "{\"foo\": \"bar\"}"
+
+	if payload != expectedPayload {
+		t.Errorf("expected payload %v, got %v", expectedPayload, payload)
+	}
+}
+
 func TestSimpleFlagOld(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
@@ -1230,7 +1502,7 @@ func TestSimpleFlagCalculation(t *testing.T) {
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
@@ -1266,12 +1538,23 @@ func TestComplexFlag(t *testing.T) {
 	if valueErr != nil || flagValue != true {
 		t.Errorf("flag listed in /decide/ response should be true")
 	}
+
+	payload, valueErr := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "hey",
+		},
+	)
+
+	if valueErr != nil || payload != "{\"test\": 1}" {
+		t.Errorf(`flag listed in /decide/ response should be "{\"test\": 1}"`)
+	}
 }
 
 func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
@@ -1306,6 +1589,17 @@ func TestMultiVariateFlag(t *testing.T) {
 
 	if err != nil || flagValue != "hello" {
 		t.Errorf("flag listed in /decide/ response should have value 'hello'")
+	}
+
+	payload, err := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "multi-variate-flag",
+			DistinctId: "hey",
+		},
+	)
+
+	if err != nil || payload != "this is the payload" {
+		t.Errorf("flag listed in /decide/ response should have value 'this is the payload'")
 	}
 }
 
@@ -1347,6 +1641,17 @@ func TestDisabledFlag(t *testing.T) {
 
 	if err != nil || flagValue != false {
 		t.Errorf("flag listed in /decide/ response should have value 'false'")
+	}
+
+	payload, err := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "disabled-flag",
+			DistinctId: "hey",
+		},
+	)
+
+	if err != nil || payload != "" {
+		t.Errorf("flag listed in /decide/ response should have value ''")
 	}
 }
 

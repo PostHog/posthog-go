@@ -22,7 +22,8 @@
                         {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
                         {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25}
                     ]
-                }
+                },
+                "payloads": { "first-variant": "{\"test\": 1}", "second-variant": "{\"test\": 2}" }
             },
             "deleted": false,
             "active": true,

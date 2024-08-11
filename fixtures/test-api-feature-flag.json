@@ -13,12 +13,32 @@
                         "properties": [],
                         "rollout_percentage": null
                     }
-                ]
+                ],
+                "payloads": { "true": "{\"test\": 1}" }
             },
             "deleted": false,
             "active": true,
             "is_simple_flag": true,
             "rollout_percentage": null
+        },
+        {
+            "id": 719,
+            "name": "",
+            "key": "continuation-flag",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": null
+                    }
+                ],
+                "payloads": { "true": "{\"test\": 1}" }
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": true,
+            "rollout_percentage": null,
+            "ensure_experience_continuity": true
         },
         {
             "id": 720,
@@ -30,7 +50,8 @@
                         "properties": [],
                         "rollout_percentage": null
                     }
-                ]
+                ],
+                "payloads": { "true": "{\"test\": 1}", "false": "{\"test\": 0}" }
             },
             "deleted": false,
             "active": true,

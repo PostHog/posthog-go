@@ -17,6 +17,13 @@
                         {"key": "fourth-variant", "name": "Fourth Variant", "rollout_percentage": 5},
                         {"key": "fifth-variant", "name": "Fifth Variant", "rollout_percentage": 5}
                     ]
+                },
+                "payloads": {
+                    "first-variant": "{\"test\": 1}",
+                    "second-variant": "{\"test\": 2}",
+                    "third-variant": "{\"test\": 3}",
+                    "fourth-variant": "{\"test\": 4}",
+                    "fifth-variant": "{\"test\": 5}"
                 }
             },
             "deleted": false,
