@@ -1427,11 +1427,11 @@ func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if apiCalls == 0 && strings.HasPrefix(r.URL.Path, "/decide") {
 			t.Fatal("expected local evaluations endpoint to be called first")
-		} else if apiCalls == 1 && !strings.HasPrefix(r.URL.Path, "/decide") {
+		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			t.Fatal("expected decide endpoint to be called second")
 		}
 
-		if !strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		} else {
 			w.Write([]byte(fixture("test-decide-v3.json")))
