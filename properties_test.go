@@ -34,5 +34,17 @@ func TestPropertiesMulti(t *testing.T) {
 	if !reflect.DeepEqual(p0, p1) {
 		t.Errorf("invalid properties produced by chained setters:\n- expected %#v\n- found: %#v", p0, p1)
 	}
+}
 
+func TestPropertiesMerge(t *testing.T) {
+	defaultProps := Properties{"currency": "USD", "service": "api"}
+
+	props := NewProperties().Set("title", "A").Set("value", 0.5).Set("currency", "BRL")
+	props.Merge(defaultProps)
+
+	expected := Properties{"title": "A", "value": 0.5, "currency": "USD", "service": "api"}
+
+	if !reflect.DeepEqual(props, Properties{"title": "A", "value": 0.5, "currency": "USD", "service": "api"}) {
+		t.Errorf("invalid properties produced by merge:\n- expected %#v\n- found: %#v", expected, props)
+	}
 }

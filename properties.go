@@ -22,3 +22,13 @@ func (p Properties) Set(name string, value interface{}) Properties {
 	p[name] = value
 	return p
 }
+
+// Merge adds the properties from the provided `props` into the receiver `p`.
+// If a property in `props` already exists in `p`, its value will be overwritten.
+func (p Properties) Merge(props Properties) Properties {
+	for k, v := range props {
+		p[k] = v
+	}
+
+	return p
+}
