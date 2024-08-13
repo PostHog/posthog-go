@@ -14,7 +14,8 @@
                         "properties": [{"key": "id", "value": 98, "operator": null, "type": "cohort"}],
                         "rollout_percentage": 100
                     }
-                ]
+                ],
+                "payloads": { "true": "{\"test\": 1}" }
             },
             "deleted": false,
             "active": true,

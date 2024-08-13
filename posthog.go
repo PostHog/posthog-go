@@ -45,6 +45,9 @@ type Client interface {
 	// if the given flag is on or off for the user
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 	//
+	// Method returns feature flag payload value matching key for user (supports multivariate flags).
+	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
+	//
 	// Get all flags - returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 	//
@@ -295,6 +298,27 @@ func (c *client) ReloadFeatureFlags() error {
 	}
 	c.featureFlagsPoller.ForceReload()
 	return nil
+}
+
+func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
+	if err := flagConfig.validate(); err != nil {
+		return "", err
+	}
+
+	var payload string
+	var err error
+
+	if c.featureFlagsPoller != nil {
+		// get feature flag from the poller, which uses the personal api key
+		// this is only available when using a PersonalApiKey
+		payload, err = c.featureFlagsPoller.GetFeatureFlagPayload(flagConfig)
+	} else {
+		// if there's no poller, get the feature flag from the decide endpoint
+		c.debugf("getting feature flag from decide endpoint")
+		payload, err = c.getFeatureFlagPayloadFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+	}
+
+	return payload, err
 }
 
 func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
@@ -596,7 +620,7 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups, personProp
 	if err != nil {
 		return nil, err
 	}
-	return featureVariants, nil
+	return featureVariants.FeatureFlags, nil
 }
 
 func (c *client) makeDecideRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error) {
@@ -613,7 +637,7 @@ func (c *client) makeDecideRequest(distinctId string, groups Groups, personPrope
 		return nil, fmt.Errorf("unable to marshal decide endpoint request data: %v", err)
 	}
 
-	decideEndpoint := "decide/?v=2"
+	decideEndpoint := "decide/?v=3"
 	url, err := url.Parse(c.Endpoint + "/" + decideEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("creating url: %v", err)
@@ -662,6 +686,19 @@ func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups 
 	}
 
 	return false, nil
+}
+
+func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
+	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
+	if err != nil {
+		return "", err
+	}
+
+	if value, ok := decideResponse.FeatureFlagPayloads[key]; ok {
+		return value, nil
+	}
+
+	return "", nil
 }
 
 func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {

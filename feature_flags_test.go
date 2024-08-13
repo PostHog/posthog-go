@@ -255,7 +255,7 @@ func TestFlagPersonProperty(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
 		}
@@ -329,7 +329,7 @@ func TestFlagGroup(t *testing.T) {
 			if !groupPropertiesEquality {
 				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1]], got %s", reqBody.GroupProperties)
 			}
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -415,7 +415,7 @@ func TestFlagGroupProperty(t *testing.T) {
 func TestComplexDefinition(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-complex-definition.json"))) // Don't return anything for local eval
 		}
@@ -457,7 +457,7 @@ func TestComplexDefinition(t *testing.T) {
 func TestFallbackToDecide(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}")) // Don't return anything for local eval
 		}
@@ -486,7 +486,7 @@ func TestFallbackToDecide(t *testing.T) {
 func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte("test-decide-v2.json"))
+			w.Write([]byte("test-decide-v3.json"))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-feature-flags-dont-fallback-to-decide-when-only-local-evaluation-is-true.json")))
 		}
@@ -498,6 +498,18 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 		Endpoint:       server.URL,
 	})
 	defer client.Close()
+
+	matchedPayload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:                 "beta-feature",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if matchedPayload != "" {
+		t.Error("Should not match")
+	}
 
 	matchedVariant, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
@@ -551,7 +563,7 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-false.json")))
 		}
@@ -623,6 +635,17 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 	})
 	defer client.Close()
 
+	matchedPayload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if matchedPayload != "" {
+		t.Error("Should not match")
+	}
+
 	isMatch, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "test-get-feature",
@@ -649,7 +672,7 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 func TestExperienceContinuityOverride(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
 		}
@@ -673,12 +696,23 @@ func TestExperienceContinuityOverride(t *testing.T) {
 	if featureVariant != "decide-fallback-value" {
 		t.Error("Should be decide-fallback-value")
 	}
+
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if payload != "{\"foo\": \"bar\"}" {
+		t.Error(`Should be "{"foo": "bar"}"`)
+	}
 }
 
 func TestGetAllFlags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-multiple-flags.json")))
 		}
@@ -704,7 +738,7 @@ func TestGetAllFlags(t *testing.T) {
 func TestGetAllFlagsEmptyLocal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
 		}
@@ -730,7 +764,7 @@ func TestGetAllFlagsEmptyLocal(t *testing.T) {
 func TestGetAllFlagsNoDecide(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-multiple-flags-valid.json")))
 		}
@@ -756,7 +790,7 @@ func TestGetAllFlagsNoDecide(t *testing.T) {
 func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-get-all-flags-with-fallback-but-only-local-evaluation-set.json")))
 		}
@@ -783,7 +817,7 @@ func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 func TestComputeInactiveFlagsLocally(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally.json")))
 		}
@@ -807,7 +841,7 @@ func TestComputeInactiveFlagsLocally(t *testing.T) {
 
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally-2.json")))
 		}
@@ -856,7 +890,7 @@ func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
 func TestGetFeatureFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
 		}
@@ -882,11 +916,40 @@ func TestGetFeatureFlag(t *testing.T) {
 	}
 }
 
+func TestGetFeatureFlagPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/decide") {
+			w.Write([]byte(fixture("test-decide-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if variant != "this is a string" {
+		t.Error("Should match")
+	}
+}
+
 func TestFlagWithVariantOverrides(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-variant-override.json")))
 		}
@@ -912,6 +975,18 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
@@ -922,13 +997,23 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 	if variant != "first-variant" {
 		t.Error("Should match", variant, "first-variant")
 	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "example_id",
+		},
+	)
+
+	if payload != "{\"test\": 1}" {
+		t.Error("Should match", payload, "{\"test\": 1}")
+	}
 }
 
 func TestFlagWithClashingVariantOverrides(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-variant-override-clashing.json")))
 		}
@@ -954,6 +1039,18 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:              "beta-feature",
@@ -965,13 +1062,24 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 	if variant != "second-variant" {
 		t.Error("Should match", variant, "second-variant")
 	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "example_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
 }
 
 func TestFlagWithInvalidVariantOverrides(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-variant-override-invalid.json")))
 		}
@@ -997,6 +1105,18 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "third-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 3}" {
+		t.Error("Should match", payload, "{\"test\": 3}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
@@ -1005,15 +1125,25 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 	)
 
 	if variant != "second-variant" {
-		t.Error("Should match", variant, "third-variant")
+		t.Error("Should match", variant, "second-variant")
+	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "example_id",
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
 	}
 }
 
 func TestFlagWithMultipleVariantOverrides(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-variant-override-multiple.json")))
 		}
@@ -1039,6 +1169,18 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 		t.Error("Should match", variant, "second-variant")
 	}
 
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "test_id",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
+
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
 			Key:        "beta-feature",
@@ -1048,6 +1190,17 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 
 	if variant != "third-variant" {
 		t.Error("Should match", variant, "third-variant")
+	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "example_id",
+		},
+	)
+
+	if payload != "{\"test\": 3}" {
+		t.Error("Should match", payload, "{\"test\": 3}")
 	}
 
 	variant, _ = client.GetFeatureFlag(
@@ -1060,12 +1213,23 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 	if variant != "second-variant" {
 		t.Error("Should match", variant, "second-variant")
 	}
+
+	payload, _ = client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "another_id",
+		},
+	)
+
+	if payload != "{\"test\": 2}" {
+		t.Error("Should match", payload, "{\"test\": 2}")
+	}
 }
 
 func TestCaptureIsCalled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
 		}
@@ -3150,6 +3314,1034 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 	}
 }
 
+func TestMultivariateFlagConsistencyPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-multivariate-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	results := []string{
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 4}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 4}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 5}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+	}
+
+	for i := 0; i < 1000; i++ {
+		variant, _ := client.GetFeatureFlagPayload(
+			FeatureFlagPayload{
+				Key:        "multivariate-flag",
+				DistinctId: fmt.Sprintf("%s%d", "distinct_id_", i),
+			},
+		)
+		if results[i] != variant {
+			t.Errorf("Match result is not consistent, expected %s, got %s", results[i], variant)
+		}
+	}
+}
+
 func TestComplexCohortsLocally(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fixture("feature_flag/test-complex-cohorts-locally.json"))) // Don't return anything for local eval
@@ -3241,7 +4433,7 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
 			time.Sleep(1 * time.Second)
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -3342,7 +4534,7 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/decide") {
-			w.Write([]byte(fixture("test-decide-v2.json")))
+			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			time.Sleep(11 * time.Second)
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))

@@ -50,6 +50,7 @@ type Filter struct {
 	AggregationGroupTypeIndex *uint8                 `json:"aggregation_group_type_index"`
 	Groups                    []FeatureFlagCondition `json:"groups"`
 	Multivariate              *Variants              `json:"multivariate"`
+	Payloads                  map[string]string      `json:"payloads"`
 }
 
 type Variants struct {
@@ -103,7 +104,8 @@ type DecideRequestData struct {
 }
 
 type DecideResponse struct {
-	FeatureFlags map[string]interface{} `json:"featureFlags"`
+	FeatureFlags        map[string]interface{} `json:"featureFlags"`
+	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
 }
 
 type InconclusiveMatchError struct {
@@ -205,11 +207,79 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
+	flag, err := poller.getFeatureFlag(flagConfig)
+
+	var result interface{}
+
+	if flag.Key != "" {
+		result, err = poller.computeFlagLocally(
+			flag,
+			flagConfig.DistinctId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			poller.cohorts,
+		)
+	}
+
+	if err != nil {
+		poller.Errorf("Unable to compute flag locally (%s) - %s", flag.Key, err)
+	}
+
+	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
+
+		result, err = poller.getFeatureFlagVariant(flag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return result, err
+}
+
+func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
+	flag, err := poller.getFeatureFlag(flagConfig)
+
+	var variant interface{}
+
+	if flag.Key != "" {
+		variant, err = poller.computeFlagLocally(
+			flag,
+			flagConfig.DistinctId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			poller.cohorts,
+		)
+	}
+	if err != nil {
+		poller.Errorf("Unable to compute flag locally (%s) - %s", flag.Key, err)
+	}
+
+	if variant != nil {
+		payload, ok := flag.Filters.Payloads[fmt.Sprintf("%v", variant)]
+		if ok {
+			return payload, nil
+		}
+	}
+
+	if (variant == nil || err != nil) && !flagConfig.OnlyEvaluateLocally {
+		result, err := poller.getFeatureFlagPayload(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if err != nil {
+			return "", err
+		}
+
+		return result, nil
+	}
+
+	return "", errors.New("unable to compute flag locally")
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
 	featureFlags, err := poller.GetFeatureFlags()
 	if err != nil {
-		return nil, err
+		return FeatureFlag{}, err
 	}
-	cohorts := poller.cohorts
 
 	featureFlag := FeatureFlag{Key: ""}
 
@@ -221,32 +291,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 		}
 	}
 
-	var result interface{}
-
-	if featureFlag.Key != "" {
-		result, err = poller.computeFlagLocally(
-			featureFlag,
-			flagConfig.DistinctId,
-			flagConfig.Groups,
-			flagConfig.PersonProperties,
-			flagConfig.GroupProperties,
-			cohorts,
-		)
-	}
-
-	if err != nil {
-		poller.Errorf("Unable to compute flag locally (%s) - %s", featureFlag.Key, err)
-	}
-
-	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-
-		result, err = poller.getFeatureFlagVariant(featureFlag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return result, err
+	return featureFlag, nil
 }
 
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
@@ -285,7 +330,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		if err != nil {
 			return response, err
 		} else {
-			for k, v := range result {
+			for k, v := range result.FeatureFlags {
 				response[k] = v
 			}
 		}
@@ -820,7 +865,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 }
 
 func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, context.CancelFunc, error) {
-	decideEndpoint := "decide/?v=2"
+	decideEndpoint := "decide/?v=3"
 
 	url, err := url.Parse(poller.Endpoint + "/" + decideEndpoint + "")
 	if err != nil {
@@ -879,7 +924,7 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 	poller.shutdown <- true
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error) {
 	errorMessage := "Failed when getting flag variants"
 	requestDataBytes, err := json.Marshal(DecideRequestData{
 		ApiKey:           poller.projectApiKey,
@@ -919,7 +964,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		return nil, errors.New(errorMessage)
 	}
 
-	return decideResponse.FeatureFlags, nil
+	return &decideResponse, nil
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
@@ -948,7 +993,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 			return false, variantErr
 		}
 
-		for flagKey, flagValue := range featureFlagVariants {
+		for flagKey, flagValue := range featureFlagVariants.FeatureFlags {
 			flagValueString := fmt.Sprintf("%v", flagValue)
 			if key == flagKey && flagValueString != "false" {
 				result = flagValueString
@@ -958,6 +1003,15 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 		return result, nil
 	}
 	return result, nil
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
+	featureFlagVariants, err := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	if err != nil {
+		return "", err
+	}
+
+	return featureFlagVariants.FeatureFlagPayloads[key], nil
 }
 
 func getSafeProp[T any](properties map[string]any, key string) T {
