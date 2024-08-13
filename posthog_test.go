@@ -889,22 +889,6 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 		t.Errorf("Expected flag payload %v, got: %v", expectedPayload, payload)
 	}
 
-	// should we be capturing an event here?
-	// lastEvent := client.GetLastCapturedEvent()
-	// if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
-	// 	t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
-	// }
-
-	// Check that the properties of the captured event match the response from /decide
-	// if lastEvent != nil {
-	// 	if lastEvent.Properties["$feature_flag"] != "beta-feature" {
-	// 		t.Errorf("Expected feature flag key 'beta-feature', got: %v", lastEvent.Properties["$feature_flag"])
-	// 	}
-	// 	if lastEvent.Properties["$feature_flag_response"] != expectedPayload {
-	// 		t.Errorf("Expected feature flag response %v, got: %v", expectedPayload, lastEvent.Properties["$feature_flag_response"])
-	// 	}
-	// }
-
 	// Test a bunch of GetFeatureFlagPayload scenarios
 	tests := []struct {
 		name          string

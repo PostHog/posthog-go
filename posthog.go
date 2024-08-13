@@ -46,7 +46,7 @@ type Client interface {
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 	//
 	// Method returns feature flag payload value matching key for user (supports multivariate flags).
-	GetFeatureFlagPayload(FeatureFlagPayload) (interface{}, error)
+	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 	//
 	// Get all flags - returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
@@ -299,12 +299,12 @@ func (c *client) ReloadFeatureFlags() error {
 	return nil
 }
 
-func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (interface{}, error) {
+func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
 	if err := flagConfig.validate(); err != nil {
 		return "", err
 	}
 
-	var payload interface{}
+	var payload string
 	var err error
 
 	if c.featureFlagsPoller != nil {
