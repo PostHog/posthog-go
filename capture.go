@@ -9,7 +9,9 @@ type Capture struct {
 	// This field is exported for serialization purposes and shouldn't be set by
 	// the application, its value is always overwritten by the library.
 	Type string
-
+	// You don't usually need to specify this field - Posthog will generate it automatically.
+	// Use it only when necessary - for example, to prevent duplicate events.
+	Uuid             string
 	DistinctId       string
 	Event            string
 	Timestamp        time.Time
@@ -44,6 +46,7 @@ func (msg Capture) Validate() error {
 
 type CaptureInApi struct {
 	Type           string    `json:"type"`
+	Uuid           string    `json:"uuid"`
 	Library        string    `json:"library"`
 	LibraryVersion string    `json:"library_version"`
 	Timestamp      time.Time `json:"timestamp"`
@@ -71,6 +74,7 @@ func (msg Capture) APIfy() APIMessage {
 	}
 
 	apified := CaptureInApi{
+		Uuid:           msg.Uuid,
 		Type:           msg.Type,
 		Library:        library,
 		LibraryVersion: libraryVersion,

@@ -152,8 +152,6 @@ func fixture(name string) string {
 	return string(b)
 }
 
-func mockId() string { return "I'm unique" }
-
 func mockTime() time.Time {
 	// time.Unix(0, 0) fails on Circle
 	return time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)
@@ -191,11 +189,11 @@ func ExampleCapture() {
 		Endpoint:  server.URL,
 		BatchSize: 1,
 		now:       mockTime,
-		uid:       mockId,
 	})
 	defer client.Close()
 
 	client.Enqueue(Capture{
+		Uuid:       "00000000-0000-0000-0000-000000000000",
 		Event:      "Download",
 		DistinctId: "123456",
 		Properties: Properties{
@@ -225,7 +223,8 @@ func ExampleCapture() {
 	//       },
 	//       "send_feature_flags": false,
 	//       "timestamp": "2009-11-10T23:00:00Z",
-	//       "type": "capture"
+	//       "type": "capture",
+	//       "uuid": "00000000-0000-0000-0000-000000000000"
 	//     }
 	//   ]
 	// }
@@ -297,8 +296,9 @@ func TestEnqueue(t *testing.T) {
 		},
 
 		"*capture": {
-			strings.TrimSpace(fixture("test-enqueue-capture.json")),
+			strings.TrimSpace(fixture("test-enqueue-capture-with-uuid.json")),
 			&Capture{
+				Uuid:       "11111111-1111-1111-1111-111111111111",
 				Event:      "Download",
 				DistinctId: "123456",
 				Properties: Properties{
@@ -320,7 +320,6 @@ func TestEnqueue(t *testing.T) {
 		Logger:    t,
 		BatchSize: 1,
 		now:       mockTime,
-		uid:       mockId,
 	})
 	defer client.Close()
 
@@ -378,7 +377,6 @@ func TestCaptureWithInterval(t *testing.T) {
 		Verbose:  true,
 		Logger:   t,
 		now:      mockTime,
-		uid:      mockId,
 	})
 	defer client.Close()
 
@@ -415,7 +413,6 @@ func TestCaptureWithTimestamp(t *testing.T) {
 		Logger:    t,
 		BatchSize: 1,
 		now:       mockTime,
-		uid:       mockId,
 	})
 	defer client.Close()
 
@@ -449,7 +446,6 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 		Logger:                 t,
 		BatchSize:              1,
 		now:                    mockTime,
-		uid:                    mockId,
 	})
 	defer client.Close()
 
@@ -482,7 +478,6 @@ func TestCaptureMany(t *testing.T) {
 		Logger:    t,
 		BatchSize: 3,
 		now:       mockTime,
-		uid:       mockId,
 	})
 	defer client.Close()
 
@@ -1685,7 +1680,6 @@ func TestCaptureSendFlags(t *testing.T) {
 		Logger:    t,
 		BatchSize: 1,
 		now:       mockTime,
-		uid:       mockId,
 
 		PersonalApiKey: "some very secret key",
 	})
