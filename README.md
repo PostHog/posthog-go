@@ -64,9 +64,9 @@ func main() {
     })
     
     // Capture event with calculated uuid to deduplicate repeated events. 
-	// The library github.com/google/uuid is used
-	key := myEvent.Id + myEvent.Project
-	uid := uuid.NewSHA1(uuid.NameSpaceX500, []byte(key)).String()
+    // The library github.com/google/uuid is used
+    key := myEvent.Id + myEvent.Project
+    uid := uuid.NewSHA1(uuid.NameSpaceX500, []byte(key)).String()
     client.Enqueue(posthog.Capture{
       Uuid: uid,
       DistinctId: "test-user",

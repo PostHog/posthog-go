@@ -74,8 +74,8 @@ func (msg Capture) APIfy() APIMessage {
 	}
 
 	apified := CaptureInApi{
-		Uuid:           msg.Uuid,
 		Type:           msg.Type,
+		Uuid:           msg.Uuid,
 		Library:        library,
 		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp,
