@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/posthog/posthog-go"
+	"github.com/Cado-Labs/posthog-go"
 	"github.com/urfave/cli"
 )
 
@@ -91,7 +91,7 @@ func main() {
 			os.Exit(1)
 		}
 
-        return nil
+		return nil
 	}
 
 	err := app.Run(os.Args)

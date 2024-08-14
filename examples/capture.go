@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/posthog/posthog-go"
+	"github.com/Cado-Labs/posthog-go"
 )
 
 func TestCapture() {
