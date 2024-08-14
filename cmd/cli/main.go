@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/Cado-Labs/posthog-go"
+	"github.com/posthog/posthog-go"
 	"github.com/urfave/cli"
 )
 

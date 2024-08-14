@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Cado-Labs/posthog-go"
+	"github.com/posthog/posthog-go"
 )
 
 func TestIsFeatureEnabled() {

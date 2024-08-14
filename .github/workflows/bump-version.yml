@@ -59,7 +59,7 @@ jobs:
         run: |
           current_version="${{ steps.bump-version.outputs.current_version }}"
           new_version="${{ steps.bump-version.outputs.new_version }}"
-          echo -e "## $new_version\n\n* [Full Changelog](https://github.com/Cado-Labs/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
+          echo -e "## $new_version\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 
       - name: Commit and push changes
         env:

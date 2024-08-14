@@ -8,7 +8,7 @@ Specifically, the [Go integration](https://posthog.com/docs/integrations/go-inte
 
 Install posthog to your gopath
 ```bash
-$ go get github.com/Cado-Labs/posthog-go
+$ go get github.com/posthog/posthog-go
 ```
 
 Go 🦔!
@@ -17,7 +17,7 @@ package main
 
 import (
     "os"
-    "github.com/Cado-Labs/posthog-go"
+    "github.com/posthog/posthog-go"
 )
 
 func main() {
@@ -98,11 +98,11 @@ module example/posthog-go-app
 
 go 1.22.5
 
-require github.com/Cado-Labs/posthog-go v0.0.0-20240327112532-87b23fe11103
+require github.com/posthog/posthog-go v0.0.0-20240327112532-87b23fe11103
 
 require github.com/google/uuid v1.3.0 // indirect
 
-replace github.com/Cado-Labs/posthog-go => /path-to-your-local/posthog-go
+replace github.com/posthog/posthog-go => /path-to-your-local/posthog-go
 ```
 
 ## Questions?
