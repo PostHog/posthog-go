@@ -44,7 +44,18 @@ func TestPropertiesMerge(t *testing.T) {
 
 	expected := Properties{"title": "A", "value": 0.5, "currency": "USD", "service": "api"}
 
-	if !reflect.DeepEqual(props, Properties{"title": "A", "value": 0.5, "currency": "USD", "service": "api"}) {
+	if !reflect.DeepEqual(props, expected) {
+		t.Errorf("invalid properties produced by merge:\n- expected %#v\n- found: %#v", expected, props)
+	}
+}
+
+func TestPropertiesMergeNil(t *testing.T) {
+	props := NewProperties().Set("title", "A")
+	props.Merge(nil)
+
+	expected := Properties{"title": "A"}
+
+	if !reflect.DeepEqual(props, expected) {
 		t.Errorf("invalid properties produced by merge:\n- expected %#v\n- found: %#v", expected, props)
 	}
 }
