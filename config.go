@@ -3,6 +3,8 @@ package posthog
 import (
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Instances of this type carry the different configuration options that may
@@ -76,6 +78,12 @@ type Config struct {
 	// again.
 	// If not set the client will fallback to use a default retry policy.
 	RetryAfter func(int) time.Duration
+
+	// A function called by the client to generate unique message identifiers.
+	// The client uses a UUID generator if none is provided.
+	// This field is not exported and only exposed internally to let unit tests
+	// mock the id generation.
+	uid func() string
 
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
@@ -165,6 +173,10 @@ func makeConfig(c Config) Config {
 		c.RetryAfter = DefaultBacko().Duration
 	}
 
+	if c.uid == nil {
+		c.uid = uid
+	}
+
 	if c.now == nil {
 		c.now = time.Now
 	}
@@ -174,4 +186,11 @@ func makeConfig(c Config) Config {
 	}
 
 	return c
+}
+
+// This function returns a string representation of a UUID, it's the default
+// function used for generating unique IDs.
+func uid() string {
+	new_uuid, _ := uuid.NewRandom()
+	return new_uuid.String()
 }
