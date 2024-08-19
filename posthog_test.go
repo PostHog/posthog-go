@@ -229,7 +229,33 @@ func ExampleCapture() {
 	//     }
 	//   ]
 	// }
+}
 
+func TestCaptureNoProperties(t *testing.T) {
+	defer func() {
+		// Ensure that the test doesn't panic.
+		if recover() != nil {
+			t.Error("shouldnt have panicked when merging properties into nil properties")
+		}
+	}()
+
+	_, server := mockServer()
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint:               server.URL,
+		BatchSize:              1,
+		now:                    mockTime,
+		uid:                    mockId,
+		DefaultEventProperties: NewProperties().Set("service", "api"),
+	})
+	defer client.Close()
+
+	client.Enqueue(Capture{
+		Event:            "Download",
+		DistinctId:       "123456",
+		SendFeatureFlags: false,
+	})
 }
 
 func TestEnqueue(t *testing.T) {

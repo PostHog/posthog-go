@@ -230,6 +230,9 @@ func (c *client) Enqueue(msg Message) (err error) {
 			}
 			m.Properties["$active_feature_flags"] = featureKeys
 		}
+		if m.Properties == nil {
+			m.Properties = NewProperties()
+		}
 		m.Properties.Merge(c.DefaultEventProperties)
 		c.setLastCapturedEvent(m)
 		msg = m
