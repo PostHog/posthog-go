@@ -62,6 +62,18 @@ func main() {
       Properties: posthog.NewProperties().
         Set("$current_url", "https://example.com"),
     })
+    
+    // Capture event with calculated uuid to deduplicate repeated events. 
+    // The library github.com/google/uuid is used
+    key := myEvent.Id + myEvent.Project
+    uid := uuid.NewSHA1(uuid.NameSpaceX500, []byte(key)).String()
+    client.Enqueue(posthog.Capture{
+      Uuid: uid,
+      DistinctId: "test-user",
+      Event:      "$pageview",
+      Properties: posthog.NewProperties().
+        Set("$current_url", "https://example.com"),
+    })
 
     // Check if a feature flag is enabled
     isMyFlagEnabled, err := client.IsFeatureEnabled(
