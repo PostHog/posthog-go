@@ -1,10 +1,3 @@
-# Changelog
-
-## 1.3.0 - 2024-08-14
-
-1. Added the ability to explicitly specify the uuid for capturing events. If uuid is not specified, Posthog will calculate it automatically (suitable for most cases).
-2. Removed unused config function `uid()`.
-
 ## 1.2.18
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.17...v1.2.18)
@@ -68,6 +61,8 @@
 ## 1.2.3
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.3)
+
+# Changelog
 
 ## 1.2.2 - 2024-08-08
 
