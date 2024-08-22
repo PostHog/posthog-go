@@ -91,7 +91,7 @@ func main() {
 			os.Exit(1)
 		}
 
-        return nil
+		return nil
 	}
 
 	err := app.Run(os.Args)
