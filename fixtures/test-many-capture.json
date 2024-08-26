@@ -14,8 +14,7 @@
       },
       "send_feature_flags": false,
       "timestamp": "2009-11-10T23:00:00Z",
-      "type": "capture",
-      "uuid": ""
+      "type": "capture"
     },
     {
       "distinct_id": "123456",
@@ -30,8 +29,7 @@
       },
       "send_feature_flags": false,
       "timestamp": "2009-11-10T23:00:00Z",
-      "type": "capture",
-      "uuid": ""
+      "type": "capture"
     },
     {
       "distinct_id": "123456",
@@ -46,8 +44,7 @@
       },
       "send_feature_flags": false,
       "timestamp": "2009-11-10T23:00:00Z",
-      "type": "capture",
-      "uuid": ""
+      "type": "capture"
     }
   ]
 }
