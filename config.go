@@ -79,14 +79,12 @@ type Config struct {
 
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
-	// This field is not exported and only exposed internally to let unit tests
-	// mock the current time.
+	// This field is not exported and only exposed internally to control concurrency.
 	now func() time.Time
 
 	// The maximum number of goroutines that will be spawned by a client to send
 	// requests to the backend API.
-	// This field is not exported and only exposed internally to let unit tests
-	// mock the current time.
+	// This field is not exported and only exposed internally to control concurrency.
 	maxConcurrentRequests int
 }
 
