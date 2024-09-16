@@ -430,8 +430,9 @@ func (c *client) send(msgs []message) {
 	const attempts = 10
 
 	b, err := json.Marshal(batch{
-		ApiKey:   c.key,
-		Messages: msgs,
+		ApiKey:              c.key,
+		HistoricalMigration: c.HistoricalMigration,
+		Messages:            msgs,
 	})
 
 	if err != nil {

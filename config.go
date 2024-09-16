@@ -38,6 +38,10 @@ type Config struct {
 	// will override DefaultFeatureFlagsPollingInterval.
 	NextFeatureFlagsPollingTick func() time.Duration
 
+	// Flag to enable historical migration
+	// See more in our migration docs: https://posthog.com/docs/migrate
+	HistoricalMigration bool
+
 	// The HTTP transport used by the client, this allows an application to
 	// redefine how requests are being sent at the HTTP level (for example,
 	// to change the connection pooling policy).

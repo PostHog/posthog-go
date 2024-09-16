@@ -256,6 +256,57 @@ func TestCaptureNoProperties(t *testing.T) {
 	})
 }
 
+func ExampleHistoricalMigrationCapture() {
+	body, server := mockServer()
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint:            server.URL,
+		BatchSize:           1,
+		now:                 mockTime,
+		uid:                 mockId,
+		HistoricalMigration: true,
+	})
+	defer client.Close()
+
+	client.Enqueue(Capture{
+		Event:      "Download",
+		DistinctId: "123456",
+		Properties: Properties{
+			"application": "PostHog Go",
+			"version":     "1.0.0",
+			"platform":    "macos", // :)
+		},
+		SendFeatureFlags: false,
+	})
+
+	fmt.Printf("%s\n", <-body)
+	// Output:
+	// {
+	//   "api_key": "Csyjlnlun3OzyNJAafdlv",
+	//   "batch": [
+	//     {
+	//       "distinct_id": "123456",
+	//       "event": "Download",
+	//       "library": "posthog-go",
+	//       "library_version": "1.0.0",
+	//       "properties": {
+	//         "$lib": "posthog-go",
+	//         "$lib_version": "1.0.0",
+	//         "application": "PostHog Go",
+	//         "platform": "macos",
+	//         "version": "1.0.0"
+	//       },
+	//       "send_feature_flags": false,
+	//       "timestamp": "2009-11-10T23:00:00Z",
+	//       "type": "capture"
+	//     }
+	//   ],
+	//   "historical_migration": true
+	// }
+
+}
+
 func TestEnqueue(t *testing.T) {
 	tests := map[string]struct {
 		ref string
