@@ -95,6 +95,29 @@ type client struct {
 	lastEventMutex sync.RWMutex
 }
 
+func (c *client) validateAPIKey() error {
+	url := c.Endpoint + "/decide/?v=3"
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.key)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("invalid API key: received status code %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // Instantiate a new client that uses the write key passed as first argument to
 // send messages to the backend.
 // The client is created with the default configuration.
@@ -125,6 +148,11 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	if len(c.PersonalApiKey) > 0 {
+
+		if err := c.validateAPIKey(); err != nil {
+			return nil, fmt.Errorf("failed to initialize client: %v", err)
+		}
+
 		c.featureFlagsPoller = newFeatureFlagsPoller(
 			c.key,
 			c.Config.PersonalApiKey,
@@ -181,6 +209,10 @@ func dereferenceMessage(msg Message) Message {
 }
 
 func (c *client) Enqueue(msg Message) (err error) {
+	if c.key == "" {
+		return errors.New("client not properly initialized: invalid API key")
+	}
+
 	msg = dereferenceMessage(msg)
 	if err = msg.Validate(); err != nil {
 		return
