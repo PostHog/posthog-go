@@ -1,8 +1,13 @@
 package posthog
 
+import (
+	"sync"
+)
+
 type SizeLimitedMap struct {
 	ids  map[string][]string
 	size int
+	mu   sync.Mutex
 }
 
 func newSizeLimitedMap(size int) *SizeLimitedMap {
@@ -15,6 +20,8 @@ func newSizeLimitedMap(size int) *SizeLimitedMap {
 }
 
 func (sizeLimitedMap *SizeLimitedMap) add(key string, element string) {
+	sizeLimitedMap.mu.Lock()
+	defer sizeLimitedMap.mu.Unlock()
 
 	if len(sizeLimitedMap.ids) >= sizeLimitedMap.size {
 		sizeLimitedMap.ids = map[string][]string{}
