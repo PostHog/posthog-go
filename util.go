@@ -7,7 +7,7 @@ import (
 type SizeLimitedMap struct {
 	ids  map[string][]string
 	size int
-	mu   sync.Mutex
+	mu   sync.RWMutex
 }
 
 func newSizeLimitedMap(size int) *SizeLimitedMap {
@@ -35,6 +35,9 @@ func (sizeLimitedMap *SizeLimitedMap) add(key string, element string) {
 }
 
 func (sizeLimitedMap *SizeLimitedMap) contains(key string, element string) bool {
+	sizeLimitedMap.mu.RLock()
+	defer sizeLimitedMap.mu.RUnlock()
+
 	if val, ok := sizeLimitedMap.ids[key]; ok {
 		for _, v := range val {
 			if v == element {
@@ -47,5 +50,8 @@ func (sizeLimitedMap *SizeLimitedMap) contains(key string, element string) bool 
 }
 
 func (sizeLimitedMap *SizeLimitedMap) count() int {
+	sizeLimitedMap.mu.RLock()
+	defer sizeLimitedMap.mu.RUnlock()
+
 	return len(sizeLimitedMap.ids)
 }
