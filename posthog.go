@@ -16,6 +16,8 @@ import (
 const unimplementedError = "not implemented"
 const SIZE_DEFAULT = 50_000
 
+const geoipDisableProperty = "$geoip_disable"
+
 // This interface is the main API exposed by the posthog package.
 // Values that satsify this interface are returned by the client constructors
 // provided by the package and provide a way to send messages via the HTTP API.
@@ -134,6 +136,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.DefaultFeatureFlagsPollingInterval,
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
+			c.Config.DisableGeoIP,
 		)
 	}
 

@@ -35,6 +35,7 @@ type FeatureFlagsPoller struct {
 	mutex          sync.RWMutex
 	nextPollTick   func() time.Duration
 	flagTimeout    time.Duration
+	disableGeoIP   bool
 }
 
 type FeatureFlag struct {
@@ -101,6 +102,7 @@ type DecideRequestData struct {
 	Groups           Groups                `json:"groups"`
 	PersonProperties Properties            `json:"person_properties"`
 	GroupProperties  map[string]Properties `json:"group_properties"`
+	DisableGeoIP     bool                  `json:"$geoip_disable"`
 }
 
 type DecideResponse struct {
@@ -125,6 +127,7 @@ func newFeatureFlagsPoller(
 	pollingInterval time.Duration,
 	nextPollTick func() time.Duration,
 	flagTimeout time.Duration,
+	disableGeoIP bool,
 ) *FeatureFlagsPoller {
 
 	if nextPollTick == nil {
@@ -143,6 +146,7 @@ func newFeatureFlagsPoller(
 		mutex:          sync.RWMutex{},
 		nextPollTick:   nextPollTick,
 		flagTimeout:    flagTimeout,
+		disableGeoIP:   disableGeoIP,
 	}
 
 	go poller.run()
@@ -932,6 +936,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 		Groups:           groups,
 		PersonProperties: personProperties,
 		GroupProperties:  groupProperties,
+		DisableGeoIP:     poller.disableGeoIP,
 	})
 	headers := [][2]string{{"Authorization", "Bearer " + poller.personalApiKey + ""}}
 	if err != nil {
