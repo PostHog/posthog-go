@@ -23,6 +23,10 @@ type Config struct {
 	// Information on how to get a personal API key: https://posthog.com/docs/api/overview
 	PersonalApiKey string
 
+	// DisableGeoIP will disable GeoIP lookup for events
+	// and when fetching feature flags
+	DisableGeoIP bool
+
 	// The flushing interval of the client. Messages will be sent when they've
 	// been queued up to the maximum batch size or when the flushing interval
 	// timer triggers.
@@ -175,6 +179,12 @@ func makeConfig(c Config) Config {
 
 	if c.maxConcurrentRequests == 0 {
 		c.maxConcurrentRequests = 1000
+	}
+
+	if c.DisableGeoIP {
+		if c.DefaultEventProperties == nil {
+			c.DefaultEventProperties = NewProperties().Set(geoipDisableProperty, true)
+		}
 	}
 
 	return c

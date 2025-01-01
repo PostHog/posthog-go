@@ -155,6 +155,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
 			c.decider,
+			c.Config.DisableGeoIP,
 		)
 	}
 

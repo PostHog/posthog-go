@@ -37,6 +37,7 @@ type FeatureFlagsPoller struct {
 	nextPollTick   func() time.Duration
 	flagTimeout    time.Duration
 	decider        decider
+	disableGeoIP   bool
 }
 
 type FeatureFlag struct {
@@ -96,6 +97,19 @@ type FeatureFlagsResponse struct {
 	Cohorts          map[string]PropertyGroup `json:"cohorts"`
 }
 
+type DecideRequestData struct {
+	ApiKey           string                `json:"api_key"`
+	DistinctId       string                `json:"distinct_id"`
+	Groups           Groups                `json:"groups"`
+	PersonProperties Properties            `json:"person_properties"`
+	GroupProperties  map[string]Properties `json:"group_properties"`
+}
+
+type DecideResponse struct {
+	FeatureFlags        map[string]interface{} `json:"featureFlags"`
+	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+}
+
 type InconclusiveMatchError struct {
 	msg string
 }
@@ -114,6 +128,7 @@ func newFeatureFlagsPoller(
 	nextPollTick func() time.Duration,
 	flagTimeout time.Duration,
 	decider decider,
+	disableGeoIP bool,
 ) *FeatureFlagsPoller {
 	if nextPollTick == nil {
 		nextPollTick = func() time.Duration { return pollingInterval }
@@ -132,6 +147,7 @@ func newFeatureFlagsPoller(
 		nextPollTick:   nextPollTick,
 		flagTimeout:    flagTimeout,
 		decider:        decider,
+		disableGeoIP:   disableGeoIP,
 	}
 
 	go poller.run()
@@ -414,10 +430,10 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	}
 
 	for _, variant := range multivariates.Variants {
-		valueMax := float64(valueMin) + *variant.RolloutPercentage/100.
-		_flagVariantMeta := FlagVariantMeta{ValueMin: float64(valueMin), ValueMax: valueMax, Key: variant.Key}
+		valueMax := valueMin + *variant.RolloutPercentage/100.
+		_flagVariantMeta := FlagVariantMeta{ValueMin: valueMin, ValueMax: valueMax, Key: variant.Key}
 		lookupTable = append(lookupTable, _flagVariantMeta)
-		valueMin = float64(valueMax)
+		valueMin = valueMax
 	}
 
 	return lookupTable
@@ -898,7 +914,7 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 // This makes a request to the flags endpoint and returns the response.
 // This is used in fallback scenarios where we can't compute the flag locally.
 func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
-	return poller.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties)
+	return poller.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, poller.disableGeoIP)
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
