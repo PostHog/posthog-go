@@ -264,7 +264,6 @@ func ExampleHistoricalMigrationCapture() {
 		Endpoint:            server.URL,
 		BatchSize:           1,
 		now:                 mockTime,
-		uid:                 mockId,
 		HistoricalMigration: true,
 	})
 	defer client.Close()
