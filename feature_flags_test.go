@@ -945,6 +945,33 @@ func TestGetFeatureFlagPayload(t *testing.T) {
 	}
 }
 
+func TestGetDecryptedFeatureFlagPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(fixture("test-remote-config.json")))
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	payload, _ := client.GetDecryptedFeatureFlagPayload(1)
+
+	var payloadMap map[string]interface{}
+	err := json.Unmarshal([]byte(payload), &payloadMap)
+	if err != nil {
+		t.Error("Failed to decode payload")
+	}
+
+	if payloadMap["foo"] != "bar" || payloadMap["baz"] != float64(42) {
+		t.Error("Should match")
+	}
+}
+
+
 func TestFlagWithVariantOverrides(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -61,4 +61,11 @@ func TestIsFeatureEnabled() {
 	if variantErr != nil || variantResult == true {
 		fmt.Println("error:", variantErr)
 	}
+
+	// Encrypted remote config flag
+	payloadResult, payloadErr := client.GetDecryptedFeatureFlagPayload(257)
+	fmt.Println("payloadResult:", payloadResult)
+	if payloadErr != nil {
+		fmt.Println("error:", payloadErr)
+	}
 }

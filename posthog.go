@@ -48,6 +48,9 @@ type Client interface {
 	// Method returns feature flag payload value matching key for user (supports multivariate flags).
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 	//
+	// Method returns decrypted feature flag payload value for remote config flags.
+	GetDecryptedFeatureFlagPayload(int) (string, error)
+	//
 	// Get all flags - returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 	//
@@ -356,6 +359,10 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	}
 
 	return flagValue, err
+}
+
+func (c *client) GetDecryptedFeatureFlagPayload(flagId int) (string, error) {
+	return c.getDecryptedFeatureFlagPayloadFromRemoteConfig(flagId)
 }
 
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
@@ -679,6 +686,44 @@ func (c *client) makeDecideRequest(distinctId string, groups Groups, personPrope
 	return &decideResponse, nil
 }
 
+func (c *client) makeRemoteConfigRequest(flagId int) (string, error) {
+	remoteConfigEndpoint := fmt.Sprintf("api/projects/@current/feature_flags/%d/remote_config/", flagId)
+	url, err := url.Parse(c.Endpoint + "/" + remoteConfigEndpoint)
+	if err != nil {
+		return "", fmt.Errorf("creating url: %v", err)
+	}
+
+	req, err := http.NewRequest("GET", url.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.PersonalApiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "posthog-go (version: "+Version+")")
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("sending request: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code from %s: %d", remoteConfigEndpoint, res.StatusCode)
+	}
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response from /remote_config/: %v", err)
+	}
+
+	var responseData string
+	if err := json.Unmarshal(resBody, &responseData); err != nil {
+		return "", fmt.Errorf("error parsing JSON response from /remote_config/: %v", err)
+	}
+	return responseData, nil
+}
+	
 func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
 	if err != nil {
@@ -703,6 +748,10 @@ func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, 
 	}
 
 	return "", nil
+}
+
+func (c* client) getDecryptedFeatureFlagPayloadFromRemoteConfig(flagId int) (string, error) {
+	return c.makeRemoteConfigRequest(flagId)
 }
 
 func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
