@@ -479,7 +479,7 @@ func (c *client) upload(b []byte) error {
 
 	version := getVersion()
 
-	req.Header.Add("User-Agent", "posthog-go (version: "+version+")")
+	req.Header.Add("User-Agent", "posthog-go/"+version)
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(b)))
 
@@ -660,7 +660,7 @@ func (c *client) makeDecideRequest(distinctId string, groups Groups, personPrope
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "posthog-go (version: "+Version+")")
+	req.Header.Set("User-Agent", "posthog-go/"+version)
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -700,7 +700,7 @@ func (c *client) makeRemoteConfigRequest(flagId int) (string, error) {
 
 	req.Header.Set("Authorization", "Bearer "+c.PersonalApiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "posthog-go (version: "+Version+")")
+	req.Header.Set("User-Agent", "posthog-go/"+version)
 
 	res, err := c.http.Do(req)
 	if err != nil {
