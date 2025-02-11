@@ -660,7 +660,7 @@ func (c *client) makeDecideRequest(distinctId string, groups Groups, personPrope
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "posthog-go/"+version)
+	req.Header.Set("User-Agent", "posthog-go/"+Version)
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -700,7 +700,7 @@ func (c *client) makeRemoteConfigRequest(flagId int) (string, error) {
 
 	req.Header.Set("Authorization", "Bearer "+c.PersonalApiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "posthog-go/"+version)
+	req.Header.Set("User-Agent", "posthog-go/"+Version)
 
 	res, err := c.http.Do(req)
 	if err != nil {
