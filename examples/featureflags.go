@@ -12,7 +12,7 @@ func TestIsFeatureEnabled() {
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            true,
-		PersonalApiKey:                     "phx_n79cT52OfsxAWDhZs9j3w67aRoBCZ7l5ksRRKmAi5nr",
+		PersonalApiKey:                     "phx_DvugINPCOSM3Ko929TaeywnUlRC5FeF4X7KV60IgyXWGTLw",
 		Endpoint:                           "http://localhost:8000",
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,
@@ -63,7 +63,7 @@ func TestIsFeatureEnabled() {
 	}
 
 	// Encrypted remote config flag
-	payloadResult, payloadErr := client.GetDecryptedFeatureFlagPayload(257)
+	payloadResult, payloadErr := client.GetDecryptedFeatureFlagPayload("my_secret_flag_value")
 	fmt.Println("payloadResult:", payloadResult)
 	if payloadErr != nil {
 		fmt.Println("error:", payloadErr)

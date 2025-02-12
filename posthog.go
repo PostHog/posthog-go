@@ -49,7 +49,7 @@ type Client interface {
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 	//
 	// Method returns decrypted feature flag payload value for remote config flags.
-	GetDecryptedFeatureFlagPayload(int) (string, error)
+	GetDecryptedFeatureFlagPayload(string) (string, error)
 	//
 	// Get all flags - returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
@@ -361,8 +361,8 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	return flagValue, err
 }
 
-func (c *client) GetDecryptedFeatureFlagPayload(flagId int) (string, error) {
-	return c.getDecryptedFeatureFlagPayloadFromRemoteConfig(flagId)
+func (c *client) GetDecryptedFeatureFlagPayload(flagKey string) (string, error) {
+	return c.getDecryptedFeatureFlagPayloadFromRemoteConfig(flagKey)
 }
 
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
@@ -686,8 +686,8 @@ func (c *client) makeDecideRequest(distinctId string, groups Groups, personPrope
 	return &decideResponse, nil
 }
 
-func (c *client) makeRemoteConfigRequest(flagId int) (string, error) {
-	remoteConfigEndpoint := fmt.Sprintf("api/projects/@current/feature_flags/%d/remote_config/", flagId)
+func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
+	remoteConfigEndpoint := fmt.Sprintf("api/projects/@current/feature_flags/%s/remote_config/", flagKey)
 	url, err := url.Parse(c.Endpoint + "/" + remoteConfigEndpoint)
 	if err != nil {
 		return "", fmt.Errorf("creating url: %v", err)
@@ -750,8 +750,8 @@ func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, 
 	return "", nil
 }
 
-func (c* client) getDecryptedFeatureFlagPayloadFromRemoteConfig(flagId int) (string, error) {
-	return c.makeRemoteConfigRequest(flagId)
+func (c* client) getDecryptedFeatureFlagPayloadFromRemoteConfig(flagKey string) (string, error) {
+	return c.makeRemoteConfigRequest(flagKey)
 }
 
 func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {

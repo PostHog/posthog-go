@@ -958,7 +958,7 @@ func TestGetDecryptedFeatureFlagPayload(t *testing.T) {
 	})
 	defer client.Close()
 
-	payload, _ := client.GetDecryptedFeatureFlagPayload(1)
+	payload, _ := client.GetDecryptedFeatureFlagPayload("flag_key")
 
 	var payloadMap map[string]interface{}
 	err := json.Unmarshal([]byte(payload), &payloadMap)
