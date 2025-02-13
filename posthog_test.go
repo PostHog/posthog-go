@@ -309,12 +309,14 @@ func ExampleHistoricalMigrationCapture() {
 
 func TestEnqueue(t *testing.T) {
 	tests := map[string]struct {
-		ref string
-		msg Message
+		ref          string
+		msg          Message
+		disableGeoIP bool
 	}{
 		"alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			Alias{Alias: "A", DistinctId: "B"},
+			false,
 		},
 
 		"identify": {
@@ -323,6 +325,7 @@ func TestEnqueue(t *testing.T) {
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
+			false,
 		},
 
 		"groupIdentify": {
@@ -333,6 +336,7 @@ func TestEnqueue(t *testing.T) {
 				Key:        "id:5",
 				Properties: Properties{},
 			},
+			false,
 		},
 
 		"capture": {
@@ -347,10 +351,28 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: false,
 			},
+			false,
 		},
+
+		"captureWithDisableGeoIP": {
+			strings.TrimSpace(fixture("test-enqueue-capture-with-disable-geoip.json")),
+			Capture{
+				Event:      "Download",
+				DistinctId: "123456",
+				Properties: Properties{
+					"application": "PostHog Go",
+					"version":     "1.0.0",
+					"platform":    "macos", // :)
+				},
+				SendFeatureFlags: false,
+			},
+			true,
+		},
+
 		"*alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			&Alias{Alias: "A", DistinctId: "B"},
+			false,
 		},
 
 		"*identify": {
@@ -359,6 +381,7 @@ func TestEnqueue(t *testing.T) {
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
+			false,
 		},
 
 		"*groupIdentify": {
@@ -369,6 +392,7 @@ func TestEnqueue(t *testing.T) {
 				Key:        "id:5",
 				Properties: Properties{},
 			},
+			false,
 		},
 
 		"*capture": {
@@ -384,22 +408,24 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: false,
 			},
+			false,
 		},
 	}
 
 	body, server := mockServer()
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Endpoint:  server.URL,
-		Verbose:   true,
-		Logger:    t,
-		BatchSize: 1,
-		now:       mockTime,
-	})
-	defer client.Close()
-
 	for name, test := range tests {
+		client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+			Endpoint:     server.URL,
+			Verbose:      true,
+			Logger:       t,
+			BatchSize:    1,
+			now:          mockTime,
+			DisableGeoIP: test.disableGeoIP,
+		})
+		defer client.Close()
+
 		if err := client.Enqueue(test.msg); err != nil {
 			t.Error(err)
 			return
