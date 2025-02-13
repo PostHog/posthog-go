@@ -48,6 +48,9 @@ type Client interface {
 	// Method returns feature flag payload value matching key for user (supports multivariate flags).
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 	//
+	// Method returns decrypted feature flag payload value for remote config flags.
+	GetRemoteConfigPayload(string) (string, error)
+	//
 	// Get all flags - returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 	//
@@ -358,6 +361,10 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	return flagValue, err
 }
 
+func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
+	return c.makeRemoteConfigRequest(flagKey)
+}
+
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
@@ -472,7 +479,7 @@ func (c *client) upload(b []byte) error {
 
 	version := getVersion()
 
-	req.Header.Add("User-Agent", "posthog-go (version: "+version+")")
+	req.Header.Add("User-Agent", SdkName+"/"+version)
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(b)))
 
@@ -653,7 +660,7 @@ func (c *client) makeDecideRequest(distinctId string, groups Groups, personPrope
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "posthog-go (version: "+Version+")")
+	req.Header.Set("User-Agent", "posthog-go/"+Version)
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -679,6 +686,44 @@ func (c *client) makeDecideRequest(distinctId string, groups Groups, personPrope
 	return &decideResponse, nil
 }
 
+func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
+	remoteConfigEndpoint := fmt.Sprintf("api/projects/@current/feature_flags/%s/remote_config/", flagKey)
+	url, err := url.Parse(c.Endpoint + "/" + remoteConfigEndpoint)
+	if err != nil {
+		return "", fmt.Errorf("creating url: %v", err)
+	}
+
+	req, err := http.NewRequest("GET", url.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.PersonalApiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "posthog-go/"+Version)
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("sending request: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code from %s: %d", remoteConfigEndpoint, res.StatusCode)
+	}
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response from /remote_config/: %v", err)
+	}
+
+	var responseData string
+	if err := json.Unmarshal(resBody, &responseData); err != nil {
+		return "", fmt.Errorf("error parsing JSON response from /remote_config/: %v", err)
+	}
+	return responseData, nil
+}
+	
 func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
 	if err != nil {

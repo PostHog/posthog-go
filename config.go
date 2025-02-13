@@ -92,6 +92,8 @@ type Config struct {
 	maxConcurrentRequests int
 }
 
+const SdkName = "posthog-go"
+
 // This constant sets the default endpoint to which client instances send
 // messages if none was explictly set.
 const DefaultEndpoint = "https://app.posthog.com"

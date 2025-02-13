@@ -264,7 +264,6 @@ func ExampleHistoricalMigrationCapture() {
 		Endpoint:            server.URL,
 		BatchSize:           1,
 		now:                 mockTime,
-		uid:                 mockId,
 		HistoricalMigration: true,
 	})
 	defer client.Close()
@@ -299,7 +298,8 @@ func ExampleHistoricalMigrationCapture() {
 	//       },
 	//       "send_feature_flags": false,
 	//       "timestamp": "2009-11-10T23:00:00Z",
-	//       "type": "capture"
+	//       "type": "capture",
+	//       "uuid": ""
 	//     }
 	//   ],
 	//   "historical_migration": true
@@ -1100,7 +1100,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
 				}
-				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go/") {
 					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
 				}
 
@@ -1300,7 +1300,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
 				}
-				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go/") {
 					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
 				}
 
@@ -1437,7 +1437,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
 				}
-				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go/") {
 					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
 				}
 

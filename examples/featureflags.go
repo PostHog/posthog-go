@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -12,7 +13,7 @@ func TestIsFeatureEnabled() {
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            true,
-		PersonalApiKey:                     "phx_n79cT52OfsxAWDhZs9j3w67aRoBCZ7l5ksRRKmAi5nr",
+		PersonalApiKey:                     "phx_DvugINPCOSM3Ko929TaeywnUlRC5FeF4X7KV60IgyXWGTLw",
 		Endpoint:                           "http://localhost:8000",
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,
@@ -61,4 +62,21 @@ func TestIsFeatureEnabled() {
 	if variantErr != nil || variantResult == true {
 		fmt.Println("error:", variantErr)
 	}
+
+	// Encrypted remote config flag (string payload)
+	stringPayloadResult, stringPayloadErr := client.GetRemoteConfigPayload("my_secret_flag_value")
+	fmt.Println("stringPayloadResult:", stringPayloadResult)
+	if stringPayloadErr != nil {
+		fmt.Println("error:", stringPayloadErr)
+	}
+
+	// Encrypted remote config flag (json object payload)
+	jsonObjectPayloadResult, _ := client.GetRemoteConfigPayload("my_secret_flag_json_object_value")
+	var jsonPayloadMap map[string]interface{}
+	json.Unmarshal([]byte(jsonObjectPayloadResult), &jsonPayloadMap)
+
+	// Encrypted remote config flag (json array payload)
+	jsonArrayPayloadResult, _ := client.GetRemoteConfigPayload("my_secret_flag_json_array_value")
+	var jsonArrayPayload []string
+	json.Unmarshal([]byte(jsonArrayPayloadResult), &jsonArrayPayload)
 }
