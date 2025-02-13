@@ -64,19 +64,19 @@ func TestIsFeatureEnabled() {
 	}
 
 	// Encrypted remote config flag (string payload)
-	stringPayloadResult, stringPayloadErr := client.GetDecryptedFeatureFlagPayload("my_secret_flag_value")
+	stringPayloadResult, stringPayloadErr := client.GetRemoteConfigPayload("my_secret_flag_value")
 	fmt.Println("stringPayloadResult:", stringPayloadResult)
 	if stringPayloadErr != nil {
 		fmt.Println("error:", stringPayloadErr)
 	}
 
 	// Encrypted remote config flag (json object payload)
-	jsonObjectPayloadResult, _ := client.GetDecryptedFeatureFlagPayload("my_secret_flag_json_object_value")
+	jsonObjectPayloadResult, _ := client.GetRemoteConfigPayload("my_secret_flag_json_object_value")
 	var jsonPayloadMap map[string]interface{}
 	json.Unmarshal([]byte(jsonObjectPayloadResult), &jsonPayloadMap)
 
 	// Encrypted remote config flag (json array payload)
-	jsonArrayPayloadResult, _ := client.GetDecryptedFeatureFlagPayload("my_secret_flag_json_array_value")
+	jsonArrayPayloadResult, _ := client.GetRemoteConfigPayload("my_secret_flag_json_array_value")
 	var jsonArrayPayload []string
 	json.Unmarshal([]byte(jsonArrayPayloadResult), &jsonArrayPayload)
 }

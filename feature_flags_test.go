@@ -945,7 +945,7 @@ func TestGetFeatureFlagPayload(t *testing.T) {
 	}
 }
 
-func TestGetDecryptedFeatureFlagPayload(t *testing.T) {
+func TestGetRemoteConfigPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(fixture("test-remote-config.json")))
 	}))
@@ -958,7 +958,7 @@ func TestGetDecryptedFeatureFlagPayload(t *testing.T) {
 	})
 	defer client.Close()
 
-	payload, _ := client.GetDecryptedFeatureFlagPayload("flag_key")
+	payload, _ := client.GetRemoteConfigPayload("flag_key")
 
 	var payloadMap map[string]interface{}
 	err := json.Unmarshal([]byte(payload), &payloadMap)

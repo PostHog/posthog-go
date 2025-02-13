@@ -49,7 +49,7 @@ type Client interface {
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 	//
 	// Method returns decrypted feature flag payload value for remote config flags.
-	GetDecryptedFeatureFlagPayload(string) (string, error)
+	GetRemoteConfigPayload(string) (string, error)
 	//
 	// Get all flags - returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
@@ -361,8 +361,8 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	return flagValue, err
 }
 
-func (c *client) GetDecryptedFeatureFlagPayload(flagKey string) (string, error) {
-	return c.getDecryptedFeatureFlagPayloadFromRemoteConfig(flagKey)
+func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
+	return c.makeRemoteConfigRequest(flagKey)
 }
 
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
@@ -748,10 +748,6 @@ func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, 
 	}
 
 	return "", nil
-}
-
-func (c* client) getDecryptedFeatureFlagPayloadFromRemoteConfig(flagKey string) (string, error) {
-	return c.makeRemoteConfigRequest(flagKey)
 }
 
 func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
