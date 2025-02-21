@@ -1049,7 +1049,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
 				}
-				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go/") {
 					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
 				}
 
@@ -1249,7 +1249,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
 				}
-				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go/") {
 					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
 				}
 
@@ -1386,7 +1386,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
 				}
-				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go (version: ") {
+				if !strings.HasPrefix(r.Header.Get("User-Agent"), "posthog-go/") {
 					t.Errorf("Unexpected User-Agent: %s", r.Header.Get("User-Agent"))
 				}
 

@@ -915,7 +915,7 @@ func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestDa
 
 	version := getVersion()
 
-	req.Header.Add("User-Agent", "posthog-go (version: "+version+")")
+	req.Header.Add("User-Agent", SdkName+"/"+version)
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(requestData)))
 
