@@ -106,6 +106,7 @@ type DecideRequestData struct {
 type DecideResponse struct {
 	FeatureFlags        map[string]interface{} `json:"featureFlags"`
 	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+	QuotaLimited        *[]string              `json:"quota_limited"`
 }
 
 type InconclusiveMatchError struct {
@@ -175,14 +176,28 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
 	res, cancel, err := poller.localEvaluationFlags(headers)
 	defer cancel()
-	if err != nil || res.StatusCode != http.StatusOK {
-		if err != nil {
-			poller.Errorf("Unable to fetch feature flags: %s", err)
-		} else {
-			poller.Errorf("Unable to fetch feature flags, status: %s", res.Status)
-		}
+	if err != nil {
+		poller.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
+
+	// Handle quota limit response (HTTP 402)
+	if res.StatusCode == http.StatusPaymentRequired {
+		// Clear existing flags when quota limited
+		poller.mutex.Lock()
+		poller.featureFlags = []FeatureFlag{}
+		poller.cohorts = map[string]PropertyGroup{}
+		poller.groups = map[string]string{}
+		poller.mutex.Unlock()
+		poller.Errorf("Feature flag quota exceeded")
+		return
+	}
+
+	if res.StatusCode != http.StatusOK {
+		poller.Errorf("Unable to fetch feature flags, status: %s", res.Status)
+		return
+	}
+
 	defer res.Body.Close()
 	resBody, err := ioutil.ReadAll(res.Body)
 	if err != nil {

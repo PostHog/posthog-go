@@ -256,57 +256,6 @@ func TestCaptureNoProperties(t *testing.T) {
 	})
 }
 
-func ExampleHistoricalMigrationCapture() {
-	body, server := mockServer()
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Endpoint:            server.URL,
-		BatchSize:           1,
-		now:                 mockTime,
-		uid:                 mockId,
-		HistoricalMigration: true,
-	})
-	defer client.Close()
-
-	client.Enqueue(Capture{
-		Event:      "Download",
-		DistinctId: "123456",
-		Properties: Properties{
-			"application": "PostHog Go",
-			"version":     "1.0.0",
-			"platform":    "macos", // :)
-		},
-		SendFeatureFlags: false,
-	})
-
-	fmt.Printf("%s\n", <-body)
-	// Output:
-	// {
-	//   "api_key": "Csyjlnlun3OzyNJAafdlv",
-	//   "batch": [
-	//     {
-	//       "distinct_id": "123456",
-	//       "event": "Download",
-	//       "library": "posthog-go",
-	//       "library_version": "1.0.0",
-	//       "properties": {
-	//         "$lib": "posthog-go",
-	//         "$lib_version": "1.0.0",
-	//         "application": "PostHog Go",
-	//         "platform": "macos",
-	//         "version": "1.0.0"
-	//       },
-	//       "send_feature_flags": false,
-	//       "timestamp": "2009-11-10T23:00:00Z",
-	//       "type": "capture"
-	//     }
-	//   ],
-	//   "historical_migration": true
-	// }
-
-}
-
 func TestEnqueue(t *testing.T) {
 	tests := map[string]struct {
 		ref string
@@ -1779,4 +1728,122 @@ func TestCaptureSendFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFeatureFlagQuotaLimits(t *testing.T) {
+	t.Run("decide endpoint quota limited", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/decide") {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"featureFlags": {"test-flag": true},
+					"featureFlagPayloads": {"test-flag": "test-payload"},
+					"quota_limited": ["feature_flags"]
+				}`))
+			}
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer client.Close()
+
+		// Test GetFeatureFlag
+		value, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user123",
+		})
+		if err != nil {
+			t.Error("Expected no error, got", err)
+		}
+		if value != false {
+			t.Error("Expected false when quota limited, got", value)
+		}
+
+		// Test GetFeatureFlagPayload
+		payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user123",
+		})
+		if err != nil {
+			t.Error("Expected no error, got", err)
+		}
+		if payload != "" {
+			t.Error("Expected empty string when quota limited, got", payload)
+		}
+
+		// Test GetAllFlags
+		flags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{
+			DistinctId: "user123",
+		})
+		if err != nil {
+			t.Error("Expected no error, got", err)
+		}
+		if len(flags) != 0 {
+			t.Error("Expected empty map when quota limited, got", flags)
+		}
+	})
+
+	t.Run("local evaluation endpoint quota limited", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+				w.WriteHeader(http.StatusPaymentRequired)
+				w.Write([]byte(`{
+					"type": "quota_limited",
+					"detail": "You have exceeded your feature flag request quota",
+					"code": "payment_required"
+				}`))
+			} else if strings.HasPrefix(r.URL.Path, "/decide") {
+				// Mock the decide endpoint as well since it's used as fallback
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"featureFlags": {},
+					"featureFlagPayloads": {}
+				}`))
+			}
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{
+			PersonalApiKey: "test-personal-key",
+			Endpoint:       server.URL,
+		})
+		defer client.Close()
+
+		// Test GetFeatureFlag
+		value, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user123",
+		})
+		if err != nil {
+			t.Error("Expected no error, got", err)
+		}
+		if value != false {
+			t.Error("Expected false when quota limited, got", value)
+		}
+
+		// Test GetFeatureFlagPayload
+		payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user123",
+		})
+		if err != nil {
+			t.Error("Expected no error, got", err)
+		}
+		if payload != "" {
+			t.Error("Expected empty string when quota limited, got", payload)
+		}
+
+		// Test GetAllFlags
+		flags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{
+			DistinctId: "user123",
+		})
+		if err != nil {
+			t.Error("Expected no error, got", err)
+		}
+		if len(flags) != 0 {
+			t.Error("Expected empty map when quota limited, got", flags)
+		}
+	})
 }

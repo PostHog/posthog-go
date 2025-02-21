@@ -685,6 +685,15 @@ func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups 
 		return nil, err
 	}
 
+	// Check if feature_flags is quota limited
+	if decideResponse.QuotaLimited != nil {
+		for _, limitedFeature := range *decideResponse.QuotaLimited {
+			if limitedFeature == "feature_flags" {
+				return false, nil
+			}
+		}
+	}
+
 	if value, ok := decideResponse.FeatureFlags[key]; ok {
 		return value, nil
 	}
@@ -698,6 +707,15 @@ func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, 
 		return "", err
 	}
 
+	// Check if feature_flags is quota limited
+	if decideResponse.QuotaLimited != nil {
+		for _, limitedFeature := range *decideResponse.QuotaLimited {
+			if limitedFeature == "feature_flags" {
+				return "", nil
+			}
+		}
+	}
+
 	if value, ok := decideResponse.FeatureFlagPayloads[key]; ok {
 		return value, nil
 	}
@@ -709,6 +727,15 @@ func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, 
 	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if feature_flags is quota limited
+	if decideResponse.QuotaLimited != nil {
+		for _, limitedFeature := range *decideResponse.QuotaLimited {
+			if limitedFeature == "feature_flags" {
+				return map[string]interface{}{}, nil
+			}
+		}
 	}
 
 	return decideResponse.FeatureFlags, nil
