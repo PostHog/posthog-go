@@ -189,7 +189,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.cohorts = map[string]PropertyGroup{}
 		poller.groups = map[string]string{}
 		poller.mutex.Unlock()
-		poller.Errorf("Feature flag quota exceeded")
+		poller.Errorf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
 		return
 	}
 
