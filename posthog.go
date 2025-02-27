@@ -723,11 +723,28 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	}
 	return responseData, nil
 }
-	
+
+// isFeatureFlagsQuotaLimited checks if feature flags are quota limited in the decide response
+func (c *client) isFeatureFlagsQuotaLimited(decideResponse *DecideResponse) bool {
+	if decideResponse.QuotaLimited != nil {
+		for _, limitedFeature := range *decideResponse.QuotaLimited {
+			if limitedFeature == "feature_flags" {
+				c.Errorf("[FEATURE FLAGS] PostHog feature flags quota limited. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
 	if err != nil {
 		return nil, err
+	}
+
+	if c.isFeatureFlagsQuotaLimited(decideResponse) {
+		return false, nil
 	}
 
 	if value, ok := decideResponse.FeatureFlags[key]; ok {
@@ -743,6 +760,10 @@ func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, 
 		return "", err
 	}
 
+	if c.isFeatureFlagsQuotaLimited(decideResponse) {
+		return "", nil
+	}
+
 	if value, ok := decideResponse.FeatureFlagPayloads[key]; ok {
 		return value, nil
 	}
@@ -754,6 +775,10 @@ func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, 
 	decideResponse, err := c.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
 	if err != nil {
 		return nil, err
+	}
+
+	if c.isFeatureFlagsQuotaLimited(decideResponse) {
+		return map[string]interface{}{}, nil
 	}
 
 	return decideResponse.FeatureFlags, nil
