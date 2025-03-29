@@ -1009,10 +1009,8 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 		}
 
 		for flagKey, flagValue := range featureFlagVariants.FeatureFlags {
-			flagValueString := fmt.Sprintf("%v", flagValue)
-			if key == flagKey && flagValueString != "false" {
-				result = flagValueString
-				break
+			if key == flagKey {
+				return flagValue, nil
 			}
 		}
 		return result, nil

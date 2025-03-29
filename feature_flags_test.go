@@ -947,7 +947,7 @@ func TestGetFeatureFlagPayload(t *testing.T) {
 
 func TestGetRemoteConfigPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(fixture("test-remote-config.json")))
+		w.Write([]byte(fixture("test-remote-config.json")))
 	}))
 
 	defer server.Close()
@@ -970,7 +970,6 @@ func TestGetRemoteConfigPayload(t *testing.T) {
 		t.Error("Should match")
 	}
 }
-
 
 func TestFlagWithVariantOverrides(t *testing.T) {
 
@@ -4644,5 +4643,73 @@ func TestFetchFlagsFails(t *testing.T) {
 	actualCalls := atomic.LoadUint32(&called)
 	if actualCalls != expectedCalls {
 		t.Error("Expected to be called", expectedCalls, "times but got", actualCalls)
+	}
+}
+
+func TestFeatureFlagWithFalseVariant(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [{
+					"id": 719,
+					"name": "",
+					"key": "test-flag",
+					"filters": {
+						"groups": [
+							{
+								"properties": [],
+								"rollout_percentage": 100
+							}
+						],
+						"multivariate": {
+							"variants": [
+								{"key": "false", "rollout_percentage": 50},
+								{"key": "true", "rollout_percentage": 50}
+							]
+						}
+					},
+					"deleted": false,
+					"active": true,
+					"is_simple_flag": false,
+					"rollout_percentage": null
+				}]
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test GetFeatureFlag - should return the variant name "false"
+	variant, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "test-id",
+		},
+	)
+	if err != nil {
+		t.Error("Unexpected error:", err)
+	}
+	if variant != "false" {
+		t.Errorf("Expected variant 'false', got: %v", variant)
+	}
+
+	// Test IsFeatureEnabled - should return the variant name "false"
+	// This will fail with the current implementation because it incorrectly converts "false" to false
+	isEnabled, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "test-id",
+		},
+	)
+	if err != nil {
+		t.Error("Unexpected error:", err)
+	}
+	if isEnabled != "false" {
+		t.Errorf("Expected variant 'false', got: %v", isEnabled)
 	}
 }

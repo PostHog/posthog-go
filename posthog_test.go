@@ -842,7 +842,7 @@ func TestIsFeatureEnabled(t *testing.T) {
 				DistinctId: "user789",
 			},
 			mockResponse:   `{"featureFlags": {"test-flag": "true"}}`,
-			expectedResult: true,
+			expectedResult: "true",
 		},
 		{
 			name: "Feature flag is a string 'false'",
@@ -851,7 +851,7 @@ func TestIsFeatureEnabled(t *testing.T) {
 				DistinctId: "user101",
 			},
 			mockResponse:   `{"featureFlags": {"test-flag": "false"}}`,
-			expectedResult: false,
+			expectedResult: "false",
 		},
 		{
 			name: "Feature flag is a variant string",
