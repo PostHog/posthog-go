@@ -19,10 +19,137 @@ type DecideRequestData struct {
 	GroupProperties  map[string]Properties `json:"group_properties"`
 }
 
+// FlagDetail represents a feature flag in v4 format
+type FlagDetail struct {
+	Key      string       `json:"key"`
+	Enabled  bool         `json:"enabled"`
+	Variant  *string      `json:"variant"`
+	Reason   *FlagReason  `json:"reason"`
+	Metadata FlagMetadata `json:"metadata"`
+}
+
+// FlagReason represents why a flag was enabled/disabled
+type FlagReason struct {
+	Code           string `json:"code"`
+	Description    string `json:"description"`
+	ConditionIndex int    `json:"condition_index"`
+}
+
+// FlagMetadata contains additional information about a flag
+type FlagMetadata struct {
+	ID          int     `json:"id"`
+	Version     int     `json:"version"`
+	Payload     *string `json:"payload"`
+	Description *string `json:"description,omitempty"`
+}
+
+// GetValue returns the variant if it exists, otherwise returns the enabled status
+func (f FlagDetail) GetValue() interface{} {
+	if f.Variant != nil {
+		return *f.Variant
+	}
+	return f.Enabled
+}
+
+// NewFlagDetail creates a new FlagDetail from a key, value, and optional payload
+func NewFlagDetail(key string, value interface{}, payload *string) FlagDetail {
+	var variant *string
+	var enabled bool
+
+	switch v := value.(type) {
+	case string:
+		variant = &v
+		enabled = true
+	case bool:
+		enabled = v
+	default:
+		enabled = false
+	}
+
+	return FlagDetail{
+		Key:     key,
+		Enabled: enabled,
+		Variant: variant,
+		Reason:  nil,
+		Metadata: FlagMetadata{
+			Payload: payload,
+		},
+	}
+}
+
+// DecideResponse represents the response from the decide endpoint v3 or v4.
+// It is a normalized super set of the v3 and v4 formats.
 type DecideResponse struct {
+	CommonResponseFields
+
+	// v4 flags format
+	Flags map[string]FlagDetail `json:"flags,omitempty"`
+
+	// v3 legacy fields
 	FeatureFlags        map[string]interface{} `json:"featureFlags"`
 	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
-	QuotaLimited        *[]string              `json:"quota_limited"`
+}
+
+// CommonResponseFields contains fields common to all decide response versions
+type CommonResponseFields struct {
+	QuotaLimited              *[]string `json:"quota_limited"`
+	RequestId                 string    `json:"requestId"`
+	ErrorsWhileComputingFlags bool      `json:"errorsWhileComputingFlags"`
+}
+
+// UnmarshalJSON implements custom unmarshaling to handle both v3 and v4 formats
+func (r *DecideResponse) UnmarshalJSON(data []byte) error {
+	// First try v4 format
+	type V4Response struct {
+		CommonResponseFields
+		Flags map[string]FlagDetail `json:"flags"`
+	}
+
+	var v4 V4Response
+	if err := json.Unmarshal(data, &v4); err == nil && v4.Flags != nil {
+		// It's a v4 response
+		r.Flags = v4.Flags
+		r.CommonResponseFields = v4.CommonResponseFields
+
+		// Calculate v3 format fields from Flags
+		r.FeatureFlags = make(map[string]interface{})
+		r.FeatureFlagPayloads = make(map[string]string)
+		for key, flag := range r.Flags {
+			r.FeatureFlags[key] = flag.GetValue()
+			if flag.Metadata.Payload != nil {
+				r.FeatureFlagPayloads[key] = *flag.Metadata.Payload
+			}
+		}
+		return nil
+	}
+
+	// If not v4, try v3 format
+	type V3Response struct {
+		CommonResponseFields
+		FeatureFlags        map[string]interface{} `json:"featureFlags"`
+		FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+	}
+
+	var v3 V3Response
+	if err := json.Unmarshal(data, &v3); err != nil {
+		return err
+	}
+
+	// Store v3 format data
+	r.FeatureFlags = v3.FeatureFlags
+	r.FeatureFlagPayloads = v3.FeatureFlagPayloads
+	r.CommonResponseFields = v3.CommonResponseFields
+
+	// Construct v4 format from v3 data
+	r.Flags = make(map[string]FlagDetail)
+	for key, value := range v3.FeatureFlags {
+		var payloadPtr *string
+		if payload, ok := v3.FeatureFlagPayloads[key]; ok {
+			payloadPtr = &payload
+		}
+		r.Flags[key] = NewFlagDetail(key, value, payloadPtr)
+	}
+	return nil
 }
 
 // decider defines the interface for making decide requests
@@ -66,7 +193,8 @@ func (d *decideClient) makeDecideRequest(distinctId string, groups Groups, perso
 		return nil, fmt.Errorf("unable to marshal decide endpoint request data: %v", err)
 	}
 
-	decideEndpoint := "decide/?v=3"
+	// Try v4 endpoint first
+	decideEndpoint := "decide/?v=4"
 	url, err := url.Parse(d.endpoint + "/" + decideEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("creating url: %v", err)
