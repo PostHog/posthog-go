@@ -35,6 +35,8 @@ type FeatureFlagsPoller struct {
 	mutex          sync.RWMutex
 	nextPollTick   func() time.Duration
 	flagTimeout    time.Duration
+	client         *client
+	decider        decider
 }
 
 type FeatureFlag struct {
@@ -126,9 +128,22 @@ func newFeatureFlagsPoller(
 	nextPollTick func() time.Duration,
 	flagTimeout time.Duration,
 ) *FeatureFlagsPoller {
-
 	if nextPollTick == nil {
 		nextPollTick = func() time.Duration { return pollingInterval }
+	}
+
+	client := &client{
+		Config: Config{
+			PersonalApiKey:            personalApiKey,
+			Endpoint:                  endpoint,
+			FeatureFlagRequestTimeout: flagTimeout,
+		},
+		key:                             projectApiKey,
+		msgs:                            make(chan APIMessage, 100),
+		quit:                            make(chan struct{}),
+		shutdown:                        make(chan struct{}),
+		http:                            httpClient,
+		distinctIdsFeatureFlagsReported: newSizeLimitedMap(SIZE_DEFAULT),
 	}
 
 	poller := FeatureFlagsPoller{
@@ -143,6 +158,8 @@ func newFeatureFlagsPoller(
 		mutex:          sync.RWMutex{},
 		nextPollTick:   nextPollTick,
 		flagTimeout:    flagTimeout,
+		client:         client,
+		decider:        newDecideClient(projectApiKey, endpoint, httpClient, flagTimeout, errorf),
 	}
 
 	go poller.run()
@@ -170,6 +187,9 @@ func (poller *FeatureFlagsPoller) run() {
 	}
 }
 
+// fetchNewFeatureFlags fetches the latest feature flag definitions from the PostHog API
+// These are used for local evaluation of feature flags and should not be confused with
+// the feature flags fetched from the decide API.
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
@@ -339,12 +359,18 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	}
 
 	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
-		result, err := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		decideResponse, err := poller.getFeatureFlagVariants(
+			flagConfig.DistinctId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+		)
 
 		if err != nil {
 			return response, err
-		} else {
-			for k, v := range result.FeatureFlags {
+		}
+		if decideResponse != nil {
+			for k, v := range decideResponse.FeatureFlags {
 				response[k] = v
 			}
 		}
@@ -928,59 +954,24 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 	poller.shutdown <- true
 }
 
+// getFeatureFlagVariants is a helper function to get the feature flag variants for
+// a given distinctId, groups, personProperties, and groupProperties.
+// This makes a request to the decide endpoint and returns the response.
+// This is used in fallback scenarios where we can't compute the flag locally.
 func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error) {
-	errorMessage := "Failed when getting flag variants"
-	requestDataBytes, err := json.Marshal(DecideRequestData{
-		ApiKey:           poller.projectApiKey,
-		DistinctId:       distinctId,
-		Groups:           groups,
-		PersonProperties: personProperties,
-		GroupProperties:  groupProperties,
-	})
-	headers := [][2]string{{"Authorization", "Bearer " + poller.personalApiKey + ""}}
-	if err != nil {
-		errorMessage = "unable to marshal decide endpoint request data"
-		poller.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
-	}
-	res, cancel, err := poller.decide(requestDataBytes, headers)
-	defer cancel()
-	if err != nil || res.StatusCode != http.StatusOK {
-		errorMessage = "Error calling /decide/"
-		if err != nil {
-			errorMessage += " - " + err.Error()
-		}
-		poller.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
-	}
-	resBody, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		errorMessage = "Error reading response from /decide/"
-		poller.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
-	}
-	defer res.Body.Close()
-	decideResponse := DecideResponse{}
-	err = json.Unmarshal([]byte(resBody), &decideResponse)
-	if err != nil {
-		errorMessage = "Error parsing response from /decide/"
-		poller.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
-	}
-
-	return &decideResponse, nil
+	return poller.decider.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
-	featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	decideResponse, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
 
 	if variantErr != nil {
 		return false, variantErr
 	}
 
-	for flagKey, flagValue := range featureFlagVariants.FeatureFlags {
+	for flagKey, flagValue := range decideResponse.FeatureFlags {
 		if key == flagKey {
 			return flagValue, nil
 		}
@@ -989,12 +980,14 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	featureFlagVariants, err := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	decideResponse, err := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
 	if err != nil {
 		return "", err
 	}
-
-	return featureFlagVariants.FeatureFlagPayloads[key], nil
+	if decideResponse != nil {
+		return decideResponse.FeatureFlagPayloads[key], nil
+	}
+	return "", nil
 }
 
 func getSafeProp[T any](properties map[string]any, key string) T {
