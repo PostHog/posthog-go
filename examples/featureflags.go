@@ -8,13 +8,13 @@ import (
 	"github.com/posthog/posthog-go"
 )
 
-func TestIsFeatureEnabled() {
-	client, _ := posthog.NewWithConfig("phc_36WfBWNJEQcYotMZ7Ui7EWzqKLbIo2LWJFG5fIg1EER", posthog.Config{
+func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
+	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            true,
-		PersonalApiKey:                     "phx_DvugINPCOSM3Ko929TaeywnUlRC5FeF4X7KV60IgyXWGTLw",
-		Endpoint:                           "http://localhost:8000",
+		PersonalApiKey:                     personalAPIKey,
+		Endpoint:                           endpoint,
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,
 	})

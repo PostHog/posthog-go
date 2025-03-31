@@ -7,12 +7,12 @@ import (
 	"github.com/posthog/posthog-go"
 )
 
-func TestCapture() {
-	// Tests against "Testing" project in app.posthog.com
-	client, _ := posthog.NewWithConfig("phc_X8B6bhR1QgQKP1WdpFLN82LxLxgZ7WPXDgJyRyvIpib", posthog.Config{
+func TestCapture(projectAPIKey, endpoint string) {
+	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:  30 * time.Second,
 		BatchSize: 100,
 		Verbose:   true,
+		Endpoint:  endpoint,
 	})
 	defer client.Close()
 
@@ -42,12 +42,13 @@ func TestCapture() {
 	}
 }
 
-func TestCaptureWithSendFeatureFlagOption() {
-	client, _ := posthog.NewWithConfig("phc_X8B6bhR1QgQKP1WdpFLN82LxLxgZ7WPXDgJyRyvIpib", posthog.Config{
+func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint string) {
+	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:       30 * time.Second,
 		BatchSize:      100,
 		Verbose:        true,
-		PersonalApiKey: "a secret key",
+		PersonalApiKey: personalAPIKey,
+		Endpoint:       endpoint,
 	})
 	defer client.Close()
 
