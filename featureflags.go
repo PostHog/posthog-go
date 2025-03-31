@@ -35,7 +35,6 @@ type FeatureFlagsPoller struct {
 	mutex          sync.RWMutex
 	nextPollTick   func() time.Duration
 	flagTimeout    time.Duration
-	client         *client
 	decider        decider
 }
 
@@ -132,20 +131,6 @@ func newFeatureFlagsPoller(
 		nextPollTick = func() time.Duration { return pollingInterval }
 	}
 
-	client := &client{
-		Config: Config{
-			PersonalApiKey:            personalApiKey,
-			Endpoint:                  endpoint,
-			FeatureFlagRequestTimeout: flagTimeout,
-		},
-		key:                             projectApiKey,
-		msgs:                            make(chan APIMessage, 100),
-		quit:                            make(chan struct{}),
-		shutdown:                        make(chan struct{}),
-		http:                            httpClient,
-		distinctIdsFeatureFlagsReported: newSizeLimitedMap(SIZE_DEFAULT),
-	}
-
 	poller := FeatureFlagsPoller{
 		loaded:         make(chan bool),
 		shutdown:       make(chan bool),
@@ -158,7 +143,6 @@ func newFeatureFlagsPoller(
 		mutex:          sync.RWMutex{},
 		nextPollTick:   nextPollTick,
 		flagTimeout:    flagTimeout,
-		client:         client,
 		decider:        newDecideClient(projectApiKey, endpoint, httpClient, flagTimeout, errorf),
 	}
 
