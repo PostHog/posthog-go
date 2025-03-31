@@ -287,12 +287,6 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, e
 		return nil, err
 	}
 
-	if result == "false" {
-		result = false
-	} else if result == "true" {
-		result = true
-	}
-
 	return result, nil
 }
 
