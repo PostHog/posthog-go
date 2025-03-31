@@ -102,6 +102,9 @@ make dependencies
 
 # Run tests and build
 make build
+
+# Just run tests
+make test
 ```
 
 ## Testing Locally
