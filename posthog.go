@@ -143,6 +143,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.DefaultFeatureFlagsPollingInterval,
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
+			c.decider,
 		)
 	}
 

@@ -126,6 +126,7 @@ func newFeatureFlagsPoller(
 	pollingInterval time.Duration,
 	nextPollTick func() time.Duration,
 	flagTimeout time.Duration,
+	decider decider,
 ) *FeatureFlagsPoller {
 	if nextPollTick == nil {
 		nextPollTick = func() time.Duration { return pollingInterval }
@@ -143,7 +144,7 @@ func newFeatureFlagsPoller(
 		mutex:          sync.RWMutex{},
 		nextPollTick:   nextPollTick,
 		flagTimeout:    flagTimeout,
-		decider:        newDecideClient(projectApiKey, endpoint, httpClient, flagTimeout, errorf),
+		decider:        decider,
 	}
 
 	go poller.run()
