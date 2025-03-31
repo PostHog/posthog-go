@@ -4,14 +4,16 @@ Please see the main [PostHog docs](https://posthog.com/docs).
 
 Specifically, the [Go integration](https://posthog.com/docs/integrations/go-integration) details.
 
-# Quickstart
+## Quickstart
 
 Install posthog to your gopath
+
 ```bash
 $ go get github.com/posthog/posthog-go
 ```
 
 Go 🦔!
+
 ```go
 package main
 
@@ -86,7 +88,23 @@ func main() {
         // Do something differently for this user
     }
 }
+```
 
+## Development
+
+Make sure you have Go installed (macOS: `brew install go`, Linx / Windows: https://go.dev/doc/install).
+
+To build the project:
+
+```bash
+# Install dependencies
+make dependencies
+
+# Run tests and build
+make build
+
+# Just run tests
+make test
 ```
 
 ## Testing Locally
@@ -104,6 +122,49 @@ require github.com/google/uuid v1.3.0 // indirect
 
 replace github.com/posthog/posthog-go => /path-to-your-local/posthog-go
 ```
+
+## Examples
+
+Check out the [examples](examples/README.md) for more detailed examples of how to use the PostHog Go client.
+
+## Running the examples
+
+The examples demonstrate different features of the PostHog Go client. To run all examples:
+
+```bash
+# Set your PostHog API keys and endpoint (optional)
+export POSTHOG_PROJECT_API_KEY="your-project-api-key"
+export POSTHOG_PERSONAL_API_KEY="your-personal-api-key"
+export POSTHOG_ENDPOINT="https://app.posthog.com"  # Optional, defaults to http://localhost:8000
+
+# Run all examples
+go run examples/*.go
+```
+
+This will run:
+- Feature flags example
+- Capture events example
+- Capture events with feature flag options example
+
+### Prerequisites
+
+Before running the examples, you'll need to:
+
+1. Have a PostHog instance running (default: http://localhost:8000)
+   - You can modify the endpoint by setting the `POSTHOG_ENDPOINT` environment variable
+   - If not set, it defaults to "http://localhost:8000"
+
+2. Set up the following feature flags in your PostHog instance:
+   - `multivariate-test` (a multivariate flag)
+   - `simple-test` (a simple boolean flag)
+   - `multivariate-simple-test` (a multivariate flag)
+   - `my_secret_flag_value` (a remote config flag with string payload)
+   - `my_secret_flag_json_object_value` (a remote config flag with JSON object payload)
+   - `my_secret_flag_json_array_value` (a remote config flag with JSON array payload)
+
+3. Set your PostHog API keys as environment variables:
+   - `POSTHOG_PROJECT_API_KEY`: Your project API key (starts with `phc_...`)
+   - `POSTHOG_PERSONAL_API_KEY`: Your personal API key (starts with `phx_...`)
 
 ## Questions?
 
