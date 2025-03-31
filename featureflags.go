@@ -95,20 +95,6 @@ type FeatureFlagsResponse struct {
 	Cohorts          map[string]PropertyGroup `json:"cohorts"`
 }
 
-type DecideRequestData struct {
-	ApiKey           string                `json:"api_key"`
-	DistinctId       string                `json:"distinct_id"`
-	Groups           Groups                `json:"groups"`
-	PersonProperties Properties            `json:"person_properties"`
-	GroupProperties  map[string]Properties `json:"group_properties"`
-}
-
-type DecideResponse struct {
-	FeatureFlags        map[string]interface{} `json:"featureFlags"`
-	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
-	QuotaLimited        *[]string              `json:"quota_limited"`
-}
-
 type InconclusiveMatchError struct {
 	msg string
 }

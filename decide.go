@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+type DecideRequestData struct {
+	ApiKey           string                `json:"api_key"`
+	DistinctId       string                `json:"distinct_id"`
+	Groups           Groups                `json:"groups"`
+	PersonProperties Properties            `json:"person_properties"`
+	GroupProperties  map[string]Properties `json:"group_properties"`
+}
+
+type DecideResponse struct {
+	FeatureFlags        map[string]interface{} `json:"featureFlags"`
+	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+	QuotaLimited        *[]string              `json:"quota_limited"`
+}
+
 // decider defines the interface for making decide requests
 type decider interface {
 	makeDecideRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error)
