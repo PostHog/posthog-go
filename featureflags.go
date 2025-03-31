@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -202,7 +202,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 
 	defer res.Body.Close()
-	resBody, err := ioutil.ReadAll(res.Body)
+	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		poller.Errorf("Unable to fetch feature flags: %s", err)
 		return

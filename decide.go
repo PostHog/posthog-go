@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -81,7 +81,7 @@ func (d *decideClient) makeDecideRequest(distinctId string, groups Groups, perso
 		return nil, fmt.Errorf("unexpected status code from /decide/: %d", res.StatusCode)
 	}
 
-	resBody, err := ioutil.ReadAll(res.Body)
+	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, fmt.Errorf("error reading response from /decide/: %v", err)
 	}
