@@ -335,6 +335,8 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 
 	var flagValue interface{}
 	var err error
+	var requestId *string
+	var flagDetail *FlagDetail
 
 	if c.featureFlagsPoller != nil {
 		// get feature flag from the poller, which uses the personal api key
@@ -343,7 +345,11 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	} else {
 		// if there's no poller, get the feature flag from the decide endpoint
 		c.debugf("getting feature flag from decide endpoint")
-		flagValue, _, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagValue, requestId, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if f, ok := flagValue.(FlagDetail); ok {
+			flagValue = f.GetValue()
+			flagDetail = &f
+		}
 	}
 
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
@@ -351,6 +357,18 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue).
 			Set("$feature_flag_errored", err != nil)
+
+		if requestId != nil {
+			properties.Set("$feature_flag_request_id", *requestId)
+		}
+
+		if flagDetail != nil {
+			properties.Set("$feature_flag_version", flagDetail.Metadata.Version)
+			properties.Set("$feature_flag_id", flagDetail.Metadata.ID)
+			if flagDetail.Reason != nil {
+				properties.Set("$feature_flag_reason", flagDetail.Reason.Description)
+			}
+		}
 
 		c.Enqueue(Capture{
 			DistinctId: flagConfig.DistinctId,
@@ -711,7 +729,7 @@ func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups 
 	}
 
 	if flagDetail, ok := decideResponse.Flags[key]; ok {
-		return flagDetail.GetValue(), requestId, nil
+		return flagDetail, requestId, nil
 	}
 
 	return false, requestId, nil
