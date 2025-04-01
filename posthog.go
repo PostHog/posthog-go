@@ -343,7 +343,7 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	} else {
 		// if there's no poller, get the feature flag from the decide endpoint
 		c.debugf("getting feature flag from decide endpoint")
-		flagValue, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagValue, _, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
@@ -692,21 +692,27 @@ func (c *client) isFeatureFlagsQuotaLimited(decideResponse *DecideResponse) bool
 	return false
 }
 
-func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, *string, error) {
 	decideResponse, err := c.decider.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
+
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	if decideResponse == nil {
+		return nil, nil, nil // Should never happen, but just in case. Also helps with type inference.
+	}
+	var requestId = &decideResponse.RequestId
 
 	if c.isFeatureFlagsQuotaLimited(decideResponse) {
-		return false, nil
+		return false, requestId, nil
 	}
 
-	if value, ok := decideResponse.FeatureFlags[key]; ok {
-		return value, nil
+	if flagDetail, ok := decideResponse.Flags[key]; ok {
+		return flagDetail.GetValue(), requestId, nil
 	}
 
-	return false, nil
+	return false, requestId, nil
 }
 
 func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
