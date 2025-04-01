@@ -39,7 +39,6 @@ type FeatureFlagsPoller struct {
 
 type FeatureFlag struct {
 	Key                        string `json:"key"`
-	IsSimpleFlag               bool   `json:"is_simple_flag"`
 	RolloutPercentage          *uint8 `json:"rollout_percentage"`
 	Active                     bool   `json:"active"`
 	Filters                    Filter `json:"filters"`
@@ -834,16 +833,6 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 	return false
 }
 
-func (poller *FeatureFlagsPoller) isSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
-	isEnabled, err := checkIfSimpleFlagEnabled(key, distinctId, rolloutPercentage)
-	if err != nil {
-		errMessage := "Error converting string to int"
-		poller.Errorf(errMessage)
-		return false, errors.New(errMessage)
-	}
-	return isEnabled, nil
-}
-
 // extracted as a regular func for testing purposes
 func checkIfSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
 	val, err := _hash(key, distinctId, "")
@@ -985,35 +974,16 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
-	if featureFlag.IsSimpleFlag {
+	featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
 
-		// json.Unmarshal will convert JSON `null` to a nullish value for each type
-		// which is 0 for uint. However, our feature flags should have rolloutPercentage == 100
-		// if it is set to `null`. Having rollout percentage be a pointer and deferencing it
-		// here allows its value to be `nil` following json.Unmarhsal, so we can appropriately
-		// set it to 100
-		rolloutPercentage := uint8(100)
-		if featureFlag.RolloutPercentage != nil {
-			rolloutPercentage = *featureFlag.RolloutPercentage
-		}
-		var err error
-		result, err = poller.isSimpleFlagEnabled(key, distinctId, rolloutPercentage)
-		if err != nil {
-			return false, err
-		}
-	} else {
-		featureFlagVariants, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	if variantErr != nil {
+		return false, variantErr
+	}
 
-		if variantErr != nil {
-			return false, variantErr
+	for flagKey, flagValue := range featureFlagVariants.FeatureFlags {
+		if key == flagKey {
+			return flagValue, nil
 		}
-
-		for flagKey, flagValue := range featureFlagVariants.FeatureFlags {
-			if key == flagKey {
-				return flagValue, nil
-			}
-		}
-		return result, nil
 	}
 	return result, nil
 }
