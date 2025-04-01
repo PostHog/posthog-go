@@ -347,14 +347,16 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	}
 
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
+		var properties = NewProperties().
+			Set("$feature_flag", flagConfig.Key).
+			Set("$feature_flag_response", flagValue).
+			Set("$feature_flag_errored", err != nil)
+
 		c.Enqueue(Capture{
 			DistinctId: flagConfig.DistinctId,
 			Event:      "$feature_flag_called",
-			Properties: NewProperties().
-				Set("$feature_flag", flagConfig.Key).
-				Set("$feature_flag_response", flagValue).
-				Set("$feature_flag_errored", err != nil),
-			Groups: flagConfig.Groups,
+			Properties: properties,
+			Groups:     flagConfig.Groups,
 		})
 		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
 	}
