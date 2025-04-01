@@ -865,17 +865,6 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	return poller.featureFlags, nil
 }
 
-func (poller *FeatureFlagsPoller) decide(requestData []byte, headers [][2]string) (*http.Response, context.CancelFunc, error) {
-	decideEndpoint := "decide/?v=3"
-
-	url, err := url.Parse(poller.Endpoint + "/" + decideEndpoint + "")
-	if err != nil {
-		poller.Errorf("creating url - %s", err)
-	}
-
-	return poller.request("POST", url, requestData, headers, poller.flagTimeout)
-}
-
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, context.CancelFunc, error) {
 	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
 
