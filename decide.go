@@ -234,5 +234,9 @@ func (d *decideClient) makeDecideRequest(distinctId string, groups Groups, perso
 		return nil, fmt.Errorf("error parsing response from /decide/: %v", err)
 	}
 
+	if decideResponse.ErrorsWhileComputingFlags {
+		d.errorf("error while computing feature flags, some flags may be missing or incorrect. Learn more at https://posthog.com/docs/feature-flags/best-practices")
+	}
+
 	return &decideResponse, nil
 }
