@@ -142,6 +142,7 @@ go run examples/*.go
 ```
 
 This will run:
+
 - Feature flags example
 - Capture events example
 - Capture events with feature flag options example
@@ -165,6 +166,23 @@ Before running the examples, you'll need to:
 3. Set your PostHog API keys as environment variables:
    - `POSTHOG_PROJECT_API_KEY`: Your project API key (starts with `phc_...`)
    - `POSTHOG_PERSONAL_API_KEY`: Your personal API key (starts with `phx_...`)
+
+## Releasing
+
+To release a new version of the PostHog Go client, follow these steps:
+
+1. Update the version in the `go.mod` file
+2. Update the changelog in `CHANGELOG.md`
+3. Once your changes are merged into main, create a new tag with the new version
+
+```bash
+git tag v1.4.7
+git push --tags
+```
+
+4. [create a new release on GitHub](https://github.com/PostHog/posthog-go/releases/new).
+
+Releases are installed directly from GitHub.
 
 ## Questions?
 
