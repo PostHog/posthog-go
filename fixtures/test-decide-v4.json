@@ -1,0 +1,173 @@
+{
+  "config": {
+    "enable_collect_everything": true
+  },
+  "editorParams": {},
+  "isAuthenticated": true,
+  "supportedCompression": ["gzip", "gzip-js", "lz64"],
+  "toolbarParams": {},
+  "flags": {
+    "enabled-flag": {
+      "key": "enabled-flag",
+      "enabled": true,
+      "variant": null,
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 3",
+        "condition_index": 2
+      },
+      "metadata": {
+        "id": 1,
+        "version": 23,
+        "payload": "{\"foo\": 1}",
+        "description": "This is an enabled flag"  
+      }
+    },
+    "group-flag": {
+      "key": "group-flag",
+      "enabled": true,
+      "variant": null,
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 1",
+        "condition_index": 0
+      },
+      "metadata": {
+        "id": 2,
+        "version": 1,
+        "payload": null
+      }
+    },
+    "disabled-flag": {
+      "key": "disabled-flag",
+      "enabled": false,
+      "variant": null,
+      "reason": {
+        "code": "no_condition_match",
+        "description": "No matching condition set",
+        "condition_index": 0
+      },
+      "metadata": {
+        "id": 3,
+        "version": 12,
+        "payload": null
+      }
+    },
+    "multi-variate-flag": {
+      "key": "multi-variate-flag",
+      "enabled": true,
+      "variant": "hello",
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 2",
+        "condition_index": 1
+      },
+      "metadata": {
+        "id": 4,
+        "version": 42,
+        "payload": "this is the payload"
+      }
+    },
+    "simple-flag": {
+      "key": "simple-flag",
+      "enabled": true,
+      "variant": null,
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 1",
+        "condition_index": 0
+      },
+      "metadata": {
+        "id": 5,
+        "version": 2,
+        "payload": "{\"bar\": 2}"
+      }
+    },
+    "beta-feature": {
+      "key": "beta-feature",
+      "enabled": true,
+      "variant": "decide-fallback-value",
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 1",
+        "condition_index": 0
+      },
+      "metadata": {
+        "id": 6,
+        "version": 4,
+        "payload": "{\"foo\": \"bar\"}"
+      }
+    },
+    "beta-feature2": {
+      "key": "beta-feature2",
+      "enabled": true,
+      "variant": "variant-2",
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 3",
+        "condition_index": 2
+      },
+      "metadata": {
+        "id": 7,
+        "payload": null
+      }
+    },
+    "test-get-feature": {
+      "key": "test-get-feature",
+      "enabled": true,
+      "variant": "variant-1",
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 1",
+        "condition_index": 0
+      },
+      "metadata": {
+        "id": 8,
+        "version": 1,
+        "payload": "this is a string"
+      }
+    },
+    "continuation-flag": {
+      "key": "continuation-flag",
+      "enabled": true,
+      "variant": null,
+      "reason": {
+        "code": "condition_match",
+        "description": "Matched conditions set 1",
+        "condition_index": 0
+      },
+      "metadata": {
+        "id": 9,
+        "version": 9,
+        "payload": "{\"foo\": \"bar\"}"
+      }
+    },
+    "false-flag-2": {
+      "key": "false-flag-2",
+      "enabled": false,
+      "variant": null,
+      "reason": {
+        "code": "no_condition_match",
+        "description": "No matching condition set",
+        "condition_index": 0
+      },
+      "metadata": {
+        "id": 10,
+        "version": 1,
+        "payload": null
+      }
+    }
+  },
+  "sessionRecording": false,
+  "errorsWhileComputingFlags": false,
+  "capturePerformance": false,
+  "autocapture_opt_out": true,
+  "autocaptureExceptions": false,
+  "analytics": { "endpoint": "/i/v0/e/" },
+  "__preview_ingestion_endpoints": true,
+  "elementsChainAsString": true,
+  "surveys": false,
+  "heatmaps": false,
+  "siteApps": [],
+  "requestId": "42853c54-1431-4861-996e-3a548989fa2c"
+}

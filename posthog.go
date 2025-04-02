@@ -335,6 +335,8 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 
 	var flagValue interface{}
 	var err error
+	var requestId *string
+	var flagDetail *FlagDetail
 
 	if c.featureFlagsPoller != nil {
 		// get feature flag from the poller, which uses the personal api key
@@ -343,18 +345,36 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	} else {
 		// if there's no poller, get the feature flag from the decide endpoint
 		c.debugf("getting feature flag from decide endpoint")
-		flagValue, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagValue, requestId, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if f, ok := flagValue.(FlagDetail); ok {
+			flagValue = f.GetValue()
+			flagDetail = &f
+		}
 	}
 
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
+		var properties = NewProperties().
+			Set("$feature_flag", flagConfig.Key).
+			Set("$feature_flag_response", flagValue).
+			Set("$feature_flag_errored", err != nil)
+
+		if requestId != nil {
+			properties.Set("$feature_flag_request_id", *requestId)
+		}
+
+		if flagDetail != nil {
+			properties.Set("$feature_flag_version", flagDetail.Metadata.Version)
+			properties.Set("$feature_flag_id", flagDetail.Metadata.ID)
+			if flagDetail.Reason != nil {
+				properties.Set("$feature_flag_reason", flagDetail.Reason.Description)
+			}
+		}
+
 		c.Enqueue(Capture{
 			DistinctId: flagConfig.DistinctId,
 			Event:      "$feature_flag_called",
-			Properties: NewProperties().
-				Set("$feature_flag", flagConfig.Key).
-				Set("$feature_flag_response", flagValue).
-				Set("$feature_flag_errored", err != nil),
-			Groups: flagConfig.Groups,
+			Properties: properties,
+			Groups:     flagConfig.Groups,
 		})
 		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
 	}
@@ -692,21 +712,27 @@ func (c *client) isFeatureFlagsQuotaLimited(decideResponse *DecideResponse) bool
 	return false
 }
 
-func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, *string, error) {
 	decideResponse, err := c.decider.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
+
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	if decideResponse == nil {
+		return nil, nil, nil // Should never happen, but just in case. Also helps with type inference.
+	}
+	var requestId = &decideResponse.RequestId
 
 	if c.isFeatureFlagsQuotaLimited(decideResponse) {
-		return false, nil
+		return false, requestId, nil
 	}
 
-	if value, ok := decideResponse.FeatureFlags[key]; ok {
-		return value, nil
+	if flagDetail, ok := decideResponse.Flags[key]; ok {
+		return flagDetail, requestId, nil
 	}
 
-	return false, nil
+	return false, requestId, nil
 }
 
 func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
