@@ -45,7 +45,7 @@
       "reason": {
         "code": "no_condition_match",
         "description": "No matching condition set",
-        "condition_index": 0
+        "condition_index": null
       },
       "metadata": {
         "id": 3,
@@ -149,7 +149,7 @@
       "reason": {
         "code": "no_condition_match",
         "description": "No matching condition set",
-        "condition_index": 0
+        "condition_index": null
       },
       "metadata": {
         "id": 10,
