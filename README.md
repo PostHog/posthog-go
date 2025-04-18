@@ -171,7 +171,7 @@ Before running the examples, you'll need to:
 
 To release a new version of the PostHog Go client, follow these steps:
 
-1. Update the version in the `go.mod` file
+1. Update the version in the `version.go` file
 2. Update the changelog in `CHANGELOG.md`
 3. Once your changes are merged into main, create a new tag with the new version
 
