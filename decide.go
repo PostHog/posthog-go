@@ -32,7 +32,7 @@ type FlagDetail struct {
 type FlagReason struct {
 	Code           string `json:"code"`
 	Description    string `json:"description"`
-	ConditionIndex int    `json:"condition_index"`
+	ConditionIndex *int   `json:"condition_index"`
 }
 
 // FlagMetadata contains additional information about a flag
