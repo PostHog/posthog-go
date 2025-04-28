@@ -876,7 +876,7 @@ func TestIsFeatureEnabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/decide/" {
+				if r.URL.Path == "/flags/" {
 					w.WriteHeader(http.StatusOK)
 					w.Write([]byte(tt.mockResponse))
 				} else {
@@ -909,7 +909,7 @@ func TestIsFeatureEnabled(t *testing.T) {
 
 func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
@@ -1004,7 +1004,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 				DistinctId: "user123",
 			},
 			mockResponse:  `{invalid-json}`,
-			expectedError: "error parsing response from /decide/",
+			expectedError: "error parsing response from /flags/",
 		},
 		{
 			name: "Non-200 status code",
@@ -1013,7 +1013,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 				DistinctId: "user123",
 			},
 			mockResponse:  ``,
-			expectedError: "unexpected status code from /decide/: 500",
+			expectedError: "unexpected status code from /flags/: 500",
 		},
 		{
 			name: "With groups and properties",
@@ -1041,8 +1041,8 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Check request method and path
-				if r.Method != "POST" || r.URL.Path != "/decide/" {
-					t.Errorf("Expected POST /decide/, got %s %s", r.Method, r.URL.Path)
+				if r.Method != "POST" || r.URL.Path != "/flags/" {
+					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
 				}
 
 				// Check headers
@@ -1055,14 +1055,14 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 
 				// Check request body
 				body, _ := ioutil.ReadAll(r.Body)
-				var requestData DecideRequestData
+				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {
 					t.Errorf("Expected distinctId %s, got %s", tt.flagConfig.DistinctId, requestData.DistinctId)
 				}
 
 				// Send mock response
-				if tt.expectedError == "unexpected status code from /decide/: 500" {
+				if tt.expectedError == "unexpected status code from /flags/: 500" {
 					w.WriteHeader(http.StatusInternalServerError)
 				} else {
 					w.WriteHeader(http.StatusOK)
@@ -1095,7 +1095,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 
 func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
@@ -1204,7 +1204,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 				DistinctId: "user123",
 			},
 			mockResponse:  `{invalid-json}`,
-			expectedError: "error parsing response from /decide/",
+			expectedError: "error parsing response from /flags/",
 		},
 		{
 			name: "Non-200 status code",
@@ -1213,7 +1213,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 				DistinctId: "user123",
 			},
 			mockResponse:  ``,
-			expectedError: "unexpected status code from /decide/: 500",
+			expectedError: "unexpected status code from /flags/: 500",
 		},
 		{
 			name: "With groups and properties",
@@ -1241,8 +1241,8 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Check request method and path
-				if r.Method != "POST" || r.URL.Path != "/decide/" {
-					t.Errorf("Expected POST /decide/, got %s %s", r.Method, r.URL.Path)
+				if r.Method != "POST" || r.URL.Path != "/flags/" {
+					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
 				}
 
 				// Check headers
@@ -1255,14 +1255,14 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 
 				// Check request body
 				body, _ := ioutil.ReadAll(r.Body)
-				var requestData DecideRequestData
+				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {
 					t.Errorf("Expected distinctId %s, got %s", tt.flagConfig.DistinctId, requestData.DistinctId)
 				}
 
 				// Send mock response
-				if tt.expectedError == "unexpected status code from /decide/: 500" {
+				if tt.expectedError == "unexpected status code from /flags/: 500" {
 					w.WriteHeader(http.StatusInternalServerError)
 				} else {
 					w.WriteHeader(http.StatusOK)
@@ -1335,7 +1335,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 				DistinctId: "user789",
 			},
 			mockResponse:  `{invalid-json}`,
-			expectedError: "error parsing response from /decide/",
+			expectedError: "error parsing response from /flags/",
 		},
 		{
 			name: "Non-200 status code",
@@ -1343,7 +1343,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 				DistinctId: "user101",
 			},
 			mockResponse:  ``,
-			expectedError: "unexpected status code from /decide/: 500",
+			expectedError: "unexpected status code from /flags/: 500",
 		},
 		{
 			name: "With groups and properties",
@@ -1378,8 +1378,8 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Check request method and path
-				if r.Method != "POST" || r.URL.Path != "/decide/" {
-					t.Errorf("Expected POST /decide/, got %s %s", r.Method, r.URL.Path)
+				if r.Method != "POST" || r.URL.Path != "/flags/" {
+					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
 				}
 
 				// Check headers
@@ -1392,14 +1392,14 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 				// Check request body
 				body, _ := ioutil.ReadAll(r.Body)
-				var requestData DecideRequestData
+				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {
 					t.Errorf("Expected distinctId %s, got %s", tt.flagConfig.DistinctId, requestData.DistinctId)
 				}
 
 				// Send mock response
-				if tt.expectedError == "unexpected status code from /decide/: 500" {
+				if tt.expectedError == "unexpected status code from /flags/: 500" {
 					w.WriteHeader(http.StatusInternalServerError)
 				} else {
 					w.WriteHeader(http.StatusOK)
@@ -1433,7 +1433,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
 			t.Fatal("expected local evaluations endpoint to be called")
 		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
@@ -1463,7 +1463,7 @@ func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing.T) {
 	apiCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if apiCalls == 0 && strings.HasPrefix(r.URL.Path, "/decide") {
+		if apiCalls == 0 && strings.HasPrefix(r.URL.Path, "/flags") {
 			t.Fatal("expected local evaluations endpoint to be called first")
 		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			t.Fatal("expected decide endpoint to be called second")
@@ -1539,7 +1539,7 @@ func TestSimpleFlagCalculation(t *testing.T) {
 
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
@@ -1563,7 +1563,7 @@ func TestComplexFlag(t *testing.T) {
 	)
 
 	if checkErr != nil || isEnabled != true {
-		t.Errorf("flag listed in /decide/ response should be marked as enabled")
+		t.Errorf("flag listed in /flags/ response should be marked as enabled")
 	}
 
 	flagValue, valueErr := client.GetFeatureFlag(
@@ -1574,7 +1574,7 @@ func TestComplexFlag(t *testing.T) {
 	)
 
 	if valueErr != nil || flagValue != true {
-		t.Errorf("flag listed in /decide/ response should be true")
+		t.Errorf("flag listed in /flags/ response should be true")
 	}
 
 	payload, valueErr := client.GetFeatureFlagPayload(
@@ -1585,13 +1585,13 @@ func TestComplexFlag(t *testing.T) {
 	)
 
 	if valueErr != nil || payload != "{\"test\": 1}" {
-		t.Errorf(`flag listed in /decide/ response should be "{\"test\": 1}"`)
+		t.Errorf(`flag listed in /flags/ response should be "{\"test\": 1}"`)
 	}
 }
 
 func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
@@ -1615,7 +1615,7 @@ func TestMultiVariateFlag(t *testing.T) {
 	)
 
 	if checkErr != nil || isEnabled == false {
-		t.Errorf("flag listed in /decide/ response should be marked as enabled")
+		t.Errorf("flag listed in /flags/ response should be marked as enabled")
 	}
 
 	flagValue, err := client.GetFeatureFlag(
@@ -1626,7 +1626,7 @@ func TestMultiVariateFlag(t *testing.T) {
 	)
 
 	if err != nil || flagValue != "hello" {
-		t.Errorf("flag listed in /decide/ response should have value 'hello'")
+		t.Errorf("flag listed in /flags/ response should have value 'hello'")
 	}
 
 	payload, err := client.GetFeatureFlagPayload(
@@ -1637,13 +1637,13 @@ func TestMultiVariateFlag(t *testing.T) {
 	)
 
 	if err != nil || payload != "this is the payload" {
-		t.Errorf("flag listed in /decide/ response should have value 'this is the payload'")
+		t.Errorf("flag listed in /flags/ response should have value 'this is the payload'")
 	}
 }
 
 func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
@@ -1667,7 +1667,7 @@ func TestDisabledFlag(t *testing.T) {
 	)
 
 	if checkErr != nil || isEnabled == true {
-		t.Errorf("flag listed in /decide/ response should be marked as disabled")
+		t.Errorf("flag listed in /flags/ response should be marked as disabled")
 	}
 
 	flagValue, err := client.GetFeatureFlag(
@@ -1678,7 +1678,7 @@ func TestDisabledFlag(t *testing.T) {
 	)
 
 	if err != nil || flagValue != false {
-		t.Errorf("flag listed in /decide/ response should have value 'false'")
+		t.Errorf("flag listed in /flags/ response should have value 'false'")
 	}
 
 	payload, err := client.GetFeatureFlagPayload(
@@ -1689,7 +1689,7 @@ func TestDisabledFlag(t *testing.T) {
 	)
 
 	if err != nil || payload != "" {
-		t.Errorf("flag listed in /decide/ response should have value ''")
+		t.Errorf("flag listed in /flags/ response should have value ''")
 	}
 }
 
@@ -1731,9 +1731,9 @@ func TestCaptureSendFlags(t *testing.T) {
 }
 
 func TestFeatureFlagQuotaLimits(t *testing.T) {
-	t.Run("decide endpoint quota limited", func(t *testing.T) {
+	t.Run("flags endpoint quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/decide") {
+			if strings.HasPrefix(r.URL.Path, "/flags") {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{
 					"featureFlags": {"test-flag": true},
@@ -1794,8 +1794,8 @@ func TestFeatureFlagQuotaLimits(t *testing.T) {
 					"detail": "You have exceeded your feature flag request quota",
 					"code": "payment_required"
 				}`))
-			} else if strings.HasPrefix(r.URL.Path, "/decide") {
-				// Mock the decide endpoint as well since it's used as fallback
+			} else if strings.HasPrefix(r.URL.Path, "/flags") {
+				// Mock the flags endpoint as well since it's used as fallback
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{
 					"featureFlags": {},
