@@ -9,11 +9,11 @@ import (
 )
 
 /*
-Tests of the feature flag api against the decide endpoint, no local evaluation.
-This is primarily here to ensure we handle the different versions of the decide
+Tests of the feature flag api against the flags endpoint, no local evaluation.
+This is primarily here to ensure we handle the different versions of the flags
 endpoint correctly.
 */
-func TestDecide(t *testing.T) {
+func TestFlags(t *testing.T) {
 	validateCapturedEvent := func(t *testing.T, client Client) {
 		lastEvent := client.GetLastCapturedEvent()
 
@@ -39,7 +39,7 @@ func TestDecide(t *testing.T) {
 
 	for _, test := range tests {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/decide") {
+			if strings.HasPrefix(r.URL.Path, "/flags") {
 				w.Write([]byte(fixture(test.fixture)))
 			}
 		}))
@@ -156,7 +156,7 @@ func TestDecide(t *testing.T) {
 
 func TestDecideV4(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/decide") {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v4.json")))
 		}
 	}))

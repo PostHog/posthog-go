@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-type DecideRequestData struct {
+type FlagsRequestData struct {
 	ApiKey           string                `json:"api_key"`
 	DistinctId       string                `json:"distinct_id"`
 	Groups           Groups                `json:"groups"`
@@ -77,9 +77,9 @@ func NewFlagDetail(key string, value interface{}, payload *string) FlagDetail {
 	}
 }
 
-// DecideResponse represents the response from the decide endpoint v3 or v4.
-// It is a normalized super set of the v3 and v4 formats.
-type DecideResponse struct {
+// FlagsResponse represents the response from the flags endpoint v1 or v2.
+// It is a normalized super set of the v1 and v2 formats.
+type FlagsResponse struct {
 	CommonResponseFields
 
 	// v4 flags format
@@ -98,7 +98,7 @@ type CommonResponseFields struct {
 }
 
 // UnmarshalJSON implements custom unmarshaling to handle both v3 and v4 formats
-func (r *DecideResponse) UnmarshalJSON(data []byte) error {
+func (r *FlagsResponse) UnmarshalJSON(data []byte) error {
 	// First try v4 format
 	type V4Response struct {
 		CommonResponseFields
@@ -152,13 +152,13 @@ func (r *DecideResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// decider defines the interface for making decide requests
+// decider defines the interface for making flags requests
 type decider interface {
-	makeDecideRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error)
+	makeFlagsRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error)
 }
 
-// decideClient implements the decider interface
-type decideClient struct {
+// flagsClient implements the decider interface
+type flagsClient struct {
 	apiKey                    string
 	endpoint                  string
 	http                      http.Client
@@ -166,9 +166,9 @@ type decideClient struct {
 	errorf                    func(format string, args ...interface{})
 }
 
-// newDecideClient creates a new decideClient
-func newDecideClient(apiKey string, endpoint string, httpClient http.Client, featureFlagRequestTimeout time.Duration, errorf func(format string, args ...interface{})) *decideClient {
-	return &decideClient{
+// newFlagsClient creates a new flagsClient
+func newFlagsClient(apiKey string, endpoint string, httpClient http.Client, featureFlagRequestTimeout time.Duration, errorf func(format string, args ...interface{})) *flagsClient {
+	return &flagsClient{
 		apiKey:                    apiKey,
 		endpoint:                  endpoint,
 		http:                      httpClient,
@@ -177,10 +177,10 @@ func newDecideClient(apiKey string, endpoint string, httpClient http.Client, fea
 	}
 }
 
-// makeDecideRequest makes a request to the decide endpoint and deserializes the response
-// into a DecideResponse struct.
-func (d *decideClient) makeDecideRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error) {
-	requestData := DecideRequestData{
+// makeFlagsRequest makes a request to the flags endpoint and deserializes the response
+// into a FlagsResponse struct.
+func (d *flagsClient) makeFlagsRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
+	requestData := FlagsRequestData{
 		ApiKey:           d.apiKey,
 		DistinctId:       distinctId,
 		Groups:           groups,
@@ -190,12 +190,12 @@ func (d *decideClient) makeDecideRequest(distinctId string, groups Groups, perso
 
 	requestDataBytes, err := json.Marshal(requestData)
 	if err != nil {
-		return nil, fmt.Errorf("unable to marshal decide endpoint request data: %v", err)
+		return nil, fmt.Errorf("unable to marshal flags endpoint request data: %v", err)
 	}
 
-	// Try v4 endpoint first
-	decideEndpoint := "decide/?v=4"
-	url, err := url.Parse(d.endpoint + "/" + decideEndpoint)
+	// Try v2 endpoint first
+	flagsEndpoint := "flags/?v=2"
+	url, err := url.Parse(d.endpoint + "/" + flagsEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("creating url: %v", err)
 	}
@@ -220,23 +220,23 @@ func (d *decideClient) makeDecideRequest(distinctId string, groups Groups, perso
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code from /decide/: %d", res.StatusCode)
+		return nil, fmt.Errorf("unexpected status code from /flags/: %d", res.StatusCode)
 	}
 
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error reading response from /decide/: %v", err)
+		return nil, fmt.Errorf("error reading response from /flags/: %v", err)
 	}
 
-	var decideResponse DecideResponse
-	err = json.Unmarshal(resBody, &decideResponse)
+	var flagsResponse FlagsResponse
+	err = json.Unmarshal(resBody, &flagsResponse)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing response from /decide/: %v", err)
+		return nil, fmt.Errorf("error parsing response from /flags/: %v", err)
 	}
 
-	if decideResponse.ErrorsWhileComputingFlags {
+	if flagsResponse.ErrorsWhileComputingFlags {
 		d.errorf("error while computing feature flags, some flags may be missing or incorrect. Learn more at https://posthog.com/docs/feature-flags/best-practices")
 	}
 
-	return &decideResponse, nil
+	return &flagsResponse, nil
 }

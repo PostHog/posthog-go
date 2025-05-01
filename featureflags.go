@@ -160,7 +160,7 @@ func (poller *FeatureFlagsPoller) run() {
 
 // fetchNewFeatureFlags fetches the latest feature flag definitions from the PostHog API
 // These are used for local evaluation of feature flags and should not be confused with
-// the feature flags fetched from the decide API.
+// the feature flags fetched from the flags API.
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
@@ -330,7 +330,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	}
 
 	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
-		decideResponse, err := poller.getFeatureFlagVariants(
+		flagsResponse, err := poller.getFeatureFlagVariants(
 			flagConfig.DistinctId,
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
@@ -340,8 +340,8 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		if err != nil {
 			return response, err
 		}
-		if decideResponse != nil {
-			for k, v := range decideResponse.FeatureFlags {
+		if flagsResponse != nil {
+			for k, v := range flagsResponse.FeatureFlags {
 				response[k] = v
 			}
 		}
@@ -916,22 +916,22 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 
 // getFeatureFlagVariants is a helper function to get the feature flag variants for
 // a given distinctId, groups, personProperties, and groupProperties.
-// This makes a request to the decide endpoint and returns the response.
+// This makes a request to the flags endpoint and returns the response.
 // This is used in fallback scenarios where we can't compute the flag locally.
-func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*DecideResponse, error) {
-	return poller.decider.makeDecideRequest(distinctId, groups, personProperties, groupProperties)
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
+	return poller.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties)
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
-	decideResponse, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
 
 	if variantErr != nil {
 		return false, variantErr
 	}
 
-	for flagKey, flagValue := range decideResponse.FeatureFlags {
+	for flagKey, flagValue := range flagsResponse.FeatureFlags {
 		if key == flagKey {
 			return flagValue, nil
 		}
@@ -940,12 +940,12 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag,
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	decideResponse, err := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
 	if err != nil {
 		return "", err
 	}
-	if decideResponse != nil {
-		return decideResponse.FeatureFlagPayloads[key], nil
+	if flagsResponse != nil {
+		return flagsResponse.FeatureFlagPayloads[key], nil
 	}
 	return "", nil
 }
