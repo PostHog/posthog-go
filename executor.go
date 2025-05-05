@@ -13,7 +13,7 @@ func newExecutor(cap int) *executor {
 	return e
 }
 
-func (e *executor) do(task func()) (ok bool) {
+func (e *executor) do(task func()) bool {
 	select {
 	case e.queue <- task:
 		// task is enqueued successfully
