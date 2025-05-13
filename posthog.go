@@ -16,7 +16,7 @@ import (
 )
 
 const unimplementedError = "not implemented"
-const CACHE_DEFAULT_SIZE = 200_000
+const CACHE_DEFAULT_SIZE = 300_000
 
 // This interface is the main API exposed by the posthog package.
 // Values that satsify this interface are returned by the client constructors
