@@ -1,3 +1,7 @@
+## 1.5.3
+
+* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.2...v1.5.3)
+
 ## 1.5.2
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.1...v1.5.2)
