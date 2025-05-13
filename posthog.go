@@ -11,10 +11,12 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/golang-lru/v2"
 )
 
 const unimplementedError = "not implemented"
-const SIZE_DEFAULT = 50_000
+const CACHE_DEFAULT_SIZE = 300_000
 
 // This interface is the main API exposed by the posthog package.
 // Values that satsify this interface are returned by the client constructors
@@ -90,7 +92,7 @@ type client struct {
 	// A background poller for fetching feature flags
 	featureFlagsPoller *FeatureFlagsPoller
 
-	distinctIdsFeatureFlagsReported *SizeLimitedMap
+	distinctIdsFeatureFlagsReported *lru.Cache[flagUser, struct{}]
 
 	// Last captured event
 	lastCapturedEvent *Capture
@@ -99,6 +101,11 @@ type client struct {
 
 	// Decider for feature flag methods
 	decider decider
+}
+
+type flagUser struct {
+	distinctID string
+	flagKey    string
 }
 
 // Instantiate a new client that uses the write key passed as first argument to
@@ -121,6 +128,10 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	config = makeConfig(config)
+	reportedCache, err := lru.New[flagUser, struct{}](CACHE_DEFAULT_SIZE)
+	if err != nil && config.Logger != nil {
+		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
+	}
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
@@ -128,7 +139,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
 		http:                            makeHttpClient(config.Transport),
-		distinctIdsFeatureFlagsReported: newSizeLimitedMap(SIZE_DEFAULT),
+		distinctIdsFeatureFlagsReported: reportedCache,
 	}
 
 	c.decider = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Errorf)
@@ -352,7 +363,8 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 		}
 	}
 
-	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.contains(flagConfig.DistinctId, flagConfig.Key) {
+	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key}
+	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
 		var properties = NewProperties().
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue).
@@ -370,13 +382,14 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 			}
 		}
 
-		c.Enqueue(Capture{
+		if c.Enqueue(Capture{
 			DistinctId: flagConfig.DistinctId,
 			Event:      "$feature_flag_called",
 			Properties: properties,
 			Groups:     flagConfig.Groups,
-		})
-		c.distinctIdsFeatureFlagsReported.add(flagConfig.DistinctId, flagConfig.Key)
+		}) == nil {
+			c.distinctIdsFeatureFlagsReported.Add(cacheKey, struct{}{})
+		}
 	}
 
 	return flagValue, err
