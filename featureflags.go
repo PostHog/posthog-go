@@ -511,7 +511,7 @@ func isConditionMatch(
 			}
 		}
 
-		if condition.RolloutPercentage != nil {
+		if condition.RolloutPercentage == nil {
 			return true, nil
 		}
 	}
