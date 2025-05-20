@@ -1526,13 +1526,13 @@ func TestSimpleFlagOld(t *testing.T) {
 }
 
 func TestSimpleFlagCalculation(t *testing.T) {
-	isEnabled, err := checkIfSimpleFlagEnabled("a", "b", 42)
-	if err != nil || !isEnabled {
+	isEnabled := checkIfSimpleFlagEnabled("a", "b", 42)
+	if !isEnabled {
 		t.Errorf("calculation for a.b should succeed and be true")
 	}
 
-	isEnabled, err = checkIfSimpleFlagEnabled("a", "b", 40)
-	if err != nil || isEnabled {
+	isEnabled = checkIfSimpleFlagEnabled("a", "b", 40)
+	if isEnabled {
 		t.Errorf("calculation for a.b should succeed and be false")
 	}
 }
