@@ -490,27 +490,20 @@ func isConditionMatch(
 	cohorts map[string]PropertyGroup,
 ) (bool, error) {
 	if len(condition.Properties) > 0 {
+		var (
+			isMatch bool
+			err     error
+		)
 		for _, prop := range condition.Properties {
-			var isMatch bool
-			var err error
-
 			if prop.Type == "cohort" {
 				isMatch, err = matchCohort(prop, properties, cohorts)
 			} else {
 				isMatch, err = matchProperty(prop, properties)
 			}
 
-			if err != nil {
+			if err != nil || !isMatch {
 				return false, err
 			}
-
-			if !isMatch {
-				return false, nil
-			}
-		}
-
-		if condition.RolloutPercentage != nil {
-			return true, nil
 		}
 	}
 
@@ -830,7 +823,8 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 
 // extracted as a regular func for testing purposes
 func checkIfSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) bool {
-	return calculateHash(key, distinctId, "") <= float64(rolloutPercentage)/100
+	hash := calculateHash(key, distinctId, "")
+	return hash <= float64(rolloutPercentage)/100
 }
 
 func calculateHash(key string, distinctId string, salt string) float64 {

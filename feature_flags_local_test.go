@@ -10,9 +10,10 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"testing"
 	"time"
 
-	"testing"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMatchPropertyValue(t *testing.T) {
@@ -422,36 +423,32 @@ func TestComplexDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
+	require.NoError(t, err)
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, err := client.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "complex-flag",
 			DistinctId:       "some-distinct-id",
 			PersonProperties: NewProperties().Set("region", "USA").Set("name", "Aloha"),
 		},
 	)
+	require.NoError(t, err)
+	require.Equal(t, true, isMatch)
 
-	if isMatch != true {
-		t.Error("Should match")
-	}
-
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, err = client.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "complex-flag",
-			DistinctId:       "some-distinct-id_within_rollou",
+			DistinctId:       "some-distinct-id_within_rollout_3",
 			PersonProperties: NewProperties().Set("region", "USA").Set("email", "a@b.com"),
 		},
 	)
-
-	if isMatch != true {
-		t.Error("Should match")
-	}
-
+	require.NoError(t, err)
+	require.Equal(t, true, isMatch)
 }
 
 func TestFallbackToDecide(t *testing.T) {
