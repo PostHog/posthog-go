@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestHash(t *testing.T) {
+func TestCalculateHash(t *testing.T) {
 	for _, tt := range []struct {
 		ident string
 		want  float64
