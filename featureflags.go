@@ -822,12 +822,12 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 }
 
 // extracted as a regular func for testing purposes
-func checkIfSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) bool {
+func checkIfSimpleFlagEnabled(key, distinctId string, rolloutPercentage uint8) bool {
 	hash := calculateHash(key, distinctId, "")
 	return hash <= float64(rolloutPercentage)/100
 }
 
-func calculateHash(key string, distinctId string, salt string) float64 {
+func calculateHash(key, distinctId, salt string) float64 {
 	hash := sha1.New()
 	hash.Write([]byte(key + "." + distinctId + salt))
 	digest := hash.Sum(nil)
