@@ -10,9 +10,10 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"testing"
 	"time"
 
-	"testing"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMatchPropertyValue(t *testing.T) {
@@ -422,36 +423,32 @@ func TestComplexDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
+	require.NoError(t, err)
 	defer client.Close()
 
-	isMatch, _ := client.IsFeatureEnabled(
+	isMatch, err := client.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "complex-flag",
 			DistinctId:       "some-distinct-id",
 			PersonProperties: NewProperties().Set("region", "USA").Set("name", "Aloha"),
 		},
 	)
+	require.NoError(t, err)
+	require.Equal(t, true, isMatch)
 
-	if isMatch != true {
-		t.Error("Should match")
-	}
-
-	isMatch, _ = client.IsFeatureEnabled(
+	isMatch, err = client.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:              "complex-flag",
-			DistinctId:       "some-distinct-id_within_rollou",
+			DistinctId:       "some-distinct-id_within_rollout_3",
 			PersonProperties: NewProperties().Set("region", "USA").Set("email", "a@b.com"),
 		},
 	)
-
-	if isMatch != true {
-		t.Error("Should match")
-	}
-
+	require.NoError(t, err)
+	require.Equal(t, true, isMatch)
 }
 
 func TestFallbackToDecide(t *testing.T) {
@@ -4484,73 +4481,55 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 		},
 	)
 
-	if err == nil {
-		t.Error("Expected error")
-	}
+	require.Error(t, err)
 	if !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Error("Expected context deadline exceeded error")
 	}
-	if isMatch != nil {
-		t.Error("Flag shouldn't match")
-	}
+	require.Nil(t, isMatch)
 
 	// get all flags with no local evaluation possible
 	variants, err := client.GetAllFlags(
 		FeatureFlagPayloadNoKey{
 			DistinctId: "-",
-			Groups:     Groups{"company": "posthog"},
+			Groups:     Groups{"company": "posthog1"},
 		},
 	)
 
-	if err == nil {
-		t.Error("Expected error")
-	}
+	require.Error(t, err)
 	if !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Error("Expected context deadline exceeded error")
 	}
 
-	if variants == nil || len(variants) != 0 {
-		t.Error("Flag shouldn't match")
-	}
+	require.Empty(t, variants)
 
 	// get all flags with partial local evaluation possible
 	variants, err = client.GetAllFlags(
 		FeatureFlagPayloadNoKey{
 			DistinctId:       "-",
-			Groups:           Groups{"company": "posthog"},
+			Groups:           Groups{"company": "posthog1"},
 			PersonProperties: NewProperties().Set("region", "USA"),
 		},
 	)
 
-	if err == nil {
-		t.Error("Expected error")
-	}
+	require.Error(t, err)
 	if !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Error("Expected context deadline exceeded error")
 	}
-
-	if variants == nil || len(variants) != 1 || variants["simple-flag"] != true {
-		t.Error("should return locally evaluated flag")
-	}
+	require.EqualValues(t, map[string]interface{}{"simple-flag": true}, variants)
 
 	// get all flags with full local evaluation possible
 	variants, err = client.GetAllFlags(
 		FeatureFlagPayloadNoKey{
 			DistinctId:       "-",
-			Groups:           Groups{"company": "posthog"},
+			Groups:           Groups{"company": "posthog1"},
 			PersonProperties: NewProperties().Set("region", "USA"),
 			GroupProperties:  map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")},
 		},
 	)
 
-	if err != nil {
-		t.Error("Unexpected error")
-	}
+	require.NoError(t, err)
 	fmt.Println(variants)
-
-	if variants == nil || len(variants) != 2 || variants["simple-flag"] != true || variants["group-flag"] != true {
-		t.Error("should return locally evaluated flag")
-	}
+	require.EqualValues(t, map[string]interface{}{"simple-flag": true, "group-flag": true}, variants)
 }
 
 func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {

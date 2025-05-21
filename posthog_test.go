@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -1526,15 +1527,8 @@ func TestSimpleFlagOld(t *testing.T) {
 }
 
 func TestSimpleFlagCalculation(t *testing.T) {
-	isEnabled, err := checkIfSimpleFlagEnabled("a", "b", 42)
-	if err != nil || !isEnabled {
-		t.Errorf("calculation for a.b should succeed and be true")
-	}
-
-	isEnabled, err = checkIfSimpleFlagEnabled("a", "b", 40)
-	if err != nil || isEnabled {
-		t.Errorf("calculation for a.b should succeed and be false")
-	}
+	require.True(t, checkIfSimpleFlagEnabled("a", "b", 42))
+	require.False(t, checkIfSimpleFlagEnabled("a", "b", 40))
 }
 
 func TestComplexFlag(t *testing.T) {

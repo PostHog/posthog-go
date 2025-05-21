@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -389,21 +390,17 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	}
 }
 
-func getMatchingVariant(flag FeatureFlag, distinctId string) (interface{}, error) {
+func getMatchingVariant(flag FeatureFlag, distinctId string) interface{} {
 	lookupTable := getVariantLookupTable(flag)
 
-	hashValue, err := _hash(flag.Key, distinctId, "variant")
-	if err != nil {
-		return nil, err
-	}
-
+	hashValue := calculateHash(flag.Key+".", distinctId, "variant")
 	for _, variant := range lookupTable {
 		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
-			return variant.Key, nil
+			return variant.Key
 		}
 	}
 
-	return true, nil
+	return true
 }
 
 func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
@@ -472,7 +469,7 @@ func matchFeatureFlagProperties(
 			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil && containsVariant(multivariates.Variants, *variantOverride) {
 				return *variantOverride, nil
 			} else {
-				return getMatchingVariant(flag, distinctId)
+				return getMatchingVariant(flag, distinctId), nil
 			}
 		}
 	}
@@ -492,32 +489,25 @@ func isConditionMatch(
 	cohorts map[string]PropertyGroup,
 ) (bool, error) {
 	if len(condition.Properties) > 0 {
+		var (
+			isMatch bool
+			err     error
+		)
 		for _, prop := range condition.Properties {
-			var isMatch bool
-			var err error
-
 			if prop.Type == "cohort" {
 				isMatch, err = matchCohort(prop, properties, cohorts)
 			} else {
 				isMatch, err = matchProperty(prop, properties)
 			}
 
-			if err != nil {
+			if err != nil || !isMatch {
 				return false, err
 			}
-
-			if !isMatch {
-				return false, nil
-			}
-		}
-
-		if condition.RolloutPercentage != nil {
-			return true, nil
 		}
 	}
 
 	if condition.RolloutPercentage != nil {
-		return checkIfSimpleFlagEnabled(flag.Key, distinctId, *condition.RolloutPercentage)
+		return checkIfSimpleFlagEnabled(flag.Key, distinctId, *condition.RolloutPercentage), nil
 	}
 
 	return true, nil
@@ -831,27 +821,16 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 }
 
 // extracted as a regular func for testing purposes
-func checkIfSimpleFlagEnabled(key string, distinctId string, rolloutPercentage uint8) (bool, error) {
-	val, err := _hash(key, distinctId, "")
-	if err != nil {
-		return false, err
-	}
-
-	return val <= float64(rolloutPercentage)/100, nil
+func checkIfSimpleFlagEnabled(key, distinctId string, rolloutPercentage uint8) bool {
+	hash := calculateHash(key+".", distinctId, "")
+	return hash <= float64(rolloutPercentage)/100
 }
 
-func _hash(key string, distinctId string, salt string) (float64, error) {
+func calculateHash(prefix, distinctId, salt string) float64 {
 	hash := sha1.New()
-	hash.Write([]byte("" + key + "." + distinctId + "" + salt))
+	hash.Write([]byte(prefix + distinctId + salt))
 	digest := hash.Sum(nil)
-	hexString := fmt.Sprintf("%x\n", digest)[:15]
-
-	value, err := strconv.ParseInt(hexString, 16, 64)
-	if err != nil {
-		return 0, err
-	}
-
-	return float64(value) / LONG_SCALE, nil
+	return float64(binary.BigEndian.Uint64(digest[:8])>>4) / LONG_SCALE
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
