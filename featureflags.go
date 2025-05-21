@@ -40,11 +40,11 @@ type FeatureFlagsPoller struct {
 }
 
 type FeatureFlag struct {
-	Key                        string `json:"key"`
-	RolloutPercentage          *uint8 `json:"rollout_percentage"`
-	Active                     bool   `json:"active"`
-	Filters                    Filter `json:"filters"`
-	EnsureExperienceContinuity *bool  `json:"ensure_experience_continuity"`
+	Key                        string   `json:"key"`
+	RolloutPercentage          *float64 `json:"rollout_percentage"`
+	Active                     bool     `json:"active"`
+	Filters                    Filter   `json:"filters"`
+	EnsureExperienceContinuity *bool    `json:"ensure_experience_continuity"`
 }
 
 type Filter struct {
@@ -59,14 +59,14 @@ type Variants struct {
 }
 
 type FlagVariant struct {
-	Key               string `json:"key"`
-	Name              string `json:"name"`
-	RolloutPercentage *uint8 `json:"rollout_percentage"`
+	Key               string   `json:"key"`
+	Name              string   `json:"name"`
+	RolloutPercentage *float64 `json:"rollout_percentage"`
 }
 
 type FeatureFlagCondition struct {
 	Properties        []FlagProperty `json:"properties"`
-	RolloutPercentage *uint8         `json:"rollout_percentage"`
+	RolloutPercentage *float64       `json:"rollout_percentage"`
 	Variant           *string        `json:"variant"`
 }
 
@@ -414,7 +414,7 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	}
 
 	for _, variant := range multivariates.Variants {
-		valueMax := float64(valueMin) + float64(*variant.RolloutPercentage)/100
+		valueMax := float64(valueMin) + *variant.RolloutPercentage/100.
 		_flagVariantMeta := FlagVariantMeta{ValueMin: float64(valueMin), ValueMax: valueMax, Key: variant.Key}
 		lookupTable = append(lookupTable, _flagVariantMeta)
 		valueMin = float64(valueMax)
@@ -821,9 +821,9 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 }
 
 // extracted as a regular func for testing purposes
-func checkIfSimpleFlagEnabled(key, distinctId string, rolloutPercentage uint8) bool {
+func checkIfSimpleFlagEnabled(key, distinctId string, rolloutPercentage float64) bool {
 	hash := calculateHash(key+".", distinctId, "")
-	return hash <= float64(rolloutPercentage)/100
+	return hash <= rolloutPercentage/100.
 }
 
 func calculateHash(prefix, distinctId, salt string) float64 {

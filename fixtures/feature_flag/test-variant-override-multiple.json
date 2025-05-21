@@ -10,14 +10,14 @@
             "filters": {
                 "groups": [
                     {
-                        "rollout_percentage": 100
+                        "rollout_percentage": 100.0
                     },
                     {
                         "properties": [{"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}], 
-                        "rollout_percentage": 100,
+                        "rollout_percentage": 100.0,
                         "variant": "second-variant"
                     },
-                    {"rollout_percentage": 50, "variant": "third-variant"}
+                    {"rollout_percentage": 50.0, "variant": "third-variant"}
                 ],
                 "multivariate": {
                     "variants": [

@@ -11,12 +11,12 @@
                 "groups": [
                     {
                         "properties": [],
-                        "rollout_percentage": 100
+                        "rollout_percentage": 100.0
                     }
                 ],
                 "multivariate": {
                     "variants": [
-                        {"key": "variant-1", "rollout_percentage": 50},
+                        {"key": "variant-1", "rollout_percentage": 50.0},
                         {"key": "variant-2", "rollout_percentage": 50}
                     ]
                 }
