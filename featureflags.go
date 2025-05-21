@@ -823,7 +823,7 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 
 // extracted as a regular func for testing purposes
 func checkIfSimpleFlagEnabled(key, distinctId string, rolloutPercentage uint8) bool {
-	hash := calculateHash(key, distinctId, "")
+	hash := calculateHash(key + ".", distinctId, "")
 	return hash <= float64(rolloutPercentage)/100
 }
 
