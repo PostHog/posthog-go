@@ -393,8 +393,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 func getMatchingVariant(flag FeatureFlag, distinctId string) interface{} {
 	lookupTable := getVariantLookupTable(flag)
 
-	hashValue := calculateHash(flag.Key, distinctId, "variant")
-
+	hashValue := calculateHash(flag.Key+".", distinctId, "variant")
 	for _, variant := range lookupTable {
 		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
 			return variant.Key
@@ -823,13 +822,13 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 
 // extracted as a regular func for testing purposes
 func checkIfSimpleFlagEnabled(key, distinctId string, rolloutPercentage uint8) bool {
-	hash := calculateHash(key + ".", distinctId, "")
+	hash := calculateHash(key+".", distinctId, "")
 	return hash <= float64(rolloutPercentage)/100
 }
 
-func calculateHash(key, distinctId, salt string) float64 {
+func calculateHash(prefix, distinctId, salt string) float64 {
 	hash := sha1.New()
-	hash.Write([]byte(key + "." + distinctId + salt))
+	hash.Write([]byte(prefix + distinctId + salt))
 	digest := hash.Sum(nil)
 	return float64(binary.BigEndian.Uint64(digest[:8])>>4) / LONG_SCALE
 }
