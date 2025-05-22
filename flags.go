@@ -17,7 +17,7 @@ type FlagsRequestData struct {
 	Groups           Groups                `json:"groups"`
 	PersonProperties Properties            `json:"person_properties"`
 	GroupProperties  map[string]Properties `json:"group_properties"`
-	DisableGeoIP     bool                  `json:"geoip_disable"`
+	DisableGeoIP     bool                  `json:"geoip_disable,omitempty"`
 }
 
 // FlagDetail represents a feature flag in v4 format

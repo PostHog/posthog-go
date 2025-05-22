@@ -58,19 +58,18 @@ type AliasInApi struct {
 }
 
 func (msg Alias) APIfy() APIMessage {
-	library := "posthog-go"
 	libraryVersion := getVersion()
 
 	apified := AliasInApi{
 		Type:           msg.Type,
 		Event:          "$create_alias",
-		Library:        library,
+		Library:        SDKName,
 		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp,
 		Properties: AliasInApiProperties{
 			DistinctId: msg.DistinctId,
 			Alias:      msg.Alias,
-			Lib:        library,
+			Lib:        SDKName,
 			LibVersion: libraryVersion,
 		},
 	}

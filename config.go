@@ -102,7 +102,7 @@ func (c Config) GetDisableGeoIP() bool {
 }
 
 const (
-	SdkName = "posthog-go"
+	SDKName = "posthog-go"
 
 	// DefaultEndpoint constant sets the default endpoint to which client instances send
 	// messages if none was explicitly set.

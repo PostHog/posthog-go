@@ -49,9 +49,7 @@ type GroupIdentifyInApi struct {
 }
 
 func (msg GroupIdentify) APIfy() APIMessage {
-	library := "posthog-go"
-
-	myProperties := Properties{}.Set("$lib", library).Set("$lib_version", getVersion())
+	myProperties := Properties{}.Set("$lib", SDKName).Set("$lib_version", getVersion())
 	myProperties.Set("$group_type", msg.Type).Set("$group_key", msg.Key).Set("$group_set", msg.Properties)
 
 	distinctId := fmt.Sprintf("$%s_%s", msg.Type, msg.Key)
@@ -61,7 +59,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 		Properties:     myProperties,
 		DistinctId:     distinctId,
 		Timestamp:      msg.Timestamp,
-		Library:        library,
+		Library:        SDKName,
 		LibraryVersion: getVersion(),
 	}
 
