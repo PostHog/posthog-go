@@ -269,7 +269,7 @@ func TestEnqueue(t *testing.T) {
 		"alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			Alias{Alias: "A", DistinctId: "B"},
-			&f,
+			&tv,
 		},
 
 		"identify": {
@@ -278,7 +278,15 @@ func TestEnqueue(t *testing.T) {
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
-			&f,
+			&tv,
+		},
+		"identify-default-geoip": {
+			strings.TrimSpace(fixture("test-enqueue-identify.json")),
+			Identify{
+				DistinctId: "B",
+				Properties: Properties{"email": "hey@posthog.com"},
+			},
+			nil,
 		},
 
 		"groupIdentify": {
@@ -289,7 +297,7 @@ func TestEnqueue(t *testing.T) {
 				Key:        "id:5",
 				Properties: Properties{},
 			},
-			&f,
+			&tv,
 		},
 
 		"capture": {

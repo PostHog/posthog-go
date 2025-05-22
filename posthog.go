@@ -218,15 +218,18 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case Alias:
 		m.Type = "alias"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	case Identify:
 		m.Type = "identify"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	case Capture:

@@ -10,9 +10,10 @@ type Identify struct {
 	// the application, its value is always overwritten by the library.
 	Type string
 
-	DistinctId string
-	Timestamp  time.Time
-	Properties Properties
+	DistinctId   string
+	Timestamp    time.Time
+	Properties   Properties
+	DisableGeoIP bool
 }
 
 func (msg Identify) internal() {
@@ -45,6 +46,9 @@ type IdentifyInApi struct {
 
 func (msg Identify) APIfy() APIMessage {
 	myProperties := Properties{}.Set("$lib", SDKName).Set("$lib_version", getVersion())
+	if msg.DisableGeoIP {
+		myProperties.Set(propertyGeoipDisable, true)
+	}
 
 	apified := IdentifyInApi{
 		Type:           msg.Type,
