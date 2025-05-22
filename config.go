@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Instances of this type carry the different configuration options that may
+// Config carries the different configuration options that may
 // be set when instantiating a client.
 //
 // Each field's zero-value is either meaningful or interpreted as using the
@@ -101,25 +101,27 @@ func (c Config) GetDisableGeoIP() bool {
 	return c.DisableGeoIP == nil || *c.DisableGeoIP
 }
 
-const SdkName = "posthog-go"
+const (
+	SdkName = "posthog-go"
 
-// This constant sets the default endpoint to which client instances send
-// messages if none was explictly set.
-const DefaultEndpoint = "https://app.posthog.com"
+	// DefaultEndpoint constant sets the default endpoint to which client instances send
+	// messages if none was explicitly set.
+	DefaultEndpoint = "https://app.posthog.com"
 
-// This constant sets the default flush interval used by client instances if
-// none was explicitly set.
-const DefaultInterval = 5 * time.Second
+	// DefaultInterval constant sets the default flush interval used by client instances if
+	// none was explicitly set.
+	DefaultInterval = 5 * time.Second
 
-// Specifies the default interval at which to fetch new feature flags
-const DefaultFeatureFlagsPollingInterval = 5 * time.Minute
+	// DefaultFeatureFlagsPollingInterval the default interval at which to fetch new feature flags
+	DefaultFeatureFlagsPollingInterval = 5 * time.Minute
 
-// Specifies the default timeout for fetching feature flags
-const DefaultFeatureFlagRequestTimeout = 3 * time.Second
+	// DefaultFeatureFlagRequestTimeout the default timeout for fetching feature flags
+	DefaultFeatureFlagRequestTimeout = 3 * time.Second
 
-// This constant sets the default batch size used by client instances if none
-// was explicitly set.
-const DefaultBatchSize = 250
+	// DefaultBatchSize sets the default batch size used by client instances if none
+	// was explicitly set.
+	DefaultBatchSize = 250
+)
 
 // Verifies that fields that don't have zero-values are set to valid values,
 // returns an error describing the problem if a field was invalid.
@@ -186,7 +188,7 @@ func makeConfig(c Config) Config {
 		c.maxConcurrentRequests = 1000
 	}
 
-	if c.DisableGeoIP == nil || *c.DisableGeoIP {
+	if c.GetDisableGeoIP() {
 		if c.DefaultEventProperties == nil {
 			c.DefaultEventProperties = NewProperties()
 		}
