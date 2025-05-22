@@ -217,6 +217,7 @@ func ExampleCapture() {
 	//       "library": "posthog-go",
 	//       "library_version": "1.0.0",
 	//       "properties": {
+	//         "$geoip_disable": true,
 	//         "$lib": "posthog-go",
 	//         "$lib_version": "1.0.0",
 	//         "application": "PostHog Go",
