@@ -23,9 +23,8 @@ type Config struct {
 	// Information on how to get a personal API key: https://posthog.com/docs/api/overview
 	PersonalApiKey string
 
-	// DisableGeoIP will disable GeoIP lookup for events
-	// and when fetching feature flags
-	DisableGeoIP bool
+	// DisableGeoIP will disable GeoIP lookup for events and when fetching feature flags
+	DisableGeoIP *bool
 
 	// The flushing interval of the client. Messages will be sent when they've
 	// been queued up to the maximum batch size or when the flushing interval
@@ -94,6 +93,12 @@ type Config struct {
 	// requests to the backend API.
 	// This field is not exported and only exposed internally to control concurrency.
 	maxConcurrentRequests int
+}
+
+// GetDisableGeoIP instructs the client to set $geoip_disable on event properties or feature flag requests.
+// It is on by default as Go is mainly used on server side and to be compatible with posthog-python.
+func (c Config) GetDisableGeoIP() bool {
+	return c.DisableGeoIP == nil || *c.DisableGeoIP
 }
 
 const SdkName = "posthog-go"
@@ -181,10 +186,11 @@ func makeConfig(c Config) Config {
 		c.maxConcurrentRequests = 1000
 	}
 
-	if c.DisableGeoIP {
+	if c.DisableGeoIP == nil || *c.DisableGeoIP {
 		if c.DefaultEventProperties == nil {
-			c.DefaultEventProperties = NewProperties().Set(geoipDisableProperty, true)
+			c.DefaultEventProperties = NewProperties()
 		}
+		c.DefaultEventProperties.Set(propertyGeoipDisable, true)
 	}
 
 	return c

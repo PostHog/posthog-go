@@ -259,15 +259,16 @@ func TestCaptureNoProperties(t *testing.T) {
 }
 
 func TestEnqueue(t *testing.T) {
+	f, tv := false, true
 	tests := map[string]struct {
 		ref          string
 		msg          Message
-		disableGeoIP bool
+		disableGeoIP *bool
 	}{
 		"alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			Alias{Alias: "A", DistinctId: "B"},
-			false,
+			&f,
 		},
 
 		"identify": {
@@ -276,7 +277,7 @@ func TestEnqueue(t *testing.T) {
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
-			false,
+			&f,
 		},
 
 		"groupIdentify": {
@@ -287,7 +288,7 @@ func TestEnqueue(t *testing.T) {
 				Key:        "id:5",
 				Properties: Properties{},
 			},
-			false,
+			&f,
 		},
 
 		"capture": {
@@ -302,7 +303,7 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: false,
 			},
-			false,
+			&f,
 		},
 
 		"captureWithDisableGeoIP": {
@@ -317,13 +318,13 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: false,
 			},
-			true,
+			&tv,
 		},
 
 		"*alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			&Alias{Alias: "A", DistinctId: "B"},
-			false,
+			&tv,
 		},
 
 		"*identify": {
@@ -332,7 +333,7 @@ func TestEnqueue(t *testing.T) {
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
-			false,
+			&tv,
 		},
 
 		"*groupIdentify": {
@@ -343,7 +344,7 @@ func TestEnqueue(t *testing.T) {
 				Key:        "id:5",
 				Properties: Properties{},
 			},
-			false,
+			&tv,
 		},
 
 		"*capture": {
@@ -359,7 +360,7 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: false,
 			},
-			false,
+			&tv,
 		},
 	}
 
@@ -367,24 +368,26 @@ func TestEnqueue(t *testing.T) {
 	defer server.Close()
 
 	for name, test := range tests {
-		client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-			Endpoint:     server.URL,
-			Verbose:      true,
-			Logger:       t,
-			BatchSize:    1,
-			now:          mockTime,
-			DisableGeoIP: test.disableGeoIP,
+		t.Run(name, func(t *testing.T) {
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				Endpoint:     server.URL,
+				Verbose:      true,
+				Logger:       t,
+				BatchSize:    1,
+				now:          mockTime,
+				DisableGeoIP: test.disableGeoIP,
+			})
+			defer client.Close()
+
+			if err := client.Enqueue(test.msg); err != nil {
+				t.Error(err)
+				return
+			}
+
+			if res := string(<-body); res != test.ref {
+				t.Errorf("%s: invalid response:\n- expected %s\n- received: %s", name, test.ref, res)
+			}
 		})
-		defer client.Close()
-
-		if err := client.Enqueue(test.msg); err != nil {
-			t.Error(err)
-			return
-		}
-
-		if res := string(<-body); res != test.ref {
-			t.Errorf("%s: invalid response:\n- expected %s\n- received: %s", name, test.ref, res)
-		}
 	}
 }
 
