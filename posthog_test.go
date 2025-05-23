@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Helper type used to implement the io.Reader interface on function values.
@@ -216,6 +217,7 @@ func ExampleCapture() {
 	//       "library": "posthog-go",
 	//       "library_version": "1.0.0",
 	//       "properties": {
+	//         "$geoip_disable": true,
 	//         "$lib": "posthog-go",
 	//         "$lib_version": "1.0.0",
 	//         "application": "PostHog Go",
@@ -258,13 +260,16 @@ func TestCaptureNoProperties(t *testing.T) {
 }
 
 func TestEnqueue(t *testing.T) {
+	f, tv := false, true
 	tests := map[string]struct {
-		ref string
-		msg Message
+		ref          string
+		msg          Message
+		disableGeoIP *bool
 	}{
 		"alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			Alias{Alias: "A", DistinctId: "B"},
+			&tv,
 		},
 
 		"identify": {
@@ -273,6 +278,15 @@ func TestEnqueue(t *testing.T) {
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
+			&tv,
+		},
+		"identify-default-geoip": {
+			strings.TrimSpace(fixture("test-enqueue-identify.json")),
+			Identify{
+				DistinctId: "B",
+				Properties: Properties{"email": "hey@posthog.com"},
+			},
+			nil,
 		},
 
 		"groupIdentify": {
@@ -283,6 +297,7 @@ func TestEnqueue(t *testing.T) {
 				Key:        "id:5",
 				Properties: Properties{},
 			},
+			&tv,
 		},
 
 		"capture": {
@@ -297,10 +312,28 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: false,
 			},
+			&f,
 		},
+
+		"captureWithDisableGeoIP": {
+			strings.TrimSpace(fixture("test-enqueue-capture-with-disable-geoip.json")),
+			Capture{
+				Event:      "Download",
+				DistinctId: "123456",
+				Properties: Properties{
+					"application": "PostHog Go",
+					"version":     "1.0.0",
+					"platform":    "macos", // :)
+				},
+				SendFeatureFlags: false,
+			},
+			&tv,
+		},
+
 		"*alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			&Alias{Alias: "A", DistinctId: "B"},
+			&tv,
 		},
 
 		"*identify": {
@@ -309,6 +342,7 @@ func TestEnqueue(t *testing.T) {
 				DistinctId: "B",
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
+			&tv,
 		},
 
 		"*groupIdentify": {
@@ -319,6 +353,7 @@ func TestEnqueue(t *testing.T) {
 				Key:        "id:5",
 				Properties: Properties{},
 			},
+			&tv,
 		},
 
 		"*capture": {
@@ -334,30 +369,34 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: false,
 			},
+			&tv,
 		},
 	}
 
 	body, server := mockServer()
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Endpoint:  server.URL,
-		Verbose:   true,
-		Logger:    t,
-		BatchSize: 1,
-		now:       mockTime,
-	})
-	defer client.Close()
-
 	for name, test := range tests {
-		if err := client.Enqueue(test.msg); err != nil {
-			t.Error(err)
-			return
-		}
+		t.Run(name, func(t *testing.T) {
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				Endpoint:     server.URL,
+				Verbose:      true,
+				Logger:       t,
+				BatchSize:    1,
+				now:          mockTime,
+				DisableGeoIP: test.disableGeoIP,
+			})
+			defer client.Close()
 
-		if res := string(<-body); res != test.ref {
-			t.Errorf("%s: invalid response:\n- expected %s\n- received: %s", name, test.ref, res)
-		}
+			if err := client.Enqueue(test.msg); err != nil {
+				t.Error(err)
+				return
+			}
+
+			if res := string(<-body); res != test.ref {
+				t.Errorf("%s: invalid response:\n- expected %s\n- received: %s", name, test.ref, res)
+			}
+		})
 	}
 }
 

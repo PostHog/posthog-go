@@ -15,8 +15,12 @@ import (
 	"github.com/hashicorp/golang-lru/v2"
 )
 
-const unimplementedError = "not implemented"
-const CACHE_DEFAULT_SIZE = 300_000
+const (
+	unimplementedError = "not implemented"
+	CACHE_DEFAULT_SIZE = 300_000
+
+	propertyGeoipDisable = "$geoip_disable"
+)
 
 // This interface is the main API exposed by the posthog package.
 // Values that satsify this interface are returned by the client constructors
@@ -155,6 +159,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
 			c.decider,
+			c.Config.GetDisableGeoIP(),
 		)
 	}
 
@@ -213,15 +218,18 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case Alias:
 		m.Type = "alias"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	case Identify:
 		m.Type = "identify"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	case Capture:
@@ -519,7 +527,7 @@ func (c *client) upload(b []byte) error {
 
 	version := getVersion()
 
-	req.Header.Add("User-Agent", SdkName+"/"+version)
+	req.Header.Add("User-Agent", SDKName+"/"+version)
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(b)))
 
@@ -726,7 +734,7 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 }
 
 func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, *string, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties)
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 
 	if err != nil {
 		return nil, nil, err
@@ -749,7 +757,7 @@ func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups 
 }
 
 func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties)
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 	if err != nil {
 		return "", err
 	}
@@ -766,7 +774,7 @@ func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, 
 }
 
 func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties)
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 	if err != nil {
 		return nil, err
 	}

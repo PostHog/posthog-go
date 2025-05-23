@@ -17,6 +17,7 @@ type FlagsRequestData struct {
 	Groups           Groups                `json:"groups"`
 	PersonProperties Properties            `json:"person_properties"`
 	GroupProperties  map[string]Properties `json:"group_properties"`
+	DisableGeoIP     bool                  `json:"geoip_disable,omitempty"`
 }
 
 // FlagDetail represents a feature flag in v4 format
@@ -154,7 +155,8 @@ func (r *FlagsResponse) UnmarshalJSON(data []byte) error {
 
 // decider defines the interface for making flags requests
 type decider interface {
-	makeFlagsRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error)
+	makeFlagsRequest(distinctId string, groups Groups, personProperties Properties,
+		groupProperties map[string]Properties, disableGeoIP bool) (*FlagsResponse, error)
 }
 
 // flagsClient implements the decider interface
@@ -167,7 +169,9 @@ type flagsClient struct {
 }
 
 // newFlagsClient creates a new flagsClient
-func newFlagsClient(apiKey string, endpoint string, httpClient http.Client, featureFlagRequestTimeout time.Duration, errorf func(format string, args ...interface{})) *flagsClient {
+func newFlagsClient(apiKey string, endpoint string, httpClient http.Client, featureFlagRequestTimeout time.Duration,
+	errorf func(format string, args ...interface{})) *flagsClient {
+
 	return &flagsClient{
 		apiKey:                    apiKey,
 		endpoint:                  endpoint,
@@ -179,13 +183,15 @@ func newFlagsClient(apiKey string, endpoint string, httpClient http.Client, feat
 
 // makeFlagsRequest makes a request to the flags endpoint and deserializes the response
 // into a FlagsResponse struct.
-func (d *flagsClient) makeFlagsRequest(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
+func (d *flagsClient) makeFlagsRequest(distinctId string, groups Groups, personProperties Properties,
+	groupProperties map[string]Properties, disableGeoIP bool) (*FlagsResponse, error) {
 	requestData := FlagsRequestData{
 		ApiKey:           d.apiKey,
 		DistinctId:       distinctId,
 		Groups:           groups,
 		PersonProperties: personProperties,
 		GroupProperties:  groupProperties,
+		DisableGeoIP:     disableGeoIP,
 	}
 
 	requestDataBytes, err := json.Marshal(requestData)

@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 )
@@ -43,4 +44,17 @@ func TestConfigInvalidBatchSize(t *testing.T) {
 	} else if e.Field != "BatchSize" || e.Value.(int) != -1 {
 		t.Error("invalid field error reported:", e)
 	}
+}
+
+func TestConfigGetDisableGeoIP(t *testing.T) {
+	var (
+		c  Config
+		tv = true
+		fv = false
+	)
+	require.True(t, c.GetDisableGeoIP())
+	c.DisableGeoIP = &tv
+	require.True(t, c.GetDisableGeoIP())
+	c.DisableGeoIP = &fv
+	require.False(t, c.GetDisableGeoIP())
 }

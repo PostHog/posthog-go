@@ -7,6 +7,7 @@
       "library": "posthog-go",
       "library_version": "1.0.0",
       "properties": {
+        "$geoip_disable": true,
         "$group_key": "id:5",
         "$group_set": {},
         "$group_type": "organization",
