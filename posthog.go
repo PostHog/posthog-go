@@ -51,7 +51,7 @@ type Client interface {
 	// if the given flag is on or off for the user
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 
-	// GetFeatureFlagPayload returns feature a flag payload value matching key for user (supports multivariate flags).
+	// GetFeatureFlagPayload returns feature flag's payload value matching key for user (supports multivariate flags).
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
 	// GetRemoteConfigPayload returns decrypted feature flag payload value for remote config flags.
