@@ -1,0 +1,39 @@
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "flags": [
+    {
+      "id": 123,
+      "name": "",
+      "key": "flag-with-groups",
+      "filters": {
+        "groups": [
+          {
+            "variant": null,
+            "properties": [
+              {
+                "key": "$group_key",
+                "type": "group",
+                "value": [
+                  "1"
+                ],
+                "operator": "exact",
+                "group_type_index": 0
+              }
+            ],
+            "rollout_percentage": 100
+          }
+        ],
+        "payloads": {},
+        "multivariate": null,
+        "aggregation_group_type_index": 0
+      },
+      "deleted": false,
+      "active": true,
+      "is_simple_flag": false,
+      "rollout_percentage": null
+    }
+  ],
+  "group_type_mapping" : {"0": "company", "1": "project"}
+}

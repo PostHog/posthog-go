@@ -3,6 +3,7 @@ package posthog
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -53,21 +54,74 @@ func TestMatchPropertyInvalidOperator(t *testing.T) {
 	}
 
 }
-func TestMatchPropertySlice(t *testing.T) {
 
+func TestMatchPropertySlice(t *testing.T) {
 	property := FlagProperty{
 		Key:      "Browser",
-		Value:    []interface{}{"Chrome"},
+		Value:    []interface{}{"Chrome", "Firefox"},
 		Operator: "exact",
 	}
-	properties := NewProperties().Set("Browser", "Chrome")
 
-	isMatch, err := matchProperty(property, properties)
+	for _, tt := range []struct {
+		name       string
+		properties Properties
+		expected   bool
+		err        error
+	}{
+		{
+			name:       "match with Chrome",
+			properties: NewProperties().Set("Browser", "Chrome"),
+			expected:   true,
+		},
+		{
+			name:       "match with Firefox",
+			properties: NewProperties().Set("Browser", "Firefox"),
+			expected:   true,
+		},
+		{
+			name:       "no match with Explorer",
+			properties: NewProperties().Set("Browser", "Explorer"),
+		},
+		{
+			name:       "no match with unknown key",
+			properties: NewProperties().Set("Car", "Chrome"),
+			err:        errors.New(""),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			isMatch, err := matchProperty(property, tt.properties)
+			if tt.err != nil {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.expected, isMatch)
+		})
+	}
+}
 
-	if err != nil || !isMatch {
-		t.Error("Value is not a match")
+func TestMatchPropertySliceExact(t *testing.T) {
+	property := FlagProperty{
+		Key:      "Browser",
+		Value:    []interface{}{"Chrome", "Firefox"},
+		Operator: "exact",
 	}
 
+	isMatch, err := matchProperty(property, NewProperties().Set("Browser", "Chrome"))
+	require.NoError(t, err)
+	require.True(t, isMatch)
+
+	isMatch, err = matchProperty(property, NewProperties().Set("Browser", "Firefox"))
+	require.NoError(t, err)
+	require.True(t, isMatch)
+
+	isMatch, err = matchProperty(property, NewProperties().Set("Browser", "Explorer"))
+	require.NoError(t, err)
+	require.False(t, isMatch)
+
+	isMatch, err = matchProperty(property, NewProperties().Set("Car", "Fiat"))
+	require.Error(t, err)
+	require.False(t, isMatch)
 }
 
 func TestMatchPropertyNumber(t *testing.T) {
@@ -253,7 +307,6 @@ func TestMatchPropertyContains(t *testing.T) {
 }
 
 func TestFlagPersonProperty(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
@@ -4533,7 +4586,6 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 }
 
 func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
-
 	// create buffer to write logs to
 	var buf bytes.Buffer
 
@@ -4625,34 +4677,161 @@ func TestFetchFlagsFails(t *testing.T) {
 	}
 }
 
+// The reference implementation of overrides may be found in Rust feature-flag implementation:
+//
+// Check link: https://github.com/PostHog/posthog/blob/0bb3ed063c37f5be280e4283a0d2a6a6683a9534/rust/feature-flags/src/api/request_handler.rs#L1412
+func TestFeatureFlagWithOverrides(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-group-props.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	cases := []struct {
+		name string
+		req  FeatureFlagPayload
+		want bool
+		err  error
+	}{
+		{
+			"matches group_key",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "1"},
+			},
+			true,
+			nil,
+		},
+		{
+			"distinct id does not match",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "2"},
+			},
+			false,
+			nil,
+		},
+		{
+			"matching group_key property is not overridden",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "2", "project": "7"},
+				GroupProperties: map[string]Properties{"company": {
+					"$group_key": "1",
+				}},
+			},
+			true,
+			nil,
+		},
+		{
+			"no match group_key property is not overridden",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "1", "project": "7"},
+				GroupProperties: map[string]Properties{"company": {
+					"$group_key": "2",
+				}},
+			},
+			false,
+			nil,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(tt *testing.T) {
+			enabled, err := client.GetFeatureFlag(c.req)
+			require.Equal(tt, c.err, err)
+			require.Equal(tt, c.want, enabled)
+		})
+	}
+}
+
+func TestFeatureFlagDistinctIDOverride(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-distinct-id-local.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	cases := []struct {
+		name string
+		req  FeatureFlagPayload
+		want bool
+		err  error
+	}{
+		{
+			"matches distinct id",
+			FeatureFlagPayload{
+				Key:        "test-boolean-flag-with-rollout-conditions",
+				DistinctId: "1",
+			},
+			true,
+			nil,
+		},
+		{
+			"distinct id does not match",
+			FeatureFlagPayload{
+				Key:        "test-boolean-flag-with-rollout-conditions",
+				DistinctId: "2",
+			},
+			false,
+			nil,
+		},
+		{
+			"distinct id property is not override",
+			FeatureFlagPayload{
+				Key:              "test-boolean-flag-with-rollout-conditions",
+				DistinctId:       "2",
+				PersonProperties: NewProperties().Set("distinct_id", "1"),
+			},
+			true,
+			nil,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(tt *testing.T) {
+			enabled, err := client.GetFeatureFlag(c.req)
+			require.Equal(tt, c.err, err)
+			require.Equal(tt, c.want, enabled)
+		})
+	}
+}
+
 func TestFeatureFlagWithFalseVariant(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-			w.Write([]byte(`{
-				"flags": [{
-					"id": 719,
-					"name": "",
-					"key": "test-flag",
-					"filters": {
-						"groups": [
-							{
-								"properties": [],
-								"rollout_percentage": 100
-							}
-						],
-						"multivariate": {
-							"variants": [
-								{"key": "false", "rollout_percentage": 50},
-								{"key": "true", "rollout_percentage": 50}
-							]
-						}
-					},
-					"deleted": false,
-					"active": true,
-					"is_simple_flag": false,
-					"rollout_percentage": null
-				}]
-			}`))
+			w.Write([]byte(fixture("feature_flag/test-false-variant.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
 		}
 	}))
 	defer server.Close()
@@ -4670,12 +4849,8 @@ func TestFeatureFlagWithFalseVariant(t *testing.T) {
 			DistinctId: "test-id",
 		},
 	)
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-	if variant != "false" {
-		t.Errorf("Expected variant 'false', got: %v", variant)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "false", variant)
 
 	// Test IsFeatureEnabled - should return the variant name "false"
 	// This will fail with the current implementation because it incorrectly converts "false" to false
@@ -4685,10 +4860,6 @@ func TestFeatureFlagWithFalseVariant(t *testing.T) {
 			DistinctId: "test-id",
 		},
 	)
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-	if isEnabled != "false" {
-		t.Errorf("Expected variant 'false', got: %v", isEnabled)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "false", isEnabled)
 }
