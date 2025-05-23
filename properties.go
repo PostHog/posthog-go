@@ -23,14 +23,6 @@ func (p Properties) Set(name string, value interface{}) Properties {
 	return p
 }
 
-func (p Properties) Clone() Properties {
-	c := make(Properties, len(p))
-	for k, v := range p {
-		c[k] = v
-	}
-	return c
-}
-
 // Merge adds the properties from the provided `props` into the receiver `p`.
 // If a property in `props` already exists in `p`, its value will be overwritten.
 func (p Properties) Merge(props Properties) Properties {
