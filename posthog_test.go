@@ -103,6 +103,22 @@ var (
 		}, nil
 	})
 
+	testTransportFeatureFlagsOK = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var body string
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			body = fixture("feature_flag/test-simple-flag.json")
+		}
+		return &http.Response{
+			Status:     http.StatusText(http.StatusOK),
+			StatusCode: http.StatusOK,
+			Proto:      r.Proto,
+			ProtoMajor: r.ProtoMajor,
+			ProtoMinor: r.ProtoMinor,
+			Body:       ioutil.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})
+
 	// HTTP transport that sleeps for a little while and eventually succeeds.
 	testTransportDelayed = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		time.Sleep(10 * time.Millisecond)
@@ -565,37 +581,27 @@ func TestCaptureMany(t *testing.T) {
 
 func TestClientCloseTwice(t *testing.T) {
 	client := New("0123456789")
-
-	if err := client.Close(); err != nil {
-		t.Error("closing a client should not a return an error")
-	}
-
-	if err := client.Close(); err != ErrClosed {
-		t.Error("closing a client a second time should return ErrClosed:", err)
-	}
-
-	if err := client.Enqueue(Capture{DistinctId: "1", Event: "A"}); err != ErrClosed {
-		t.Error("using a client after it was closed should return ErrClosed:", err)
-	}
+	require.NoError(t, client.Close())
+	require.EqualError(t, client.Close(), ErrClosed.Error())
+	require.EqualError(t, client.Enqueue(Capture{DistinctId: "1", Event: "A"}), ErrClosed.Error())
 }
 
 func TestClientConfigError(t *testing.T) {
 	client, err := NewWithConfig("0123456789", Config{
 		Interval: -1 * time.Second,
 	})
+	require.Error(t, err, "no error returned when creating a client with an invalid config")
+	require.ErrorAs(t, err, &ConfigError{}, "invalid error type returned when creating a client with an invalid config")
+	require.NotNil(t, client)
+}
 
-	if err == nil {
-		t.Error("no error returned when creating a client with an invalid config")
-	}
-
-	if _, ok := err.(ConfigError); !ok {
-		t.Errorf("invalid error type returned when creating a client with an invalid config: %T", err)
-	}
-
-	if client != nil {
-		t.Error("invalid non-nil client object returned when creating a client with and invalid config:", client)
-		client.Close()
-	}
+func TestClientWithPersonalApiKeyClosing(t *testing.T) {
+	client, err := NewWithConfig("123", Config{
+		PersonalApiKey: "123",
+		Transport:      testTransportFeatureFlagsOK,
+	})
+	require.NoError(t, err)
+	require.NoError(t, client.Close())
 }
 
 func TestClientEnqueueError(t *testing.T) {
