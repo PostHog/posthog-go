@@ -394,11 +394,17 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			return nil, errors.New(errMessage)
 		}
 
-		focusedGroupProperties := groupProperties[groupType].Clone()
-		focusedGroupProperties["$group_key"] = groupKey
+		focusedGroupProperties := groupProperties[groupType]
+		if _, ok := focusedGroupProperties["$group_key"]; !ok {
+			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
+		}
 		return matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts)
 	} else {
-		return matchFeatureFlagProperties(flag, distinctId, personProperties, cohorts)
+		localPersonProperties := personProperties
+		if _, ok := localPersonProperties["distinct_id"]; !ok {
+			localPersonProperties = Properties{"distinct_id": distinctId}.Merge(localPersonProperties)
+		}
+		return matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts)
 	}
 }
 

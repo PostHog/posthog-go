@@ -1,0 +1,25 @@
+{
+  "count": 1,
+  "flags": [
+    {
+      "id": 1,
+      "key": "test-boolean-flag-with-rollout-conditions",
+      "filters": {
+        "groups": [
+          {
+            "properties": [
+              {
+                "key": "distinct_id",
+                "type": "person",
+                "value": ["1"],
+                "operator": "exact"
+              }
+            ],
+            "rollout_percentage": 100
+          }
+        ]
+      },
+      "active": true
+    }
+  ]
+}

@@ -307,7 +307,6 @@ func TestMatchPropertyContains(t *testing.T) {
 }
 
 func TestFlagPersonProperty(t *testing.T) {
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
@@ -4699,28 +4698,130 @@ func TestFeatureFlagWithOverrides(t *testing.T) {
 	})
 	defer client.Close()
 
-	enabled, err := client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:        "flag-with-groups",
-			DistinctId: "test-id",
-			Groups:     Groups{"company": "1"},
+	cases := []struct {
+		name string
+		req  FeatureFlagPayload
+		want bool
+		err  error
+	}{
+		{
+			"matches group_key",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "1"},
+			},
+			true,
+			nil,
 		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, true, enabled)
+		{
+			"distinct id does not match",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "2"},
+			},
+			false,
+			nil,
+		},
+		{
+			"matching group_key property is not overridden",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "2", "project": "7"},
+				GroupProperties: map[string]Properties{"company": {
+					"$group_key": "1",
+				}},
+			},
+			true,
+			nil,
+		},
+		{
+			"no match group_key property is not overridden",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "1", "project": "7"},
+				GroupProperties: map[string]Properties{"company": {
+					"$group_key": "2",
+				}},
+			},
+			false,
+			nil,
+		},
+	}
 
-	enabled, err = client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:        "flag-with-groups",
-			DistinctId: "test-id",
-			Groups:     Groups{"company": "2", "project": "7"},
-			GroupProperties: map[string]Properties{"company": {
-				"$group_key": "1",
-			}},
+	for _, c := range cases {
+		t.Run(c.name, func(tt *testing.T) {
+			enabled, err := client.GetFeatureFlag(c.req)
+			require.Equal(tt, c.err, err)
+			require.Equal(tt, c.want, enabled)
+		})
+	}
+}
+
+func TestFeatureFlagDistinctIDOverride(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-distinct-id-local.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	cases := []struct {
+		name string
+		req  FeatureFlagPayload
+		want bool
+		err  error
+	}{
+		{
+			"matches distinct id",
+			FeatureFlagPayload{
+				Key:        "test-boolean-flag-with-rollout-conditions",
+				DistinctId: "1",
+			},
+			true,
+			nil,
 		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, false, enabled)
+		{
+			"distinct id does not match",
+			FeatureFlagPayload{
+				Key:        "test-boolean-flag-with-rollout-conditions",
+				DistinctId: "2",
+			},
+			false,
+			nil,
+		},
+		{
+			"distinct id property is not override",
+			FeatureFlagPayload{
+				Key:              "test-boolean-flag-with-rollout-conditions",
+				DistinctId:       "2",
+				PersonProperties: NewProperties().Set("distinct_id", "1"),
+			},
+			true,
+			nil,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(tt *testing.T) {
+			enabled, err := client.GetFeatureFlag(c.req)
+			require.Equal(tt, c.err, err)
+			require.Equal(tt, c.want, enabled)
+		})
+	}
 }
 
 func TestFeatureFlagWithFalseVariant(t *testing.T) {
