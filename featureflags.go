@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -395,10 +394,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			return nil, errors.New(errMessage)
 		}
 
-		focusedGroupProperties := maps.Clone(groupProperties[groupType])
-		if focusedGroupProperties == nil {
-			focusedGroupProperties = Properties{}
-		}
+		focusedGroupProperties := groupProperties[groupType].Clone()
 		focusedGroupProperties["$group_key"] = groupKey
 		return matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts)
 	} else {
