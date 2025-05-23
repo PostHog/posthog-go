@@ -1,26 +1,30 @@
 package posthog
 
 import (
-	"reflect"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
 func TestGroups(t *testing.T) {
 	number := 5
 
-	tests := map[string]struct {
-		ref Groups
-		run func(Groups)
+	tests := []struct {
+		name string
+		want Groups
+		run  func(Groups)
 	}{
-		"company": {Groups{"company": number}, func(g Groups) { g.Set("company", number) }},
+		{
+			"company",
+			Groups{"company": number},
+			func(g Groups) { g.Set("company", number) },
+		},
 	}
 
-	for name, test := range tests {
-		group := NewGroups()
-		test.run(group)
-
-		if !reflect.DeepEqual(group, test.ref) {
-			t.Errorf("%s: invalid groups produced: %#v\n", name, group)
-		}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			group := NewGroups()
+			test.run(group)
+			require.EqualValues(t, test.want, group)
+		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -249,7 +250,6 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-
 		result, err = poller.getFeatureFlagVariant(flag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, err
@@ -302,9 +302,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) 
 	if err != nil {
 		return FeatureFlag{}, err
 	}
-
-	featureFlag := FeatureFlag{Key: ""}
-
+	var featureFlag FeatureFlag
 	// avoid using flag for conflicts with Golang's stdlib `flag`
 	for _, storedFlag := range featureFlags {
 		if flagConfig.Key == storedFlag.Key {
@@ -366,7 +364,6 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 
 	return response, nil
 }
-
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,
 	distinctId string,
@@ -384,23 +381,26 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
-
-		groupName, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
+		groupType, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
 		if !exists {
 			errMessage := "flag has unknown group type index"
 			return nil, errors.New(errMessage)
 		}
 
-		_, exists = groups[groupName]
+		groupKey, exists := groups[groupType]
 
 		if !exists {
-			errMessage := fmt.Sprintf("FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
+			errMessage := fmt.Sprintf("[FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
 			return nil, errors.New(errMessage)
 		}
 
-		focusedGroupProperties := groupProperties[groupName]
-		return matchFeatureFlagProperties(flag, groups[groupName].(string), focusedGroupProperties, cohorts)
+		focusedGroupProperties := maps.Clone(groupProperties[groupType])
+		if focusedGroupProperties == nil {
+			focusedGroupProperties = Properties{}
+		}
+		focusedGroupProperties["$group_key"] = groupKey
+		return matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts)
 	} else {
 		return matchFeatureFlagProperties(flag, distinctId, personProperties, cohorts)
 	}
@@ -468,7 +468,6 @@ func matchFeatureFlagProperties(
 	})
 
 	for _, condition := range sortedConditions {
-
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
 			if _, ok := err.(*InconclusiveMatchError); ok {

@@ -1,0 +1,33 @@
+{
+  "flags": [
+    {
+      "id": 719,
+      "name": "",
+      "key": "test-flag",
+      "filters": {
+        "groups": [
+          {
+            "properties": [],
+            "rollout_percentage": 100
+          }
+        ],
+        "multivariate": {
+          "variants": [
+            {
+              "key": "false",
+              "rollout_percentage": 50
+            },
+            {
+              "key": "true",
+              "rollout_percentage": 50
+            }
+          ]
+        }
+      },
+      "deleted": false,
+      "active": true,
+      "is_simple_flag": false,
+      "rollout_percentage": null
+    }
+  ]
+}

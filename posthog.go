@@ -22,13 +22,13 @@ const (
 	propertyGeoipDisable = "$geoip_disable"
 )
 
-// This interface is the main API exposed by the posthog package.
-// Values that satsify this interface are returned by the client constructors
+// Client interface is the main API exposed by the posthog package.
+// Values that satisfy this interface are returned by the client constructors
 // provided by the package and provide a way to send messages via the HTTP API.
 type Client interface {
 	io.Closer
 
-	// Queues a message to be sent by the client when the conditions for a batch
+	// Enqueue queues a message to be sent by the client when the conditions for a batch
 	// upload are met.
 	// This is the main method you'll be using, a typical flow would look like
 	// this:
@@ -43,32 +43,32 @@ type Client interface {
 	// happens if the client was already closed at the time the method was
 	// called or if the message was malformed.
 	Enqueue(Message) error
-	//
-	// Method returns if a feature flag is on for a given user based on their distinct ID
+
+	// IsFeatureEnabled returns if a feature flag is on for a given user based on their distinct ID
 	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
-	//
-	// Method returns variant value if multivariantflag or otherwise a boolean indicating
+
+	// GetFeatureFlag returns variant value if multivariant flag or otherwise a boolean indicating
 	// if the given flag is on or off for the user
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
-	//
-	// Method returns feature flag payload value matching key for user (supports multivariate flags).
+
+	// GetFeatureFlagPayload returns feature a flag payload value matching key for user (supports multivariate flags).
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
-	//
-	// Method returns decrypted feature flag payload value for remote config flags.
+
+	// GetRemoteConfigPayload returns decrypted feature flag payload value for remote config flags.
 	GetRemoteConfigPayload(string) (string, error)
-	//
-	// Get all flags - returns all flags for a user
+
+	// GetAllFlags returns all flags for a user
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
-	//
-	// Method forces a reload of feature flags
+
+	// ReloadFeatureFlags forces a reload of feature flags
 	// NB: This is only available when using a PersonalApiKey
 	ReloadFeatureFlags() error
-	//
-	// Get feature flags - for testing only
+
+	// GetFeatureFlags gets all feature flags, for testing only.
 	// NB: This is only available when using a PersonalApiKey
 	GetFeatureFlags() ([]FeatureFlag, error)
-	//
-	// Get the last captured event
+
+	// GetLastCapturedEvent returns the last captured event
 	GetLastCapturedEvent() *Capture
 }
 
@@ -341,7 +341,7 @@ func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, e
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		payload, err = c.getFeatureFlagPayloadFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		payload, err = c.getFeatureFlagPayloadFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
 	return payload, err
@@ -364,7 +364,8 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		flagValue, requestId, err = c.getFeatureFlagFromDecide(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagValue, requestId, err = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
 			flagDetail = &f
@@ -438,7 +439,8 @@ func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]int
 	} else {
 		// if there's no poller, get the feature flags from the flags endpoint
 		c.debugf("getting all feature flags from flags endpoint")
-		flagsValue, err = c.getAllFeatureFlagsFromDecide(flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagsValue, err = c.getAllFeatureFlagsFromRemote(flagConfig.DistinctId, flagConfig.Groups,
+			flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
 	return flagsValue, err
@@ -733,7 +735,9 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 	return false
 }
 
-func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, *string, error) {
+func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups Groups, personProperties Properties,
+	groupProperties map[string]Properties) (interface{}, *string, error) {
+
 	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 
 	if err != nil {
@@ -756,7 +760,7 @@ func (c *client) getFeatureFlagFromDecide(key string, distinctId string, groups 
 	return false, requestId, nil
 }
 
-func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
+func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
 	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 	if err != nil {
 		return "", err
@@ -773,7 +777,7 @@ func (c *client) getFeatureFlagPayloadFromDecide(key string, distinctId string, 
 	return "", nil
 }
 
-func (c *client) getAllFeatureFlagsFromDecide(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+func (c *client) getAllFeatureFlagsFromRemote(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
 	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 	if err != nil {
 		return nil, err
