@@ -592,7 +592,7 @@ func TestClientConfigError(t *testing.T) {
 	})
 	require.Error(t, err, "no error returned when creating a client with an invalid config")
 	require.ErrorAs(t, err, &ConfigError{}, "invalid error type returned when creating a client with an invalid config")
-	require.NotNil(t, client)
+	require.Nil(t, client)
 }
 
 func TestClientWithPersonalApiKeyClosing(t *testing.T) {
