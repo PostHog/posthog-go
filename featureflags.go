@@ -852,10 +852,12 @@ func calculateHash(prefix, distinctId, salt string) float64 {
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	// When channel is open this will block. When channel is closed it will immediately exit.
-	_, closed := <-poller.loaded
-	if closed && poller.featureFlags == nil {
+	_, opened := <-poller.loaded
+	poller.mutex.RLock()
+	defer poller.mutex.RUnlock()
+	if !opened && poller.featureFlags == nil {
 		// There was an error with initial flag fetching
-		return nil, fmt.Errorf("flags were not successfully fetched yet")
+		return nil, errors.New("flags were not successfully fetched yet")
 	}
 
 	return poller.featureFlags, nil
