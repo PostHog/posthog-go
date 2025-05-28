@@ -22,22 +22,24 @@ import (
 const LONG_SCALE = 0xfffffffffffffff
 
 type FeatureFlagsPoller struct {
-	loaded         chan bool
-	shutdown       chan bool
-	forceReload    chan bool
-	featureFlags   []FeatureFlag
-	cohorts        map[string]PropertyGroup
-	groups         map[string]string
-	personalApiKey string
-	projectApiKey  string
-	Errorf         func(format string, args ...interface{})
-	Endpoint       string
-	http           http.Client
-	mutex          sync.RWMutex
-	nextPollTick   func() time.Duration
-	flagTimeout    time.Duration
-	decider        decider
-	disableGeoIP   bool
+	// firstFeatureFlagRequestFinished is used to blog feature flag usage before the first feature flag request is done.
+	// After the request the channel get closed.
+	firstFeatureFlagRequestFinished chan bool
+	shutdown                        chan bool
+	forceReload                     chan bool
+	featureFlags                    []FeatureFlag
+	cohorts                         map[string]PropertyGroup
+	groups                          map[string]string
+	personalApiKey                  string
+	projectApiKey                   string
+	Errorf                          func(format string, args ...interface{})
+	Endpoint                        string
+	http                            http.Client
+	mutex                           sync.RWMutex
+	nextPollTick                    func() time.Duration
+	flagTimeout                     time.Duration
+	decider                         decider
+	disableGeoIP                    bool
 }
 
 type FeatureFlag struct {
@@ -135,19 +137,19 @@ func newFeatureFlagsPoller(
 	}
 
 	poller := FeatureFlagsPoller{
-		loaded:         make(chan bool),
-		shutdown:       make(chan bool),
-		forceReload:    make(chan bool),
-		personalApiKey: personalApiKey,
-		projectApiKey:  projectApiKey,
-		Errorf:         errorf,
-		Endpoint:       endpoint,
-		http:           httpClient,
-		mutex:          sync.RWMutex{},
-		nextPollTick:   nextPollTick,
-		flagTimeout:    flagTimeout,
-		decider:        decider,
-		disableGeoIP:   disableGeoIP,
+		firstFeatureFlagRequestFinished: make(chan bool),
+		shutdown:                        make(chan bool),
+		forceReload:                     make(chan bool),
+		personalApiKey:                  personalApiKey,
+		projectApiKey:                   projectApiKey,
+		Errorf:                          errorf,
+		Endpoint:                        endpoint,
+		http:                            httpClient,
+		mutex:                           sync.RWMutex{},
+		nextPollTick:                    nextPollTick,
+		flagTimeout:                     flagTimeout,
+		decider:                         decider,
+		disableGeoIP:                    disableGeoIP,
 	}
 
 	go poller.run()
@@ -156,7 +158,7 @@ func newFeatureFlagsPoller(
 
 func (poller *FeatureFlagsPoller) run() {
 	poller.fetchNewFeatureFlags()
-	close(poller.loaded)
+	close(poller.firstFeatureFlagRequestFinished)
 
 	for {
 		timer := time.NewTimer(poller.nextPollTick())
@@ -852,10 +854,10 @@ func calculateHash(prefix, distinctId, salt string) float64 {
 
 func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	// When channel is open this will block. When channel is closed it will immediately exit.
-	_, opened := <-poller.loaded
+	<-poller.firstFeatureFlagRequestFinished
 	poller.mutex.RLock()
 	defer poller.mutex.RUnlock()
-	if !opened && poller.featureFlags == nil {
+	if poller.featureFlags == nil {
 		// There was an error with initial flag fetching
 		return nil, errors.New("flags were not successfully fetched yet")
 	}
