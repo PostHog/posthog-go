@@ -4505,6 +4505,33 @@ func TestComplexCohortsWithNegationLocally(t *testing.T) {
 	}
 }
 
+func TestFlagsFetchFail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.WriteHeader(http.StatusInternalServerError)
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore batch requests
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey:            "some very secret key",
+		Endpoint:                  server.URL,
+		FeatureFlagRequestTimeout: 10 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+	_, err = client.GetFeatureFlag(FeatureFlagPayload{
+		Key:                 "enabled-flag",
+		DistinctId:          "123",
+		OnlyEvaluateLocally: true,
+	})
+	require.EqualError(t, err, "flags were not successfully fetched yet")
+}
+
 func TestFlagWithTimeoutExceeded(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
