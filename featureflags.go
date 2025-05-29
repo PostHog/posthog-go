@@ -22,7 +22,7 @@ import (
 const LONG_SCALE = 0xfffffffffffffff
 
 type FeatureFlagsPoller struct {
-	// firstFeatureFlagRequestFinished is used to blog feature flag usage before the first feature flag request is done.
+	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
 	// After the request the channel get closed.
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
