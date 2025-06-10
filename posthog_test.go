@@ -57,7 +57,19 @@ type testLogger struct {
 	errorf func(string, ...interface{})
 }
 
+func (l testLogger) Debugf(format string, args ...interface{}) {
+	if l.logf != nil {
+		l.logf(format, args...)
+	}
+}
+
 func (l testLogger) Logf(format string, args ...interface{}) {
+	if l.logf != nil {
+		l.logf(format, args...)
+	}
+}
+
+func (l testLogger) Warnf(format string, args ...interface{}) {
 	if l.logf != nil {
 		l.logf(format, args...)
 	}
@@ -397,7 +409,7 @@ func TestEnqueue(t *testing.T) {
 			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 				Endpoint:     server.URL,
 				Verbose:      true,
-				Logger:       t,
+				Logger:       toLogger(t),
 				BatchSize:    1,
 				now:          mockTime,
 				DisableGeoIP: test.disableGeoIP,
@@ -437,10 +449,9 @@ func (c *customMessage) APIfy() APIMessage {
 func TestEnqueuingCustomTypeFails(t *testing.T) {
 	client := New("0123456789")
 	err := client.Enqueue(&customMessage{})
-
-	if err.Error() != "messages with custom types cannot be enqueued: *posthog.customMessage" {
-		t.Errorf("invalid/missing error when queuing unsupported message: %v", err)
-	}
+	require.Error(t, err)
+	require.EqualError(t, err, "messages with custom types cannot be enqueued: *posthog.customMessage",
+		"invalid/missing error when queuing unsupported message")
 }
 
 func TestCaptureWithInterval(t *testing.T) {
@@ -456,7 +467,7 @@ func TestCaptureWithInterval(t *testing.T) {
 		Endpoint: server.URL,
 		Interval: interval,
 		Verbose:  true,
-		Logger:   t,
+		Logger:   toLogger(t),
 		now:      mockTime,
 	})
 	defer client.Close()
@@ -491,7 +502,7 @@ func TestCaptureWithTimestamp(t *testing.T) {
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Endpoint:  server.URL,
 		Verbose:   true,
-		Logger:    t,
+		Logger:    toLogger(t),
 		BatchSize: 1,
 		now:       mockTime,
 	})
@@ -524,7 +535,7 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 		Endpoint:               server.URL,
 		Verbose:                true,
 		DefaultEventProperties: NewProperties().Set("service", "api"),
-		Logger:                 t,
+		Logger:                 toLogger(t),
 		BatchSize:              1,
 		now:                    mockTime,
 	})
@@ -556,7 +567,7 @@ func TestCaptureMany(t *testing.T) {
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Endpoint:  server.URL,
 		Verbose:   true,
-		Logger:    t,
+		Logger:    toLogger(t),
 		BatchSize: 3,
 		now:       mockTime,
 	})
@@ -668,25 +679,14 @@ func TestClientMarshalMessageError(t *testing.T) {
 	}
 }
 
-func TestClientNewRequestError(t *testing.T) {
-	errchan := make(chan error, 1)
-
-	client, _ := NewWithConfig("0123456789", Config{
-		Endpoint: "://localhost:80", // Malformed endpoint URL.
-		Logger:   testLogger{t.Logf, t.Logf},
-		Callback: testCallback{
-			nil,
-			func(m APIMessage, e error) { errchan <- e },
-		},
+func TestClientErrorWithMalformedEndpoint(t *testing.T) {
+	_, err := NewWithConfig("0123456789", Config{
+		Endpoint:  "://localhost:80", // Malformed endpoint URL.
+		Logger:    testLogger{t.Logf, t.Logf},
 		Transport: testTransportOK,
 	})
 
-	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
-	client.Close()
-
-	if err := <-errchan; err == nil {
-		t.Error("failure callback not triggered for an invalid request")
-	}
+	require.ErrorContains(t, err, "invalid endpoint")
 }
 
 func TestClientRoundTripperError(t *testing.T) {
@@ -799,7 +799,7 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 	reschan := make(chan bool, 1)
 	errchan := make(chan error, 1)
 
-	client, _ := NewWithConfig("0123456789", Config{
+	client, err := NewWithConfig("0123456789", Config{
 		Logger: testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
 			func(m APIMessage) { reschan <- true },
@@ -811,10 +811,13 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 		BatchSize:             1,
 		maxConcurrentRequests: 1,
 	})
+	require.NoError(t, err)
 
-	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
-	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
-	client.Close()
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
+	require.NoError(t, client.Close())
+	close(reschan)
+	close(errchan)
 
 	if _, ok := <-reschan; !ok {
 		t.Error("one of the requests should have succeeded but the result channel was empty")
@@ -822,7 +825,6 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 
 	if err := <-errchan; err == nil {
 		t.Error("failure callback not triggered after reaching the request limit")
-
 	} else if err != ErrTooManyRequests {
 		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
 	}
@@ -833,26 +835,18 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	errchan := make(chan error, 1)
 	defer close(errchan)
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Logger: testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
 			func(m APIMessage) {},
 			func(m APIMessage, e error) { errchan <- e },
 		},
 	})
-	defer client.Close()
+	require.NoError(t, err)
 
-	receivedErrors := [2]error{}
-	receivedErrors[0] = client.ReloadFeatureFlags()
-	_, receivedErrors[1] = client.GetFeatureFlags()
-
-	for _, receivedError := range receivedErrors {
-		if receivedError == nil || receivedError.Error() != "specifying a PersonalApiKey is required for using feature flags" {
-			t.Errorf("feature flags methods should return error without personal api key")
-			return
-		}
-	}
-
+	require.ErrorContains(t, client.ReloadFeatureFlags(), "no PersonalAPIKey provided")
+	_, err = client.GetFeatureFlags()
+	require.ErrorContains(t, err, "no PersonalAPIKey provided")
 }
 
 func TestIsFeatureEnabled(t *testing.T) {
@@ -1741,7 +1735,7 @@ func TestCaptureSendFlags(t *testing.T) {
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Endpoint:  server.URL,
 		Verbose:   true,
-		Logger:    t,
+		Logger:    toLogger(t),
 		BatchSize: 1,
 		now:       mockTime,
 
