@@ -32,7 +32,8 @@ type FeatureFlagsPoller struct {
 	groups                          map[string]string
 	personalApiKey                  string
 	projectApiKey                   string
-	Errorf                          func(format string, args ...interface{})
+	localEvalUrl                    *url.URL
+	Logger                          Logger
 	Endpoint                        string
 	http                            http.Client
 	mutex                           sync.RWMutex
@@ -112,8 +113,18 @@ type DecideResponse struct {
 	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
 }
 
+type matchErrorCode int
+
+var (
+	flagExperienceContinuityEnabled matchErrorCode = 1
+	missingPropertyValue            matchErrorCode = 2 // property was not provided in a call
+	propertyIsNotSet                matchErrorCode = 3 // maybe on server this property is set
+	unknownOperator                 matchErrorCode = 4 // if you encountered that, file an issue in our GitHub
+)
+
 type InconclusiveMatchError struct {
-	msg string
+	code matchErrorCode
+	msg  string
 }
 
 func (e *InconclusiveMatchError) Error() string {
@@ -123,7 +134,7 @@ func (e *InconclusiveMatchError) Error() string {
 func newFeatureFlagsPoller(
 	projectApiKey string,
 	personalApiKey string,
-	errorf func(format string, args ...interface{}),
+	logger Logger,
 	endpoint string,
 	httpClient http.Client,
 	pollingInterval time.Duration,
@@ -131,7 +142,13 @@ func newFeatureFlagsPoller(
 	flagTimeout time.Duration,
 	decider decider,
 	disableGeoIP bool,
-) *FeatureFlagsPoller {
+) (*FeatureFlagsPoller, error) {
+	localEvaluationEndpoint := "/api/feature_flag/local_evaluation"
+	localEvalURL, err := url.Parse(endpoint + localEvaluationEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("creating local evaluation URL - %w", err)
+	}
+
 	if nextPollTick == nil {
 		nextPollTick = func() time.Duration { return pollingInterval }
 	}
@@ -142,7 +159,8 @@ func newFeatureFlagsPoller(
 		forceReload:                     make(chan bool),
 		personalApiKey:                  personalApiKey,
 		projectApiKey:                   projectApiKey,
-		Errorf:                          errorf,
+		localEvalUrl:                    localEvalURL,
+		Logger:                          logger,
 		Endpoint:                        endpoint,
 		http:                            httpClient,
 		mutex:                           sync.RWMutex{},
@@ -153,7 +171,7 @@ func newFeatureFlagsPoller(
 	}
 
 	go poller.run()
-	return &poller
+	return &poller, nil
 }
 
 func (poller *FeatureFlagsPoller) run() {
@@ -182,13 +200,13 @@ func (poller *FeatureFlagsPoller) run() {
 // the feature flags fetched from the flags API.
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
-	headers := [][2]string{{"Authorization", "Bearer " + personalApiKey + ""}}
+	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
 	res, cancel, err := poller.localEvaluationFlags(headers)
-	defer cancel()
 	if err != nil {
-		poller.Errorf("Unable to fetch feature flags: %s", err)
+		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
+	defer cancel()
 
 	// Handle quota limit response (HTTP 402)
 	if res.StatusCode == http.StatusPaymentRequired {
@@ -198,36 +216,43 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.cohorts = map[string]PropertyGroup{}
 		poller.groups = map[string]string{}
 		poller.mutex.Unlock()
-		poller.Errorf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
+		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
 		return
 	}
 
 	if res.StatusCode != http.StatusOK {
-		poller.Errorf("Unable to fetch feature flags, status: %s", res.Status)
+		poller.Logger.Errorf("Unable to fetch feature flags, status: %s", res.Status)
 		return
 	}
 
 	defer res.Body.Close()
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
-		poller.Errorf("Unable to fetch feature flags: %s", err)
+		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
-	featureFlagsResponse := FeatureFlagsResponse{}
-	err = json.Unmarshal([]byte(resBody), &featureFlagsResponse)
-	if err != nil {
-		poller.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
+	var featureFlagsResponse FeatureFlagsResponse
+	if err = json.Unmarshal(resBody, &featureFlagsResponse); err != nil {
+		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
 		return
 	}
-	newFlags := []FeatureFlag{}
-	newFlags = append(newFlags, featureFlagsResponse.Flags...)
+	newFlags := append([]FeatureFlag(nil), featureFlagsResponse.Flags...)
 	poller.mutex.Lock()
+	defer poller.mutex.Unlock()
 	poller.featureFlags = newFlags
 	poller.cohorts = featureFlagsResponse.Cohorts
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
-	poller.mutex.Unlock()
+}
+
+func (poller *FeatureFlagsPoller) logComputeFlagLocallyErr(key string, onlyLocal bool, err error) {
+	var dest *InconclusiveMatchError
+	if errors.As(err, &dest) && onlyLocal {
+		poller.Logger.Errorf("Unable to compute flag locally (%s) - %s", key, err)
+	} else {
+		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", key, err)
+	}
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
@@ -244,14 +269,14 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.GroupProperties,
 			poller.cohorts,
 		)
-	}
-
-	if err != nil {
-		poller.Errorf("Unable to compute flag locally (%s) - %s", flag.Key, err)
+		if err != nil {
+			poller.logComputeFlagLocallyErr(flagConfig.Key, flagConfig.OnlyEvaluateLocally, err)
+		}
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err = poller.getFeatureFlagVariant(flag, flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, err
 		}
@@ -276,10 +301,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 		)
 	}
 	if err != nil {
-		poller.Errorf("Unable to compute flag locally (%s) - %s", flag.Key, err)
-	}
-
-	if variant != nil {
+		poller.logComputeFlagLocallyErr(flagConfig.Key, flagConfig.OnlyEvaluateLocally, err)
+	} else if variant != nil {
 		payload, ok := flag.Filters.Payloads[fmt.Sprintf("%v", variant)]
 		if ok {
 			return payload, nil
@@ -299,11 +322,12 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
+	var featureFlag FeatureFlag
 	featureFlags, err := poller.GetFeatureFlags()
 	if err != nil {
-		return FeatureFlag{}, err
+		return featureFlag, err
 	}
-	var featureFlag FeatureFlag
+
 	// avoid using flag for conflicts with Golang's stdlib `flag`
 	for _, storedFlag := range featureFlags {
 		if flagConfig.Key == storedFlag.Key {
@@ -337,8 +361,9 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 				cohorts,
 			)
 			if err != nil {
-				poller.Errorf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
+				poller.logComputeFlagLocallyErr(storedFlag.Key, flagConfig.OnlyEvaluateLocally, err)
 				fallbackToDecide = true
+				// TODO we lose this error, never return it
 			} else {
 				response[storedFlag.Key] = result
 			}
@@ -365,6 +390,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 
 	return response, nil
 }
+
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,
 	distinctId string,
@@ -374,7 +400,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	cohorts map[string]PropertyGroup,
 ) (interface{}, error) {
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
-		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
+		return nil, &InconclusiveMatchError{flagExperienceContinuityEnabled, "Flag has experience continuity enabled"}
 	}
 
 	if !flag.Active {
@@ -415,7 +441,7 @@ func getMatchingVariant(flag FeatureFlag, distinctId string) interface{} {
 
 	hashValue := calculateHash(flag.Key+".", distinctId, "variant")
 	for _, variant := range lookupTable {
-		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
+		if hashValue >= variant.ValueMin && hashValue < variant.ValueMax {
 			return variant.Key
 		}
 	}
@@ -471,21 +497,23 @@ func matchFeatureFlagProperties(
 		return iValue < jValue
 	})
 
+	var inconclusiveErrors []error
 	for _, condition := range sortedConditions {
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
-			if _, ok := err.(*InconclusiveMatchError); ok {
+			if errors.Is(err, &InconclusiveMatchError{}) {
 				isInconclusive = true
+				inconclusiveErrors = append(inconclusiveErrors, err)
 			} else {
 				return nil, err
 			}
-		}
-
-		if isMatch {
+		} else if isMatch {
 			variantOverride := condition.Variant
 			multivariates := flag.Filters.Multivariate
 
-			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil && containsVariant(multivariates.Variants, *variantOverride) {
+			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil &&
+				containsVariant(multivariates.Variants, *variantOverride) {
+
 				return *variantOverride, nil
 			} else {
 				return getMatchingVariant(flag, distinctId), nil
@@ -494,7 +522,7 @@ func matchFeatureFlagProperties(
 	}
 
 	if isInconclusive {
-		return false, &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+		return false, errors.Join(inconclusiveErrors...)
 	}
 
 	return false, nil
@@ -640,11 +668,11 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	operator := property.Operator
 	value := property.Value
 	if _, ok := properties[key]; !ok {
-		return false, &InconclusiveMatchError{"Can't match properties without a given property value"}
+		return false, &InconclusiveMatchError{missingPropertyValue, "Can't match properties without a given property value"}
 	}
 
 	if operator == "is_not_set" {
-		return false, &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
+		return false, &InconclusiveMatchError{propertyIsNotSet, "Can't match properties with operator is_not_set"}
 	}
 
 	override_value := properties[key]
@@ -769,7 +797,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return overrideValueOrderable <= valueOrderable, nil
 	}
 
-	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
+	return false, &InconclusiveMatchError{unknownOperator, "Unknown operator: " + operator}
 
 }
 
@@ -865,27 +893,25 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	return poller.featureFlags, nil
 }
 
-func (poller *FeatureFlagsPoller) localEvaluationFlags(headers [][2]string) (*http.Response, context.CancelFunc, error) {
-	localEvaluationEndpoint := "api/feature_flag/local_evaluation"
-
-	url, err := url.Parse(poller.Endpoint + "/" + localEvaluationEndpoint + "")
-	if err != nil {
-		poller.Errorf("creating url - %s", err)
-	}
-	searchParams := url.Query()
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header) (*http.Response, context.CancelFunc, error) {
+	var u url.URL
+	u = *poller.localEvalUrl
+	searchParams := u.Query()
 	searchParams.Add("token", poller.projectApiKey)
 	searchParams.Add("send_cohorts", "true")
-	url.RawQuery = searchParams.Encode()
+	u.RawQuery = searchParams.Encode()
 
-	return poller.request("GET", url, []byte{}, headers, time.Duration(10)*time.Second)
+	return poller.request("GET", u.String(), nil, headers, poller.flagTimeout)
 }
 
-func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestData []byte, headers [][2]string, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
+func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestData []byte, headers http.Header, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
-	req, err := http.NewRequestWithContext(ctx, method, url.String(), bytes.NewReader(requestData))
+	req, err := http.NewRequestWithContext(ctx, method, reqUrl, bytes.NewReader(requestData))
 	if err != nil {
-		poller.Errorf("creating request - %s", err)
+		poller.Logger.Errorf("creating request - %s", err)
+		cancel()
+		return nil, nil, err
 	}
 
 	version := getVersion()
@@ -894,13 +920,13 @@ func (poller *FeatureFlagsPoller) request(method string, url *url.URL, requestDa
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(requestData)))
 
-	for _, header := range headers {
-		req.Header.Add(header[0], header[1])
+	for key, val := range headers {
+		req.Header[key] = val
 	}
 
 	res, err := poller.http.Do(req)
 	if err != nil {
-		poller.Errorf("sending request - %s", err)
+		poller.Logger.Errorf("sending request - %s", err)
 	}
 
 	return res, cancel, err
@@ -922,7 +948,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 	return poller.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, poller.disableGeoIP)
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagVariant(featureFlag FeatureFlag, key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
 	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
