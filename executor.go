@@ -1,39 +1,43 @@
 package posthog
 
+import "sync"
+
 type executor struct {
-	queue chan func()
+	m         sync.Mutex
+	available int
+	closed    bool
 }
 
 func newExecutor(cap int) *executor {
 	e := &executor{
-		queue: make(chan func()),
-	}
-
-	for i := 0; i < cap; i++ {
-		go e.loop()
+		available: cap,
 	}
 
 	return e
 }
 
-func (e *executor) loop() {
-	for task := range e.queue {
-		task()
-	}
-}
-
 func (e *executor) do(task func()) bool {
-	select {
-	case e.queue <- task:
-		// task is enqueued successfully
-		return true
-	default:
-		// buffer was full; inform the caller rather than blocking
+	e.m.Lock()
+	defer e.m.Unlock()
+
+	if e.closed || e.available <= 0 {
+		return false
 	}
 
-	return false
+	e.available--
+	go func() {
+		defer func() {
+			e.m.Lock()
+			defer e.m.Unlock()
+			e.available++
+		}()
+		task()
+	}()
+	return true
 }
 
 func (e *executor) close() {
-	close(e.queue)
+	e.m.Lock()
+	defer e.m.Unlock()
+	e.closed = true
 }
