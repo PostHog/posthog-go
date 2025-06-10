@@ -226,7 +226,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
 		return
 	}
-	newFlags := append([]FeatureFlag(nil), featureFlagsResponse.Flags...)
+	newFlags := append(make([]FeatureFlag, len(featureFlagsResponse.Flags)), featureFlagsResponse.Flags...)
 	poller.mutex.Lock()
 	defer poller.mutex.Unlock()
 	poller.featureFlags = newFlags

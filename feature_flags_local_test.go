@@ -796,15 +796,17 @@ func TestGetAllFlagsEmptyLocal(t *testing.T) {
 
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
+	require.NoError(t, err)
 	defer client.Close()
 
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+	featureVariants, err := client.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId: "distinct-id",
 	})
+	require.NoError(t, err)
 
 	if featureVariants["beta-feature"] != "decide-fallback-value" || featureVariants["beta-feature2"] != "variant-2" {
 		t.Error("Should match decide values")
