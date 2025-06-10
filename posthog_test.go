@@ -57,7 +57,19 @@ type testLogger struct {
 	errorf func(string, ...interface{})
 }
 
+func (l testLogger) Debugf(format string, args ...interface{}) {
+	if l.logf != nil {
+		l.logf(format, args...)
+	}
+}
+
 func (l testLogger) Logf(format string, args ...interface{}) {
+	if l.logf != nil {
+		l.logf(format, args...)
+	}
+}
+
+func (l testLogger) Warnf(format string, args ...interface{}) {
 	if l.logf != nil {
 		l.logf(format, args...)
 	}
@@ -397,7 +409,7 @@ func TestEnqueue(t *testing.T) {
 			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 				Endpoint:     server.URL,
 				Verbose:      true,
-				Logger:       t,
+				Logger:       toLogger(t),
 				BatchSize:    1,
 				now:          mockTime,
 				DisableGeoIP: test.disableGeoIP,
@@ -437,10 +449,9 @@ func (c *customMessage) APIfy() APIMessage {
 func TestEnqueuingCustomTypeFails(t *testing.T) {
 	client := New("0123456789")
 	err := client.Enqueue(&customMessage{})
-
-	if err.Error() != "messages with custom types cannot be enqueued: *posthog.customMessage" {
-		t.Errorf("invalid/missing error when queuing unsupported message: %v", err)
-	}
+	require.Error(t, err)
+	require.EqualError(t, err, "messages with custom types cannot be enqueued: *posthog.customMessage",
+		"invalid/missing error when queuing unsupported message")
 }
 
 func TestCaptureWithInterval(t *testing.T) {
@@ -456,7 +467,7 @@ func TestCaptureWithInterval(t *testing.T) {
 		Endpoint: server.URL,
 		Interval: interval,
 		Verbose:  true,
-		Logger:   t,
+		Logger:   toLogger(t),
 		now:      mockTime,
 	})
 	defer client.Close()
@@ -491,7 +502,7 @@ func TestCaptureWithTimestamp(t *testing.T) {
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Endpoint:  server.URL,
 		Verbose:   true,
-		Logger:    t,
+		Logger:    toLogger(t),
 		BatchSize: 1,
 		now:       mockTime,
 	})
@@ -524,7 +535,7 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 		Endpoint:               server.URL,
 		Verbose:                true,
 		DefaultEventProperties: NewProperties().Set("service", "api"),
-		Logger:                 t,
+		Logger:                 toLogger(t),
 		BatchSize:              1,
 		now:                    mockTime,
 	})
@@ -556,7 +567,7 @@ func TestCaptureMany(t *testing.T) {
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Endpoint:  server.URL,
 		Verbose:   true,
-		Logger:    t,
+		Logger:    toLogger(t),
 		BatchSize: 3,
 		now:       mockTime,
 	})
@@ -1741,7 +1752,7 @@ func TestCaptureSendFlags(t *testing.T) {
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Endpoint:  server.URL,
 		Verbose:   true,
-		Logger:    t,
+		Logger:    toLogger(t),
 		BatchSize: 1,
 		now:       mockTime,
 

@@ -9,7 +9,7 @@ import (
 )
 
 func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
-	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
+	client, err := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            true,
@@ -18,6 +18,10 @@ func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,
 	})
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
 	defer client.Close()
 
 	boolResult, boolErr := client.IsFeatureEnabled(

@@ -4547,11 +4547,12 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey:            "some very secret key",
 		Endpoint:                  server.URL,
 		FeatureFlagRequestTimeout: 10 * time.Millisecond,
 	})
+	require.NoError(t, err)
 	defer client.Close()
 
 	isMatch, err := client.IsFeatureEnabled(
@@ -4634,7 +4635,7 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 		PersonalApiKey:            "some very secret key",
 		Endpoint:                  server.URL,
 		FeatureFlagRequestTimeout: 10 * time.Millisecond,
-		Logger:                    StdLogger(log.New(&buf, "posthog-test", log.LstdFlags)),
+		Logger:                    StdLogger(log.New(&buf, "posthog-test", log.LstdFlags), false),
 	})
 	defer client.Close()
 

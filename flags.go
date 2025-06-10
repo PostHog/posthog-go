@@ -93,9 +93,9 @@ type FlagsResponse struct {
 
 // CommonResponseFields contains fields common to all decide response versions
 type CommonResponseFields struct {
-	QuotaLimited              *[]string `json:"quota_limited"`
-	RequestId                 string    `json:"requestId"`
-	ErrorsWhileComputingFlags bool      `json:"errorsWhileComputingFlags"`
+	QuotaLimited              []string `json:"quota_limited"`
+	RequestId                 string   `json:"requestId"`
+	ErrorsWhileComputingFlags bool     `json:"errorsWhileComputingFlags"`
 }
 
 // UnmarshalJSON implements custom unmarshaling to handle both v3 and v4 formats
@@ -165,20 +165,27 @@ type flagsClient struct {
 	endpoint                  string
 	http                      http.Client
 	featureFlagRequestTimeout time.Duration
-	errorf                    func(format string, args ...interface{})
+	logger                    Logger
 }
 
 // newFlagsClient creates a new flagsClient
-func newFlagsClient(apiKey string, endpoint string, httpClient http.Client, featureFlagRequestTimeout time.Duration,
-	errorf func(format string, args ...interface{})) *flagsClient {
+func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
+	featureFlagRequestTimeout time.Duration, logger Logger) (*flagsClient, error) {
+
+	// Try v2 endpoint first
+	flagsEndpoint := "flags/?v=2"
+	flagsEndpointURL, err := url.Parse(endpoint + "/" + flagsEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("creating url: %v", err)
+	}
 
 	return &flagsClient{
 		apiKey:                    apiKey,
-		endpoint:                  endpoint,
+		endpoint:                  flagsEndpointURL.String(),
 		http:                      httpClient,
 		featureFlagRequestTimeout: featureFlagRequestTimeout,
-		errorf:                    errorf,
-	}
+		logger:                    logger,
+	}, nil
 }
 
 // makeFlagsRequest makes a request to the flags endpoint and deserializes the response
@@ -199,14 +206,7 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, groups Groups, personP
 		return nil, fmt.Errorf("unable to marshal flags endpoint request data: %v", err)
 	}
 
-	// Try v2 endpoint first
-	flagsEndpoint := "flags/?v=2"
-	url, err := url.Parse(d.endpoint + "/" + flagsEndpoint)
-	if err != nil {
-		return nil, fmt.Errorf("creating url: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", url.String(), bytes.NewReader(requestDataBytes))
+	req, err := http.NewRequest("POST", d.endpoint, bytes.NewReader(requestDataBytes))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %v", err)
 	}
@@ -241,7 +241,7 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, groups Groups, personP
 	}
 
 	if flagsResponse.ErrorsWhileComputingFlags {
-		d.errorf("error while computing feature flags, some flags may be missing or incorrect. Learn more at https://posthog.com/docs/feature-flags/best-practices")
+		d.logger.Errorf("error while computing feature flags, some flags may be missing or incorrect. Learn more at https://posthog.com/docs/feature-flags/best-practices")
 	}
 
 	return &flagsResponse, nil

@@ -121,8 +121,8 @@ func New(apiKey string) Client {
 	return c
 }
 
-// Instantiate a new client that uses the write key and configuration passed as
-// arguments to send messages to the backend.
+// NewWithConfig instantiate a new client that uses the write key and configuration passed
+// as arguments to send messages to the backend.
 // The function will return an error if the configuration contained impossible
 // values (like a negative flush interval for example).
 // When the function returns an error the returned client will always be nil.
@@ -146,13 +146,16 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
 
-	c.decider = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Errorf)
+	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("error creating flags client: %v", err)
+	}
 
 	if len(c.PersonalApiKey) > 0 {
-		c.featureFlagsPoller = newFeatureFlagsPoller(
+		c.featureFlagsPoller, err = newFeatureFlagsPoller(
 			c.key,
 			c.Config.PersonalApiKey,
-			c.Errorf,
+			c.Logger,
 			c.Endpoint,
 			c.http,
 			c.DefaultFeatureFlagsPollingInterval,
@@ -161,6 +164,9 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.decider,
 			c.Config.GetDisableGeoIP(),
 		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	go c.loop()
@@ -408,14 +414,17 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 	return c.makeRemoteConfigRequest(flagKey)
 }
 
+// ErrNoPersonalAPIKey is returned when oen tries to use feature flags without specifying a PersonalAPIKey
+var ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
+
 // GetFeatureFlags returns all feature flag definitions used for local evaluation
 // This is only available when using a PersonalApiKey. Not to be confused with
 // GetAllFlags, which returns all flags and their values for a given user.
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	if c.featureFlagsPoller == nil {
-		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
-		c.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
+		err := fmt.Errorf("cannot use feature flags: %w", ErrNoPersonalAPIKey)
+		c.Logger.Debugf(err.Error())
+		return nil, err
 	}
 	return c.featureFlagsPoller.GetFeatureFlags()
 }
@@ -558,7 +567,7 @@ func (c *client) report(res *http.Response) (err error) {
 		return
 	}
 
-	c.logf("response %d %s – %s", res.StatusCode, res.Status, string(body))
+	c.Logger.Logf("response %d %s – %s", res.StatusCode, res.Status, string(body))
 	return fmt.Errorf("%d %s", res.StatusCode, res.Status)
 }
 
@@ -634,13 +643,7 @@ func (c *client) flush(q *messageQueue, wg *sync.WaitGroup, ex *executor) {
 }
 
 func (c *client) debugf(format string, args ...interface{}) {
-	if c.Verbose {
-		c.logf(format, args...)
-	}
-}
-
-func (c *client) logf(format string, args ...interface{}) {
-	c.Logger.Logf(format, args...)
+	c.Logger.Debugf(format, args...)
 }
 
 func (c *client) Errorf(format string, args ...interface{}) {
@@ -724,12 +727,13 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 
 // isFeatureFlagsQuotaLimited checks if feature flags are quota limited in the flags response
 func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
-	if flagsResponse.QuotaLimited != nil {
-		for _, limitedFeature := range *flagsResponse.QuotaLimited {
-			if limitedFeature == "feature_flags" {
-				c.Errorf("[FEATURE FLAGS] PostHog feature flags quota limited. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
-				return true
-			}
+	if flagsResponse.QuotaLimited == nil {
+		return false
+	}
+	for _, limitedFeature := range flagsResponse.QuotaLimited {
+		if limitedFeature == "feature_flags" {
+			c.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
+			return true
 		}
 	}
 	return false
