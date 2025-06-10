@@ -9,7 +9,7 @@ import (
 func TestConfigZeroValue(t *testing.T) {
 	c := Config{}
 
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Error("validating the zero-value configuration failed:", err)
 	}
 }
@@ -19,7 +19,7 @@ func TestConfigInvalidInterval(t *testing.T) {
 		Interval: -1 * time.Second,
 	}
 
-	if err := c.validate(); err == nil {
+	if err := c.Validate(); err == nil {
 		t.Error("no error returned when validating a malformed config")
 
 	} else if e, ok := err.(ConfigError); !ok {
@@ -35,7 +35,7 @@ func TestConfigInvalidBatchSize(t *testing.T) {
 		BatchSize: -1,
 	}
 
-	if err := c.validate(); err == nil {
+	if err := c.Validate(); err == nil {
 		t.Error("no error returned when validating a malformed config")
 
 	} else if e, ok := err.(ConfigError); !ok {

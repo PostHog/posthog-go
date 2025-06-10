@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -123,9 +124,9 @@ const (
 	DefaultBatchSize = 250
 )
 
-// Verifies that fields that don't have zero-values are set to valid values,
+// Validate verifies that fields that don't have zero-values are set to valid values,
 // returns an error describing the problem if a field was invalid.
-func (c *Config) validate() error {
+func (c *Config) Validate() error {
 	if c.Interval < 0 {
 		return ConfigError{
 			Reason: "negative time intervals are not supported",
@@ -139,6 +140,14 @@ func (c *Config) validate() error {
 			Reason: "negative batch sizes are not supported",
 			Field:  "BatchSize",
 			Value:  c.BatchSize,
+		}
+	}
+
+	if _, err := url.Parse(c.Endpoint); err != nil {
+		return ConfigError{
+			Reason: "invalid endpoint",
+			Field:  "Endpoint",
+			Value:  c.Endpoint,
 		}
 	}
 

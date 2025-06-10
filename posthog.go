@@ -127,7 +127,7 @@ func New(apiKey string) Client {
 // values (like a negative flush interval for example).
 // When the function returns an error the returned client will always be nil.
 func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
-	if err = config.validate(); err != nil {
+	if err = config.Validate(); err != nil {
 		return
 	}
 
