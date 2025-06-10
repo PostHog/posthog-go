@@ -113,8 +113,18 @@ type DecideResponse struct {
 	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
 }
 
+type matchErrorCode int
+
+var (
+	flagExperienceContinuityEnabled matchErrorCode = 1
+	missingPropertyValue            matchErrorCode = 2 // property was not provided in a call
+	propertyIsNotSet                matchErrorCode = 3 // maybe on server this property is set
+	unknownOperator                 matchErrorCode = 4 // if you encountered that, file an issue in our GitHub
+)
+
 type InconclusiveMatchError struct {
-	msg string
+	code matchErrorCode
+	msg  string
 }
 
 func (e *InconclusiveMatchError) Error() string {
@@ -236,6 +246,15 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 }
 
+func (poller *FeatureFlagsPoller) logComputeFlagLocallyErr(key string, onlyLocal bool, err error) {
+	var dest *InconclusiveMatchError
+	if errors.As(err, &dest) && onlyLocal {
+		poller.Logger.Errorf("Unable to compute flag locally (%s) - %s", key, err)
+	} else {
+		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", key, err)
+	}
+}
+
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
 	flag, err := poller.getFeatureFlag(flagConfig)
 
@@ -250,14 +269,14 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.GroupProperties,
 			poller.cohorts,
 		)
-	}
-
-	if err != nil {
-		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
+		if err != nil {
+			poller.logComputeFlagLocallyErr(flagConfig.Key, flagConfig.OnlyEvaluateLocally, err)
+		}
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, err
 		}
@@ -282,7 +301,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 		)
 	}
 	if err != nil {
-		poller.Logger.Errorf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
+		poller.logComputeFlagLocallyErr(flagConfig.Key, flagConfig.OnlyEvaluateLocally, err)
 	} else if variant != nil {
 		payload, ok := flag.Filters.Payloads[fmt.Sprintf("%v", variant)]
 		if ok {
@@ -342,8 +361,9 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 				cohorts,
 			)
 			if err != nil {
-				poller.Logger.Errorf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
+				poller.logComputeFlagLocallyErr(storedFlag.Key, flagConfig.OnlyEvaluateLocally, err)
 				fallbackToDecide = true
+				// TODO we lose this error, never return it
 			} else {
 				response[storedFlag.Key] = result
 			}
@@ -370,6 +390,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 
 	return response, nil
 }
+
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,
 	distinctId string,
@@ -379,7 +400,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	cohorts map[string]PropertyGroup,
 ) (interface{}, error) {
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
-		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
+		return nil, &InconclusiveMatchError{flagExperienceContinuityEnabled, "Flag has experience continuity enabled"}
 	}
 
 	if !flag.Active {
@@ -420,7 +441,7 @@ func getMatchingVariant(flag FeatureFlag, distinctId string) interface{} {
 
 	hashValue := calculateHash(flag.Key+".", distinctId, "variant")
 	for _, variant := range lookupTable {
-		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
+		if hashValue >= variant.ValueMin && hashValue < variant.ValueMax {
 			return variant.Key
 		}
 	}
@@ -476,21 +497,23 @@ func matchFeatureFlagProperties(
 		return iValue < jValue
 	})
 
+	var inconclusiveErrors []error
 	for _, condition := range sortedConditions {
 		isMatch, err := isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
-			if _, ok := err.(*InconclusiveMatchError); ok {
+			if errors.Is(err, &InconclusiveMatchError{}) {
 				isInconclusive = true
+				inconclusiveErrors = append(inconclusiveErrors, err)
 			} else {
 				return nil, err
 			}
-		}
-
-		if isMatch {
+		} else if isMatch {
 			variantOverride := condition.Variant
 			multivariates := flag.Filters.Multivariate
 
-			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil && containsVariant(multivariates.Variants, *variantOverride) {
+			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil &&
+				containsVariant(multivariates.Variants, *variantOverride) {
+
 				return *variantOverride, nil
 			} else {
 				return getMatchingVariant(flag, distinctId), nil
@@ -499,7 +522,7 @@ func matchFeatureFlagProperties(
 	}
 
 	if isInconclusive {
-		return false, &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+		return false, errors.Join(inconclusiveErrors...)
 	}
 
 	return false, nil
@@ -645,11 +668,11 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	operator := property.Operator
 	value := property.Value
 	if _, ok := properties[key]; !ok {
-		return false, &InconclusiveMatchError{"Can't match properties without a given property value"}
+		return false, &InconclusiveMatchError{missingPropertyValue, "Can't match properties without a given property value"}
 	}
 
 	if operator == "is_not_set" {
-		return false, &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
+		return false, &InconclusiveMatchError{propertyIsNotSet, "Can't match properties with operator is_not_set"}
 	}
 
 	override_value := properties[key]
@@ -774,7 +797,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return overrideValueOrderable <= valueOrderable, nil
 	}
 
-	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
+	return false, &InconclusiveMatchError{unknownOperator, "Unknown operator: " + operator}
 
 }
 
