@@ -4579,9 +4579,7 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	if !strings.Contains(err.Error(), "context deadline exceeded") {
-		t.Error("Expected context deadline exceeded error")
-	}
+	require.ErrorContains(t, err, "context deadline exceeded")
 
 	require.Empty(t, variants)
 
