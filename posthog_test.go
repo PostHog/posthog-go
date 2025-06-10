@@ -835,26 +835,18 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	errchan := make(chan error, 1)
 	defer close(errchan)
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		Logger: testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
 			func(m APIMessage) {},
 			func(m APIMessage, e error) { errchan <- e },
 		},
 	})
-	defer client.Close()
+	require.NoError(t, err)
 
-	receivedErrors := [2]error{}
-	receivedErrors[0] = client.ReloadFeatureFlags()
-	_, receivedErrors[1] = client.GetFeatureFlags()
-
-	for _, receivedError := range receivedErrors {
-		if receivedError == nil || receivedError.Error() != "specifying a PersonalApiKey is required for using feature flags" {
-			t.Errorf("feature flags methods should return error without personal api key")
-			return
-		}
-	}
-
+	require.ErrorContains(t, client.ReloadFeatureFlags(), "no PersonalAPIKey provided")
+	_, err = client.GetFeatureFlags()
+	require.ErrorContains(t, err, "no PersonalAPIKey provided")
 }
 
 func TestIsFeatureEnabled(t *testing.T) {
