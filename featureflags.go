@@ -172,7 +172,6 @@ func (poller *FeatureFlagsPoller) run() {
 		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
-			close(poller.shutdown)
 			close(poller.forceReload)
 			timer.Stop()
 			return
@@ -914,7 +913,7 @@ func (poller *FeatureFlagsPoller) ForceReload() {
 }
 
 func (poller *FeatureFlagsPoller) shutdownPoller() {
-	poller.shutdown <- true
+	close(poller.shutdown)
 }
 
 // getFeatureFlagVariants is a helper function to get the feature flag variants for

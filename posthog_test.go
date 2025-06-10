@@ -799,7 +799,7 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 	reschan := make(chan bool, 1)
 	errchan := make(chan error, 1)
 
-	client, _ := NewWithConfig("0123456789", Config{
+	client, err := NewWithConfig("0123456789", Config{
 		Logger: testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
 			func(m APIMessage) { reschan <- true },
@@ -811,10 +811,13 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 		BatchSize:             1,
 		maxConcurrentRequests: 1,
 	})
+	require.NoError(t, err)
 
-	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
-	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
-	client.Close()
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
+	require.NoError(t, client.Close())
+	close(reschan)
+	close(errchan)
 
 	if _, ok := <-reschan; !ok {
 		t.Error("one of the requests should have succeeded but the result channel was empty")
@@ -822,7 +825,6 @@ func TestClientMaxConcurrentRequests(t *testing.T) {
 
 	if err := <-errchan; err == nil {
 		t.Error("failure callback not triggered after reaching the request limit")
-
 	} else if err != ErrTooManyRequests {
 		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
 	}
