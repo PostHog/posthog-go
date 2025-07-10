@@ -78,7 +78,7 @@ type FlagProperty struct {
 	Key      string      `json:"key"`
 	Operator string      `json:"operator"`
 	Value    interface{} `json:"value"`
-	Type     string      `json:"type"`
+	Type     string      `json:"type"` // Supported types: "person", "group", "cohort", "flag" (flag dependencies not implemented in local evaluation)
 	Negation bool        `json:"negation"`
 }
 
@@ -519,6 +519,10 @@ func isConditionMatch(
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
 				isMatch, err = matchCohort(prop, properties, cohorts)
+			} else if prop.Type == "flag" {
+				// Flag dependencies are not supported in local evaluation yet
+				// Skip this condition to allow other conditions to be evaluated
+				continue
 			} else {
 				isMatch, err = matchProperty(prop, properties)
 			}

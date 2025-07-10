@@ -916,6 +916,61 @@ func TestComputeInactiveFlagsLocally(t *testing.T) {
 	}
 }
 
+func TestFeatureFlagWithDependencies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-flag-with-dependencies.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test that flag evaluation doesn't fail when encountering a flag dependency
+	isMatch, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-with-dependencies",
+			DistinctId:          "test-user",
+			PersonProperties:    NewProperties().Set("email", "test@example.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	// Should not error out
+	if err != nil {
+		t.Errorf("Should not return error when encountering flag dependencies: %v", err)
+	}
+
+	// The flag should evaluate based on other conditions (email contains @example.com)
+	// Since flag dependencies aren't implemented, it should skip the flag condition
+	// and evaluate based on the email condition only
+	if isMatch != true {
+		t.Error("Should match based on email condition")
+	}
+
+	// Test with email that doesn't match
+	isMatch, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-with-dependencies",
+			DistinctId:          "test-user-2",
+			PersonProperties:    NewProperties().Set("email", "test@other.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if err != nil {
+		t.Errorf("Should not return error: %v", err)
+	}
+
+	if isMatch == true {
+		t.Error("Should not match when email doesn't contain @example.com")
+	}
+}
+
 func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fixture("feature_flag/test-simple-flag-without-rollout.json")))

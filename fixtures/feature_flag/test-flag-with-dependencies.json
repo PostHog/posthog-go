@@ -1,0 +1,37 @@
+{
+  "flags": [
+    {
+      "id": 1,
+      "name": "Test Flag with Dependencies",
+      "key": "flag-with-dependencies",
+      "is_simple_flag": false,
+      "active": true,
+      "filters": {
+        "groups": [
+          {
+            "properties": [
+              {
+                "key": "beta-feature",
+                "type": "flag",
+                "value": true,
+                "operator": "exact",
+                "negation": false
+              },
+              {
+                "key": "email",
+                "type": "person",
+                "value": "@example.com",
+                "operator": "icontains",
+                "negation": false
+              }
+            ],
+            "rollout_percentage": 100
+          }
+        ],
+        "multivariate": null,
+        "payloads": {}
+      }
+    }
+  ],
+  "group_type_mapping": {}
+}
