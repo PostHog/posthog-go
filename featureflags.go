@@ -404,13 +404,13 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts)
+		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts)
 	} else {
 		localPersonProperties := personProperties
 		if _, ok := localPersonProperties["distinct_id"]; !ok {
 			localPersonProperties = Properties{"distinct_id": distinctId}.Merge(localPersonProperties)
 		}
-		return matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts)
+		return poller.matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts)
 	}
 }
 
@@ -447,7 +447,7 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 	return lookupTable
 }
 
-func matchFeatureFlagProperties(
+func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	flag FeatureFlag,
 	distinctId string,
 	properties Properties,
@@ -476,7 +476,7 @@ func matchFeatureFlagProperties(
 	})
 
 	for _, condition := range sortedConditions {
-		isMatch, err := isConditionMatch(flag, distinctId, condition, properties, cohorts)
+		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
 			if _, ok := err.(*InconclusiveMatchError); ok {
 				isInconclusive = true
@@ -504,7 +504,7 @@ func matchFeatureFlagProperties(
 	return false, nil
 }
 
-func isConditionMatch(
+func (poller *FeatureFlagsPoller) isConditionMatch(
 	flag FeatureFlag,
 	distinctId string,
 	condition FeatureFlagCondition,
@@ -522,6 +522,9 @@ func isConditionMatch(
 			} else if prop.Type == "flag" {
 				// Flag dependencies are not supported in local evaluation yet
 				// Skip this condition to allow other conditions to be evaluated
+				if poller.Logger != nil {
+					poller.Logger.Warnf("Flag dependency filters are not supported in local evaluation. Skipping condition for flag '%s' with dependency on flag '%s'", flag.Key, prop.Key)
+				}
 				continue
 			} else {
 				isMatch, err = matchProperty(prop, properties)
