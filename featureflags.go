@@ -931,6 +931,43 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, grou
 	return poller.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, poller.disableGeoIP)
 }
 
+// getFeatureFlagVariantsLocalOnly evaluates all feature flags using only local evaluation
+func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+	flags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]interface{})
+	cohorts := poller.cohorts
+
+	for _, flag := range flags {
+		flagValue, err := poller.computeFlagLocally(
+			flag,
+			distinctId,
+			groups,
+			personProperties,
+			groupProperties,
+			cohorts,
+		)
+		
+		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
+		if err != nil {
+			if _, ok := err.(*InconclusiveMatchError); ok {
+				continue
+			}
+			return nil, err
+		}
+
+		// Only include flags that are not false
+		if flagValue != false {
+			result[flag.Key] = flagValue
+		}
+	}
+
+	return result, nil
+}
+
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 

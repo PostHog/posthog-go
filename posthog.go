@@ -241,9 +241,23 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case Capture:
 		m.Type = "capture"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
-		if m.SendFeatureFlags {
+		if m.shouldSendFeatureFlags() {
 			// Add all feature variants to event
-			featureVariants, err := c.getFeatureVariants(m.DistinctId, m.Groups, NewProperties(), map[string]Properties{})
+			personProperties := NewProperties()
+			groupProperties := map[string]Properties{}
+			opts := m.getFeatureFlagsOptions()
+			
+			// Use custom properties if provided via options
+			if opts != nil {
+				if opts.PersonProperties != nil {
+					personProperties = opts.PersonProperties
+				}
+				if opts.GroupProperties != nil {
+					groupProperties = opts.GroupProperties
+				}
+			}
+			
+			featureVariants, err := c.getFeatureVariantsWithOptions(m.DistinctId, m.Groups, personProperties, groupProperties, opts)
 			if err != nil {
 				c.Errorf("unable to get feature variants - %s", err)
 			}
@@ -674,10 +688,19 @@ func (c *client) notifyFailure(msgs []message, err error) {
 }
 
 func (c *client) getFeatureVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+	return c.getFeatureVariantsWithOptions(distinctId, groups, personProperties, groupProperties, nil)
+}
+
+func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties, options *SendFeatureFlagsOptions) (map[string]interface{}, error) {
 	if c.featureFlagsPoller == nil {
 		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
 		c.Errorf(errorMessage)
 		return nil, errors.New(errorMessage)
+	}
+
+	// If OnlyEvaluateLocally is set, only use local evaluation
+	if options != nil && options.OnlyEvaluateLocally {
+		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, groups, personProperties, groupProperties)
 	}
 
 	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)

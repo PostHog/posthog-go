@@ -2,6 +2,38 @@ package posthog
 
 import "time"
 
+// SendFeatureFlagsOptions allows for more granular control over feature flag evaluation
+type SendFeatureFlagsOptions struct {
+	// OnlyEvaluateLocally forces evaluation to only use local flags and never make API requests
+	OnlyEvaluateLocally bool
+	// PersonProperties provides explicit person properties for local flag evaluation
+	PersonProperties Properties
+	// GroupProperties provides explicit group properties for local flag evaluation
+	GroupProperties map[string]Properties
+}
+
+// Helper functions to work with SendFeatureFlags interface
+func (c *Capture) shouldSendFeatureFlags() bool {
+	if c.SendFeatureFlags == nil {
+		return false
+	}
+	switch v := c.SendFeatureFlags.(type) {
+	case bool:
+		return v
+	case *SendFeatureFlagsOptions:
+		return v != nil
+	default:
+		return false
+	}
+}
+
+func (c *Capture) getFeatureFlagsOptions() *SendFeatureFlagsOptions {
+	if opts, ok := c.SendFeatureFlags.(*SendFeatureFlagsOptions); ok {
+		return opts
+	}
+	return nil
+}
+
 var _ Message = (*Capture)(nil)
 
 // This type represents object sent in a capture call
@@ -17,7 +49,7 @@ type Capture struct {
 	Timestamp        time.Time
 	Properties       Properties
 	Groups           Groups
-	SendFeatureFlags bool
+	SendFeatureFlags interface{} // Can be bool or *SendFeatureFlagsOptions
 }
 
 func (msg Capture) internal() {
@@ -51,10 +83,10 @@ type CaptureInApi struct {
 	LibraryVersion string    `json:"library_version"`
 	Timestamp      time.Time `json:"timestamp"`
 
-	DistinctId       string     `json:"distinct_id"`
-	Event            string     `json:"event"`
-	Properties       Properties `json:"properties"`
-	SendFeatureFlags bool       `json:"send_feature_flags"`
+	DistinctId       string      `json:"distinct_id"`
+	Event            string      `json:"event"`
+	Properties       Properties  `json:"properties"`
+	SendFeatureFlags interface{} `json:"send_feature_flags"`
 }
 
 func (msg Capture) APIfy() APIMessage {
@@ -73,14 +105,15 @@ func (msg Capture) APIfy() APIMessage {
 	}
 
 	apified := CaptureInApi{
-		Type:           msg.Type,
-		Uuid:           msg.Uuid,
-		Library:        SDKName,
-		LibraryVersion: libraryVersion,
-		Timestamp:      msg.Timestamp,
-		DistinctId:     msg.DistinctId,
-		Event:          msg.Event,
-		Properties:     myProperties,
+		Type:             msg.Type,
+		Uuid:             msg.Uuid,
+		Library:          SDKName,
+		LibraryVersion:   libraryVersion,
+		Timestamp:        msg.Timestamp,
+		DistinctId:       msg.DistinctId,
+		Event:            msg.Event,
+		Properties:       myProperties,
+		SendFeatureFlags: msg.SendFeatureFlags,
 	}
 
 	return apified
