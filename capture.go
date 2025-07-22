@@ -49,7 +49,7 @@ type Capture struct {
 	Timestamp        time.Time
 	Properties       Properties
 	Groups           Groups
-	SendFeatureFlags interface{} // Can be bool or *SendFeatureFlagsOptions
+	SendFeatureFlags any // Can be bool or *SendFeatureFlagsOptions
 }
 
 func (msg Capture) internal() {
@@ -83,10 +83,10 @@ type CaptureInApi struct {
 	LibraryVersion string    `json:"library_version"`
 	Timestamp      time.Time `json:"timestamp"`
 
-	DistinctId       string      `json:"distinct_id"`
-	Event            string      `json:"event"`
-	Properties       Properties  `json:"properties"`
-	SendFeatureFlags interface{} `json:"send_feature_flags"`
+	DistinctId       string     `json:"distinct_id"`
+	Event            string     `json:"event"`
+	Properties       Properties `json:"properties"`
+	SendFeatureFlags any        `json:"send_feature_flags"`
 }
 
 func (msg Capture) APIfy() APIMessage {
