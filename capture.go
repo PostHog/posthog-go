@@ -2,6 +2,12 @@ package posthog
 
 import "time"
 
+// SendFeatureFlagsValue defines the interface for feature flag configuration
+type SendFeatureFlagsValue interface {
+	ShouldSend() bool
+	GetOptions() *SendFeatureFlagsOptions
+}
+
 // SendFeatureFlagsOptions allows for more granular control over feature flag evaluation
 type SendFeatureFlagsOptions struct {
 	// OnlyEvaluateLocally forces evaluation to only use local flags and never make API requests
@@ -12,26 +18,49 @@ type SendFeatureFlagsOptions struct {
 	GroupProperties map[string]Properties
 }
 
+// Implement SendFeatureFlagsValue interface for SendFeatureFlagsOptions
+func (opts *SendFeatureFlagsOptions) ShouldSend() bool {
+	return opts != nil
+}
+
+func (opts *SendFeatureFlagsOptions) GetOptions() *SendFeatureFlagsOptions {
+	return opts
+}
+
+// SendFeatureFlagsBool wraps a boolean value to implement SendFeatureFlagsValue
+type SendFeatureFlagsBool bool
+
+// Implement SendFeatureFlagsValue interface for SendFeatureFlagsBool
+func (b SendFeatureFlagsBool) ShouldSend() bool {
+	return bool(b)
+}
+
+func (b SendFeatureFlagsBool) GetOptions() *SendFeatureFlagsOptions {
+	return nil
+}
+
+// Constructor functions for easier usage
+func SendFeatureFlags(enabled bool) SendFeatureFlagsValue {
+	return SendFeatureFlagsBool(enabled)
+}
+
+func SendFeatureFlagsWithOptions(opts *SendFeatureFlagsOptions) SendFeatureFlagsValue {
+	return opts
+}
+
 // Helper functions to work with SendFeatureFlags interface
 func (c *Capture) shouldSendFeatureFlags() bool {
 	if c.SendFeatureFlags == nil {
 		return false
 	}
-	switch v := c.SendFeatureFlags.(type) {
-	case bool:
-		return v
-	case *SendFeatureFlagsOptions:
-		return v != nil
-	default:
-		return false
-	}
+	return c.SendFeatureFlags.ShouldSend()
 }
 
 func (c *Capture) getFeatureFlagsOptions() *SendFeatureFlagsOptions {
-	if opts, ok := c.SendFeatureFlags.(*SendFeatureFlagsOptions); ok {
-		return opts
+	if c.SendFeatureFlags == nil {
+		return nil
 	}
-	return nil
+	return c.SendFeatureFlags.GetOptions()
 }
 
 var _ Message = (*Capture)(nil)
@@ -49,7 +78,7 @@ type Capture struct {
 	Timestamp        time.Time
 	Properties       Properties
 	Groups           Groups
-	SendFeatureFlags any // Can be bool or *SendFeatureFlagsOptions
+	SendFeatureFlags SendFeatureFlagsValue
 }
 
 func (msg Capture) internal() {
@@ -83,10 +112,10 @@ type CaptureInApi struct {
 	LibraryVersion string    `json:"library_version"`
 	Timestamp      time.Time `json:"timestamp"`
 
-	DistinctId       string     `json:"distinct_id"`
-	Event            string     `json:"event"`
-	Properties       Properties `json:"properties"`
-	SendFeatureFlags any        `json:"send_feature_flags"`
+	DistinctId       string                `json:"distinct_id"`
+	Event            string                `json:"event"`
+	Properties       Properties            `json:"properties"`
+	SendFeatureFlags SendFeatureFlagsValue `json:"send_feature_flags"`
 }
 
 func (msg Capture) APIfy() APIMessage {

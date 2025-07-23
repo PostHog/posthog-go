@@ -70,7 +70,7 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
-				SendFeatureFlags: true,
+				SendFeatureFlags: posthog.SendFeatureFlags(true),
 			}); err != nil {
 				fmt.Println("error:", err)
 				return
@@ -121,7 +121,7 @@ func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpo
 				Event:      "Purchase",
 				DistinctId: "123456",
 				Properties: map[string]interface{}{
-					"amount": 99.99,
+					"amount":   99.99,
 					"currency": "USD",
 				},
 				SendFeatureFlags: &posthog.SendFeatureFlagsOptions{

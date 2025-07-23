@@ -231,7 +231,7 @@ func ExampleCapture() {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
-		SendFeatureFlags: false,
+		SendFeatureFlags: SendFeatureFlags(false),
 	})
 
 	fmt.Printf("%s\n", <-body)
@@ -283,7 +283,7 @@ func TestCaptureNoProperties(t *testing.T) {
 	client.Enqueue(Capture{
 		Event:            "Download",
 		DistinctId:       "123456",
-		SendFeatureFlags: false,
+		SendFeatureFlags: SendFeatureFlags(false),
 	})
 }
 
@@ -338,7 +338,7 @@ func TestEnqueue(t *testing.T) {
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
-				SendFeatureFlags: false,
+				SendFeatureFlags: SendFeatureFlags(false),
 			},
 			&f,
 		},
@@ -353,7 +353,7 @@ func TestEnqueue(t *testing.T) {
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
-				SendFeatureFlags: false,
+				SendFeatureFlags: SendFeatureFlags(false),
 			},
 			&tv,
 		},
@@ -395,7 +395,7 @@ func TestEnqueue(t *testing.T) {
 					"version":     "1.0.0",
 					"platform":    "macos", // :)
 				},
-				SendFeatureFlags: false,
+				SendFeatureFlags: SendFeatureFlags(false),
 			},
 			&tv,
 		},
@@ -480,7 +480,7 @@ func TestCaptureWithInterval(t *testing.T) {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
-		SendFeatureFlags: false,
+		SendFeatureFlags: SendFeatureFlags(false),
 	})
 
 	// Will flush in 100 milliseconds
@@ -516,7 +516,7 @@ func TestCaptureWithTimestamp(t *testing.T) {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
-		SendFeatureFlags: false,
+		SendFeatureFlags: SendFeatureFlags(false),
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
@@ -549,7 +549,7 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 			"version":     "1.0.0",
 			"platform":    "macos", // :)
 		},
-		SendFeatureFlags: false,
+		SendFeatureFlags: SendFeatureFlags(false),
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
@@ -581,7 +581,7 @@ func TestCaptureMany(t *testing.T) {
 				"application": "PostHog Go",
 				"version":     i,
 			},
-			SendFeatureFlags: false,
+			SendFeatureFlags: SendFeatureFlags(false),
 		})
 	}
 
@@ -1755,7 +1755,7 @@ func TestCaptureSendFlags(t *testing.T) {
 	err := client.Enqueue(Capture{
 		Event:            "Download",
 		DistinctId:       "123456",
-		SendFeatureFlags: true,
+		SendFeatureFlags: SendFeatureFlags(true),
 	})
 
 	if err != nil {
@@ -1838,7 +1838,7 @@ func TestCaptureSendFeatureFlagsOptions(t *testing.T) {
 		err := client.Enqueue(Capture{
 			Event:            "test_event",
 			DistinctId:       "test_user",
-			SendFeatureFlags: true,
+			SendFeatureFlags: SendFeatureFlags(true),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1847,7 +1847,7 @@ func TestCaptureSendFeatureFlagsOptions(t *testing.T) {
 		err = client.Enqueue(Capture{
 			Event:            "test_event",
 			DistinctId:       "test_user",
-			SendFeatureFlags: false,
+			SendFeatureFlags: SendFeatureFlags(false),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1857,14 +1857,14 @@ func TestCaptureSendFeatureFlagsOptions(t *testing.T) {
 
 func TestSendFeatureFlagsHelperMethods(t *testing.T) {
 	t.Run("shouldSendFeatureFlags with bool true", func(t *testing.T) {
-		capture := Capture{SendFeatureFlags: true}
+		capture := Capture{SendFeatureFlags: SendFeatureFlags(true)}
 		if !capture.shouldSendFeatureFlags() {
 			t.Error("Expected shouldSendFeatureFlags to return true for bool true")
 		}
 	})
 
 	t.Run("shouldSendFeatureFlags with bool false", func(t *testing.T) {
-		capture := Capture{SendFeatureFlags: false}
+		capture := Capture{SendFeatureFlags: SendFeatureFlags(false)}
 		if capture.shouldSendFeatureFlags() {
 			t.Error("Expected shouldSendFeatureFlags to return false for bool false")
 		}
@@ -1885,7 +1885,7 @@ func TestSendFeatureFlagsHelperMethods(t *testing.T) {
 	})
 
 	t.Run("getFeatureFlagsOptions with bool", func(t *testing.T) {
-		capture := Capture{SendFeatureFlags: true}
+		capture := Capture{SendFeatureFlags: SendFeatureFlags(true)}
 		if capture.getFeatureFlagsOptions() != nil {
 			t.Error("Expected getFeatureFlagsOptions to return nil for bool")
 		}

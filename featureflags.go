@@ -877,8 +877,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header) (*http.Response, context.CancelFunc, error) {
-	var u url.URL
-	u = *poller.localEvalUrl
+	u := *poller.localEvalUrl
 	searchParams := u.Query()
 	searchParams.Add("token", poller.projectApiKey)
 	searchParams.Add("send_cohorts", "true")
@@ -950,7 +949,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 			groupProperties,
 			cohorts,
 		)
-		
+
 		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
 		if err != nil {
 			if _, ok := err.(*InconclusiveMatchError); ok {
