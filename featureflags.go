@@ -478,7 +478,8 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	for _, condition := range sortedConditions {
 		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
-			if _, ok := err.(*InconclusiveMatchError); ok {
+			var inconclusiveErr *InconclusiveMatchError
+			if errors.As(err, &inconclusiveErr) {
 				isInconclusive = true
 			} else {
 				return nil, err
@@ -574,7 +575,8 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 					Values: getSafeProp[[]any](prop, "values"),
 				}, properties, cohorts)
 				if err != nil {
-					if _, ok := err.(*InconclusiveMatchError); ok {
+					var inconclusiveErr *InconclusiveMatchError
+					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
 					} else {
 						return false, err
@@ -609,7 +611,8 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 				}
 
 				if err != nil {
-					if _, ok := err.(*InconclusiveMatchError); ok {
+					var inconclusiveErr *InconclusiveMatchError
+					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
 					} else {
 						return false, err
@@ -952,7 +955,8 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 
 		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
 		if err != nil {
-			if _, ok := err.(*InconclusiveMatchError); ok {
+			var inconclusiveErr *InconclusiveMatchError
+			if errors.As(err, &inconclusiveErr) {
 				continue
 			}
 			return nil, err
