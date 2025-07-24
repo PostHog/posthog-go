@@ -880,7 +880,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header) (*http.Response, context.CancelFunc, error) {
-	u := *poller.localEvalUrl
+	u := url.URL(*poller.localEvalUrl)
 	searchParams := u.Query()
 	searchParams.Add("token", poller.projectApiKey)
 	searchParams.Add("send_cohorts", "true")
