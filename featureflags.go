@@ -478,7 +478,8 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	for _, condition := range sortedConditions {
 		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts)
 		if err != nil {
-			if _, ok := err.(*InconclusiveMatchError); ok {
+			var inconclusiveErr *InconclusiveMatchError
+			if errors.As(err, &inconclusiveErr) {
 				isInconclusive = true
 			} else {
 				return nil, err
@@ -574,7 +575,8 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 					Values: getSafeProp[[]any](prop, "values"),
 				}, properties, cohorts)
 				if err != nil {
-					if _, ok := err.(*InconclusiveMatchError); ok {
+					var inconclusiveErr *InconclusiveMatchError
+					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
 					} else {
 						return false, err
@@ -609,7 +611,8 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 				}
 
 				if err != nil {
-					if _, ok := err.(*InconclusiveMatchError); ok {
+					var inconclusiveErr *InconclusiveMatchError
+					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
 					} else {
 						return false, err
@@ -877,8 +880,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header) (*http.Response, context.CancelFunc, error) {
-	var u url.URL
-	u = *poller.localEvalUrl
+	u := url.URL(*poller.localEvalUrl)
 	searchParams := u.Query()
 	searchParams.Add("token", poller.projectApiKey)
 	searchParams.Add("send_cohorts", "true")
@@ -929,6 +931,44 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 // This is used in fallback scenarios where we can't compute the flag locally.
 func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
 	return poller.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, poller.disableGeoIP)
+}
+
+// getFeatureFlagVariantsLocalOnly evaluates all feature flags using only local evaluation
+func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+	flags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]interface{})
+	cohorts := poller.cohorts
+
+	for _, flag := range flags {
+		flagValue, err := poller.computeFlagLocally(
+			flag,
+			distinctId,
+			groups,
+			personProperties,
+			groupProperties,
+			cohorts,
+		)
+
+		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
+		if err != nil {
+			var inconclusiveErr *InconclusiveMatchError
+			if errors.As(err, &inconclusiveErr) {
+				continue
+			}
+			return nil, err
+		}
+
+		// Only include flags that are not false
+		if flagValue != false {
+			result[flag.Key] = flagValue
+		}
+	}
+
+	return result, nil
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {

@@ -49,7 +49,8 @@ func TestMatchPropertyInvalidOperator(t *testing.T) {
 		t.Error("Should not match")
 	}
 
-	if _, ok := err.(*InconclusiveMatchError); !ok {
+	var inconclusiveErr *InconclusiveMatchError
+	if !errors.As(err, &inconclusiveErr) {
 		t.Error("Error type is not a match")
 	}
 
