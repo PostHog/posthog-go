@@ -804,6 +804,7 @@ func validateOrderable(firstValue interface{}, secondValue interface{}) (float64
 
 func interfaceToFloat(val interface{}) (float64, error) {
 	var i float64
+	var err error
 	switch t := val.(type) {
 	case int:
 		i = float64(t)
@@ -827,6 +828,13 @@ func interfaceToFloat(val interface{}) (float64, error) {
 		i = float64(t)
 	case uint64:
 		i = float64(t)
+	case string:
+		i, err = strconv.ParseFloat(t, 64)
+		if err != nil {
+			// If parsing fails, return an error
+			errMessage := fmt.Sprintf("string '%s' is not orderable", t)
+			return 0.0, errors.New(errMessage)
+		}
 	default:
 		errMessage := "argument not orderable"
 		return 0.0, errors.New(errMessage)

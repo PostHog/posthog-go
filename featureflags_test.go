@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -20,6 +21,29 @@ func TestCalculateHash(t *testing.T) {
 			if math.Abs(got-tt.want) > 0.000001 {
 				t.Logf("got: %.16f, want: %f", got, tt.want)
 				t.Fail()
+			}
+		})
+	}
+}
+
+func TestArgumentConversion(t *testing.T) {
+	for _, tt := range []struct {
+		input    interface{}
+		expected float64
+		error    bool
+	}{
+		{42, 42.0, false},
+		{3.14, 3.14, false},
+		{"123.456", 123.456, false},
+		{"not_a_number", 0.0, true}, // This should fail
+	} {
+		t.Run(fmt.Sprintf("Converting %v...", tt.input), func(t *testing.T) {
+			result, err := interfaceToFloat(tt.input)
+			if tt.error != (err != nil) {
+				t.Errorf("Expected error: %v, got: %v", tt.error, err)
+			}
+			if !tt.error && result != tt.expected {
+				t.Errorf("Expected: %f, got: %f", tt.expected, result)
 			}
 		})
 	}

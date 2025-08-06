@@ -199,6 +199,26 @@ func TestMatchPropertyNumber(t *testing.T) {
 	}
 }
 
+func TestMatchPropertyStringAsNumber(t *testing.T) {
+	property := FlagProperty{
+		Key:      "Number",
+		Value:    "5",
+		Operator: "gt",
+	}
+
+	properties := NewProperties().Set("Number", "7")
+
+	isMatch, err := matchProperty(property, properties)
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !isMatch {
+		t.Error("Value is not a match")
+	}
+}
+
 func TestMatchPropertyRegex(t *testing.T) {
 
 	shouldMatch := []interface{}{"value.com", "value2.com"}
