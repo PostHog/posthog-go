@@ -783,8 +783,44 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return overrideValueOrderable <= valueOrderable, nil
 	}
 
+	if (operator == "is_date_before") || (operator == "is_date_after") {
+		valueDate, valueDateErr := convertToDateTime(value)
+		if valueDateErr != nil {
+			return false, valueDateErr
+		}
+		overrideDate, err := convertToDateTime(override_value)
+		if err != nil {
+			return false, err
+		}
+		if operator == "is_date_before" {
+			return overrideDate.Before(valueDate), nil
+		}
+		return overrideDate.After(valueDate), nil
+	}
+
 	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
 
+}
+
+func convertToDateTime(value interface{}) (time.Time, error) {
+	if valueDate, ok := value.(time.Time); ok {
+		return valueDate, nil
+	} else if valueString, ok := value.(string); ok {
+		if !strings.Contains(valueString, "T") {
+			// try to parse as a short date format
+			stringToDate, err := time.Parse("2006-01-02", valueString)
+			if err == nil {
+				return stringToDate, nil
+			}
+		}
+		stringToDate, err := time.Parse(time.RFC3339, valueString)
+		if err == nil {
+			return stringToDate, nil
+		}
+		return time.Now(), &InconclusiveMatchError{fmt.Sprintf("Value %d is not in a valid ISO8601 string format", value)}
+	} else {
+		return time.Now(), &InconclusiveMatchError{fmt.Sprintf("Value %d must be in string or date format", value)}
+	}
 }
 
 func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
