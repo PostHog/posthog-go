@@ -711,7 +711,7 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 }
 
 func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
-	remoteConfigEndpoint := fmt.Sprintf("api/projects/@current/feature_flags/%s/remote_config/", flagKey)
+	remoteConfigEndpoint := fmt.Sprintf("api/projects/@current/feature_flags/%s/remote_config?token=%s", flagKey, c.key)
 	url, err := url.Parse(c.Endpoint + "/" + remoteConfigEndpoint)
 	if err != nil {
 		return "", fmt.Errorf("creating url: %v", err)
