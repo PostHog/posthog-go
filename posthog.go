@@ -711,13 +711,21 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 }
 
 func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
-	remoteConfigEndpoint := fmt.Sprintf("api/projects/@current/feature_flags/%s/remote_config/", flagKey)
-	url, err := url.Parse(c.Endpoint + "/" + remoteConfigEndpoint)
+	baseURL, err := url.JoinPath(c.Endpoint, "api/projects/@current/feature_flags", flagKey, "remote_config")
 	if err != nil {
-		return "", fmt.Errorf("creating url: %v", err)
+		return "", fmt.Errorf("building URL: %v", err)
 	}
 
-	req, err := http.NewRequest("GET", url.String(), nil)
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parsing URL: %v", err)
+	}
+
+	q := parsedURL.Query()
+	q.Set("token", c.key)
+	parsedURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequest("GET", parsedURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %v", err)
 	}
@@ -733,7 +741,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status code from %s: %d", remoteConfigEndpoint, res.StatusCode)
+		return "", fmt.Errorf("unexpected status code from %s: %d", parsedURL.String(), res.StatusCode)
 	}
 
 	resBody, err := io.ReadAll(res.Body)
