@@ -84,7 +84,9 @@ func main() {
       Key:        "flag-key",
       DistinctId: "distinct_id_of_your_user",
     })
-
+    if err != nil {
+       // Handle error (e.g. capture error and fallback to default behaviour)
+    }
     if isMyFlagEnabled == true {
         // Do something differently for this user
     }
