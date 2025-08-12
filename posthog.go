@@ -210,6 +210,11 @@ func dereferenceMessage(msg Message) Message {
 			return nil
 		}
 		return *m
+	case *Exception:
+		if m == nil {
+			return nil
+		}
+		return *m
 	}
 
 	return msg
@@ -249,7 +254,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 			personProperties := NewProperties()
 			groupProperties := map[string]Properties{}
 			opts := m.getFeatureFlagsOptions()
-			
+
 			// Use custom properties if provided via options
 			if opts != nil {
 				if opts.PersonProperties != nil {
@@ -259,7 +264,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 					groupProperties = opts.GroupProperties
 				}
 			}
-			
+
 			featureVariants, err := c.getFeatureVariantsWithOptions(m.DistinctId, m.Groups, personProperties, groupProperties, opts)
 			if err != nil {
 				c.Errorf("unable to get feature variants - %s", err)
@@ -287,6 +292,12 @@ func (c *client) Enqueue(msg Message) (err error) {
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
 		c.setLastCapturedEvent(m)
+		msg = m
+
+	case Exception:
+		m.Type = "exception"
+		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	default:
