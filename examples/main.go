@@ -37,4 +37,6 @@ func main() {
 	TestCapture(projectAPIKey, endpoint)
 	TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint)
 	TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint)
+	TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint)
+	TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint)
 }
