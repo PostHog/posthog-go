@@ -22,12 +22,7 @@ const (
 	propertyGeoipDisable = "$geoip_disable"
 )
 
-// Client interface is the main API exposed by the posthog package.
-// Values that satisfy this interface are returned by the client constructors
-// provided by the package and provide a way to send messages via the HTTP API.
-type Client interface {
-	io.Closer
-
+type EnqueueClient interface {
 	// Enqueue queues a message to be sent by the client when the conditions for a batch
 	// upload are met.
 	// This is the main method you'll be using, a typical flow would look like
@@ -43,6 +38,14 @@ type Client interface {
 	// happens if the client was already closed at the time the method was
 	// called or if the message was malformed.
 	Enqueue(Message) error
+}
+
+// Client interface is the main API exposed by the posthog package.
+// Values that satisfy this interface are returned by the client constructors
+// provided by the package and provide a way to send messages via the HTTP API.
+type Client interface {
+	io.Closer
+	EnqueueClient
 
 	// IsFeatureEnabled returns if a feature flag is on for a given user based on their distinct ID
 	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
