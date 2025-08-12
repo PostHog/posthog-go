@@ -288,6 +288,32 @@ func TestCaptureNoProperties(t *testing.T) {
 }
 
 func TestEnqueue(t *testing.T) {
+	exception := Exception{
+		DistinctId:   "my-user-id",
+		Timestamp:    time.Date(2025, 8, 11, 20, 43, 37, 0, time.UTC),
+		DisableGeoIP: true,
+		ExceptionList: []ExceptionItem{
+			{
+				Type:  "Exception Title",
+				Value: "Exception Description",
+				Stacktrace: &ExceptionStacktrace{
+					Type: "resolved",
+					Frames: []StackFrame{
+						{
+							RawID:        "1234ABCD",
+							MangledName:  "main.go",
+							InApp:        ptrBool(true),
+							ResolvedName: "main.main",
+							Language:     "go",
+							Resolved:     ptrBool(true),
+							Source:       "/Users/Developer/posthog-go/examples/main.go",
+							Line:         56,
+						},
+					},
+				},
+			},
+		},
+	}
 	f, tv := false, true
 	tests := map[string]struct {
 		ref          string
@@ -358,6 +384,12 @@ func TestEnqueue(t *testing.T) {
 			&tv,
 		},
 
+		"exception": {
+			strings.TrimSpace(fixture("test-enqueue-exception.json")),
+			exception,
+			&tv,
+		},
+
 		"*alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			&Alias{Alias: "A", DistinctId: "B"},
@@ -397,6 +429,12 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: SendFeatureFlags(false),
 			},
+			&tv,
+		},
+
+		"*exception": {
+			strings.TrimSpace(fixture("test-enqueue-exception.json")),
+			&exception,
 			&tv,
 		},
 	}
@@ -2039,30 +2077,30 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 				w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
 				return
 			}
-			
+
 			// Handle the remote config request
 			if strings.Contains(r.URL.Path, "/remote_config") {
 				remoteConfigCalled = true
-				
+
 				// Verify the URL includes the token parameter
 				expectedPath := "/api/projects/@current/feature_flags/test-flag/remote_config"
 				if r.URL.Path != expectedPath {
 					t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
 				}
-				
+
 				// Verify the token parameter is present with the correct value
 				token := r.URL.Query().Get("token")
 				if token != "test-api-key" {
 					t.Errorf("Expected token 'test-api-key', got '%s'", token)
 				}
-				
+
 				// Verify Authorization header uses personal API key
 				authHeader := r.Header.Get("Authorization")
 				expectedAuth := "Bearer test-personal-key"
 				if authHeader != expectedAuth {
 					t.Errorf("Expected Authorization header '%s', got '%s'", expectedAuth, authHeader)
 				}
-				
+
 				w.Header().Set("Content-Type", "application/json")
 				w.Write([]byte(`"{\"foo\": \"bar\",\"baz\": 42}"`))
 			}
@@ -2079,11 +2117,11 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 		if err != nil {
 			t.Error("Expected no error, got", err)
 		}
-		
+
 		if !remoteConfigCalled {
 			t.Error("Expected remote config endpoint to be called")
 		}
-		
+
 		expected := `{"foo": "bar","baz": 42}`
 		if payload != expected {
 			t.Errorf("Expected payload '%s', got '%s'", expected, payload)
