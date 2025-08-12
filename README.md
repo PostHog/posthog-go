@@ -66,6 +66,25 @@ func main() {
       Properties: posthog.NewProperties().
         Set("$current_url", "https://example.com"),
     })
+
+    // Capture an error / exception
+    client.Enqueue(posthog.NewDefaultException(
+      time.Now(),
+      "distinct-id",
+      "Error title",
+      "Error Description",
+    ))
+
+    // Create a logger which automatically captures warning logs and above
+    baseLogHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+    logger := slog.New(posthog.NewSlogCaptureHandler(baseLogHandler, client,
+      posthog.WithMinCaptureLevel(slog.LevelWarn),
+      posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
+        // for demo purposes, real applications should likely pull this value from the context.
+        return "my-user-id"
+      }),
+    })
+    logger.Warn("Log that something broke", "error", fmt.Errorf("this is a dummy scenario"))
     
     // Capture event with calculated uuid to deduplicate repeated events. 
     // The library github.com/google/uuid is used

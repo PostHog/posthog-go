@@ -1,0 +1,39 @@
+{
+  "api_key": "Csyjlnlun3OzyNJAafdlv",
+  "batch": [
+    {
+      "event": "$exception",
+      "library": "posthog-go",
+      "library_version": "1.0.0",
+      "properties": {
+        "$exception_list": [
+          {
+            "stacktrace": {
+              "frames": [
+                {
+                  "in_app": true,
+                  "lang": "go",
+                  "line": 56,
+                  "mangled_name": "main.go",
+                  "raw_id": "1234ABCD",
+                  "resolved": true,
+                  "resolved_name": "main.main",
+                  "source": "/Users/Developer/posthog-go/examples/main.go"
+                }
+              ],
+              "type": "resolved"
+            },
+            "type": "Exception Title",
+            "value": "Exception Description"
+          }
+        ],
+        "$geoip_disable": true,
+        "$lib": "posthog-go",
+        "$lib_version": "1.0.0",
+        "distinct_id": "my-user-id"
+      },
+      "timestamp": "2025-08-11T20:43:37Z",
+      "type": "exception"
+    }
+  ]
+}
