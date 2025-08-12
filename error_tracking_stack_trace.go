@@ -63,10 +63,14 @@ func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
 
 		resolved := true
 		withinApp := d.InAppDecider(frame)
+		mangled := filepath.Base(frame.File)
+		if frame.Func != nil {
+			mangled = frame.Func.Name()
+		}
 		traces = append(traces, StackFrame{
 			RawID:        d.idFromFrame(frame),
 			Source:       frame.File,
-			MangledName:  frame.Func.Name(),
+			MangledName:  mangled,
 			Line:         frame.Line,
 			ResolvedName: frame.Function,
 			InApp:        &withinApp,
