@@ -75,11 +75,12 @@ type FeatureFlagCondition struct {
 }
 
 type FlagProperty struct {
-	Key      string      `json:"key"`
-	Operator string      `json:"operator"`
-	Value    interface{} `json:"value"`
-	Type     string      `json:"type"` // Supported types: "person", "group", "cohort", "flag" (flag dependencies not implemented in local evaluation)
-	Negation bool        `json:"negation"`
+	Key             string      `json:"key"`
+	Operator        string      `json:"operator"`
+	Value           interface{} `json:"value"`
+	Type            string      `json:"type"` // Supported types: "person", "group", "cohort", "flag"
+	Negation        bool        `json:"negation"`
+	DependencyChain []string    `json:"dependency_chain,omitempty"` // For flag dependencies
 }
 
 type PropertyGroup struct {
@@ -119,6 +120,94 @@ type InconclusiveMatchError struct {
 
 func (e *InconclusiveMatchError) Error() string {
 	return e.msg
+}
+
+// evaluateFlagDependency evaluates a flag dependency property according to the dependency chain algorithm
+func (poller *FeatureFlagsPoller) evaluateFlagDependency(
+	property FlagProperty,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]*interface{},
+	distinctId string,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+) (bool, error) {
+	if flagsByKey == nil || evaluationCache == nil {
+		// Cannot evaluate flag dependencies without required context
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without flagsByKey and evaluationCache", property.Key),
+		}
+	}
+
+	// Check if dependency_chain is present - it should always be provided for flag dependencies
+	if property.DependencyChain == nil {
+		// Missing dependency_chain indicates malformed server data
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Flag dependency property for '%s' is missing required 'dependency_chain' field", property.Key),
+		}
+	}
+
+	dependencyChain := property.DependencyChain
+
+	// Handle circular dependency (empty chain means circular)
+	if len(dependencyChain) == 0 {
+		if poller.Logger != nil {
+			poller.Logger.Debugf("Circular dependency detected for flag: %s", property.Key)
+		}
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key),
+		}
+	}
+
+	// Evaluate all dependencies in the chain order
+	for _, depFlagKey := range dependencyChain {
+		if _, exists := evaluationCache[depFlagKey]; !exists {
+			// Need to evaluate this dependency first
+			depFlag, flagExists := flagsByKey[depFlagKey]
+			if !flagExists {
+				// Missing flag dependency - cannot evaluate locally
+				nilResult := (*interface{})(nil)
+				evaluationCache[depFlagKey] = nilResult
+				return false, &InconclusiveMatchError{
+					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
+				}
+			} else {
+				// Check if the flag is active (same check as in computeFlagLocally)
+				if !depFlag.Active {
+					falseResult := interface{}(false)
+					evaluationCache[depFlagKey] = &falseResult
+				} else {
+					// Recursively evaluate the dependency
+					result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
+					if err != nil {
+						// If we can't evaluate a dependency, store nil and propagate the error
+						nilResult := (*interface{})(nil)
+						evaluationCache[depFlagKey] = nilResult
+						return false, &InconclusiveMatchError{
+							msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+						}
+					}
+					evaluationCache[depFlagKey] = &result
+				}
+			}
+		}
+	}
+
+	// After evaluating all dependencies, check if any returned false
+	for _, depFlagKey := range dependencyChain {
+		if cachedResult, exists := evaluationCache[depFlagKey]; exists {
+			if cachedResult == nil {
+				// Previously inconclusive - raise error again
+				return false, &InconclusiveMatchError{
+					msg: fmt.Sprintf("Flag dependency '%s' was previously inconclusive", depFlagKey),
+				}
+			} else if *cachedResult == false {
+				// Definitive False result - dependency failed
+				return false, nil
+			}
+		}
+	}
+
+	return true, nil
 }
 
 func newFeatureFlagsPoller(
@@ -385,6 +474,19 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		return false, nil
 	}
 
+	// Create evaluation cache for flag dependencies
+	evaluationCache := make(map[string]*interface{})
+
+	// Create flags by key map for dependency evaluation
+	featureFlags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
+	flagsByKey := make(map[string]FeatureFlag)
+	for _, f := range featureFlags {
+		flagsByKey[f.Key] = f
+	}
+
 	if flag.Filters.AggregationGroupTypeIndex != nil {
 		groupType, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
@@ -404,13 +506,13 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts)
+		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts, flagsByKey, evaluationCache)
 	} else {
 		localPersonProperties := personProperties
 		if _, ok := localPersonProperties["distinct_id"]; !ok {
 			localPersonProperties = Properties{"distinct_id": distinctId}.Merge(localPersonProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts)
+		return poller.matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts, flagsByKey, evaluationCache)
 	}
 }
 
@@ -452,6 +554,8 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	distinctId string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]*interface{},
 ) (interface{}, error) {
 	conditions := flag.Filters.Groups
 	isInconclusive := false
@@ -476,7 +580,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	})
 
 	for _, condition := range sortedConditions {
-		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts)
+		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
 			var inconclusiveErr *InconclusiveMatchError
 			if errors.As(err, &inconclusiveErr) {
@@ -511,6 +615,8 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	condition FeatureFlagCondition,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]*interface{},
 ) (bool, error) {
 	if len(condition.Properties) > 0 {
 		var (
@@ -519,14 +625,9 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 		)
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = matchCohort(prop, properties, cohorts)
+				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 			} else if prop.Type == "flag" {
-				// Flag dependencies are not supported in local evaluation yet
-				// Skip this condition to allow other conditions to be evaluated
-				if poller.Logger != nil {
-					poller.Logger.Warnf("Flag dependency filters are not supported in local evaluation. Skipping condition for flag '%s' with dependency on flag '%s'", flag.Key, prop.Key)
-				}
-				continue
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, properties, cohorts)
 			} else {
 				isMatch, err = matchProperty(prop, properties)
 			}
@@ -544,17 +645,17 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	return true, nil
 }
 
-func matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]*interface{}, distinctId string) (bool, error) {
 	cohortId := fmt.Sprint(property.Value)
 	propertyGroup, ok := cohorts[cohortId]
 	if !ok {
 		return false, fmt.Errorf("can't match cohort: cohort %s not found", cohortId)
 	}
 
-	return matchPropertyGroup(propertyGroup, properties, cohorts)
+	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 }
 
-func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]*interface{}, distinctId string) (bool, error) {
 	groupType := propertyGroup.Type
 	values := propertyGroup.Values
 
@@ -570,10 +671,10 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 		case map[string]any:
 			if _, ok := prop["values"]; ok {
 				// PropertyGroup
-				matches, err := matchPropertyGroup(PropertyGroup{
+				matches, err := poller.matchPropertyGroup(PropertyGroup{
 					Type:   getSafeProp[string](prop, "type"),
 					Values: getSafeProp[[]any](prop, "values"),
-				}, properties, cohorts)
+				}, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 				if err != nil {
 					var inconclusiveErr *InconclusiveMatchError
 					if errors.As(err, &inconclusiveErr) {
@@ -598,14 +699,17 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 				var matches bool
 				var err error
 				flagProperty := FlagProperty{
-					Key:      getSafeProp[string](prop, "key"),
-					Operator: getSafeProp[string](prop, "operator"),
-					Value:    getSafeProp[any](prop, "value"),
-					Type:     getSafeProp[string](prop, "type"),
-					Negation: getSafeProp[bool](prop, "negation"),
+					Key:             getSafeProp[string](prop, "key"),
+					Operator:        getSafeProp[string](prop, "operator"),
+					Value:           getSafeProp[any](prop, "value"),
+					Type:            getSafeProp[string](prop, "type"),
+					Negation:        getSafeProp[bool](prop, "negation"),
+					DependencyChain: getSafeProp[[]string](prop, "dependency_chain"),
 				}
 				if prop["type"] == "cohort" {
-					matches, err = matchCohort(flagProperty, properties, cohorts)
+					matches, err = poller.matchCohort(flagProperty, properties, cohorts, flagsByKey, evaluationCache, distinctId)
+				} else if prop["type"] == "flag" {
+					matches, err = poller.evaluateFlagDependency(flagProperty, flagsByKey, evaluationCache, distinctId, properties, cohorts)
 				} else {
 					matches, err = matchProperty(flagProperty, properties)
 				}

@@ -931,8 +931,11 @@ func TestFeatureFlagWithDependencies(t *testing.T) {
 	})
 	defer client.Close()
 
-	// Test that flag evaluation doesn't fail when encountering a flag dependency
-	isMatch, err := client.IsFeatureEnabled(
+	// Test that flag evaluation handles flag dependencies properly
+	// The flag has a dependency on "beta-feature" which doesn't exist locally
+	// Since OnlyEvaluateLocally is true and the dependency can't be resolved locally,
+	// this should return an error
+	_, err := client.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:                 "flag-with-dependencies",
 			DistinctId:          "test-user",
@@ -941,20 +944,13 @@ func TestFeatureFlagWithDependencies(t *testing.T) {
 		},
 	)
 
-	// Should not error out
-	if err != nil {
-		t.Errorf("Should not return error when encountering flag dependencies: %v", err)
+	// Should return an error since dependency can't be evaluated locally
+	if err == nil {
+		t.Error("Should return error when flag dependencies can't be evaluated locally")
 	}
 
-	// The flag should evaluate based on other conditions (email contains @example.com)
-	// Since flag dependencies aren't implemented, it should skip the flag condition
-	// and evaluate based on the email condition only
-	if isMatch != true {
-		t.Error("Should match based on email condition")
-	}
-
-	// Test with email that doesn't match
-	isMatch, err = client.IsFeatureEnabled(
+	// Test with email that doesn't match - should also error due to missing dependency
+	_, err = client.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:                 "flag-with-dependencies",
 			DistinctId:          "test-user-2",
@@ -963,12 +959,8 @@ func TestFeatureFlagWithDependencies(t *testing.T) {
 		},
 	)
 
-	if err != nil {
-		t.Errorf("Should not return error: %v", err)
-	}
-
-	if isMatch == true {
-		t.Error("Should not match when email doesn't contain @example.com")
+	if err == nil {
+		t.Error("Should return error when flag dependencies can't be evaluated locally")
 	}
 }
 
@@ -4946,4 +4938,522 @@ func TestFeatureFlagWithFalseVariant(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "false", isEnabled)
+}
+
+func TestBasicEmailPropertyMatching(t *testing.T) {
+	// Test basic property matching for icontains
+	property := FlagProperty{
+		Key:      "email",
+		Operator: "icontains",
+		Value:    "@example.com",
+		Type:     "person",
+	}
+
+	// Should match
+	properties1 := NewProperties().Set("email", "test@example.com")
+	match1, err1 := matchProperty(property, properties1)
+	require.NoError(t, err1)
+	require.True(t, match1, "Should match email containing @example.com")
+
+	// Should not match
+	properties2 := NewProperties().Set("email", "test@other.com")
+	match2, err2 := matchProperty(property, properties2)
+	require.NoError(t, err2)
+	require.False(t, match2, "Should not match email not containing @example.com")
+}
+
+
+func TestFlagDependenciesSimpleChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"name": "Flag A",
+						"key": "flag-a",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "email",
+											"operator": "icontains",
+											"value": "@example.com",
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					},
+					{
+						"id": 2,
+						"name": "Flag B",
+						"key": "flag-b",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "flag-a",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": ["flag-a"]
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test when dependency is satisfied
+	result, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-b",
+			DistinctId:          "test-user",
+			PersonProperties:    NewProperties().Set("email", "test@example.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result)
+
+	// Test flag-a directly with email that doesn't match - should be false
+	flagAResult, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-a",
+			DistinctId:          "test-user-2",
+			PersonProperties:    NewProperties().Set("email", "test@other.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, flagAResult, "flag-a should be false for email that doesn't contain @example.com")
+
+	// Test when dependency is not satisfied
+	result, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-b",
+			DistinctId:          "test-user-2",
+			PersonProperties:    NewProperties().Set("email", "test@other.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, result)
+}
+
+func TestFlagDependenciesCircularDependency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"name": "Flag A",
+						"key": "flag-a",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "flag-b",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": []
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					},
+					{
+						"id": 2,
+						"name": "Flag B",
+						"key": "flag-b",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "flag-a",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": []
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {}
+			}`))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/") {
+			w.Write([]byte(`{"featureFlags": {}}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Both flags should fall back to remote evaluation due to circular dependency
+	result, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "flag-a",
+			DistinctId: "test-user",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, result)
+
+	result, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "flag-b",
+			DistinctId: "test-user",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, result)
+}
+
+func TestFlagDependenciesMissingFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"name": "Flag A",
+						"key": "flag-a",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "non-existent-flag",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": ["non-existent-flag"]
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {}
+			}`))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/") {
+			w.Write([]byte(`{"featureFlags": {}}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Should fall back to remote evaluation because dependency doesn't exist
+	result, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "flag-a",
+			DistinctId: "test-user",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, result)
+}
+
+func TestFlagDependenciesComplexChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"name": "Flag A",
+						"key": "flag-a",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					},
+					{
+						"id": 2,
+						"name": "Flag B",
+						"key": "flag-b",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					},
+					{
+						"id": 3,
+						"name": "Flag C",
+						"key": "flag-c",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "flag-a",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": ["flag-a"]
+										},
+										{
+											"key": "flag-b",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": ["flag-b"]
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					},
+					{
+						"id": 4,
+						"name": "Flag D",
+						"key": "flag-d",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "flag-c",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": ["flag-a", "flag-b", "flag-c"]
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// All dependencies satisfied - should return true
+	result, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-d",
+			DistinctId:          "test-user",
+			OnlyEvaluateLocally: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result)
+}
+
+func TestFlagDependenciesMixedConditions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"name": "Base Flag",
+						"key": "base-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					},
+					{
+						"id": 2,
+						"name": "Mixed Flag",
+						"key": "mixed-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "base-flag",
+											"operator": "exact",
+											"value": true,
+											"type": "flag",
+											"dependency_chain": ["base-flag"]
+										},
+										{
+											"key": "email",
+											"operator": "icontains",
+											"value": "@example.com",
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Both flag dependency and email condition satisfied
+	result, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "mixed-flag",
+			DistinctId:          "test-user",
+			PersonProperties:    NewProperties().Set("email", "test@example.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result)
+
+	// Flag dependency satisfied but email condition not satisfied
+	result, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "mixed-flag",
+			DistinctId:          "test-user-2",
+			PersonProperties:    NewProperties().Set("email", "test@other.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, result)
+}
+
+func TestFlagDependenciesMalformedChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"name": "Base Flag",
+						"key": "base-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					},
+					{
+						"id": 2,
+						"name": "Missing Chain Flag",
+						"key": "missing-chain-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "base-flag",
+											"operator": "exact",
+											"value": true,
+											"type": "flag"
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {}
+			}`))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/") {
+			w.Write([]byte(`{"featureFlags": {}}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Should fall back to remote evaluation when dependency_chain is missing
+	result, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "missing-chain-flag",
+			DistinctId: "test-user",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, result)
 }
