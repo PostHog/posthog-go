@@ -1,8 +1,6 @@
 package posthog
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -61,21 +59,13 @@ func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
 			break
 		}
 
-		resolved := true
-		withinApp := d.InAppDecider(frame)
-		mangled := filepath.Base(frame.File)
-		if frame.Func != nil {
-			mangled = frame.Func.Name()
-		}
 		traces = append(traces, StackFrame{
-			RawID:        d.idFromFrame(frame),
-			Source:       frame.File,
-			MangledName:  mangled,
-			Line:         frame.Line,
-			ResolvedName: frame.Function,
-			InApp:        &withinApp,
-			Resolved:     &resolved,
-			Language:     "go",
+			Filename:  frame.File,
+			LineNo:    frame.Line,
+			Function:  frame.Function,
+			InApp:     d.InAppDecider(frame),
+			Synthetic: false,
+			Platform:  "go",
 		})
 		if !hasMore {
 			break
@@ -83,18 +73,7 @@ func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
 	}
 
 	return &ExceptionStacktrace{
-		Type:   "resolved",
+		Type:   "raw",
 		Frames: traces,
 	}
-}
-
-// idFromFrame returns a stable ID for a stack frame based on its location.
-func (d DefaultStackTraceExtractor) idFromFrame(fr runtime.Frame) string {
-	h := sha256.New()
-	h.Write([]byte(fr.Function))
-	h.Write([]byte(fr.File))
-	h.Write([]byte(fmt.Sprintf("%d", fr.Line)))
-	sum := h.Sum(nil)
-	// Shorten to the first few hex chars (enough to be unique, keeps payload smaller).
-	return hex.EncodeToString(sum)[:12]
 }

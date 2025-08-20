@@ -38,17 +38,16 @@ type ExceptionStacktrace struct {
 	Frames []StackFrame `json:"frames"`
 }
 
+// StackFrame represents a single "Frame" within a stack trace.
+// Documentation about the available fields can be found here:
+// https://github.com/PostHog/posthog/blob/39b9326320c23acbdc6e96a8beb41b30d3c99099/rust/cymbal/src/langs/go.rs#L7
 type StackFrame struct {
-	RawID        string `json:"raw_id"`
-	MangledName  string `json:"mangled_name"`
-	InApp        *bool  `json:"in_app,omitempty"`
-	ResolvedName string `json:"resolved_name"`
-	Language     string `json:"lang"`
-	Resolved     *bool  `json:"resolved,omitempty"`
-	Source       string `json:"source"`
-	Line         int    `json:"line"`
-	// ResolveFailure will be shown when Resolve=false. It should contain details about why this frame is not resolved.
-	ResolveFailure *string `json:"resolve_failure,omitempty"`
+	Filename  string `json:"filename"`
+	LineNo    int    `json:"lineno"`
+	Function  string `json:"function"`
+	InApp     bool   `json:"in_app"`
+	Synthetic bool   `json:"synthetic"`
+	Platform  string `json:"platform"`
 }
 
 type ExceptionInApi struct {
@@ -96,13 +95,6 @@ func (msg Exception) Validate() error {
 }
 
 func (msg ExceptionItem) Validate() error {
-	if msg.Stacktrace != nil {
-		for _, frame := range msg.Stacktrace.Frames {
-			if err := frame.Validate(); err != nil {
-				return err
-			}
-		}
-	}
 	if msg.Type == "" {
 		return FieldError{
 			Type:  "posthog.Exception",
@@ -115,18 +107,6 @@ func (msg ExceptionItem) Validate() error {
 			Type:  "posthog.Exception",
 			Name:  "Value",
 			Value: msg.Value,
-		}
-	}
-
-	return nil
-}
-
-func (msg StackFrame) Validate() error {
-	if msg.RawID == "" {
-		return FieldError{
-			Type:  "posthog.ExceptionItem",
-			Name:  "Stacktrace.Frame",
-			Value: msg.RawID,
 		}
 	}
 

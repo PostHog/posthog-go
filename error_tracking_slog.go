@@ -145,22 +145,22 @@ func (e ErrorExtractor) errorFromValue(v slog.Value) error {
 			return nil
 		}
 		// direct error
-		if e, ok := any.(error); ok && e != nil {
-			return e
+		if err, ok := any.(error); ok && err != nil {
+			return err
 		}
 		// common wrappers
 		type unwrappable interface{ Unwrap() error }
 		if c, ok := any.(unwrappable); ok {
-			if e := c.Unwrap(); e != nil {
-				return e
+			if err := c.Unwrap(); err != nil {
+				return err
 			}
 		}
 
 		return nil
 	case slog.KindGroup:
 		for _, ga := range v.Group() {
-			if e := e.errorFromValue(ga.Value); e != nil {
-				return e
+			if err := e.errorFromValue(ga.Value); err != nil {
+				return err
 			}
 		}
 

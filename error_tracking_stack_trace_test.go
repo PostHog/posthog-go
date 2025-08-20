@@ -41,49 +41,6 @@ func TestSimpleInAppDecider(t *testing.T) {
 	}
 }
 
-func TestDefaultStackTraceExtractor_idFromFrame(t *testing.T) {
-	extractor := DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}
-
-	tests := map[string]struct {
-		frA         runtime.Frame
-		frB         runtime.Frame
-		expectEqual bool
-	}{
-		"same frame => same id": {
-			frA:         runtime.Frame{Function: "pkg.fn", File: "/path/a.go", Line: 10},
-			frB:         runtime.Frame{Function: "pkg.fn", File: "/path/a.go", Line: 10},
-			expectEqual: true,
-		},
-		"different line => different id": {
-			frA:         runtime.Frame{Function: "pkg.fn", File: "/path/a.go", Line: 10},
-			frB:         runtime.Frame{Function: "pkg.fn", File: "/path/a.go", Line: 11},
-			expectEqual: false,
-		},
-		"different file => different id": {
-			frA:         runtime.Frame{Function: "pkg.fn", File: "/path/a.go", Line: 10},
-			frB:         runtime.Frame{Function: "pkg.fn", File: "/path/b.go", Line: 10},
-			expectEqual: false,
-		},
-		"different function => different id": {
-			frA:         runtime.Frame{Function: "pkg.fnA", File: "/path/a.go", Line: 10},
-			frB:         runtime.Frame{Function: "pkg.fnB", File: "/path/a.go", Line: 10},
-			expectEqual: false,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			idA := extractor.idFromFrame(tc.frA)
-			idB := extractor.idFromFrame(tc.frB)
-
-			if (idA == idB) != tc.expectEqual {
-				t.Fatalf("idFromFrame compare: got equal=%v (idA=%q idB=%q), want equal=%v",
-					idA == idB, idA, idB, tc.expectEqual)
-			}
-		})
-	}
-}
-
 // go:inline - Avoid optimizations which might break the stack trace
 func recursiveChain(ex DefaultStackTraceExtractor, skip, depth int) []StackFrame {
 	if depth <= 0 {
@@ -230,9 +187,9 @@ func TestDefaultStackTraceExtractor_GetStackTrace(t *testing.T) {
 			}
 
 			for i := range traces {
-				if traces[i].ResolvedName != tc.expectedNames[i] {
+				if traces[i].Function != tc.expectedNames[i] {
 					t.Fatalf("trace resolved name does not match expectations (idx=%d): got=%v want=%v",
-						i, traces[i].ResolvedName, tc.expectedNames[i])
+						i, traces[i].Function, tc.expectedNames[i])
 				}
 			}
 		})

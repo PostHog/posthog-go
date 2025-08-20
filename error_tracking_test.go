@@ -75,29 +75,6 @@ func TestException_Validate(t *testing.T) {
 				Value: "",
 			},
 		},
-		"error: frame missing RawID": {
-			msg: Exception{
-				DistinctId: "user-123",
-				Timestamp:  now,
-				ExceptionList: []ExceptionItem{
-					{
-						Type:  "t",
-						Value: "v",
-						Stacktrace: &ExceptionStacktrace{
-							Type: "raw",
-							Frames: []StackFrame{
-								{RawID: "", MangledName: "fn", ResolvedName: "fn", Language: "go", Source: "file.go", Line: 1},
-							},
-						},
-					},
-				},
-			},
-			expectedError: FieldError{
-				Type:  "posthog.ExceptionItem",
-				Name:  "Stacktrace.Frame",
-				Value: "",
-			},
-		},
 		"valid: full nested structure": {
 			msg: Exception{
 				DistinctId: "user-123",
@@ -111,17 +88,15 @@ func TestException_Validate(t *testing.T) {
 							Synthetic: ptrBool(false),
 						},
 						Stacktrace: &ExceptionStacktrace{
-							Type: "resolved",
+							Type: "raw",
 							Frames: []StackFrame{
 								{
-									RawID:        "abc123",
-									MangledName:  "fn",
-									InApp:        ptrBool(true),
-									ResolvedName: "fn",
-									Language:     "go",
-									Resolved:     ptrBool(true),
-									Source:       "file.go",
-									Line:         42,
+									Filename:  "file.go",
+									LineNo:    42,
+									Function:  "package.Sample",
+									InApp:     true,
+									Synthetic: false,
+									Platform:  "go",
 								},
 							},
 						},
