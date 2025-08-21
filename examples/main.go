@@ -75,7 +75,7 @@ func checkCredentials() {
 		}
 	} else {
 		fmt.Println("✅ PostHog credentials loaded successfully!")
-		fmt.Printf("   Project API Key: %s...\n", projectAPIKey[:9])
+		fmt.Println("   Project API Key: [REDACTED]")
 		fmt.Println("   Personal API Key: [REDACTED]")
 		fmt.Printf("   Endpoint: %s\n\n", endpoint)
 	}
