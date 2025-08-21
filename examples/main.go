@@ -82,7 +82,8 @@ func checkCredentials() {
 }
 
 func showMenu() {
-	fmt.Println("🚀 PostHog Go SDK Demo - Choose an example to run:\n")
+	fmt.Println("🚀 PostHog Go SDK Demo - Choose an example to run:")
+	fmt.Println()
 	fmt.Println("1. Basic capture examples")
 	fmt.Println("2. Capture with feature flags examples")
 	fmt.Println("3. Feature flag evaluation examples")

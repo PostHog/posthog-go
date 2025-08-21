@@ -21,6 +21,9 @@ import (
 
 const LONG_SCALE = 0xfffffffffffffff
 
+// nilInterfacePtr is a helper for creating nil interface{} pointers used in evaluation cache
+var nilInterfacePtr = (*interface{})(nil)
+
 type FeatureFlagsPoller struct {
 	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
 	// After the request the channel get closed.
@@ -165,8 +168,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			depFlag, flagExists := flagsByKey[depFlagKey]
 			if !flagExists {
 				// Missing flag dependency - cannot evaluate locally
-				nilResult := (*interface{})(nil)
-				evaluationCache[depFlagKey] = nilResult
+				evaluationCache[depFlagKey] = nilInterfacePtr
 				return false, &InconclusiveMatchError{
 					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
 				}
@@ -180,8 +182,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 					result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
 					if err != nil {
 						// If we can't evaluate a dependency, store nil and propagate the error
-						nilResult := (*interface{})(nil)
-						evaluationCache[depFlagKey] = nilResult
+						evaluationCache[depFlagKey] = nilInterfacePtr
 						return false, &InconclusiveMatchError{
 							msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
 						}
@@ -192,21 +193,34 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		}
 	}
 
-	// After evaluating all dependencies, check if any returned false
+	// After evaluating all dependencies, check if any returned false or inconclusive
 	for _, depFlagKey := range dependencyChain {
 		if cachedResult, exists := evaluationCache[depFlagKey]; exists {
-			if cachedResult == nil {
-				// Previously inconclusive - raise error again
-				return false, &InconclusiveMatchError{
-					msg: fmt.Sprintf("Flag dependency '%s' was previously inconclusive", depFlagKey),
-				}
-			} else if *cachedResult == false {
-				// Definitive False result - dependency failed
+			ok, err := checkCachedDependencyResult(cachedResult, depFlagKey)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
 				return false, nil
 			}
 		}
 	}
 
+	return true, nil
+}
+
+// checkCachedDependencyResult checks if a cached dependency result indicates failure or inconclusive state
+func checkCachedDependencyResult(cachedResult *interface{}, depFlagKey string) (bool, error) {
+	if cachedResult == nil {
+		// Previously inconclusive - raise error again
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Flag dependency '%s' was previously inconclusive", depFlagKey),
+		}
+	} else if *cachedResult == false {
+		// Definitive False result - dependency failed
+		return false, nil
+	}
+	// Dependency passed
 	return true, nil
 }
 
