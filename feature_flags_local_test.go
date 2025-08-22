@@ -5457,3 +5457,189 @@ func TestFlagDependenciesMalformedChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, result)
 }
+
+// TestMultiLevelMultivariateDependencyChain tests multi-level dependency chains with multivariate flags
+// This test is equivalent to the EvaluatesMultiLevelMultivariateDependencyChain test in the .NET SDK
+func TestMultiLevelMultivariateDependencyChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"name": "Leaf Flag",
+						"key": "leaf-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "email",
+											"operator": "icontains",
+											"value": "control",
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100,
+									"variant": "control"
+								},
+								{
+									"properties": [
+										{
+											"key": "email",
+											"operator": "icontains",
+											"value": "test",
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100,
+									"variant": "test"
+								}
+							],
+							"multivariate": {
+								"variants": [
+									{"key": "control", "name": "Control", "rollout_percentage": 50},
+									{"key": "test", "name": "Test", "rollout_percentage": 50}
+								]
+							}
+						}
+					},
+					{
+						"id": 2,
+						"name": "Intermediate Flag",
+						"key": "intermediate-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "leaf-flag",
+											"operator": "exact",
+											"value": "control",
+											"type": "flag",
+											"dependency_chain": ["leaf-flag"]
+										}
+									],
+									"rollout_percentage": 100,
+									"variant": "blue"
+								}
+							],
+							"multivariate": {
+								"variants": [
+									{"key": "blue", "name": "Blue", "rollout_percentage": 60},
+									{"key": "green", "name": "Green", "rollout_percentage": 40}
+								]
+							}
+						}
+					},
+					{
+						"id": 3,
+						"name": "Dependent Flag",
+						"key": "dependent-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "intermediate-flag",
+											"operator": "exact",
+											"value": "blue",
+											"type": "flag",
+											"dependency_chain": ["leaf-flag", "intermediate-flag"]
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {}
+			}`))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/") {
+			w.Write([]byte(`{"featureFlags": {}}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test leaf flag evaluates to "control" variant for control@example.com
+	result, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "leaf-flag",
+			DistinctId: "user-control",
+			PersonProperties: NewProperties().
+				Set("email", "control@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "control", result)
+
+	// Test leaf flag evaluates to "test" variant for test@example.com
+	result, err = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "leaf-flag",
+			DistinctId: "user-test",
+			PersonProperties: NewProperties().
+				Set("email", "test@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "test", result)
+
+	// Test intermediate flag evaluates to "blue" when leaf-flag is "control"
+	result, err = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "intermediate-flag",
+			DistinctId: "user-control",
+			PersonProperties: NewProperties().
+				Set("email", "control@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "blue", result)
+
+	// Test intermediate flag evaluates to false when leaf-flag is "test" (dependency not met)
+	resultBool, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "intermediate-flag",
+			DistinctId: "user-test",
+			PersonProperties: NewProperties().
+				Set("email", "test@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, resultBool)
+
+	// Test dependent flag is true when leaf-flag="control" and intermediate-flag="blue"
+	resultBool, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "dependent-flag",
+			DistinctId: "user-control",
+			PersonProperties: NewProperties().
+				Set("email", "control@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, resultBool)
+
+	// Test dependent flag is false when leaf-flag="test" (breaks dependency chain)
+	resultBool, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "dependent-flag",
+			DistinctId: "user-test",
+			PersonProperties: NewProperties().
+				Set("email", "test@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, resultBool)
+}
