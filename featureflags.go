@@ -83,7 +83,7 @@ type FlagProperty struct {
 	Value           interface{} `json:"value"`
 	Type            string      `json:"type"` // Supported types: "person", "group", "cohort", "flag"
 	Negation        bool        `json:"negation"`
-	DependencyChain []string    `json:"dependency_chain,omitempty"` // For flag dependencies
+	DependencyChain []string    `json:"dependency_chain"` // For flag dependencies
 }
 
 type PropertyGroup struct {
@@ -214,7 +214,7 @@ func checkCachedDependencyResult(cachedResult *interface{}, depFlagKey string) (
 	if cachedResult == nil {
 		// Previously inconclusive - raise error again
 		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Flag dependency '%s' was previously inconclusive", depFlagKey),
+			msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated (missing flag or evaluation error)", depFlagKey),
 		}
 	} else if *cachedResult == false {
 		// Definitive False result - dependency failed

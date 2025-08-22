@@ -54,7 +54,8 @@ func LoadEnvFileFromPath(path string) error {
 				value := strings.TrimSpace(parts[1])
 				
 				// Only set if not already set (like Python's setdefault)
-				if os.Getenv(key) == "" {
+				_, exists := os.LookupEnv(key)
+				if !exists {
 					os.Setenv(key, value)
 				}
 			}
