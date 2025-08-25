@@ -21,8 +21,6 @@ import (
 
 const LONG_SCALE = 0xfffffffffffffff
 
-// nilInterfacePtr is a helper for creating nil interface{} pointers used in evaluation cache
-var nilInterfacePtr = (*interface{})(nil)
 
 type FeatureFlagsPoller struct {
 	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
@@ -129,7 +127,7 @@ func (e *InconclusiveMatchError) Error() string {
 func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	property FlagProperty,
 	flagsByKey map[string]FeatureFlag,
-	evaluationCache map[string]*interface{},
+	evaluationCache map[string]interface{},
 	distinctId string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
@@ -168,26 +166,25 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			depFlag, flagExists := flagsByKey[depFlagKey]
 			if !flagExists {
 				// Missing flag dependency - cannot evaluate locally
-				evaluationCache[depFlagKey] = nilInterfacePtr
+				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{
 					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
 				}
 			} else {
 				// Check if the flag is active (same check as in computeFlagLocally)
 				if !depFlag.Active {
-					falseResult := interface{}(false)
-					evaluationCache[depFlagKey] = &falseResult
+					evaluationCache[depFlagKey] = false
 				} else {
 					// Recursively evaluate the dependency
 					result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
 					if err != nil {
 						// If we can't evaluate a dependency, store nil and propagate the error
-						evaluationCache[depFlagKey] = nilInterfacePtr
+						evaluationCache[depFlagKey] = nil
 						return false, &InconclusiveMatchError{
 							msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
 						}
 					}
-					evaluationCache[depFlagKey] = &result
+					evaluationCache[depFlagKey] = result
 				}
 			}
 		}
@@ -198,7 +195,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	if property.Value != nil && property.Operator != "" {
 		// New behavior: Check if the main dependency (the property.Key) matches the expected value
 		if cachedResult, exists := evaluationCache[property.Key]; exists && cachedResult != nil {
-			match, err := checkFlagDependencyValue(*cachedResult, property.Value, property.Operator, property.Key)
+			match, err := checkFlagDependencyValue(cachedResult, property.Value, property.Operator, property.Key)
 			if err != nil {
 				return false, err
 			}
@@ -228,13 +225,13 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 }
 
 // checkCachedDependencyResult checks if a cached dependency result indicates failure or inconclusive state
-func checkCachedDependencyResult(cachedResult *interface{}, depFlagKey string) (bool, error) {
+func checkCachedDependencyResult(cachedResult interface{}, depFlagKey string) (bool, error) {
 	if cachedResult == nil {
 		// Previously inconclusive - raise error again
 		return false, &InconclusiveMatchError{
 			msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated (missing flag or evaluation error)", depFlagKey),
 		}
-	} else if *cachedResult == false {
+	} else if cachedResult == false {
 		// Definitive False result - dependency failed
 		return false, nil
 	}
@@ -589,7 +586,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	}
 
 	// Create evaluation cache for flag dependencies
-	evaluationCache := make(map[string]*interface{})
+	evaluationCache := make(map[string]interface{})
 
 	// Create flags by key map for dependency evaluation
 	featureFlags, err := poller.GetFeatureFlags()
@@ -669,7 +666,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	properties Properties,
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
-	evaluationCache map[string]*interface{},
+	evaluationCache map[string]interface{},
 ) (interface{}, error) {
 	conditions := flag.Filters.Groups
 	isInconclusive := false
@@ -730,7 +727,7 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	properties Properties,
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
-	evaluationCache map[string]*interface{},
+	evaluationCache map[string]interface{},
 ) (bool, error) {
 	if len(condition.Properties) > 0 {
 		var (
@@ -759,7 +756,7 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	return true, nil
 }
 
-func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]*interface{}, distinctId string) (bool, error) {
+func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string) (bool, error) {
 	cohortId := fmt.Sprint(property.Value)
 	propertyGroup, ok := cohorts[cohortId]
 	if !ok {
@@ -769,7 +766,7 @@ func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties 
 	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 }
 
-func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]*interface{}, distinctId string) (bool, error) {
+func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string) (bool, error) {
 	groupType := propertyGroup.Type
 	values := propertyGroup.Values
 
