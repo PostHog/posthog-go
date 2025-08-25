@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/joho/godotenv"
 	_ "github.com/posthog/posthog-go" // Used by other files in this package
 )
 
@@ -29,7 +30,7 @@ var (
 
 func init() {
 	// Load .env file if it exists (similar to Python SDK)
-	_ = LoadEnvFile()
+	_ = godotenv.Load()
 
 	// Get configuration from environment variables
 	projectAPIKey = os.Getenv("POSTHOG_PROJECT_API_KEY")
@@ -66,7 +67,7 @@ func checkCredentials() {
 		fmt.Println("   Please set POSTHOG_PROJECT_API_KEY and POSTHOG_PERSONAL_API_KEY environment variables")
 		fmt.Println("   or copy .env.example to .env and fill in your values")
 		fmt.Println()
-		
+
 		if projectAPIKey == "" {
 			projectAPIKey = promptForInput("Enter your PostHog project API key (starts with phc_): ")
 		}
@@ -130,19 +131,19 @@ func runFlagDependenciesExamples() {
 
 func runAllExamples() {
 	fmt.Println("\n🔄 Running all examples...")
-	
+
 	fmt.Printf("\n%s BASIC CAPTURE %s\n", strings.Repeat("🔸", 20), strings.Repeat("🔸", 20))
 	TestCapture(projectAPIKey, endpoint)
-	
+
 	fmt.Printf("\n%s CAPTURE WITH FEATURE FLAGS %s\n", strings.Repeat("🔸", 15), strings.Repeat("🔸", 15))
 	TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint)
-	
+
 	fmt.Printf("\n%s FEATURE FLAG EVALUATION %s\n", strings.Repeat("🔸", 17), strings.Repeat("🔸", 17))
 	TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint)
-	
+
 	fmt.Printf("\n%s ADVANCED FEATURE FLAGS %s\n", strings.Repeat("🔸", 18), strings.Repeat("🔸", 18))
 	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint)
-	
+
 	fmt.Printf("\n%s FLAG DEPENDENCIES %s\n", strings.Repeat("🔸", 20), strings.Repeat("🔸", 20))
 	TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint)
 }
@@ -155,18 +156,18 @@ func isInteractive() bool {
 
 func main() {
 	checkCredentials()
-	
+
 	// If not interactive, just run all examples
 	if !isInteractive() {
 		fmt.Println("🤖 Non-interactive mode detected. Running all examples...")
 		runAllExamples()
 		return
 	}
-	
+
 	for {
 		showMenu()
 		choice := promptForInput("\nEnter your choice (1-7): ")
-		
+
 		switch choice {
 		case "1":
 			runBasicCaptureExamples()
@@ -187,11 +188,11 @@ func main() {
 			fmt.Println("❌ Invalid choice. Please select 1-7.")
 			continue
 		}
-		
+
 		fmt.Println("\n" + strings.Repeat("=", 60))
 		fmt.Println("✅ Example completed!")
 		fmt.Println(strings.Repeat("=", 60))
-		
+
 		// Ask if user wants to run another example
 		again := promptForInput("\nWould you like to run another example? (y/N): ")
 		if strings.ToLower(again) != "y" && strings.ToLower(again) != "yes" {

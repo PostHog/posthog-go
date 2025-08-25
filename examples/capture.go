@@ -9,7 +9,7 @@ import (
 
 func TestCapture(projectAPIKey, endpoint string) {
 	fmt.Println("📊 Capturing basic events...")
-	
+
 	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:  30 * time.Second,
 		BatchSize: 100,
@@ -33,7 +33,7 @@ func TestCapture(projectAPIKey, endpoint string) {
 		fmt.Println("❌ Error sending Download event:", err)
 		return
 	}
-	
+
 	fmt.Println("→ Sending 'Page View' event...")
 	if err := client.Enqueue(posthog.Capture{
 		Event:      "$pageview",
@@ -47,7 +47,7 @@ func TestCapture(projectAPIKey, endpoint string) {
 		fmt.Println("❌ Error sending Page View event:", err)
 		return
 	}
-	
+
 	fmt.Println("→ Sending 'Button Clicked' event...")
 	if err := client.Enqueue(posthog.Capture{
 		Event:      "Button Clicked",
@@ -61,7 +61,7 @@ func TestCapture(projectAPIKey, endpoint string) {
 		fmt.Println("❌ Error sending Button Clicked event:", err)
 		return
 	}
-	
+
 	// Give the client time to send events
 	time.Sleep(1 * time.Second)
 	fmt.Println("✅ Basic events sent successfully!")
@@ -70,7 +70,7 @@ func TestCapture(projectAPIKey, endpoint string) {
 func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint string) {
 	fmt.Println("🏁 Capturing events with feature flags...")
 	fmt.Println("   This demonstrates how to automatically include feature flag states with events")
-	
+
 	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:       30 * time.Second,
 		BatchSize:      100,
@@ -94,7 +94,7 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 		fmt.Println("❌ Error sending Purchase event:", err)
 		return
 	}
-	
+
 	fmt.Println("→ Sending event without feature flags for comparison...")
 	if err := client.Enqueue(posthog.Capture{
 		Event:      "Login",
@@ -108,7 +108,7 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 		fmt.Println("❌ Error sending Login event:", err)
 		return
 	}
-	
+
 	// Give the client time to send events
 	time.Sleep(1 * time.Second)
 	fmt.Println("✅ Events with feature flag states sent successfully!")
@@ -119,7 +119,7 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint string) {
 	fmt.Println("🚀 Advanced feature flags with SendFeatureFlagsOptions...")
 	fmt.Println("   This demonstrates advanced feature flag evaluation with custom properties")
-	
+
 	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:       30 * time.Second,
 		BatchSize:      100,
@@ -164,7 +164,7 @@ func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpo
 		fmt.Println("❌ Error sending team action event:", err)
 		return
 	}
-	
+
 	fmt.Println("→ Sending event with minimal local evaluation...")
 	if err := client.Enqueue(posthog.Capture{
 		Event:      "Quick Action",
@@ -181,7 +181,7 @@ func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpo
 		fmt.Println("❌ Error sending quick action event:", err)
 		return
 	}
-	
+
 	// Give the client time to send events
 	time.Sleep(1 * time.Second)
 	fmt.Println("✅ Advanced feature flag events sent successfully!")

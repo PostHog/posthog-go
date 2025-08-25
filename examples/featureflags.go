@@ -83,7 +83,7 @@ func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
 	jsonArrayPayloadResult, _ := client.GetRemoteConfigPayload("my_secret_flag_json_array_value")
 	var jsonArrayPayload []string
 	json.Unmarshal([]byte(jsonArrayPayloadResult), &jsonArrayPayload)
-	
+
 	fmt.Println("ℹ️ Feature flag evaluation completed!")
 	fmt.Println("   - IsFeatureEnabled(): Returns boolean for any flag type")
 	fmt.Println("   - GetFeatureFlag(): Returns the actual variant value")
@@ -152,7 +152,7 @@ func TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint string) {
 	}
 
 	fmt.Println("→ Testing beta-feature directly for comparison...")
-	
+
 	beta1, betaErr1 := client.IsFeatureEnabled(posthog.FeatureFlagPayload{
 		Key:                   "beta-feature",
 		DistinctId:            "example_user",

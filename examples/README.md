@@ -55,7 +55,7 @@ Before running the examples, you'll need to:
 
 ## Configuration
 
-The examples will automatically load configuration from a `.env` file if it exists. This provides a convenient way to manage your PostHog credentials without exposing them in your shell history or environment.
+The examples will automatically load configuration from a `.env` file if it exists using the [godotenv](https://github.com/joho/godotenv) library. This provides a convenient way to manage your PostHog credentials without exposing them in your shell history or environment.
 
 ### .env file format
 
