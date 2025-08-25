@@ -5076,7 +5076,7 @@ func TestFlagDependenciesCircularDependency(t *testing.T) {
 									"properties": [
 										{
 											"key": "flag-b",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": []
@@ -5098,7 +5098,7 @@ func TestFlagDependenciesCircularDependency(t *testing.T) {
 									"properties": [
 										{
 											"key": "flag-a",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": []
@@ -5160,7 +5160,7 @@ func TestFlagDependenciesMissingFlag(t *testing.T) {
 									"properties": [
 										{
 											"key": "non-existent-flag",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": ["non-existent-flag"]
@@ -5421,7 +5421,7 @@ func TestFlagDependenciesMalformedChain(t *testing.T) {
 									"properties": [
 										{
 											"key": "base-flag",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag"
 										}

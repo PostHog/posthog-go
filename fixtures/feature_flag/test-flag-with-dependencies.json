@@ -14,7 +14,7 @@
                 "key": "beta-feature",
                 "type": "flag",
                 "value": true,
-                "operator": "exact",
+                "operator": "flag_evaluates_to",
                 "negation": false,
                 "dependency_chain": ["beta-feature"]
               },
