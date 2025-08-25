@@ -163,6 +163,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		if _, exists := evaluationCache[depFlagKey]; exists {
 			continue
 		}
+
 		// Need to evaluate this dependency first
 		depFlag, flagExists := flagsByKey[depFlagKey]
 		if !flagExists {
@@ -171,22 +172,22 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			return false, &InconclusiveMatchError{
 				msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
 			}
+		}
+
+		// Check if the flag is active (same check as in computeFlagLocally)
+		if !depFlag.Active {
+			evaluationCache[depFlagKey] = false
 		} else {
-			// Check if the flag is active (same check as in computeFlagLocally)
-			if !depFlag.Active {
-				evaluationCache[depFlagKey] = false
-			} else {
-				// Recursively evaluate the dependency
-				result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
-				if err != nil {
-					// If we can't evaluate a dependency, store nil and propagate the error
-					evaluationCache[depFlagKey] = nil
-					return false, &InconclusiveMatchError{
-						msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
-					}
+			// Recursively evaluate the dependency
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
+			if err != nil {
+				// If we can't evaluate a dependency, store nil and propagate the error
+				evaluationCache[depFlagKey] = nil
+				return false, &InconclusiveMatchError{
+					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
 				}
-				evaluationCache[depFlagKey] = result
 			}
+			evaluationCache[depFlagKey] = result
 		}
 	}
 

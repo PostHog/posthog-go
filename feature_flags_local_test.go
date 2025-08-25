@@ -4962,7 +4962,6 @@ func TestBasicEmailPropertyMatching(t *testing.T) {
 	require.False(t, match2, "Should not match email not containing @example.com")
 }
 
-
 func TestFlagDependenciesSimpleChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
