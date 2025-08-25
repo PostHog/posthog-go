@@ -175,6 +175,42 @@ func TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint string) {
 		fmt.Printf("📊 Beta feature comparison - @example.com: %v, regular: %v\n", beta1, beta2)
 	}
 
+	fmt.Println("→ Testing multivariate dependency chains...")
+
+	// Test pineapple -> blue -> breaking-bad chain
+	dependentResult3, err3 := client.GetFeatureFlag(posthog.FeatureFlagPayload{
+		Key:                   "multivariate-root-flag",
+		DistinctId:            "regular_user",
+		PersonProperties:      posthog.NewProperties().Set("email", "pineapple@example.com"),
+		OnlyEvaluateLocally:   true,
+		SendFeatureFlagEvents: &sendEvents,
+	})
+
+	if err3 != nil {
+		fmt.Printf("❌ Error evaluating 'multivariate-root-flag' with pineapple@example.com: %v\n", err3)
+	} else if dependentResult3 != "breaking-bad" {
+		fmt.Printf("     ❌ Something went wrong evaluating 'multivariate-root-flag' with pineapple@example.com. Expected 'breaking-bad', got '%v'\n", dependentResult3)
+	} else {
+		fmt.Println("✅ 'multivariate-root-flag' with email pineapple@example.com succeeded")
+	}
+
+	// Test mango -> red -> the-wire chain
+	dependentResult4, err4 := client.GetFeatureFlag(posthog.FeatureFlagPayload{
+		Key:                   "multivariate-root-flag",
+		DistinctId:            "regular_user",
+		PersonProperties:      posthog.NewProperties().Set("email", "mango@example.com"),
+		OnlyEvaluateLocally:   true,
+		SendFeatureFlagEvents: &sendEvents,
+	})
+
+	if err4 != nil {
+		fmt.Printf("❌ Error evaluating 'multivariate-root-flag' with mango@example.com: %v\n", err4)
+	} else if dependentResult4 != "the-wire" {
+		fmt.Printf("     ❌ Something went wrong evaluating multivariate-root-flag with mango@example.com. Expected 'the-wire', got '%v'\n", dependentResult4)
+	} else {
+		fmt.Println("✅ 'multivariate-root-flag' with email mango@example.com succeeded")
+	}
+
 	fmt.Println("\n🎯 Results Summary:")
 	if err1 == nil && err2 == nil && result1 != nil && result2 != nil {
 		// Convert to booleans for comparison
