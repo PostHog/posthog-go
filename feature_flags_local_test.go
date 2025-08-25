@@ -4999,7 +4999,7 @@ func TestFlagDependenciesSimpleChain(t *testing.T) {
 									"properties": [
 										{
 											"key": "flag-a",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": ["flag-a"]
@@ -5241,14 +5241,14 @@ func TestFlagDependenciesComplexChain(t *testing.T) {
 									"properties": [
 										{
 											"key": "flag-a",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": ["flag-a"]
 										},
 										{
 											"key": "flag-b",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": ["flag-b"]
@@ -5270,7 +5270,7 @@ func TestFlagDependenciesComplexChain(t *testing.T) {
 									"properties": [
 										{
 											"key": "flag-c",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": ["flag-a", "flag-b", "flag-c"]
@@ -5336,7 +5336,7 @@ func TestFlagDependenciesMixedConditions(t *testing.T) {
 									"properties": [
 										{
 											"key": "base-flag",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": true,
 											"type": "flag",
 											"dependency_chain": ["base-flag"]
@@ -5515,7 +5515,7 @@ func TestMultiLevelMultivariateDependencyChain(t *testing.T) {
 									"properties": [
 										{
 											"key": "leaf-flag",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": "control",
 											"type": "flag",
 											"dependency_chain": ["leaf-flag"]
@@ -5544,7 +5544,7 @@ func TestMultiLevelMultivariateDependencyChain(t *testing.T) {
 									"properties": [
 										{
 											"key": "intermediate-flag",
-											"operator": "exact",
+											"operator": "flag_evaluates_to",
 											"value": "blue",
 											"type": "flag",
 											"dependency_chain": ["leaf-flag", "intermediate-flag"]
@@ -5641,4 +5641,327 @@ func TestMultiLevelMultivariateDependencyChain(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, false, resultBool)
+}
+
+func TestProductionStyleMultivariateDependencyChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		response := `{
+			"flags": [
+				{
+					"id": 451,
+					"key": "multivariate-leaf-flag",
+					"name": "Multivariate Leaf Flag (Base)",
+					"active": true,
+					"deleted": false,
+					"is_simple_flag": false,
+					"rollout_percentage": null,
+					"filters": {
+						"multivariate": {
+							"variants": [
+								{
+									"key": "pineapple",
+									"rollout_percentage": 25
+								},
+								{
+									"key": "mango", 
+									"rollout_percentage": 25
+								},
+								{
+									"key": "papaya",
+									"rollout_percentage": 25
+								},
+								{
+									"key": "kiwi",
+									"rollout_percentage": 25
+								}
+							]
+						},
+						"groups": [
+							{
+								"variant": "pineapple",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person",
+										"value": ["pineapple@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "mango",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person", 
+										"value": ["mango@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "papaya",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person",
+										"value": ["papaya@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "kiwi",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person",
+										"value": ["kiwi@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"properties": [],
+								"rollout_percentage": 0
+							}
+						]
+					}
+				},
+				{
+					"id": 467,
+					"key": "multivariate-intermediate-flag",
+					"name": "Multivariate Intermediate Flag (Depends on fruit)",
+					"active": true,
+					"deleted": false,
+					"is_simple_flag": false,
+					"rollout_percentage": null,
+					"filters": {
+						"multivariate": {
+							"variants": [
+								{
+									"key": "blue",
+									"rollout_percentage": 100
+								},
+								{
+									"key": "red",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "green",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "black",
+									"rollout_percentage": 0
+								}
+							]
+						},
+						"groups": [
+							{
+								"variant": "blue",
+								"properties": [
+									{
+										"key": "multivariate-leaf-flag",
+										"type": "flag",
+										"value": "pineapple",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "red",
+								"properties": [
+									{
+										"key": "multivariate-leaf-flag",
+										"type": "flag",
+										"value": "mango",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							}
+						]
+					}
+				},
+				{
+					"id": 468,
+					"key": "multivariate-root-flag",
+					"name": "Multivariate Root Flag (Depends on color)",
+					"active": true,
+					"deleted": false,
+					"is_simple_flag": false,
+					"rollout_percentage": null,
+					"filters": {
+						"multivariate": {
+							"variants": [
+								{
+									"key": "breaking-bad",
+									"rollout_percentage": 100
+								},
+								{
+									"key": "the-wire",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "game-of-thrones",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "the-expanse",
+									"rollout_percentage": 0
+								}
+							]
+						},
+						"groups": [
+							{
+								"variant": "breaking-bad",
+								"properties": [
+									{
+										"key": "multivariate-intermediate-flag",
+										"type": "flag",
+										"value": "blue",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag", "multivariate-intermediate-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "the-wire",
+								"properties": [
+									{
+										"key": "multivariate-intermediate-flag",
+										"type": "flag",
+										"value": "red",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag", "multivariate-intermediate-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							}
+						]
+					}
+				}
+			]
+		}`
+		w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test successful pineapple -> blue -> breaking-bad chain
+	leafResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-leaf-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "pineapple@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "pineapple", leafResult)
+
+	intermediateResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-intermediate-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "pineapple@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "blue", intermediateResult)
+
+	rootResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-root-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "pineapple@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "breaking-bad", rootResult)
+
+	// Test successful mango -> red -> the-wire chain
+	mangoLeafResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-leaf-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "mango@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "mango", mangoLeafResult)
+
+	mangoIntermediateResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-intermediate-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "mango@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "red", mangoIntermediateResult)
+
+	mangoRootResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-root-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "mango@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "the-wire", mangoRootResult)
+
+	// Test broken chain - user without matching email gets default/false results
+	unknownLeafResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-leaf-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "unknown@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, unknownLeafResult) // No matching email -> null variant -> false
+
+	unknownIntermediateResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-intermediate-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "unknown@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, unknownIntermediateResult) // Dependency not satisfied
+
+	unknownRootResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-root-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "unknown@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, unknownRootResult) // Dependency chain broken
 }

@@ -131,6 +131,19 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	properties Properties,
 	cohorts map[string]PropertyGroup,
 ) (bool, error) {
+	// Some of these conditions should never happen, but we'll check them to be defensive.
+	if property.Value == nil {
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key),
+		}
+	}
+
+	if property.Operator != "flag_evaluates_to" {
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", property.Operator, property.Key),
+		}
+	}
+
 	if flagsByKey == nil || evaluationCache == nil {
 		// Cannot evaluate flag dependencies without required context
 		return false, &InconclusiveMatchError{
@@ -192,134 +205,44 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	}
 
 	// Check if the dependency result matches the expected value and operator
-	// If no specific value is expected, fall back to the legacy truthy check
-	if property.Value != nil && property.Operator != "" {
-		// New behavior: Check if the main dependency (the property.Key) matches the expected value
-		if cachedResult, exists := evaluationCache[property.Key]; exists && cachedResult != nil {
-			match, err := checkFlagDependencyValue(cachedResult, property.Value, property.Operator, property.Key)
-			if err != nil {
-				return false, err
-			}
-			return match, nil
-		} else {
-			// The main dependency couldn't be evaluated
-			return false, &InconclusiveMatchError{
-				msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
-			}
+	if cachedResult, exists := evaluationCache[property.Key]; exists && cachedResult != nil {
+		match, err := checkFlagDependencyValue(property.Value, cachedResult)
+		if err != nil {
+			return false, err
 		}
+		return match, nil
 	}
 
-	// Legacy behavior: After evaluating all dependencies, check if any returned false or inconclusive
-	for _, depFlagKey := range dependencyChain {
-		if cachedResult, exists := evaluationCache[depFlagKey]; exists {
-			ok, err := checkCachedDependencyResult(cachedResult, depFlagKey)
-			if err != nil {
-				return false, err
-			}
-			if !ok {
-				return false, nil
-			}
-		}
+	// The main dependency couldn't be evaluated
+	return false, &InconclusiveMatchError{
+		msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
 	}
-
-	return true, nil
-}
-
-// checkCachedDependencyResult checks if a cached dependency result indicates failure or inconclusive state
-func checkCachedDependencyResult(cachedResult interface{}, depFlagKey string) (bool, error) {
-	if cachedResult == nil {
-		// Previously inconclusive - raise error again
-		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated (missing flag or evaluation error)", depFlagKey),
-		}
-	} else if cachedResult == false {
-		// Definitive False result - dependency failed
-		return false, nil
-	}
-	// Dependency passed
-	return true, nil
 }
 
 // checkFlagDependencyValue checks if a flag dependency result matches the expected value and operator
-func checkFlagDependencyValue(actualResult interface{}, expectedValue interface{}, operator string, depFlagKey string) (bool, error) {
-	if operator == "exact" {
-		switch t := expectedValue.(type) {
-		case []interface{}:
-			return contains(t, actualResult), nil
-		default:
-			return expectedValue == actualResult, nil
+func checkFlagDependencyValue(expectedValue interface{}, actualResult interface{}) (bool, error) {
+	// String variant case - check for exact match or boolean true
+	if actualStr, ok := actualResult.(string); ok && len(actualStr) > 0 {
+		if expectedBool, ok := expectedValue.(bool); ok {
+			// Any variant matches boolean true
+			return expectedBool, nil
+		} else if expectedStr, ok := expectedValue.(string); ok {
+			// variants are case-sensitive, hence our comparison is too
+			return actualStr == expectedStr, nil
+		} else {
+			return false, nil
 		}
 	}
 
-	if operator == "is_not" {
-		switch t := expectedValue.(type) {
-		case []interface{}:
-			return !contains(t, actualResult), nil
-		default:
-			return expectedValue != actualResult, nil
+	// Boolean case - must match expected boolean value
+	if actualBool, ok := actualResult.(bool); ok {
+		if expectedBool, ok := expectedValue.(bool); ok {
+			return actualBool == expectedBool, nil
 		}
 	}
 
-	if operator == "is_set" {
-		return actualResult != nil, nil
-	}
-
-	if operator == "is_not_set" {
-		return actualResult == nil, nil
-	}
-
-	if operator == "icontains" {
-		return strings.Contains(strings.ToLower(fmt.Sprintf("%v", actualResult)), strings.ToLower(fmt.Sprintf("%v", expectedValue))), nil
-	}
-
-	if operator == "not_icontains" {
-		return !strings.Contains(strings.ToLower(fmt.Sprintf("%v", actualResult)), strings.ToLower(fmt.Sprintf("%v", expectedValue))), nil
-	}
-
-	if operator == "regex" {
-		r, err := regexp.Compile(fmt.Sprintf("%v", expectedValue))
-		if err != nil {
-			return false, &InconclusiveMatchError{
-				msg: fmt.Sprintf("Invalid regex in flag dependency for '%s': %s", depFlagKey, err.Error()),
-			}
-		}
-		return r.MatchString(fmt.Sprintf("%v", actualResult)), nil
-	}
-
-	if operator == "not_regex" {
-		r, err := regexp.Compile(fmt.Sprintf("%v", expectedValue))
-		if err != nil {
-			return false, &InconclusiveMatchError{
-				msg: fmt.Sprintf("Invalid regex in flag dependency for '%s': %s", depFlagKey, err.Error()),
-			}
-		}
-		return !r.MatchString(fmt.Sprintf("%v", actualResult)), nil
-	}
-
-	// Handle numeric operators
-	actualFloat, actualErr := interfaceToFloat(actualResult)
-	expectedFloat, expectedErr := interfaceToFloat(expectedValue)
-
-	if actualErr != nil || expectedErr != nil {
-		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Cannot compare non-numeric values with numeric operator '%s' for flag dependency '%s'", operator, depFlagKey),
-		}
-	}
-
-	switch operator {
-	case "gt":
-		return actualFloat > expectedFloat, nil
-	case "gte":
-		return actualFloat >= expectedFloat, nil
-	case "lt":
-		return actualFloat < expectedFloat, nil
-	case "lte":
-		return actualFloat <= expectedFloat, nil
-	default:
-		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", operator, depFlagKey),
-		}
-	}
+	// Default case
+	return false, nil
 }
 
 func newFeatureFlagsPoller(
