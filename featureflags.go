@@ -21,7 +21,6 @@ import (
 
 const LONG_SCALE = 0xfffffffffffffff
 
-
 type FeatureFlagsPoller struct {
 	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
 	// After the request the channel get closed.
@@ -161,31 +160,32 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
-		if _, exists := evaluationCache[depFlagKey]; !exists {
-			// Need to evaluate this dependency first
-			depFlag, flagExists := flagsByKey[depFlagKey]
-			if !flagExists {
-				// Missing flag dependency - cannot evaluate locally
-				evaluationCache[depFlagKey] = nil
-				return false, &InconclusiveMatchError{
-					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
-				}
+		if _, exists := evaluationCache[depFlagKey]; exists {
+			continue
+		}
+		// Need to evaluate this dependency first
+		depFlag, flagExists := flagsByKey[depFlagKey]
+		if !flagExists {
+			// Missing flag dependency - cannot evaluate locally
+			evaluationCache[depFlagKey] = nil
+			return false, &InconclusiveMatchError{
+				msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
+			}
+		} else {
+			// Check if the flag is active (same check as in computeFlagLocally)
+			if !depFlag.Active {
+				evaluationCache[depFlagKey] = false
 			} else {
-				// Check if the flag is active (same check as in computeFlagLocally)
-				if !depFlag.Active {
-					evaluationCache[depFlagKey] = false
-				} else {
-					// Recursively evaluate the dependency
-					result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
-					if err != nil {
-						// If we can't evaluate a dependency, store nil and propagate the error
-						evaluationCache[depFlagKey] = nil
-						return false, &InconclusiveMatchError{
-							msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
-						}
+				// Recursively evaluate the dependency
+				result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
+				if err != nil {
+					// If we can't evaluate a dependency, store nil and propagate the error
+					evaluationCache[depFlagKey] = nil
+					return false, &InconclusiveMatchError{
+						msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
 					}
-					evaluationCache[depFlagKey] = result
 				}
+				evaluationCache[depFlagKey] = result
 			}
 		}
 	}
@@ -298,7 +298,7 @@ func checkFlagDependencyValue(actualResult interface{}, expectedValue interface{
 	// Handle numeric operators
 	actualFloat, actualErr := interfaceToFloat(actualResult)
 	expectedFloat, expectedErr := interfaceToFloat(expectedValue)
-	
+
 	if actualErr != nil || expectedErr != nil {
 		return false, &InconclusiveMatchError{
 			msg: fmt.Sprintf("Cannot compare non-numeric values with numeric operator '%s' for flag dependency '%s'", operator, depFlagKey),
