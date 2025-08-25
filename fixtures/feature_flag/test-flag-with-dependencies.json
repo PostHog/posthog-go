@@ -14,8 +14,9 @@
                 "key": "beta-feature",
                 "type": "flag",
                 "value": true,
-                "operator": "exact",
-                "negation": false
+                "operator": "flag_evaluates_to",
+                "negation": false,
+                "dependency_chain": ["beta-feature"]
               },
               {
                 "key": "email",

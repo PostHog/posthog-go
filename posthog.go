@@ -246,7 +246,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 			personProperties := NewProperties()
 			groupProperties := map[string]Properties{}
 			opts := m.getFeatureFlagsOptions()
-			
+
 			// Use custom properties if provided via options
 			if opts != nil {
 				if opts.PersonProperties != nil {
@@ -256,7 +256,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 					groupProperties = opts.GroupProperties
 				}
 			}
-			
+
 			featureVariants, err := c.getFeatureVariantsWithOptions(m.DistinctId, m.Groups, personProperties, groupProperties, opts)
 			if err != nil {
 				c.Errorf("unable to get feature variants - %s", err)

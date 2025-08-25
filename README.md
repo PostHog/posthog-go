@@ -133,6 +133,20 @@ Check out the [examples](examples/README.md) for more detailed examples of how t
 
 The examples demonstrate different features of the PostHog Go client. To run all examples:
 
+### Option 1: Using .env file (Recommended)
+
+```bash
+# Copy the example .env file and fill in your credentials
+cd examples
+cp .env.example .env
+# Edit .env with your actual API keys
+
+# Run all examples
+go run *.go
+```
+
+### Option 2: Using environment variables
+
 ```bash
 # Set your PostHog API keys and endpoint (optional)
 export POSTHOG_PROJECT_API_KEY="your-project-api-key"
