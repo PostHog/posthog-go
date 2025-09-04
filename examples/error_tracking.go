@@ -18,10 +18,7 @@ func TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint string) {
 		Verbose:   true,
 		Endpoint:  endpoint,
 	})
-	defer func() {
-		client.Close()
-		fmt.Println("✅ Exception sent successfully through enqueuing!")
-	}()
+	defer client.Close()
 
 	fmt.Println("→ Sending 'Exception' event...")
 	exception := posthog.NewDefaultException(
@@ -34,6 +31,10 @@ func TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint string) {
 		fmt.Println("❌ Error sending `Exception` event:", err)
 		return
 	}
+
+	// Give the client time to send events
+	time.Sleep(1 * time.Second)
+	fmt.Println("✅ Exception sent successfully through 'enqueuing'!")
 }
 
 func TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint string) {
@@ -45,10 +46,7 @@ func TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint string) {
 		Verbose:   true,
 		Endpoint:  endpoint,
 	})
-	defer func() {
-		client.Close()
-		fmt.Println("✅ Exception sent successfully through log handler!")
-	}()
+	defer client.Close()
 
 	baseLogHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
 	log := slog.New(posthog.NewSlogCaptureHandler(baseLogHandler, client,
@@ -62,4 +60,8 @@ func TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint string) {
 	log.Warn("Log that something broke",
 		"error", fmt.Errorf("this is a dummy scenario"),
 	)
+
+	// Give the client time to send events
+	time.Sleep(1 * time.Second)
+	fmt.Println("✅ Exception sent successfully through 'log handler'!")
 }
