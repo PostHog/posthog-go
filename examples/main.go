@@ -140,6 +140,8 @@ func runAllExamples() {
 
 	fmt.Printf("\n%s FEATURE FLAG EVALUATION %s\n", strings.Repeat("🔸", 17), strings.Repeat("🔸", 17))
 	TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint)
+	TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint)
+	TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint)
 
 	fmt.Printf("\n%s ADVANCED FEATURE FLAGS %s\n", strings.Repeat("🔸", 18), strings.Repeat("🔸", 18))
 	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint)

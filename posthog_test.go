@@ -288,6 +288,30 @@ func TestCaptureNoProperties(t *testing.T) {
 }
 
 func TestEnqueue(t *testing.T) {
+	exception := Exception{
+		DistinctId:   "my-user-id",
+		Timestamp:    time.Date(2025, 8, 11, 20, 43, 37, 0, time.UTC),
+		DisableGeoIP: true,
+		ExceptionList: []ExceptionItem{
+			{
+				Type:  "Exception Title",
+				Value: "Exception Description",
+				Stacktrace: &ExceptionStacktrace{
+					Type: "raw",
+					Frames: []StackFrame{
+						{
+							Filename:  "/Users/Developer/posthog-go/examples/main.go",
+							LineNo:    56,
+							Function:  "main.main",
+							InApp:     true,
+							Synthetic: false,
+							Platform:  "go",
+						},
+					},
+				},
+			},
+		},
+	}
 	f, tv := false, true
 	tests := map[string]struct {
 		ref          string
@@ -358,6 +382,12 @@ func TestEnqueue(t *testing.T) {
 			&tv,
 		},
 
+		"exception": {
+			strings.TrimSpace(fixture("test-enqueue-exception.json")),
+			exception,
+			&tv,
+		},
+
 		"*alias": {
 			strings.TrimSpace(fixture("test-enqueue-alias.json")),
 			&Alias{Alias: "A", DistinctId: "B"},
@@ -397,6 +427,12 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: SendFeatureFlags(false),
 			},
+			&tv,
+		},
+
+		"*exception": {
+			strings.TrimSpace(fixture("test-enqueue-exception.json")),
+			&exception,
 			&tv,
 		},
 	}
