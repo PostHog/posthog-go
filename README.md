@@ -1,6 +1,7 @@
 # PostHog Go
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/posthog/posthog-go.svg)](https://pkg.go.dev/github.com/posthog/posthog-go)
+![min. Go Version](https://img.shields.io/github/go-mod/go-version/PostHog/posthog-go?label=min.%20Go%20version%20)
 
 Please see the main [PostHog docs](https://posthog.com/docs).
 
@@ -151,6 +152,20 @@ Check out the [examples](examples/README.md) for more detailed examples of how t
 ## Running the examples
 
 The examples demonstrate different features of the PostHog Go client. To run all examples:
+
+### Option 1: Using .env file (Recommended)
+
+```bash
+# Copy the example .env file and fill in your credentials
+cd examples
+cp .env.example .env
+# Edit .env with your actual API keys
+
+# Run all examples
+go run *.go
+```
+
+### Option 2: Using environment variables
 
 ```bash
 # Set your PostHog API keys and endpoint (optional)
