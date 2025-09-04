@@ -34,7 +34,7 @@ func TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint string) {
 
 	// Give the client time to send events
 	time.Sleep(1 * time.Second)
-	fmt.Println("✅ Exception sent successfully through 'enqueuing'!")
+	fmt.Println("✅ Exception sent successfully through 'enqueueing'!")
 }
 
 func TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint string) {
