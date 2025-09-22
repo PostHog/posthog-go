@@ -1266,12 +1266,12 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 	}
 }
 
-func TestFlagWithMultipleVariantOverrides(t *testing.T) {
+func TestConditionsEvaluatedInOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-decide-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-			w.Write([]byte(fixture("feature_flag/test-variant-override-multiple.json")))
+			w.Write([]byte(fixture("feature_flag/test-condition-order.json")))
 		}
 	}))
 
@@ -1283,72 +1283,57 @@ func TestFlagWithMultipleVariantOverrides(t *testing.T) {
 	})
 	defer client.Close()
 
+	// Test 1: User with @vip.com email should get "first-condition" variant
+	// because the first condition (100% rollout) matches before the VIP condition
 	variant, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+			Key:              "order-test-flag",
+			DistinctId:       "vip-user",
+			PersonProperties: NewProperties().Set("email", "user@vip.com"),
 		},
 	)
 
-	if variant != "second-variant" {
-		t.Error("Should match", variant, "second-variant")
+	if variant != "first-condition" {
+		t.Error("Expected first-condition variant for VIP user, but got", variant)
 	}
 
 	payload, _ := client.GetFeatureFlagPayload(
 		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
+			Key:              "order-test-flag",
+			DistinctId:       "vip-user",
+			PersonProperties: NewProperties().Set("email", "user@vip.com"),
+		},
+	)
+
+	if payload != "{\"order\": 1}" {
+		t.Error("Expected payload {\"order\": 1} for VIP user, but got", payload)
+	}
+
+	// Test 2: User with test@posthog.com should also get "first-condition" variant
+	// because the first condition matches before the specific email condition
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "order-test-flag",
+			DistinctId:       "test-user",
 			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
 		},
 	)
 
-	if payload != "{\"test\": 2}" {
-		t.Error("Should match", payload, "{\"test\": 2}")
+	if variant != "first-condition" {
+		t.Error("Expected first-condition variant for test@posthog.com user, but got", variant)
 	}
 
+	// Test 3: Any other user should also get "first-condition" variant
 	variant, _ = client.GetFeatureFlag(
 		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "example_id",
+			Key:              "order-test-flag",
+			DistinctId:       "random-user",
+			PersonProperties: NewProperties().Set("email", "random@example.com"),
 		},
 	)
 
-	if variant != "third-variant" {
-		t.Error("Should match", variant, "third-variant")
-	}
-
-	payload, _ = client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "example_id",
-		},
-	)
-
-	if payload != "{\"test\": 3}" {
-		t.Error("Should match", payload, "{\"test\": 3}")
-	}
-
-	variant, _ = client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "another_id",
-		},
-	)
-
-	if variant != "second-variant" {
-		t.Error("Should match", variant, "second-variant")
-	}
-
-	payload, _ = client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "another_id",
-		},
-	)
-
-	if payload != "{\"test\": 2}" {
-		t.Error("Should match", payload, "{\"test\": 2}")
+	if variant != "first-condition" {
+		t.Error("Expected first-condition variant for random user, but got", variant)
 	}
 }
 

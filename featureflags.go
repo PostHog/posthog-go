@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -595,26 +594,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	conditions := flag.Filters.Groups
 	isInconclusive := false
 
-	// # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
-	// # evaluated first, and the variant override is applied to the first matching condition.
-	// conditionsCopy := make([]PropertyGroup, len(conditions))
-	sortedConditions := append([]FeatureFlagCondition{}, conditions...)
-
-	sort.SliceStable(sortedConditions, func(i, j int) bool {
-		iValue := 1
-		jValue := 1
-		if sortedConditions[i].Variant != nil {
-			iValue = -1
-		}
-
-		if sortedConditions[j].Variant != nil {
-			jValue = -1
-		}
-
-		return iValue < jValue
-	})
-
-	for _, condition := range sortedConditions {
+	for _, condition := range conditions {
 		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
 			var inconclusiveErr *InconclusiveMatchError
