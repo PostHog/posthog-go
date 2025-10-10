@@ -63,7 +63,7 @@ jobs:
 
       - name: Commit and push changes
         env:
-          PAT: ${{ secrets.PAT_WITH_PUSH_ACCESS }}
+          PAT: ${{ secrets.POSTHOG_BOT_PAT }}
         run: |
           git config --local user.email "max@posthog.com"
           git config --local user.name "Max Hedgehog"
