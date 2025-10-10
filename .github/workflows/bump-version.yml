@@ -27,7 +27,7 @@ jobs:
       - name: Determine version bump type
         id: bump-type
         env:
-          GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_PAT }}
         run: |
           pr_number=$(gh pr list --state merged --json number --limit 1 -q '.[0].number')
           if [[ $(gh pr view $pr_number --json labels -q '.labels[].name' | grep -q "minor") ]]; then
@@ -63,7 +63,7 @@ jobs:
 
       - name: Commit and push changes
         env:
-          PAT: ${{ secrets.PAT_WITH_PUSH_ACCESS }}
+          PAT: ${{ secrets.POSTHOG_BOT_PAT }}
         run: |
           git config --local user.email "max@posthog.com"
           git config --local user.name "Max Hedgehog"
