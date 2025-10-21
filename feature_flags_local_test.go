@@ -5950,3 +5950,92 @@ func TestProductionStyleMultivariateDependencyChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, unknownRootResult) // Dependency chain broken
 }
+
+func TestFallbackToAPIWhenFlagHasStaticCohortInMultiCondition(t *testing.T) {
+	// When a flag has multiple conditions and one contains a static cohort,
+	// the SDK should fallback to API for the entire flag, not just skip that
+	// condition and evaluate the next one locally.
+	//
+	// This prevents returning wrong variants when later conditions could match
+	// locally but the user is actually in the static cohort.
+
+	var flagsAPICalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
+			// Return API response indicating user is in the static cohort
+			flagsAPICalled = true
+			w.Write([]byte(`{"featureFlags": {"multi-condition-flag": "set-1"}}`))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			// Return local evaluation data WITHOUT cohort 999 (making it a static cohort)
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"key": "multi-condition-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{"key": "id", "value": 999, "type": "cohort"}
+									],
+									"rollout_percentage": 100,
+									"variant": "set-1"
+								},
+								{
+									"properties": [
+										{
+											"key": "$geoip_country_code",
+											"operator": "exact",
+											"value": ["DE"],
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100,
+									"variant": "set-8"
+								}
+							],
+							"multivariate": {
+								"variants": [
+									{"key": "set-1", "rollout_percentage": 50},
+									{"key": "set-8", "rollout_percentage": 50}
+								]
+							}
+						}
+					}
+				],
+				"cohorts": {}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test_api_key", Config{
+		Endpoint:       server.URL,
+		PersonalApiKey: "test_personal_api_key",
+	})
+	defer client.Close()
+
+	// Wait for local evaluation to load
+	time.Sleep(100 * time.Millisecond)
+
+	result, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:        "multi-condition-flag",
+		DistinctId: "test-user",
+		PersonProperties: NewProperties().
+			Set("$geoip_country_code", "DE"),
+	})
+
+	if err != nil {
+		t.Fatalf("GetFeatureFlag returned error: %v", err)
+	}
+
+	// Should return API result (set-1), not local evaluation result (set-8)
+	if !flagsAPICalled {
+		t.Errorf("FLAGS API was not called - local evaluation did not fallback")
+	}
+
+	if result != "set-1" {
+		t.Errorf("Expected 'set-1' from API, got %v", result)
+	}
+}

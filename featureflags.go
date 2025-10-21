@@ -121,6 +121,18 @@ func (e *InconclusiveMatchError) Error() string {
 	return e.msg
 }
 
+// RequiresServerEvaluationError is returned when feature flag evaluation
+// requires server-side data that is not available locally (e.g., static cohorts,
+// experience continuity). This error should propagate immediately to trigger
+// API fallback, unlike InconclusiveMatchError which allows trying other conditions.
+type RequiresServerEvaluationError struct {
+	msg string
+}
+
+func (e *RequiresServerEvaluationError) Error() string {
+	return e.msg
+}
+
 // evaluateFlagDependency evaluates a flag dependency property according to the dependency chain algorithm
 func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	property FlagProperty,
@@ -597,8 +609,16 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	for _, condition := range conditions {
 		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
+			var serverEvalErr *RequiresServerEvaluationError
+			if errors.As(err, &serverEvalErr) {
+				// Static cohort or other missing server-side data - must fallback to API
+				return nil, err
+			}
+
 			var inconclusiveErr *InconclusiveMatchError
 			if errors.As(err, &inconclusiveErr) {
+				// Evaluation error (bad regex, invalid date, missing property, etc.)
+				// Track that we had an inconclusive match, but try other conditions
 				isInconclusive = true
 			} else {
 				return nil, err
@@ -664,7 +684,9 @@ func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties 
 	cohortId := fmt.Sprint(property.Value)
 	propertyGroup, ok := cohorts[cohortId]
 	if !ok {
-		return false, fmt.Errorf("can't match cohort: cohort %s not found", cohortId)
+		return false, &RequiresServerEvaluationError{
+			msg: fmt.Sprintf("cohort %s not found in local cohorts - likely a static cohort that requires server evaluation", cohortId),
+		}
 	}
 
 	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId)
@@ -691,6 +713,12 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 					Values: getSafeProp[[]any](prop, "values"),
 				}, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 				if err != nil {
+					var serverEvalErr *RequiresServerEvaluationError
+					if errors.As(err, &serverEvalErr) {
+						// Immediately propagate - this condition requires server-side data
+						return false, err
+					}
+
 					var inconclusiveErr *InconclusiveMatchError
 					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
@@ -730,6 +758,12 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 				}
 
 				if err != nil {
+					var serverEvalErr *RequiresServerEvaluationError
+					if errors.As(err, &serverEvalErr) {
+						// Immediately propagate - this condition requires server-side data
+						return false, err
+					}
+
 					var inconclusiveErr *InconclusiveMatchError
 					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
