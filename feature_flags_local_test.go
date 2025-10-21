@@ -6039,3 +6039,81 @@ func TestFallbackToAPIWhenFlagHasStaticCohortInMultiCondition(t *testing.T) {
 		t.Errorf("Expected 'set-1' from API, got %v", result)
 	}
 }
+
+func TestGetFeatureFlagPayloadFallbackToAPIWhenFlagHasStaticCohort(t *testing.T) {
+	// When a flag has a static cohort and GetFeatureFlagPayload is called,
+	// the SDK should fallback to API and return the API payload, not the local payload.
+	//
+	// This test verifies the fix for the bug where GetFeatureFlagPayload
+	// didn't properly handle static cohort errors like GetFeatureFlag did.
+
+	var flagsAPICalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
+			// Return API response with payload
+			flagsAPICalled = true
+			w.Write([]byte(`{"featureFlags": {"flag-with-cohort": "variant-a"}, "featureFlagPayloads": {"flag-with-cohort": "{\"message\": \"from-api\"}"}}`))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			// Return local evaluation data WITHOUT cohort 999 (making it a static cohort)
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"key": "flag-with-cohort",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{"key": "id", "value": 999, "type": "cohort"}
+									],
+									"rollout_percentage": 100,
+									"variant": "variant-a"
+								}
+							],
+							"multivariate": {
+								"variants": [
+									{"key": "variant-a", "rollout_percentage": 100}
+								]
+							},
+							"payloads": {
+								"variant-a": "{\"message\": \"from-local\"}"
+							}
+						}
+					}
+				],
+				"cohorts": {}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test_api_key", Config{
+		Endpoint:       server.URL,
+		PersonalApiKey: "test_personal_api_key",
+	})
+	defer client.Close()
+
+	// Wait for local evaluation to load
+	time.Sleep(100 * time.Millisecond)
+
+	result, err := client.GetFeatureFlagPayload(FeatureFlagPayload{
+		Key:        "flag-with-cohort",
+		DistinctId: "test-user",
+	})
+
+	if err != nil {
+		t.Fatalf("GetFeatureFlagPayload returned error: %v", err)
+	}
+
+	// Should call FLAGS API since cohort is static (not in local cohorts map)
+	if !flagsAPICalled {
+		t.Errorf("FLAGS API was not called - local evaluation did not fallback")
+	}
+
+	// Should return API payload, not local payload
+	expectedPayload := "{\"message\": \"from-api\"}"
+	if result != expectedPayload {
+		t.Errorf("Expected payload '%s' from API, got '%s'", expectedPayload, result)
+	}
+}
