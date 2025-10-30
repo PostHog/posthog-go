@@ -390,14 +390,16 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	var err error
 	var requestId *string
 	var flagDetail *FlagDetail
+	var locallyEvaluated bool
 
 	if c.featureFlagsPoller != nil {
 		// get feature flag from the poller, which uses the personal api key
 		// this is only available when using a PersonalApiKey
-		flagValue, err = c.featureFlagsPoller.GetFeatureFlag(flagConfig)
+		flagValue, locallyEvaluated, err = c.featureFlagsPoller.GetFeatureFlag(flagConfig)
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
+		locallyEvaluated = false
 		flagValue, requestId, err = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if f, ok := flagValue.(FlagDetail); ok {
@@ -411,7 +413,8 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 		var properties = NewProperties().
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue).
-			Set("$feature_flag_errored", err != nil)
+			Set("$feature_flag_errored", err != nil).
+			Set("locally_evaluated", locallyEvaluated)
 
 		if requestId != nil {
 			properties.Set("$feature_flag_request_id", *requestId)
