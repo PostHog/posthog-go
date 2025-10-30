@@ -1014,6 +1014,24 @@ func TestGetFeatureFlag(t *testing.T) {
 	if variant != "variant-1" {
 		t.Error("Should match")
 	}
+
+
+	lastEvent := client.GetLastCapturedEvent()
+	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
+		t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
+	}
+
+	if lastEvent != nil {
+		if lastEvent.Properties["$feature_flag"] != "test-get-feature" {
+			t.Errorf("Expected feature flag key 'test-get-feature', got: %v", lastEvent.Properties["$feature_flag"])
+		}
+		if lastEvent.Properties["$feature_flag_response"] != "variant-1" {
+			t.Errorf("Expected feature flag response 'variant-1', got: %v", lastEvent.Properties["$feature_flag_response"])
+		}
+		if lastEvent.Properties["locally_evaluated"] != true {
+			t.Errorf("Expected locally_evaluated to be true for local evaluation, got: %v", lastEvent.Properties["locally_evaluated"])
+		}
+	}
 }
 
 func TestGetFeatureFlagPayload(t *testing.T) {
