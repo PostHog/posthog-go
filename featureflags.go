@@ -20,6 +20,8 @@ import (
 
 const LONG_SCALE = 0xfffffffffffffff
 
+var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
+
 type FeatureFlagsPoller struct {
 	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
 	// After the request the channel get closed.
@@ -902,6 +904,18 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return overrideValueOrderable <= valueOrderable, nil
 	}
 
+	if operator == "is_date_before" || operator == "is_date_after" {
+		overrideTime, valueTime, err := validateDates(override_value, value)
+		if err != nil {
+			return false, err
+		}
+
+		if operator == "is_date_before" {
+			return overrideTime.Before(valueTime), nil
+		}
+		return overrideTime.After(valueTime), nil
+	}
+
 	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
 
 }
@@ -919,6 +933,82 @@ func validateOrderable(firstValue interface{}, secondValue interface{}) (float64
 	}
 
 	return convertedFirstValue, convertedSecondValue, nil
+}
+
+func validateDates(firstValue interface{}, secondValue interface{}) (time.Time, time.Time, error) {
+	firstStr, ok := firstValue.(string)
+	if !ok {
+		return time.Time{}, time.Time{}, errors.New("date comparison requires string values")
+	}
+
+	secondStr, ok := secondValue.(string)
+	if !ok {
+		return time.Time{}, time.Time{}, errors.New("date comparison requires string values")
+	}
+
+	firstTime, err := parseDate(firstStr)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+
+	secondTime, err := parseDate(secondStr)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+
+	return firstTime, secondTime, nil
+}
+
+// parseDate parses a date string which can be either RFC3339 format or relative format (e.g., "-7d")
+func parseDate(dateStr string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, dateStr)
+	if err == nil {
+		return t, nil
+	}
+
+	relativeTime, relErr := parseRelativeDate(dateStr)
+	if relErr == nil {
+		return relativeTime, nil
+	}
+
+	return time.Time{}, errors.New("invalid date format, must be RFC3339 or relative format (e.g., '-7d')")
+}
+
+// parseRelativeDate parses relative date format (e.g., "-1d" or "1d" for 1 day ago).
+// Always produces a date in the past.
+func parseRelativeDate(dateStr string) (time.Time, error) {
+	matches := relativeDateRegex.FindStringSubmatch(dateStr)
+	if matches == nil {
+		return time.Time{}, errors.New("invalid relative date format")
+	}
+
+	number, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return time.Time{}, errors.New("invalid number in relative date")
+	}
+
+	// Avoid overflow or overly large date ranges
+	if number >= 10000 {
+		return time.Time{}, errors.New("relative date number too large (must be < 10000)")
+	}
+
+	interval := matches[2]
+	now := time.Now()
+
+	switch interval {
+	case "h":
+		return now.Add(-time.Duration(number) * time.Hour), nil
+	case "d":
+		return now.AddDate(0, 0, -number), nil
+	case "w":
+		return now.AddDate(0, 0, -number*7), nil
+	case "m":
+		return now.AddDate(0, -number, 0), nil
+	case "y":
+		return now.AddDate(-number, 0, 0), nil
+	default:
+		return time.Time{}, errors.New("invalid interval in relative date")
+	}
 }
 
 func interfaceToFloat(val interface{}) (float64, error) {
