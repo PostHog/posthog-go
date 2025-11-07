@@ -5950,3 +5950,60 @@ func TestProductionStyleMultivariateDependencyChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, unknownRootResult) // Dependency chain broken
 }
+
+func TestPropertyMissingInconclusive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			response := `{
+				"flags": [
+					{
+						"id": 1,
+						"key": "test-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "email",
+											"value": ["test@example.com"],
+											"operator": "exact",
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {},
+				"cohorts": {}
+			}`
+			w.Write([]byte(response))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Call GetFeatureFlag without providing the required "email" property
+	// PersonProperties is empty, so the email property is missing
+	result, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:                   "test-flag",
+			DistinctId:            "user-123",
+			PersonProperties:      NewProperties(),
+			OnlyEvaluateLocally:   true,
+			SendFeatureFlagEvents: nil,
+		},
+	)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Can't determine if feature flag is enabled or not with given properties")
+	require.Equal(t, nil, result)
+}

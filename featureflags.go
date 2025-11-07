@@ -618,7 +618,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	}
 
 	if isInconclusive {
-		return false, &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+		return nil, &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
 	}
 
 	return false, nil
