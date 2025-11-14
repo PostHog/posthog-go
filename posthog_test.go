@@ -311,6 +311,7 @@ func TestEnqueue(t *testing.T) {
 				},
 			},
 		},
+		Properties: Properties{},
 	}
 	f, tv := false, true
 	tests := map[string]struct {
