@@ -69,6 +69,7 @@ func (h *SlogCaptureHandler) Handle(ctx context.Context, r slog.Record) error {
 			},
 		},
 		ExceptionFingerprint: h.cfg.fingerprint(ctx, r),
+		Properties:           h.cfg.properties(ctx, r),
 	}
 	_ = h.client.Enqueue(ex) // ignore enqueue error to keep logging safe
 
