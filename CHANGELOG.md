@@ -3,7 +3,7 @@
 **Breaking Changes:**
 * `ExceptionInApi.Properties` type changed from `ExceptionInApiProperties` (struct) to `Properties` (map[string]interface{})
 * Removed `ExceptionInApiProperties` struct, replaced with `Properties` map for custom properties.
-* Note: All existing system properties (`$lib`, `$lib_version`, `distinct_id`, `$exception_list`, etc.) are still attached and sent to the API - only the Go type representation has changed.
+* Note: All existing system properties (`$lib`, `$lib_version`, `distinct_id`, `$exception_list`, etc.) are still attached and sent to the API, only the type representation has changed.
 
 **Features:**
 * feat: Add custom properties support to exceptions
