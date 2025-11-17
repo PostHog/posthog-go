@@ -237,7 +237,6 @@ func ptrString(s string) *string {
 	return &s
 }
 
-// marshalAndParseJSON is a helper that marshals an exception to JSON and returns the parsed structure
 func marshalAndParseJSON(t *testing.T, exception Exception) (result map[string]interface{}, props map[string]interface{}) {
 	t.Helper()
 

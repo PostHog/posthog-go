@@ -37,8 +37,7 @@ type captureConfig struct {
 	// error message as the description.
 	descriptionExtractor DescriptionExtractor
 
-	// properties computes additional event properties to attach
-	// to the captured exception event.
+	// event properties to attach to the captured exception event.
 	properties func(ctx context.Context, r slog.Record) Properties
 }
 

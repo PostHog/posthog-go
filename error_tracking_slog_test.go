@@ -221,10 +221,9 @@ func TestSlogCaptureHandler_WithPropertiesFn(t *testing.T) {
 		t.Fatal("expected Properties to be set")
 	}
 
-	// Verify extracted properties (note: slog.Int converts to int64)
 	expectedProps := map[string]interface{}{
 		"environment": "production",
-		"retry_count": int64(3),
+		"retry_count": int64(3), // note: slog.Int converts to int64
 	}
 
 	for key, expected := range expectedProps {
