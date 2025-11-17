@@ -1,0 +1,43 @@
+{
+  "actionabilityScore": 0.55,
+  "context": "Task asks to 'add R to readme' in the posthog-go repository. This likely refers to adding a reference to the Ruby SDK (posthog-ruby) to the README, but the exact scope, placement, and format are unclear. The README currently contains only Go-specific content with no cross-references to other PostHog SDKs.",
+  "keyFiles": [
+    "/Users/lucasfaria/src/array-workspace/posthog-go/README.md"
+  ],
+  "blockers": [
+    "Task description is ambiguous - 'R' could theoretically mean Ruby SDK, R programming language support, or something else entirely",
+    "Unclear whether to add only Ruby or create a comprehensive multi-SDK reference section",
+    "No specification of where in README or what format the addition should take",
+    "No established pattern in the codebase for how other SDKs should be referenced"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the scope of SDK references to add?",
+      "options": [
+        "Add only Ruby (posthog-ruby) with a single reference/link",
+        "Create a 'Other PostHog SDKs' section listing all major server-side SDKs (Ruby, Python, Node.js, PHP, Java, C#)",
+        "Add a minimal 'See Also' section at the end with link to the central SDK comparison page"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where should the Ruby/SDK reference be placed in the README?",
+      "options": [
+        "In the introduction/header section, near 'Please see the main PostHog docs'",
+        "New dedicated section after 'Development' and before 'Examples'",
+        "At the end after 'Questions?' as a footer reference"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What format should the reference use?",
+      "options": [
+        "Simple bulleted list with GitHub repository links",
+        "Structured table showing SDK name, language, and link",
+        "Inline text mentioning Ruby with a hyperlink in existing documentation section"
+      ]
+    }
+  ],
+  "answered": false
+}
