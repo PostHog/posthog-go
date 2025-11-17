@@ -178,3 +178,59 @@ func TestErrorExtractor_ExtractDescription(t *testing.T) {
 		})
 	}
 }
+
+func TestSlogCaptureHandler_WithPropertiesFn(t *testing.T) {
+	next := &fakeNextSlogHandler{isEnabled: true}
+	client := &fakeEnqueueClient{}
+	ctx := context.Background()
+
+	handler := NewSlogCaptureHandler(next, client,
+		WithMinCaptureLevel(slog.LevelWarn),
+		WithDistinctIDFn(func(_ context.Context, _ slog.Record) string {
+			return "test-user"
+		}),
+		WithPropertiesFn(func(_ context.Context, r slog.Record) Properties {
+			props := NewProperties()
+			r.Attrs(func(a slog.Attr) bool {
+				props.Set(a.Key, a.Value.Any())
+				return true
+			})
+			return props
+		}),
+	)
+
+	record := createLogRecord(slog.LevelError, "test error",
+		slog.String("environment", "production"),
+		slog.Int("retry_count", 3),
+	)
+
+	if err := handler.Handle(ctx, record); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+
+	if len(client.enqueuedMsgs) != 1 {
+		t.Fatalf("expected 1 enqueued message, got %d", len(client.enqueuedMsgs))
+	}
+
+	exception, ok := client.enqueuedMsgs[0].(Exception)
+	if !ok {
+		t.Fatalf("expected Exception, got %T", client.enqueuedMsgs[0])
+	}
+
+	if exception.Properties == nil {
+		t.Fatal("expected Properties to be set")
+	}
+
+	// Verify extracted properties (note: slog.Int converts to int64)
+	expectedProps := map[string]interface{}{
+		"environment": "production",
+		"retry_count": int64(3),
+	}
+
+	for key, expected := range expectedProps {
+		if exception.Properties[key] != expected {
+			t.Errorf("property %s: expected %v (type %T), got %v (type %T)",
+				key, expected, expected, exception.Properties[key], exception.Properties[key])
+		}
+	}
+}

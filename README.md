@@ -76,6 +76,31 @@ func main() {
       "Error Description",
     ))
 
+    // Capture an exception with custom properties
+    client.Enqueue(posthog.NewDefaultException(
+      time.Now(),
+      "distinct-id",
+      "Error title",
+      "Error Description",
+      posthog.NewProperties().
+        Set("custom_property_a", "custom_value_a").
+        Set("custom_property_b", "custom_value_b"),
+    ))
+
+    // Or use the Exception struct directly for full control
+    client.Enqueue(posthog.Exception{
+      DistinctId: "distinct-id",
+      Properties: posthog.NewProperties().
+        Set("custom_property_a", "custom_value_a").
+        Set("custom_property_b", "custom_value_b"),
+      ExceptionList: []posthog.ExceptionItem{
+        {
+          Type:  "Error title",
+          Value: "Error description",
+        },
+      },
+    })
+
     // Create a logger which automatically captures warning logs and above
     baseLogHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
     logger := slog.New(posthog.NewSlogCaptureHandler(baseLogHandler, client,
@@ -86,7 +111,21 @@ func main() {
       }),
     })
     logger.Warn("Log that something broke", "error", fmt.Errorf("this is a dummy scenario"))
-    
+
+    // Optionally extract custom properties from slog attributes
+    loggerWithProps := slog.New(posthog.NewSlogCaptureHandler(baseLogHandler, client,
+      posthog.WithPropertiesFn(func(ctx context.Context, r slog.Record) posthog.Properties {
+        props := posthog.NewProperties()
+        r.Attrs(func(a slog.Attr) bool {
+          props.Set(a.Key, a.Value.Any())
+          return true
+        })
+        return props
+      }),
+    ))
+    loggerWithProps.Error("Payment failed", "payment_id", "pay_123", "amount", 99.99)
+    // This exception will have custom properties: payment_id and amount
+
     // Capture event with calculated uuid to deduplicate repeated events. 
     // The library github.com/google/uuid is used
     key := myEvent.Id + myEvent.Project
