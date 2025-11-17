@@ -1,3 +1,19 @@
+## 1.7.0
+
+**Breaking Changes:**
+* `ExceptionInApi.Properties` type changed from `ExceptionInApiProperties` (struct) to `Properties` (map[string]interface{})
+* Removed `ExceptionInApiProperties` struct, replaced with `Properties` map for custom properties.
+* Note: All existing system properties (`$lib`, `$lib_version`, `distinct_id`, `$exception_list`, etc.) are still attached and sent to the API, only the type representation has changed.
+
+**Features:**
+* feat: Add custom properties support to exceptions
+  - Exceptions now support custom properties via the `Properties` field
+  - Added `Exception.WithProperties()` builder method to add properties to exceptions
+  - Added `WithPropertiesFn` option for slog handler to extract log attributes as exception properties
+  - Custom properties can override system properties
+
+* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.12...v1.7.0)
+
 ## 1.6.12
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.11...v1.6.12)

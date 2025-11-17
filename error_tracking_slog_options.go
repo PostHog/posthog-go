@@ -36,6 +36,9 @@ type captureConfig struct {
 	// record for fields like "err" or "error" and uses the extracted
 	// error message as the description.
 	descriptionExtractor DescriptionExtractor
+
+	// event properties to attach to the captured exception event.
+	properties func(ctx context.Context, r slog.Record) Properties
 }
 
 func defaultCaptureConfig() captureConfig {
@@ -54,6 +57,9 @@ func defaultCaptureConfig() captureConfig {
 		descriptionExtractor: ErrorExtractor{
 			ErrorKeys: []string{"err", "error"},
 			Fallback:  "<no linked error>",
+		},
+		properties: func(ctx context.Context, r slog.Record) Properties {
+			return NewProperties()
 		},
 	}
 }
@@ -86,4 +92,10 @@ func WithStackTraceExtractor(extractor StackTraceExtractor) SlogOption {
 
 func WithDescriptionExtractor(extractor DescriptionExtractor) SlogOption {
 	return func(c *captureConfig) { c.descriptionExtractor = extractor }
+}
+
+// WithPropertiesFn sets a custom function to extract properties from slog records.
+// This allows you to attach custom metadata from log records to exception events.
+func WithPropertiesFn(fn func(ctx context.Context, r slog.Record) Properties) SlogOption {
+	return func(c *captureConfig) { c.properties = fn }
 }

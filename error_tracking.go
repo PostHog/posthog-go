@@ -11,6 +11,7 @@ type Exception struct {
 
 	DistinctId   string
 	Timestamp    time.Time
+	Properties   Properties
 	DisableGeoIP bool
 
 	// Typed properties that end up in the API "properties" object:
@@ -51,21 +52,12 @@ type StackFrame struct {
 }
 
 type ExceptionInApi struct {
-	Type           string                   `json:"type"`
-	Library        string                   `json:"library"`
-	LibraryVersion string                   `json:"library_version"`
-	Timestamp      time.Time                `json:"timestamp"`
-	Event          string                   `json:"event"`
-	Properties     ExceptionInApiProperties `json:"properties"`
-}
-
-type ExceptionInApiProperties struct {
-	Lib                  string          `json:"$lib"`
-	LibVersion           string          `json:"$lib_version"`
-	DistinctId           string          `json:"distinct_id"`
-	DisableGeoIP         bool            `json:"$geoip_disable,omitempty"`
-	ExceptionList        []ExceptionItem `json:"$exception_list"`
-	ExceptionFingerprint *string         `json:"$exception_fingerprint,omitempty"`
+	Type           string     `json:"type"`
+	Library        string     `json:"library"`
+	LibraryVersion string     `json:"library_version"`
+	Timestamp      time.Time  `json:"timestamp"`
+	Event          string     `json:"event"`
+	Properties     Properties `json:"properties"`
 }
 
 func (msg Exception) internal() { panic(unimplementedError) }
@@ -116,25 +108,39 @@ func (msg ExceptionItem) Validate() error {
 func (msg Exception) APIfy() APIMessage {
 	libVersion := getVersion()
 
+	properties := Properties{}.
+		Set("$lib", SDKName).
+		Set("$lib_version", libVersion).
+		Set("distinct_id", msg.DistinctId).
+		Set("$exception_list", msg.ExceptionList)
+
+	if msg.DisableGeoIP {
+		properties.Set("$geoip_disable", true)
+	}
+
+	if msg.ExceptionFingerprint != nil {
+		properties.Set("$exception_fingerprint", msg.ExceptionFingerprint)
+	}
+
+	if msg.Properties != nil {
+		for k, v := range msg.Properties {
+			properties[k] = v
+		}
+	}
+
 	return ExceptionInApi{
-		Type:           msg.Type, // set to "exception" by Enqueue switch
+		Type:           msg.Type,
 		Event:          "$exception",
 		Library:        SDKName,
 		LibraryVersion: libVersion,
 		Timestamp:      msg.Timestamp,
-		Properties: ExceptionInApiProperties{
-			Lib:                  SDKName,
-			LibVersion:           libVersion,
-			DistinctId:           msg.DistinctId,
-			DisableGeoIP:         msg.DisableGeoIP,
-			ExceptionList:        msg.ExceptionList,
-			ExceptionFingerprint: msg.ExceptionFingerprint,
-		},
+		Properties:     properties,
 	}
 }
 
 // NewDefaultException is a convenience function to build an Exception object (usable for `client.Enqueue`)
 // with sane defaults. If you want more control, please manually build the Exception object.
+// Use .WithProperties() to add custom properties to the exception.
 func NewDefaultException(
 	timestamp time.Time,
 	distinctID, title, description string,
@@ -152,4 +158,9 @@ func NewDefaultException(
 			},
 		},
 	}
+}
+
+func (e Exception) WithProperties(properties Properties) Exception {
+	e.Properties = properties
+	return e
 }
