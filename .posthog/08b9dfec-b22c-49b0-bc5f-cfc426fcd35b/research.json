@@ -1,0 +1,42 @@
+{
+  "actionabilityScore": 0.15,
+  "context": "Task to add content to README is extremely vague. 'X' is undefined - could refer to a feature, section, documentation, dependency, or any content. Cannot locate relevant files or understand implementation scope without clarification.",
+  "keyFiles": [],
+  "blockers": [
+    "Undefined scope: 'X' could mean almost anything (feature description, API docs, installation guide, contributing section, changelog entry, etc.)",
+    "No context provided about what should be added or why",
+    "Cannot verify existing README structure without repository access",
+    "No clear success criteria or target audience for the README update"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What specific content should be added to the README?",
+      "options": [
+        "A new feature/functionality description with usage examples",
+        "Installation or setup instructions for a new tool/dependency",
+        "An API reference or technical documentation section",
+        "A section in an existing category (e.g., contributing guidelines, changelog)"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where in the README should this content be placed?",
+      "options": [
+        "Create a new top-level section with its own heading",
+        "Add to an existing section (specify which: Overview, Getting Started, Features, etc.)",
+        "Insert as a subsection under an existing category"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What is the format and detail level expected?",
+      "options": [
+        "Brief 1-2 line entry with a link to external documentation",
+        "Full section with description, code examples, and usage instructions",
+        "Quick reference table or checklist format"
+      ]
+    }
+  ],
+  "answered": false
+}
