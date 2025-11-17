@@ -140,15 +140,14 @@ func (msg Exception) APIfy() APIMessage {
 
 // NewDefaultException is a convenience function to build an Exception object (usable for `client.Enqueue`)
 // with sane defaults. If you want more control, please manually build the Exception object.
-// (Optionally) accepts a Properties argument to add custom properties to the exception.
+// Use .WithProperties() to add custom properties to the exception.
 func NewDefaultException(
 	timestamp time.Time,
 	distinctID, title, description string,
-	properties ...Properties,
 ) Exception {
 	defaultStackTrace := DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}
 
-	exception := Exception{
+	return Exception{
 		DistinctId: distinctID,
 		Timestamp:  timestamp,
 		ExceptionList: []ExceptionItem{
@@ -159,10 +158,9 @@ func NewDefaultException(
 			},
 		},
 	}
+}
 
-	if len(properties) > 0 {
-		exception.Properties = properties[0]
-	}
-
-	return exception
+func (e Exception) WithProperties(properties Properties) Exception {
+	e.Properties = properties
+	return e
 }

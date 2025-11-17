@@ -186,51 +186,28 @@ func TestException_APIfy_WithCustomProperties(t *testing.T) {
 func TestNewDefaultException_WithProperties(t *testing.T) {
 	now := time.Now()
 
-	tests := map[string]struct {
-		properties       []Properties
-		expectProperties bool
-		expectedProps    Properties
-	}{
-		"without properties (backward compatible)": {
-			properties:       nil,
-			expectProperties: false,
-		},
-		"with properties": {
-			properties: []Properties{
-				NewProperties().
-					Set("environment", "production").
-					Set("custom_key", "custom_value"),
-			},
-			expectProperties: true,
-			expectedProps: NewProperties().
-				Set("environment", "production").
-				Set("custom_key", "custom_value"),
-		},
-	}
+	t.Run("without properties", func(t *testing.T) {
+		exception := NewDefaultException(now, "user-123", "Error", "Description")
 
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			var exception Exception
-			if tc.properties != nil {
-				exception = NewDefaultException(now, "user-123", "Error", "Description", tc.properties...)
-			} else {
-				exception = NewDefaultException(now, "user-123", "Error", "Description")
-			}
+		if exception.Properties != nil {
+			t.Errorf("expected Properties to be nil, got %+v", exception.Properties)
+		}
+	})
 
-			if tc.expectProperties {
-				if exception.Properties == nil {
-					t.Error("expected Properties to be set")
-				} else if !reflect.DeepEqual(exception.Properties, tc.expectedProps) {
-					t.Errorf("properties mismatch\nexpected: %+v\ngot: %+v",
-						tc.expectedProps, exception.Properties)
-				}
-			} else {
-				if exception.Properties != nil {
-					t.Errorf("expected Properties to be nil, got %+v", exception.Properties)
-				}
-			}
-		})
-	}
+	t.Run("with properties using builder pattern", func(t *testing.T) {
+		props := NewProperties().
+			Set("environment", "production").
+			Set("custom_key", "custom_value")
+
+		exception := NewDefaultException(now, "user-123", "Error", "Description").
+			WithProperties(props)
+
+		if exception.Properties == nil {
+			t.Error("expected Properties to be set")
+		} else if !reflect.DeepEqual(exception.Properties, props) {
+			t.Errorf("properties mismatch\nexpected: %+v\ngot: %+v", props, exception.Properties)
+		}
+	})
 }
 
 func ptrString(s string) *string {

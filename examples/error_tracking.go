@@ -47,9 +47,9 @@ func TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint string) {
 				"distinct-id",
 				"Error title",
 				"Error Description",
-				posthog.NewProperties().
-					Set("custom_property_a", "custom_value_a").
-					Set("custom_property_b", "custom_value_b"),
+			).WithProperties(posthog.NewProperties().
+				Set("custom_property_a", "custom_value_a").
+				Set("custom_property_b", "custom_value_b"),
 			)
 			if err := client.Enqueue(exceptionWithProps); err != nil {
 				fmt.Println("error:", err)

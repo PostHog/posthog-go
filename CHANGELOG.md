@@ -8,7 +8,7 @@
 **Features:**
 * feat: Add custom properties support to exceptions
   - Exceptions now support custom properties via the `Properties` field
-  - `NewDefaultException` accepts optional properties as variadic parameter (backward compatible)
+  - Added `Exception.WithProperties()` builder method to add properties to exceptions
   - Added `WithPropertiesFn` option for slog handler to extract log attributes as exception properties
   - Custom properties can override system properties
 
