@@ -986,7 +986,7 @@ func TestIsFeatureEnabled(t *testing.T) {
 func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
@@ -1172,7 +1172,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
@@ -1210,7 +1210,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 		t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
 	}
 
-	// Check that the properties of the captured event match the response from /decide
+	// Check that the properties of the captured event match the response from /flags
 	if lastEvent != nil {
 		if lastEvent.Properties["$feature_flag"] != "beta-feature" {
 			t.Errorf("Expected feature flag key 'beta-feature', got: %v", lastEvent.Properties["$feature_flag"])
@@ -1486,7 +1486,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 			client, _ := NewWithConfig("test-api-key", Config{
 				Endpoint: server.URL,
-				// Note: No PersonalApiKey is set, so it will fall back to using the decide endpoint
+				// Note: No PersonalApiKey is set, so it will fall back to using the flags endpoint
 			})
 
 			flags, err := client.GetAllFlags(tt.flagConfig)
@@ -1542,13 +1542,13 @@ func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing
 		if apiCalls == 0 && strings.HasPrefix(r.URL.Path, "/flags") {
 			t.Fatal("expected local evaluations endpoint to be called first")
 		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-			t.Fatal("expected decide endpoint to be called second")
+			t.Fatal("expected flags endpoint to be called second")
 		}
 
 		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		} else {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		}
 		apiCalls++
 	}))
@@ -1609,7 +1609,7 @@ func TestSimpleFlagCalculation(t *testing.T) {
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
@@ -1661,7 +1661,7 @@ func TestComplexFlag(t *testing.T) {
 func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
@@ -1713,7 +1713,7 @@ func TestMultiVariateFlag(t *testing.T) {
 func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {

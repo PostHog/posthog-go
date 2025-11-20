@@ -389,6 +389,7 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	var flagValue interface{}
 	var err error
 	var requestId *string
+	var evaluatedAt *int64
 	var flagDetail *FlagDetail
 
 	if c.featureFlagsPoller != nil {
@@ -398,7 +399,7 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		flagValue, requestId, err = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+		flagValue, requestId, evaluatedAt, err = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
@@ -415,6 +416,10 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 
 		if requestId != nil {
 			properties.Set("$feature_flag_request_id", *requestId)
+		}
+
+		if evaluatedAt != nil {
+			properties.Set("$feature_flag_evaluated_at", *evaluatedAt)
 		}
 
 		if flagDetail != nil {
@@ -785,28 +790,29 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 }
 
 func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups Groups, personProperties Properties,
-	groupProperties map[string]Properties) (interface{}, *string, error) {
+	groupProperties map[string]Properties) (interface{}, *string, *int64, error) {
 
 	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if flagsResponse == nil {
-		return nil, nil, nil // Should never happen, but just in case. Also helps with type inference.
+		return nil, nil, nil, nil // Should never happen, but just in case. Also helps with type inference.
 	}
 	var requestId = &flagsResponse.RequestId
+	var evaluatedAt = flagsResponse.EvaluatedAt
 
 	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return false, requestId, nil
+		return false, requestId, evaluatedAt, nil
 	}
 
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
-		return flagDetail, requestId, nil
+		return flagDetail, requestId, evaluatedAt, nil
 	}
 
-	return false, requestId, nil
+	return false, requestId, evaluatedAt, nil
 }
 
 func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
