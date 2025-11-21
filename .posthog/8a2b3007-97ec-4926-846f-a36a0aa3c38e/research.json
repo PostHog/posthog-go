@@ -1,0 +1,46 @@
+{
+  "actionabilityScore": 0.15,
+  "context": "Task requests adding 'x' to the PostHog Go client README.md, but the specification is extremely vague with no clarity on what content should be added, where it should be placed, or what purpose it serves.",
+  "keyFiles": [
+    "/Users/js/github/posthog-go/README.md"
+  ],
+  "blockers": [
+    "Critical: Task uses placeholder 'x' with no indication of actual content",
+    "Unclear: No specification of where in README the content should be added",
+    "Missing: No context on what feature, section, or information 'x' represents",
+    "Ambiguous: Cannot determine if this is a code example, documentation section, heading, link, or other content type"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the actual content or section that should be added as 'x'?",
+      "options": [
+        "A new documentation section (e.g., 'Features', 'API Reference', 'Troubleshooting')",
+        "A code example or snippet demonstrating a specific feature",
+        "A link to external documentation or resources",
+        "A note about dependencies, compatibility, or requirements"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where in the README should this content be added?",
+      "options": [
+        "In the Quickstart section after the basic example (after line 113)",
+        "In a new section after Development (after line 130)",
+        "At the end before Questions (after line 205, before line 223)",
+        "As part of an existing section (please specify which section)"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What is the purpose or context for adding this content?",
+      "options": [
+        "Documenting a new feature or capability of the SDK",
+        "Adding best practices or usage patterns",
+        "Clarifying setup or installation instructions",
+        "Providing troubleshooting or FAQ information"
+      ]
+    }
+  ],
+  "answered": false
+}
