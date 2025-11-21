@@ -39,5 +39,19 @@
       ]
     }
   ],
-  "answered": false
+  "answered": true,
+  "answers": [
+    {
+      "questionId": "q1",
+      "selectedOption": "Add the 🆁 letter-R emoji (regional indicator R) to line 18, similar to the recent pie emoji task pattern"
+    },
+    {
+      "questionId": "q2",
+      "selectedOption": "In the integrations/languages section as a new supported language reference"
+    },
+    {
+      "questionId": "q3",
+      "selectedOption": "Add explanatory text describing what the 'R' represents or means"
+    }
+  ]
 }
