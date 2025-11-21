@@ -30,5 +30,15 @@
       ]
     }
   ],
-  "answered": false
+  "answered": true,
+  "answers": [
+    {
+      "questionId": "q1",
+      "selectedOption": "Add a pie emoji (🥧) to the README for visual interest or as decoration (e.g., next to the 'Go 🦔!' line)"
+    },
+    {
+      "questionId": "q2",
+      "selectedOption": "In the introductory 'Go 🦔!' section (line 18) as visual emoji decoration"
+    }
+  ]
 }
