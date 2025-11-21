@@ -15,7 +15,7 @@ Install posthog to your gopath
 $ go get github.com/posthog/posthog-go
 ```
 
-Go 🦔!
+Go 🥧 🦔!
 
 ```go
 package main
