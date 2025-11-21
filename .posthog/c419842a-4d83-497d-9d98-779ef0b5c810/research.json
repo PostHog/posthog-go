@@ -1,0 +1,43 @@
+{
+  "actionabilityScore": 0.35,
+  "context": "Task 'add R to readme' is extremely vague and lacks specificity about what 'R' refers to and where it should be added. The posthog-go repository is a Go SDK for PostHog analytics. Recent commit patterns suggest this may be an emoji addition task (similar to 'add pie emoji' in commit c062902), but this is unclear.",
+  "keyFiles": [
+    "/Users/js/github/posthog-go/README.md"
+  ],
+  "blockers": [
+    "Task description is ambiguous: 'R' could refer to multiple concepts (letter R, rabbit emoji, registered trademark, R programming language, or something else entirely)",
+    "No context provided about where in the README 'R' should be added",
+    "Unclear whether this is a literal letter, emoji, symbol, or reference addition",
+    "Recent similar commit pattern exists (pie emoji), but connection to current task is speculative"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What does the 'R' character represent in this task?",
+      "options": [
+        "Add the 🆁 letter-R emoji (regional indicator R) to line 18, similar to the recent pie emoji task pattern",
+        "Add a rabbit emoji (🐰 or 🐇) as an animal companion to the hedgehog emoji (🦔) on line 18",
+        "Add a reference or link to an R programming language PostHog client SDK in the README"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where in the README should the 'R' be added?",
+      "options": [
+        "Line 18 in the Quickstart section: 'Go 🦔!' → 'Go 🦔 R!' (following the pie emoji pattern)",
+        "In the integrations/languages section as a new supported language reference",
+        "In the examples or documentation sections"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "Should this change include any accompanying documentation or context?",
+      "options": [
+        "Just add the emoji/character with no additional text changes",
+        "Add explanatory text describing what the 'R' represents or means",
+        "Add a new section or subsection related to 'R' functionality"
+      ]
+    }
+  ],
+  "answered": false
+}
