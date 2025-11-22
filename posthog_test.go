@@ -1218,6 +1218,9 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 		if lastEvent.Properties["$feature_flag_response"] != expectedValue {
 			t.Errorf("Expected feature flag response %v, got: %v", expectedValue, lastEvent.Properties["$feature_flag_response"])
 		}
+		if lastEvent.Properties["locally_evaluated"] != false {
+			t.Errorf("Expected locally_evaluated to be false for remote evaluation, got: %v", lastEvent.Properties["locally_evaluated"])
+		}
 	}
 
 	// Test a bunch of GetFeatureFlag scenarios
