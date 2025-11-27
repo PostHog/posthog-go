@@ -27,7 +27,7 @@ import (
 
 func main() {
     client := posthog.New(os.Getenv("POSTHOG_API_KEY")) // This value must be set to the project API key in PostHog
-    // alternatively, you can do 
+    // alternatively, you can do
     // client, _ := posthog.NewWithConfig(
     //     os.Getenv("POSTHOG_API_KEY"),
     //     posthog.Config{
@@ -45,7 +45,7 @@ func main() {
         Set("plan", "Enterprise").
         Set("friends", 42),
     })
-    
+
     // Add context for a user
     client.Enqueue(posthog.Identify{
       DistinctId: "user:123",
@@ -53,13 +53,13 @@ func main() {
         Set("email", "john@doe.com").
         Set("proUser", false),
     })
-    
+
     // Link user contexts
     client.Enqueue(posthog.Alias{
       DistinctId: "user:123",
       Alias: "user:12345",
     })
-    
+
     // Capture a pageview
     client.Enqueue(posthog.Capture{
       DistinctId: "test-user",
@@ -86,8 +86,8 @@ func main() {
       }),
     })
     logger.Warn("Log that something broke", "error", fmt.Errorf("this is a dummy scenario"))
-    
-    // Capture event with calculated uuid to deduplicate repeated events. 
+
+    // Capture event with calculated uuid to deduplicate repeated events.
     // The library github.com/google/uuid is used
     key := myEvent.Id + myEvent.Project
     uid := uuid.NewSHA1(uuid.NameSpaceX500, []byte(key)).String()
@@ -188,10 +188,12 @@ This will run:
 Before running the examples, you'll need to:
 
 1. Have a PostHog instance running (default: http://localhost:8000)
+
    - You can modify the endpoint by setting the `POSTHOG_ENDPOINT` environment variable
    - If not set, it defaults to "http://localhost:8000"
 
 2. Set up the following feature flags in your PostHog instance:
+
    - `multivariate-test` (a multivariate flag)
    - `simple-test` (a simple boolean flag)
    - `multivariate-simple-test` (a multivariate flag)
@@ -205,18 +207,19 @@ Before running the examples, you'll need to:
 
 ## Releasing
 
+Before creating a release make sure you have installed [`gh`](https://cli.github.com) and authenticated via `gh auth login`
+
 To release a new version of the PostHog Go client, follow these steps:
 
 1. Update the version in the `version.go` file
 2. Update the changelog in `CHANGELOG.md`
-3. Once your changes are merged into main, create a new tag with the new version
+3. Once your changes are merged into main, create a new tag and release with the new version
 
 ```bash
 git tag v1.4.7
 git push --tags
+gh release create v1.4.7 --generate-notes
 ```
-
-4. [create a new release on GitHub](https://github.com/PostHog/posthog-go/releases/new).
 
 Releases are installed directly from GitHub.
 
