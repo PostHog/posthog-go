@@ -91,10 +91,11 @@ type FlagsResponse struct {
 	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
 }
 
-// CommonResponseFields contains fields common to all decide response versions
+// CommonResponseFields contains fields common to all flags response versions
 type CommonResponseFields struct {
 	QuotaLimited              []string `json:"quota_limited"`
 	RequestId                 string   `json:"requestId"`
+	EvaluatedAt               *int64   `json:"evaluatedAt"`
 	ErrorsWhileComputingFlags bool     `json:"errorsWhileComputingFlags"`
 }
 
