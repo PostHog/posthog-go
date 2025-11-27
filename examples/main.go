@@ -48,14 +48,14 @@ func promptForInput(prompt string) string {
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		// If we can't read from stdin (e.g., running in CI), return "6" to run all examples
-		fmt.Println("6 (auto-selected for non-interactive environment)")
-		return "6"
+		fmt.Println("8 (auto-selected for non-interactive environment)")
+		return "8"
 	}
 	input = strings.TrimSpace(input)
 	if input == "" {
 		// If input is empty (e.g., just pressed enter), return "6" to run all examples
-		fmt.Println("6 (auto-selected for empty input)")
-		return "6"
+		fmt.Println("8 (auto-selected for empty input)")
+		return "8"
 	}
 	return input
 }
@@ -90,8 +90,10 @@ func showMenu() {
 	fmt.Println("3. Feature flag evaluation examples")
 	fmt.Println("4. Feature flag with SendFeatureFlagsOptions examples")
 	fmt.Println("5. Flag dependencies examples")
-	fmt.Println("6. Run all examples")
-	fmt.Println("7. Exit")
+	fmt.Println("6. Error tracking with enqueue examples")
+	fmt.Println("7. Error tracking with log handler examples")
+	fmt.Println("8. Run all examples")
+	fmt.Println("9. Exit")
 }
 
 func runBasicCaptureExamples() {
@@ -129,6 +131,20 @@ func runFlagDependenciesExamples() {
 	TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint)
 }
 
+func runErrorTrackingThroughEnqueueExamples() {
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("ERROR TRACKING THROUGH ENQUEUE EXAMPLES")
+	fmt.Println(strings.Repeat("=", 60))
+	TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint)
+}
+
+func runErrorTrackingThroughLogHandlerExamples() {
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("ERROR TRACKING THROUGH LOG HANDLER EXAMPLES")
+	fmt.Println(strings.Repeat("=", 60))
+	TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint)
+}
+
 func runAllExamples() {
 	fmt.Println("\n🔄 Running all examples...")
 
@@ -140,14 +156,18 @@ func runAllExamples() {
 
 	fmt.Printf("\n%s FEATURE FLAG EVALUATION %s\n", strings.Repeat("🔸", 17), strings.Repeat("🔸", 17))
 	TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint)
-	TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint)
-	TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint)
 
 	fmt.Printf("\n%s ADVANCED FEATURE FLAGS %s\n", strings.Repeat("🔸", 18), strings.Repeat("🔸", 18))
 	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint)
 
 	fmt.Printf("\n%s FLAG DEPENDENCIES %s\n", strings.Repeat("🔸", 20), strings.Repeat("🔸", 20))
 	TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint)
+
+	fmt.Printf("\n%s ERROR TRACKING THROUGH ENQUEUE %s\n", strings.Repeat("🔸", 14), strings.Repeat("🔸", 14))
+	TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint)
+
+	fmt.Printf("\n%s ERROR TRACKING THROUGH LOG HANDLER %s\n", strings.Repeat("🔸", 13), strings.Repeat("🔸", 13))
+	TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint)
 }
 
 func isInteractive() bool {
@@ -168,7 +188,7 @@ func main() {
 
 	for {
 		showMenu()
-		choice := promptForInput("\nEnter your choice (1-7): ")
+		choice := promptForInput("\nEnter your choice (1-9): ")
 
 		switch choice {
 		case "1":
@@ -182,12 +202,16 @@ func main() {
 		case "5":
 			runFlagDependenciesExamples()
 		case "6":
-			runAllExamples()
+			runErrorTrackingThroughEnqueueExamples()
 		case "7":
+			runErrorTrackingThroughLogHandlerExamples()
+		case "8":
+			runAllExamples()
+		case "9":
 			fmt.Println("👋 Goodbye!")
 			return
 		default:
-			fmt.Println("❌ Invalid choice. Please select 1-7.")
+			fmt.Println("❌ Invalid choice. Please select 1-9.")
 			continue
 		}
 
