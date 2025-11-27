@@ -372,10 +372,11 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
+func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
 	flag, err := poller.getFeatureFlag(flagConfig)
 
 	var result interface{}
+	locallyEvaluated := false
 
 	if flag.Key != "" {
 		result, err = poller.computeFlagLocally(
@@ -386,6 +387,9 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.GroupProperties,
 			poller.cohorts,
 		)
+		if err == nil && result != nil {
+			locallyEvaluated = true
+		}
 	}
 
 	if err != nil {
@@ -395,11 +399,11 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
 		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
-			return nil, err
+			return nil, locallyEvaluated, err
 		}
 	}
 
-	return result, err
+	return result, locallyEvaluated, err
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
