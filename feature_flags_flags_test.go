@@ -27,14 +27,18 @@ func TestFlags(t *testing.T) {
 		if lastEvent.Properties["$feature_flag_request_id"] != "42853c54-1431-4861-996e-3a548989fa2c" {
 			t.Errorf("Expected $feature_flag_request_id property to be 42853c54-1431-4861-996e-3a548989fa2c, got: %v", lastEvent.Properties["$feature_flag_request_id"])
 		}
+
+		if lastEvent.Properties["$feature_flag_evaluated_at"] != int64(1737312368000) {
+			t.Errorf("Expected $feature_flag_evaluated_at property to be 1737312368000, got: %v", lastEvent.Properties["$feature_flag_evaluated_at"])
+		}
 	}
 
 	tests := []struct {
 		name    string
 		fixture string
 	}{
-		{name: "v3", fixture: "test-decide-v3.json"},
-		{name: "v4", fixture: "test-decide-v4.json"},
+		{name: "v3", fixture: "test-flags-v3.json"},
+		{name: "v4", fixture: "test-flags-v4.json"},
 	}
 
 	for _, test := range tests {
@@ -154,10 +158,10 @@ func TestFlags(t *testing.T) {
 	}
 }
 
-func TestDecideV4(t *testing.T) {
+func TestFlagsV4(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v4.json")))
+			w.Write([]byte(fixture("test-flags-v4.json")))
 		}
 	}))
 	defer server.Close()

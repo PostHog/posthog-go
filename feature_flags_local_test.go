@@ -569,7 +569,7 @@ func TestMatchPropertyDateComparison(t *testing.T) {
 func TestFlagPersonProperty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
 		}
@@ -643,7 +643,7 @@ func TestFlagGroup(t *testing.T) {
 			if !groupPropertiesEquality {
 				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1]], got %s", reqBody.GroupProperties)
 			}
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -729,7 +729,7 @@ func TestFlagGroupProperty(t *testing.T) {
 func TestComplexDefinition(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-complex-definition.json"))) // Don't return anything for local eval
 		}
@@ -764,10 +764,10 @@ func TestComplexDefinition(t *testing.T) {
 	require.Equal(t, true, isMatch)
 }
 
-func TestFallbackToDecide(t *testing.T) {
+func TestFallbackToFlags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}")) // Don't return anything for local eval
 		}
@@ -793,10 +793,10 @@ func TestFallbackToDecide(t *testing.T) {
 	}
 }
 
-func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
+func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte("test-decide-v3.json"))
+			w.Write([]byte("test-flags-v3.json"))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-feature-flags-dont-fallback-to-decide-when-only-local-evaluation-is-true.json")))
 		}
@@ -873,7 +873,7 @@ func TestFeatureFlagsDontFallbackToDecideWhenOnlyLocalEvaluationIsTrue(t *testin
 func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-false.json")))
 		}
@@ -932,7 +932,7 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 
 }
 
-func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
+func TestFeatureFlagNullComeIntoPlayOnlyWhenFlagsErrorsOut(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("{ads}"))
 	}))
@@ -982,7 +982,7 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenDecideErrorsOut(t *testing.T) {
 func TestExperienceContinuityOverride(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
 		}
@@ -1022,7 +1022,7 @@ func TestExperienceContinuityOverride(t *testing.T) {
 func TestGetAllFlags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-multiple-flags.json")))
 		}
@@ -1048,7 +1048,7 @@ func TestGetAllFlags(t *testing.T) {
 func TestGetAllFlagsEmptyLocal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte("{}"))
 		}
@@ -1073,10 +1073,10 @@ func TestGetAllFlagsEmptyLocal(t *testing.T) {
 	}
 }
 
-func TestGetAllFlagsNoDecide(t *testing.T) {
+func TestGetAllFlagsNoRemoteFallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-multiple-flags-valid.json")))
 		}
@@ -1102,7 +1102,7 @@ func TestGetAllFlagsNoDecide(t *testing.T) {
 func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-get-all-flags-with-fallback-but-only-local-evaluation-set.json")))
 		}
@@ -1129,7 +1129,7 @@ func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 func TestComputeInactiveFlagsLocally(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally.json")))
 		}
@@ -1153,7 +1153,7 @@ func TestComputeInactiveFlagsLocally(t *testing.T) {
 
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally-2.json")))
 		}
@@ -1249,7 +1249,7 @@ func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
 func TestGetFeatureFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
 		}
@@ -1278,7 +1278,7 @@ func TestGetFeatureFlag(t *testing.T) {
 func TestGetFeatureFlagPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
 		}
@@ -1334,7 +1334,7 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-variant-override.json")))
 		}
@@ -1398,7 +1398,7 @@ func TestFlagWithVariantOverrides(t *testing.T) {
 func TestFlagWithClashingVariantOverrides(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-variant-override-clashing.json")))
 		}
@@ -1464,7 +1464,7 @@ func TestFlagWithClashingVariantOverrides(t *testing.T) {
 func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-variant-override-invalid.json")))
 		}
@@ -1528,7 +1528,7 @@ func TestFlagWithInvalidVariantOverrides(t *testing.T) {
 func TestConditionsEvaluatedInOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-condition-order.json")))
 		}
@@ -1599,7 +1599,7 @@ func TestConditionsEvaluatedInOrder(t *testing.T) {
 func TestCaptureIsCalled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
 		}
@@ -4830,7 +4830,7 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			time.Sleep(1 * time.Second)
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -4911,7 +4911,7 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-decide-v3.json")))
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 			time.Sleep(11 * time.Second)
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
