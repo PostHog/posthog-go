@@ -4,11 +4,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// waitForCondition polls until condition returns true or timeout expires.
+// Returns true if condition was met, false if timed out.
+func waitForCondition(timeout time.Duration, condition func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
 
 func TestETagSupportForLocalEvaluation(t *testing.T) {
 	t.Run("stores ETag from initial response", func(t *testing.T) {
@@ -32,8 +44,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		c := cli.(*client)
 
-		// Wait for initial fetch to complete
-		time.Sleep(100 * time.Millisecond)
+		// GetFeatureFlags blocks until initial fetch completes
+		_, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags: %v", err)
+		}
 
 		// Verify ETag is stored
 		c.featureFlagsPoller.mutex.RLock()
@@ -47,16 +62,14 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 	t.Run("sends If-None-Match header on subsequent requests", func(t *testing.T) {
 		var requestCount int32
-		var receivedIfNoneMatch string
-		var ifNoneMatchMutex sync.Mutex
+		var receivedIfNoneMatch atomic.Value
+		receivedIfNoneMatch.Store("")
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
 				count := atomic.AddInt32(&requestCount, 1)
 
-				ifNoneMatchMutex.Lock()
-				receivedIfNoneMatch = r.Header.Get("If-None-Match")
-				ifNoneMatchMutex.Unlock()
+				receivedIfNoneMatch.Store(r.Header.Get("If-None-Match"))
 
 				if count == 1 {
 					// First request - return flags with ETag
@@ -93,19 +106,23 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		c := cli.(*client)
 
-		// Wait for initial fetch
-		time.Sleep(100 * time.Millisecond)
+		// GetFeatureFlags blocks until initial fetch completes
+		_, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags: %v", err)
+		}
 
 		// Force a reload to trigger a second request
 		c.featureFlagsPoller.ForceReload()
 
-		// Wait for the second request
-		time.Sleep(100 * time.Millisecond)
+		// Wait for second request to complete
+		if !waitForCondition(2*time.Second, func() bool {
+			return atomic.LoadInt32(&requestCount) >= 2
+		}) {
+			t.Fatal("Timed out waiting for second request")
+		}
 
-		ifNoneMatchMutex.Lock()
-		ifNoneMatch := receivedIfNoneMatch
-		ifNoneMatchMutex.Unlock()
-
+		ifNoneMatch := receivedIfNoneMatch.Load().(string)
 		if ifNoneMatch != `"initial-etag"` {
 			t.Errorf("Expected If-None-Match header to be \"initial-etag\", got %q", ifNoneMatch)
 		}
@@ -143,10 +160,7 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		c := cli.(*client)
 
-		// Wait for initial fetch
-		time.Sleep(100 * time.Millisecond)
-
-		// Verify initial flags are loaded
+		// GetFeatureFlags blocks until initial fetch completes
 		flags, err := cli.GetFeatureFlags()
 		if err != nil {
 			t.Fatalf("Failed to get feature flags: %v", err)
@@ -157,7 +171,13 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		// Force a reload - should get 304
 		c.featureFlagsPoller.ForceReload()
-		time.Sleep(100 * time.Millisecond)
+
+		// Wait for second request to complete
+		if !waitForCondition(2*time.Second, func() bool {
+			return atomic.LoadInt32(&requestCount) >= 2
+		}) {
+			t.Fatal("Timed out waiting for second request")
+		}
 
 		// Flags should still be the same after 304
 		flags, err = cli.GetFeatureFlags()
@@ -204,8 +224,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		c := cli.(*client)
 
-		// Wait for initial fetch
-		time.Sleep(100 * time.Millisecond)
+		// GetFeatureFlags blocks until initial fetch completes
+		_, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags: %v", err)
+		}
 
 		c.featureFlagsPoller.mutex.RLock()
 		etag1 := c.featureFlagsPoller.flagsEtag
@@ -217,14 +240,18 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		// Force reload to get new flags
 		c.featureFlagsPoller.ForceReload()
-		time.Sleep(100 * time.Millisecond)
 
-		c.featureFlagsPoller.mutex.RLock()
-		etag2 := c.featureFlagsPoller.flagsEtag
-		c.featureFlagsPoller.mutex.RUnlock()
-
-		if etag2 != `"etag-v2"` {
-			t.Errorf("Expected updated ETag to be \"etag-v2\", got %q", etag2)
+		// Wait for ETag to update
+		if !waitForCondition(2*time.Second, func() bool {
+			c.featureFlagsPoller.mutex.RLock()
+			etag := c.featureFlagsPoller.flagsEtag
+			c.featureFlagsPoller.mutex.RUnlock()
+			return etag == `"etag-v2"`
+		}) {
+			c.featureFlagsPoller.mutex.RLock()
+			etag := c.featureFlagsPoller.flagsEtag
+			c.featureFlagsPoller.mutex.RUnlock()
+			t.Errorf("Expected updated ETag to be \"etag-v2\", got %q", etag)
 		}
 
 		// Verify flags were updated
@@ -268,8 +295,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		c := cli.(*client)
 
-		// Wait for initial fetch
-		time.Sleep(100 * time.Millisecond)
+		// GetFeatureFlags blocks until initial fetch completes
+		_, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags: %v", err)
+		}
 
 		c.featureFlagsPoller.mutex.RLock()
 		etag1 := c.featureFlagsPoller.flagsEtag
@@ -281,14 +311,18 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		// Force reload - server won't send ETag
 		c.featureFlagsPoller.ForceReload()
-		time.Sleep(100 * time.Millisecond)
 
-		c.featureFlagsPoller.mutex.RLock()
-		etag2 := c.featureFlagsPoller.flagsEtag
-		c.featureFlagsPoller.mutex.RUnlock()
-
-		if etag2 != "" {
-			t.Errorf("Expected ETag to be cleared when server stops sending it, got %q", etag2)
+		// Wait for ETag to be cleared
+		if !waitForCondition(2*time.Second, func() bool {
+			c.featureFlagsPoller.mutex.RLock()
+			etag := c.featureFlagsPoller.flagsEtag
+			c.featureFlagsPoller.mutex.RUnlock()
+			return etag == ""
+		}) {
+			c.featureFlagsPoller.mutex.RLock()
+			etag := c.featureFlagsPoller.flagsEtag
+			c.featureFlagsPoller.mutex.RUnlock()
+			t.Errorf("Expected ETag to be cleared when server stops sending it, got %q", etag)
 		}
 	})
 
@@ -328,8 +362,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		c := cli.(*client)
 
-		// Wait for initial fetch
-		time.Sleep(100 * time.Millisecond)
+		// GetFeatureFlags blocks until initial fetch completes
+		_, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags: %v", err)
+		}
 
 		c.featureFlagsPoller.mutex.RLock()
 		etag1 := c.featureFlagsPoller.flagsEtag
@@ -341,31 +378,39 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		// Force reload - should get quota limited
 		c.featureFlagsPoller.ForceReload()
-		time.Sleep(100 * time.Millisecond)
 
-		c.featureFlagsPoller.mutex.RLock()
-		etag2 := c.featureFlagsPoller.flagsEtag
-		flags := c.featureFlagsPoller.featureFlags
-		c.featureFlagsPoller.mutex.RUnlock()
+		// Wait for ETag and flags to be cleared
+		if !waitForCondition(2*time.Second, func() bool {
+			c.featureFlagsPoller.mutex.RLock()
+			etag := c.featureFlagsPoller.flagsEtag
+			flags := c.featureFlagsPoller.featureFlags
+			c.featureFlagsPoller.mutex.RUnlock()
+			return etag == "" && len(flags) == 0
+		}) {
+			c.featureFlagsPoller.mutex.RLock()
+			etag2 := c.featureFlagsPoller.flagsEtag
+			flags := c.featureFlagsPoller.featureFlags
+			c.featureFlagsPoller.mutex.RUnlock()
 
-		if etag2 != "" {
-			t.Errorf("Expected ETag to be cleared on quota limit, got %q", etag2)
-		}
-
-		if len(flags) != 0 {
-			t.Errorf("Expected flags to be cleared on quota limit, got %+v", flags)
+			if etag2 != "" {
+				t.Errorf("Expected ETag to be cleared on quota limit, got %q", etag2)
+			}
+			if len(flags) != 0 {
+				t.Errorf("Expected flags to be cleared on quota limit, got %+v", flags)
+			}
 		}
 	})
 
 	t.Run("first request does not send If-None-Match header", func(t *testing.T) {
-		var firstRequestIfNoneMatch string
-		var mutex sync.Mutex
+		var firstRequestIfNoneMatch atomic.Value
+		firstRequestIfNoneMatch.Store("")
+		var requestReceived int32
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-				mutex.Lock()
-				firstRequestIfNoneMatch = r.Header.Get("If-None-Match")
-				mutex.Unlock()
+				if atomic.CompareAndSwapInt32(&requestReceived, 0, 1) {
+					firstRequestIfNoneMatch.Store(r.Header.Get("If-None-Match"))
+				}
 
 				w.Header().Set("ETag", `"abc123"`)
 				w.Write([]byte(`{
@@ -383,13 +428,13 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		})
 		defer cli.Close()
 
-		// Wait for initial fetch
-		time.Sleep(100 * time.Millisecond)
+		// GetFeatureFlags blocks until initial fetch completes
+		_, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags: %v", err)
+		}
 
-		mutex.Lock()
-		ifNoneMatch := firstRequestIfNoneMatch
-		mutex.Unlock()
-
+		ifNoneMatch := firstRequestIfNoneMatch.Load().(string)
 		if ifNoneMatch != "" {
 			t.Errorf("Expected no If-None-Match header on first request, got %q", ifNoneMatch)
 		}
