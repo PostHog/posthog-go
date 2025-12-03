@@ -345,7 +345,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	// Handle 304 Not Modified - flags haven't changed, skip processing
 	if res.StatusCode == http.StatusNotModified {
 		poller.Logger.Debugf("[FEATURE FLAGS] Flags not modified (304), using cached data")
-		// Update ETag if server returned one (clear if server stops sending)
+		// Update ETag if server returned one (preserve existing if not)
 		if newEtag := res.Header.Get("ETag"); newEtag != "" {
 			poller.mutex.Lock()
 			poller.flagsEtag = newEtag
