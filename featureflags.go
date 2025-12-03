@@ -340,6 +340,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 	defer cancel()
+	defer res.Body.Close()
 
 	// Handle 304 Not Modified - flags haven't changed, skip processing
 	if res.StatusCode == http.StatusNotModified {
@@ -371,7 +372,6 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 
-	defer res.Body.Close()
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
