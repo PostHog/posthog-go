@@ -42,6 +42,7 @@ type FeatureFlagsPoller struct {
 	flagTimeout                     time.Duration
 	decider                         decider
 	disableGeoIP                    bool
+	flagsEtag                       string // ETag for conditional requests to reduce bandwidth
 }
 
 type FeatureFlag struct {
@@ -327,12 +328,30 @@ func (poller *FeatureFlagsPoller) run() {
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
-	res, cancel, err := poller.localEvaluationFlags(headers)
+
+	// Read current ETag under lock
+	poller.mutex.RLock()
+	currentEtag := poller.flagsEtag
+	poller.mutex.RUnlock()
+
+	res, cancel, err := poller.localEvaluationFlags(headers, currentEtag)
 	if err != nil {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
 	defer cancel()
+
+	// Handle 304 Not Modified - flags haven't changed, skip processing
+	if res.StatusCode == http.StatusNotModified {
+		poller.Logger.Debugf("[FEATURE FLAGS] Flags not modified (304), using cached data")
+		// Update ETag if server returned one (clear if server stops sending)
+		if newEtag := res.Header.Get("ETag"); newEtag != "" {
+			poller.mutex.Lock()
+			poller.flagsEtag = newEtag
+			poller.mutex.Unlock()
+		}
+		return
+	}
 
 	// Handle quota limit response (HTTP 402)
 	if res.StatusCode == http.StatusPaymentRequired {
@@ -341,6 +360,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.featureFlags = []FeatureFlag{}
 		poller.cohorts = map[string]PropertyGroup{}
 		poller.groups = map[string]string{}
+		poller.flagsEtag = "" // Clear ETag on quota limit
 		poller.mutex.Unlock()
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
 		return
@@ -363,10 +383,15 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 	newFlags := append(make([]FeatureFlag, 0, len(featureFlagsResponse.Flags)), featureFlagsResponse.Flags...)
+
+	// Store new ETag from response (clear if server stops sending)
+	newEtag := res.Header.Get("ETag")
+
 	poller.mutex.Lock()
 	defer poller.mutex.Unlock()
 	poller.featureFlags = newFlags
 	poller.cohorts = featureFlagsResponse.Cohorts
+	poller.flagsEtag = newEtag
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
@@ -1134,12 +1159,16 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	return poller.featureFlags, nil
 }
 
-func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header) (*http.Response, context.CancelFunc, error) {
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header, etag string) (*http.Response, context.CancelFunc, error) {
 	u := url.URL(*poller.localEvalUrl)
 	searchParams := u.Query()
 	searchParams.Add("token", poller.projectApiKey)
 	searchParams.Add("send_cohorts", "true")
 	u.RawQuery = searchParams.Encode()
+
+	if etag != "" {
+		headers.Set("If-None-Match", etag)
+	}
 
 	return poller.request("GET", u.String(), nil, headers, poller.flagTimeout)
 }
