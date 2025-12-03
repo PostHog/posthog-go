@@ -90,8 +90,9 @@ func showMenu() {
 	fmt.Println("3. Feature flag evaluation examples")
 	fmt.Println("4. Feature flag with SendFeatureFlagsOptions examples")
 	fmt.Println("5. Flag dependencies examples")
-	fmt.Println("6. Run all examples")
-	fmt.Println("7. Exit")
+	fmt.Println("6. ETag polling test (continuous, Ctrl+C to stop)")
+	fmt.Println("7. Run all examples (except ETag polling)")
+	fmt.Println("8. Exit")
 }
 
 func runBasicCaptureExamples() {
@@ -127,6 +128,13 @@ func runFlagDependenciesExamples() {
 	fmt.Println("FLAG DEPENDENCIES EXAMPLES")
 	fmt.Println(strings.Repeat("=", 60))
 	TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint)
+}
+
+func runETagPollingExample() {
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("ETAG POLLING TEST")
+	fmt.Println(strings.Repeat("=", 60))
+	TestETagPolling(projectAPIKey, personalAPIKey, endpoint)
 }
 
 func runAllExamples() {
@@ -168,7 +176,7 @@ func main() {
 
 	for {
 		showMenu()
-		choice := promptForInput("\nEnter your choice (1-7): ")
+		choice := promptForInput("\nEnter your choice (1-8): ")
 
 		switch choice {
 		case "1":
@@ -182,12 +190,16 @@ func main() {
 		case "5":
 			runFlagDependenciesExamples()
 		case "6":
-			runAllExamples()
+			runETagPollingExample()
+			// ETag polling runs continuously, so exit after it returns
+			return
 		case "7":
+			runAllExamples()
+		case "8":
 			fmt.Println("👋 Goodbye!")
 			return
 		default:
-			fmt.Println("❌ Invalid choice. Please select 1-7.")
+			fmt.Println("❌ Invalid choice. Please select 1-8.")
 			continue
 		}
 
