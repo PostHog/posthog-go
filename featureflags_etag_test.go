@@ -326,6 +326,79 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		}
 	})
 
+	t.Run("preserves ETag when 304 response has no ETag header", func(t *testing.T) {
+		var requestCount int32
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+				count := atomic.AddInt32(&requestCount, 1)
+
+				if count == 1 {
+					w.Header().Set("ETag", `"etag-v1"`)
+					w.Write([]byte(`{
+						"flags": [{"key": "flag-v1", "active": true, "filters": {"groups": []}}],
+						"group_type_mapping": {},
+						"cohorts": {}
+					}`))
+				} else {
+					// Second request - 304 without ETag header (unusual but possible)
+					w.WriteHeader(http.StatusNotModified)
+				}
+			}
+		}))
+		defer server.Close()
+
+		cli, _ := NewWithConfig("test-api-key", Config{
+			PersonalApiKey: "test-personal-key",
+			Endpoint:       server.URL,
+		})
+		defer cli.Close()
+
+		c := cli.(*client)
+
+		// GetFeatureFlags blocks until initial fetch completes
+		_, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags: %v", err)
+		}
+
+		c.featureFlagsPoller.mutex.RLock()
+		etag1 := c.featureFlagsPoller.flagsEtag
+		c.featureFlagsPoller.mutex.RUnlock()
+
+		if etag1 != `"etag-v1"` {
+			t.Errorf("Expected initial ETag to be \"etag-v1\", got %q", etag1)
+		}
+
+		// Force reload - server returns 304 without ETag header
+		c.featureFlagsPoller.ForceReload()
+
+		// Wait for second request to complete
+		if !waitForCondition(2*time.Second, func() bool {
+			return atomic.LoadInt32(&requestCount) >= 2
+		}) {
+			t.Fatal("Timed out waiting for second request")
+		}
+
+		// ETag should be preserved when 304 has no ETag header
+		c.featureFlagsPoller.mutex.RLock()
+		etag2 := c.featureFlagsPoller.flagsEtag
+		c.featureFlagsPoller.mutex.RUnlock()
+
+		if etag2 != `"etag-v1"` {
+			t.Errorf("Expected ETag to be preserved when 304 has no ETag header, got %q", etag2)
+		}
+
+		// Flags should still be available
+		flags, err := cli.GetFeatureFlags()
+		if err != nil {
+			t.Fatalf("Failed to get feature flags after 304: %v", err)
+		}
+		if len(flags) != 1 || flags[0].Key != "flag-v1" {
+			t.Errorf("Expected flags to remain after 304 without ETag, got %+v", flags)
+		}
+	})
+
 	t.Run("clears ETag on quota limit (402)", func(t *testing.T) {
 		var requestCount int32
 
