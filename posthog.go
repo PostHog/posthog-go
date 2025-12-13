@@ -578,7 +578,7 @@ func (c *client) upload(b []byte) error {
 	res, err := c.http.Do(req)
 
 	if err != nil {
-		c.Errorf("sending request - %s", err)
+		c.Warnf("sending request - %s", err)
 		return err
 	}
 
@@ -681,6 +681,10 @@ func (c *client) debugf(format string, args ...interface{}) {
 
 func (c *client) Errorf(format string, args ...interface{}) {
 	c.Logger.Errorf(format, args...)
+}
+
+func (c *client) Warnf(format string, args ...interface{}) {
+	c.Logger.Warnf(format, args...)
 }
 
 func (c *client) maxBatchBytes() int {
