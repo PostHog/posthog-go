@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/joho/godotenv v1.5.1
-	github.com/orian/flakyhttp v0.0.0-20251213012516-85721792fae6
+	github.com/orian/flakyhttp v0.1.0
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli v1.22.5
 )

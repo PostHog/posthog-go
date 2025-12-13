@@ -223,6 +223,77 @@ gh release create v1.4.7 --generate-notes
 
 Releases are installed directly from GitHub.
 
+## Event Delivery and Retry Behavior
+
+The PostHog Go client includes automatic retry logic for handling transient network failures. Understanding when events are delivered vs dropped helps ensure reliable analytics.
+
+### Events Are Delivered (Not Dropped)
+
+The client automatically retries on network errors and will successfully deliver events when:
+
+- **Transient network failures** - EOF errors, connection resets, TCP drops that recover within retry attempts
+- **Server temporarily unavailable** - If the server starts responding before max retries are exhausted
+- **Connection drops at any stage** - Whether after connect, during headers, or while sending body
+
+Example scenarios that recover successfully:
+- Server closes connection without response (EOF) but succeeds on retry
+- TCP connection dropped after partial body read
+- Temporary network interruption lasting a few seconds
+
+### Events Are Dropped
+
+Events will be permanently lost in these scenarios:
+
+| Scenario | Behavior |
+|----------|----------|
+| **Max retries exceeded** | After 10 failed attempts, events are dropped and `Failure` callback is invoked |
+| **Client closed during retry** | If `client.Close()` is called while retrying, pending events are dropped |
+| **Non-retryable errors** | JSON marshalling failures cause immediate drop (no retry) |
+| **HTTP 4xx responses** | Client errors (e.g., invalid API key) are not retried |
+
+### Configuring Retry Behavior
+
+You can customize retry timing via the `RetryAfter` config option:
+
+```go
+client, _ := posthog.NewWithConfig(
+    "api-key",
+    posthog.Config{
+        RetryAfter: func(attempt int) time.Duration {
+            // Custom backoff: 100ms, 200ms, 400ms, ...
+            return time.Duration(100<<attempt) * time.Millisecond
+        },
+    },
+)
+```
+
+To disable retries entirely (events fail immediately on first error):
+
+```go
+RetryAfter: func(attempt int) time.Duration { return -1 }
+```
+
+### Monitoring Event Delivery
+
+Use the `Callback` interface to track successes and failures:
+
+```go
+type MyCallback struct{}
+
+func (c *MyCallback) Success(msg posthog.APIMessage) {
+    log.Printf("Event delivered: %v", msg)
+}
+
+func (c *MyCallback) Failure(msg posthog.APIMessage, err error) {
+    log.Printf("Event dropped: %v, error: %v", msg, err)
+    // Optionally: persist to disk, send to dead-letter queue, etc.
+}
+
+client, _ := posthog.NewWithConfig("api-key", posthog.Config{
+    Callback: &MyCallback{},
+})
+```
+
 ## Questions?
 
 ### [Visit the community forum.](https://posthog.com/questions)

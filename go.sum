@@ -9,6 +9,7 @@ github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
 github.com/orian/flakyhttp v0.0.0-20251213012516-85721792fae6 h1:4joUF09MMIcigLR4uRmwlIT94J8CoiFAijyTpsIBoaI=
 github.com/orian/flakyhttp v0.0.0-20251213012516-85721792fae6/go.mod h1:tePCDwAvGX2teNe6PMXkSrbNJhN/6jVPZnFhbFaLJM4=
+github.com/orian/flakyhttp v0.1.0/go.mod h1:jVJ4z8O1D6iWCLIrhJj80QXh5BK6MS4EisXzTOABNNI=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/russross/blackfriday/v2 v2.0.1 h1:lPqVAte+HuHNfhJ/0LC98ESWRz8afy9tM/0RK8m9o+Q=
