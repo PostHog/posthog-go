@@ -20,6 +20,8 @@ func TestRetryBehavior(t *testing.T) {
 		requestCount  int
 		disableRetry  bool // if true, RetryAfter returns -1
 		expectSuccess bool
+		retryAfter    func(i int) time.Duration
+		forceClose    bool
 	}{
 		{
 			name:          "NoRetry_DropsMessage",
@@ -34,6 +36,17 @@ func TestRetryBehavior(t *testing.T) {
 			requestCount:  10,
 			disableRetry:  false,
 			expectSuccess: false,
+		},
+		{
+			name:          "QuitDuringRetry_DropsMessage",
+			failCount:     1, // always fail, will exhaust all 10 retries
+			requestCount:  1,
+			disableRetry:  false,
+			expectSuccess: false,
+			retryAfter: func(i int) time.Duration {
+				return time.Minute
+			},
+			forceClose: true,
 		},
 		{
 			name:          "SuccessOnLastRetry",
@@ -63,7 +76,7 @@ func TestRetryBehavior(t *testing.T) {
 					rt:      http.DefaultTransport,
 					timeout: 1 * time.Second,
 				},
-				Interval:   10 * time.Millisecond,
+				Interval:   1 * time.Millisecond,
 				BatchSize:  1,
 				Logger:     posthog.StdLogger(log.New(os.Stderr, "[posthog] ", log.LstdFlags), true),
 				Callback:   callback,
@@ -72,6 +85,9 @@ func TestRetryBehavior(t *testing.T) {
 
 			if tc.disableRetry {
 				config.MaxRetries = posthog.Ptr[int](0)
+			}
+			if tc.retryAfter != nil {
+				config.RetryAfter = tc.retryAfter
 			}
 
 			client, err := posthog.NewWithConfig("test-api-key", config)
@@ -82,6 +98,11 @@ func TestRetryBehavior(t *testing.T) {
 				Event:      "test_event",
 			})
 			require.NoError(t, err)
+
+			if tc.forceClose {
+				time.Sleep(10 * time.Millisecond)
+				client.Close()
+			}
 
 			// Wait for callback
 			select {
@@ -99,7 +120,9 @@ func TestRetryBehavior(t *testing.T) {
 				require.Fail(t, "Timeout waiting for callback")
 			}
 
-			client.Close()
+			if !tc.forceClose {
+				client.Close()
+			}
 
 			success, failure := callback.GetCounts()
 			assert.Equal(t, tc.requestCount, server.RequestCount())
