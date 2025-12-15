@@ -93,9 +93,6 @@ func TestTCPDropRecovery(t *testing.T) {
 			client.Close()
 
 			success, failure := callback.GetCounts()
-			t.Logf("Results: %d success, %d failure", success, failure)
-			t.Logf("Server: %d connections, %d successful", server.ConnCount(), server.SuccessCount())
-
 			assert.Equal(t, 1, success, "Expected 1 success")
 			assert.Equal(t, 0, failure, "Expected 0 failures")
 			assert.Equal(t, 1, server.SuccessCount())
@@ -192,9 +189,7 @@ func TestTCPDropFailure(t *testing.T) {
 			client.Close()
 
 			success, failure := callback.GetCounts()
-			t.Logf("Results: %d success, %d failure", success, failure)
-			t.Logf("Server received %d connections", server.ConnCount())
-
+			assert.Equal(t, 10, server.ConnCount())
 			assert.Equal(t, 1, failure, "Expected 1 failure")
 			assert.Equal(t, 0, success, "Expected 0 success")
 		})

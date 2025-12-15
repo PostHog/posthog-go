@@ -85,6 +85,9 @@ type Config struct {
 	// If not set the client will fallback to use a default retry policy.
 	RetryAfter func(int) time.Duration
 
+	// MaxRetries is a maximum number of a request is retried on failure.
+	MaxRetries *int
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
@@ -94,6 +97,9 @@ type Config struct {
 	// requests to the backend API.
 	// This field is not exported and only exposed internally to control concurrency.
 	maxConcurrentRequests int
+
+	// maxAttempts is a maximum numbers we try to send data to capture endpoint, must be in range [1,10].
+	maxAttempts int
 }
 
 // GetDisableGeoIP instructs the client to set $geoip_disable on event properties or feature flag requests.
@@ -151,6 +157,14 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.MaxRetries != nil && (*c.MaxRetries < 0 || 9 < *c.MaxRetries) {
+		return ConfigError{
+			Reason: "max retries out of range [0,9]",
+			Field:  "MaxRetries",
+			Value:  *c.MaxRetries,
+		}
+	}
+
 	return nil
 }
 
@@ -186,11 +200,17 @@ func makeConfig(c Config) Config {
 	}
 
 	if c.RetryAfter == nil {
-		c.RetryAfter = DefaultBacko().Duration
+		c.RetryAfter = DefaultBackoff().Duration
 	}
 
 	if c.now == nil {
 		c.now = time.Now
+	}
+
+	if c.MaxRetries != nil && 0 <= *c.MaxRetries && *c.MaxRetries <= 9 {
+		c.maxAttempts = 1 + *c.MaxRetries
+	} else {
+		c.maxAttempts = 10
 	}
 
 	if c.maxConcurrentRequests == 0 {
@@ -205,4 +225,9 @@ func makeConfig(c Config) Config {
 	}
 
 	return c
+}
+
+// Ptr is a helper to easily make reference from value.
+func Ptr[T any](v T) *T {
+	return &v
 }

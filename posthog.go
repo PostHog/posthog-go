@@ -526,7 +526,6 @@ func (c *client) sendAsync(msgs []message, wg *sync.WaitGroup, ex *executor) {
 
 // Send batch request.
 func (c *client) send(msgs []message) {
-	const attempts = 10
 
 	b, err := json.Marshal(batch{
 		ApiKey:              c.key,
@@ -540,7 +539,7 @@ func (c *client) send(msgs []message) {
 		return
 	}
 
-	for i := 0; i != attempts; i++ {
+	for i := 0; i != c.maxAttempts; i++ {
 		if err = c.upload(b); err == nil {
 			c.notifySuccess(msgs)
 			return
@@ -556,7 +555,7 @@ func (c *client) send(msgs []message) {
 		}
 	}
 
-	c.Errorf("%d messages dropped because they failed to be sent after %d attempts", len(msgs), attempts)
+	c.Errorf("%d messages dropped because they failed to be sent after %d attempts", len(msgs), c.maxAttempts)
 	c.notifyFailure(msgs, err)
 }
 

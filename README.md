@@ -267,10 +267,23 @@ client, _ := posthog.NewWithConfig(
 )
 ```
 
-To disable retries entirely (events fail immediately on first error):
+To limit the number of retries (default is 9 retries = 10 total attempts):
 
 ```go
-RetryAfter: func(attempt int) time.Duration { return -1 }
+client, _ := posthog.NewWithConfig(
+    "api-key",
+    posthog.Config{
+        MaxRetries: posthog.Ptr(3), // 3 retries = 4 total attempts
+    },
+)
+```
+
+Setting `MaxRetries` to 0 means only one attempt with no retries (disable retries):
+
+```go
+posthog.Config{
+    MaxRetries: posthog.Ptr(0), // 3 retries = 4 total attempts
+},
 ```
 
 ### Monitoring Event Delivery

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-type Backo struct {
+type Backoff struct {
 	base   time.Duration
 	factor uint8
 	jitter float64
@@ -14,27 +14,27 @@ type Backo struct {
 }
 
 // Creates a backo instance with the given parameters
-func NewBacko(base time.Duration, factor uint8, jitter float64, cap time.Duration) *Backo {
-	return &Backo{base, factor, jitter, cap}
+func NewBackoff(base time.Duration, factor uint8, jitter float64, cap time.Duration) *Backoff {
+	return &Backoff{base, factor, jitter, cap}
 }
 
-// Creates a backo instance with the following defaults:
+// Creates a backoff instance with the following defaults:
 //
 //	base: 100 milliseconds
 //	factor: 2
 //	jitter: 0
 //	cap: 10 seconds
-func DefaultBacko() *Backo {
-	return NewBacko(time.Millisecond*100, 2, 0, time.Second*10)
+func DefaultBackoff() *Backoff {
+	return NewBackoff(time.Millisecond*100, 2, 0, time.Second*10)
 }
 
 // Duration returns the backoff interval for the given attempt.
-func (backo *Backo) Duration(attempt int) time.Duration {
-	duration := float64(backo.base) * math.Pow(float64(backo.factor), float64(attempt))
+func (b *Backoff) Duration(attempt int) time.Duration {
+	duration := float64(b.base) * math.Pow(float64(b.factor), float64(attempt))
 
-	if backo.jitter != 0 {
+	if b.jitter != 0 {
 		random := rand.Float64()
-		deviation := math.Floor(random * backo.jitter * duration)
+		deviation := math.Floor(random * b.jitter * duration)
 		if (int(math.Floor(random*10)) & 1) == 0 {
 			duration = duration - deviation
 		} else {
@@ -42,13 +42,13 @@ func (backo *Backo) Duration(attempt int) time.Duration {
 		}
 	}
 
-	duration = math.Min(float64(duration), float64(backo.cap))
+	duration = math.Min(float64(duration), float64(b.cap))
 	return time.Duration(duration)
 }
 
 // Sleep pauses the current goroutine for the backoff interval for the given attempt.
-func (backo *Backo) Sleep(attempt int) {
-	duration := backo.Duration(attempt)
+func (b *Backoff) Sleep(attempt int) {
+	duration := b.Duration(attempt)
 	time.Sleep(duration)
 }
 
@@ -57,7 +57,7 @@ type Ticker struct {
 	C    <-chan time.Time
 }
 
-func (b *Backo) NewTicker() *Ticker {
+func (b *Backoff) NewTicker() *Ticker {
 	c := make(chan time.Time, 1)
 	ticker := &Ticker{
 		done: make(chan struct{}, 1),

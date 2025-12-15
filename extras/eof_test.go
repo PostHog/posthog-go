@@ -20,7 +20,7 @@ func TestEOFScenarios(t *testing.T) {
 		scenario        flakyhttp.Scenario
 		partialBodySize int
 		disableRetries  bool
-		expectFailure   bool // true = must fail, false = success or failure both OK
+		expectFailure   bool
 	}{
 		{
 			name:            "HeadersOnlyClose_PartialBody",
@@ -77,7 +77,7 @@ func TestEOFScenarios(t *testing.T) {
 				RetryAfter: func(i int) time.Duration { return time.Millisecond },
 			}
 			if tc.disableRetries {
-				clientConfig.RetryAfter = func(i int) time.Duration { return -1 }
+				clientConfig.MaxRetries = posthog.Ptr[int](0)
 			}
 
 			client, err := posthog.NewWithConfig("test-api-key", clientConfig)
@@ -109,18 +109,14 @@ func TestEOFScenarios(t *testing.T) {
 			client.Close()
 
 			success, failure := callback.GetCounts()
-			t.Logf("Results: %d success, %d failure callbacks", success, failure)
-			t.Logf("Server received %d request(s)", server.RequestCount())
 
-			assert.GreaterOrEqual(t, server.RequestCount(), 1, "Expected at least 1 request to the server")
-			assert.GreaterOrEqual(t, success+failure, 1, "Expected at least 1 callback")
+			assert.Equal(t, 1, server.RequestCount(), "Expected at least 1 request to the server")
+			assert.Equal(t, 1, success+failure, "Expected at least 1 callback")
 
 			if tc.expectFailure {
-				assert.Equal(t, 1, failure, "Expected 1 failure callback")
-				assert.Equal(t, 0, success, "Expected 0 success callbacks")
+				assert.Equal(t, 1, failure, "Expected failure callback")
 			} else {
-				assert.Equal(t, 0, failure, "Expected 0 failure callback")
-				assert.Equal(t, 1, success, "Expected  success callbacks")
+				assert.Equal(t, 1, success, "Expected success callback")
 			}
 		})
 	}

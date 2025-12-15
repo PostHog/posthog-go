@@ -16,25 +16,29 @@ import (
 func TestRetryBehavior(t *testing.T) {
 	tests := []struct {
 		name          string
-		failCount     int  // 0 = always fail, N = fail N times then succeed
+		failCount     int // 0 = always fail, N = fail N times then succeed
+		requestCount  int
 		disableRetry  bool // if true, RetryAfter returns -1
 		expectSuccess bool
 	}{
 		{
 			name:          "NoRetry_DropsMessage",
 			failCount:     0, // always fail
+			requestCount:  1,
 			disableRetry:  true,
 			expectSuccess: false,
 		},
 		{
 			name:          "AllRetriesFail_DropsMessage",
 			failCount:     0, // always fail, will exhaust all 10 retries
+			requestCount:  10,
 			disableRetry:  false,
 			expectSuccess: false,
 		},
 		{
 			name:          "SuccessOnLastRetry",
 			failCount:     9, // fail 9 times, succeed on 10th (last retry)
+			requestCount:  10,
 			disableRetry:  false,
 			expectSuccess: true,
 		},
@@ -59,16 +63,15 @@ func TestRetryBehavior(t *testing.T) {
 					rt:      http.DefaultTransport,
 					timeout: 1 * time.Second,
 				},
-				Interval:  10 * time.Millisecond,
-				BatchSize: 1,
-				Logger:    posthog.StdLogger(log.New(os.Stderr, "[posthog] ", log.LstdFlags), true),
-				Callback:  callback,
+				Interval:   10 * time.Millisecond,
+				BatchSize:  1,
+				Logger:     posthog.StdLogger(log.New(os.Stderr, "[posthog] ", log.LstdFlags), true),
+				Callback:   callback,
+				RetryAfter: func(i int) time.Duration { return time.Millisecond },
 			}
 
 			if tc.disableRetry {
-				config.RetryAfter = func(i int) time.Duration { return -1 }
-			} else {
-				config.RetryAfter = func(i int) time.Duration { return time.Millisecond }
+				config.MaxRetries = posthog.Ptr[int](0)
 			}
 
 			client, err := posthog.NewWithConfig("test-api-key", config)
@@ -99,8 +102,8 @@ func TestRetryBehavior(t *testing.T) {
 			client.Close()
 
 			success, failure := callback.GetCounts()
-			t.Logf("Results: %d success, %d failure", success, failure)
-			t.Logf("Server received %d requests", server.RequestCount())
+			assert.Equal(t, tc.requestCount, server.RequestCount())
+			assert.Equal(t, 1, success+failure, "Expected 1 callback")
 
 			if tc.expectSuccess {
 				assert.Equal(t, 1, success, "Expected 1 success")
