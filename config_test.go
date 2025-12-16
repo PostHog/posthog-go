@@ -1,9 +1,10 @@
 package posthog
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestConfigZeroValue(t *testing.T) {
@@ -28,6 +29,30 @@ func TestConfigInvalidInterval(t *testing.T) {
 	} else if e.Field != "Interval" || e.Value.(time.Duration) != (-1*time.Second) {
 		t.Error("invalid field error reported:", e)
 	}
+}
+
+func TestConfig_MaxRetries(t *testing.T) {
+	c := Config{}
+	require.NoError(t, c.Validate())
+	got := makeConfig(c)
+	require.Equal(t, 10, got.maxAttempts)
+
+	c.MaxRetries = Ptr[int](-1)
+	require.ErrorContains(t, c.Validate(),
+		"posthog.NewWithConfig: max retries out of range [0,9] (posthog.Config.MaxRetries: -1)")
+	got = makeConfig(c)
+	require.Equal(t, 10, got.maxAttempts)
+
+	c.MaxRetries = Ptr[int](10)
+	require.ErrorContains(t, c.Validate(),
+		"posthog.NewWithConfig: max retries out of range [0,9] (posthog.Config.MaxRetries: 10)")
+	got = makeConfig(c)
+	require.Equal(t, 10, got.maxAttempts)
+
+	c.MaxRetries = Ptr[int](5)
+	require.NoError(t, c.Validate())
+	got = makeConfig(c)
+	require.Equal(t, 6, got.maxAttempts)
 }
 
 func TestConfigInvalidBatchSize(t *testing.T) {
