@@ -222,7 +222,7 @@ Once merged, the following happens automatically:
 
 1. A Slack notification is sent to the client libraries channel requesting approval
 2. A maintainer approves the release in the GitHub `Release` environment
-3. The version is bumped in `version.go` (patch or minor based on labels)
+3. The version is bumped in `version.go` based on the version label (`patch`, `minor`, or `major`)
 4. The `CHANGELOG.md` is updated with a link to the full changelog
 5. Changes are committed and pushed to `master`
 6. A git tag is created (e.g., `v1.8.0`)
