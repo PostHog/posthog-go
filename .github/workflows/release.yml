@@ -52,27 +52,18 @@ jobs:
   notify-approval-needed:
     name: Notify Slack - Approval Needed
     needs: check-release-label
-    runs-on: ubuntu-latest
     if: needs.check-release-label.outputs.should-release == 'true'
-    outputs:
-      slack_ts: ${{ steps.notify.outputs.slack_ts }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Send Slack notification
-        id: notify
-        uses: posthog/.github/.github/actions/notify-slack-release-approval@9b04bf3288aca2b4cd3883070858b034b4f7f334
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
+    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@main
+    with:
+      slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+      slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
+    secrets:
+      slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+      posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
 
   release:
     name: Bump versions and release
-    needs: [check-release-label, notify-approval-needed]
+    needs: [check-release-label]
     runs-on: ubuntu-latest
     if: needs.check-release-label.outputs.should-release == 'true'
     environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
@@ -82,11 +73,11 @@ jobs:
       id-token: write
     steps:
       - name: Notify Slack - Approved
-        uses: posthog/.github/.github/actions/slack-thread-reply@9b04bf3288aca2b4cd3883070858b034b4f7f334
+        uses: posthog/.github/.github/actions/slack-thread-reply@main
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          thread_ts: ${{ steps.notify-approval-needed.outputs.slack_ts }}
           message: "✅ Release approved! Version bump in progress..."
           emoji_reaction: "white_check_mark"
 
@@ -198,7 +189,7 @@ jobs:
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          thread_ts: ${{ steps.notify-approval-needed.outputs.slack_ts }}
           message: "❌ Failed to release `posthog-go@v${{ steps.bump-version.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
           emoji_reaction: "x"
 
