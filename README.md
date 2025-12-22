@@ -207,19 +207,27 @@ Before running the examples, you'll need to:
 
 ## Releasing
 
-Before creating a release make sure you have installed [`gh`](https://cli.github.com) and authenticated via `gh auth login`
+Releases are semi-automated via GitHub Actions. When a PR with the `release` and a version bump label is merged to `master`, the release workflow is triggered.
 
-To release a new version of the PostHog Go client, follow these steps:
+You'll need an approval from a PostHog engineer. If you're an employee, you can see the request in the [#approvals-client-libraries](https://app.slack.com/client/TSS5W8YQZ/C0A3UEVDDNF) channel.
 
-1. Update the version in the `version.go` file
-2. Update the changelog in `CHANGELOG.md`
-3. Once your changes are merged into main, create a new tag and release with the new version
+### Release Process
 
-```bash
-git tag v1.4.7
-git push --tags
-gh release create v1.4.7 --generate-notes
-```
+1. **Create your PR** with the changes you want to release
+2. **Add the `release` label** to the PR
+3. **Add a version bump label** that should be either `patch`, `minor` or `major`
+4. **Merge the PR** to `master`
+
+Once merged, the following happens automatically:
+
+1. A Slack notification is sent to the client libraries channel requesting approval
+2. A maintainer approves the release in the GitHub `Release` environment
+3. The version is bumped in `version.go` (patch or minor based on labels)
+4. The `CHANGELOG.md` is updated with a link to the full changelog
+5. Changes are committed and pushed to `master`
+6. A git tag is created (e.g., `v1.8.0`)
+7. A GitHub release is created with the changelog content
+8. Slack is notified of the successful release
 
 Releases are installed directly from GitHub.
 
@@ -236,6 +244,7 @@ The client automatically retries on network errors and will successfully deliver
 - **Connection drops at any stage** - Whether after connect, during headers, or while sending body
 
 Example scenarios that recover successfully:
+
 - Server closes connection without response (EOF) but succeeds on retry
 - TCP connection dropped after partial body read
 - Temporary network interruption lasting a few seconds
@@ -244,12 +253,12 @@ Example scenarios that recover successfully:
 
 Events will be permanently lost in these scenarios:
 
-| Scenario | Behavior |
-|----------|----------|
-| **Max retries exceeded** | After 10 failed attempts, events are dropped and `Failure` callback is invoked |
-| **Client closed during retry** | If `client.Close()` is called while retrying, pending events are dropped |
-| **Non-retryable errors** | JSON marshalling failures cause immediate drop (no retry) |
-| **HTTP 4xx responses** | Client errors (e.g., invalid API key) are not retried |
+| Scenario                       | Behavior                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| **Max retries exceeded**       | After 10 failed attempts, events are dropped and `Failure` callback is invoked |
+| **Client closed during retry** | If `client.Close()` is called while retrying, pending events are dropped       |
+| **Non-retryable errors**       | JSON marshalling failures cause immediate drop (no retry)                      |
+| **HTTP 4xx responses**         | Client errors (e.g., invalid API key) are not retried                          |
 
 ### Configuring Retry Behavior
 
