@@ -5,6 +5,9 @@ on:
     types: [closed]
     branches: [master]
 
+permissions:
+  contents: read
+
 # Concurrency control: only one release process can run at a time
 # This prevents race conditions if multiple PRs with 'release' label merge simultaneously
 concurrency:
