@@ -1,10 +1,5 @@
 name: "Release"
 
-permissions:
-  contents: write
-  actions: write
-  id-token: write
-
 on:
   pull_request:
     types: [closed]
@@ -78,6 +73,10 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.check-release-label.outputs.should-release == 'true'
     environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
+    permissions:
+      contents: write
+      actions: write
+      id-token: write
     steps:
       - name: Notify Slack - Approved
         uses: posthog/.github/.github/actions/slack-thread-reply@9b04bf3288aca2b4cd3883070858b034b4f7f334
