@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/golang-lru/v2"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 const (
@@ -388,22 +388,26 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 
 	var flagValue interface{}
 	var err error
-	var requestId *string
-	var evaluatedAt *int64
-	var flagDetail *FlagDetail
+	var flagResult *FeatureFlagResult
 
 	if c.featureFlagsPoller != nil {
 		// get feature flag from the poller, which uses the personal api key
 		// this is only available when using a PersonalApiKey
 		flagValue, err = c.featureFlagsPoller.GetFeatureFlag(flagConfig)
+		flagResult = &FeatureFlagResult{
+			Value: flagValue,
+			Err:   err,
+		}
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		flagValue, requestId, evaluatedAt, err = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+		flagResult = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagValue = flagResult.Value
+		err = flagResult.Err
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
-			flagDetail = &f
+			flagResult.Value = flagValue
 		}
 	}
 
@@ -414,20 +418,25 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 			Set("$feature_flag_response", flagValue).
 			Set("$feature_flag_errored", err != nil)
 
-		if requestId != nil {
-			properties.Set("$feature_flag_request_id", *requestId)
+		if flagResult.RequestID != nil {
+			properties.Set("$feature_flag_request_id", *flagResult.RequestID)
 		}
 
-		if evaluatedAt != nil {
-			properties.Set("$feature_flag_evaluated_at", *evaluatedAt)
+		if flagResult.EvaluatedAt != nil {
+			properties.Set("$feature_flag_evaluated_at", *flagResult.EvaluatedAt)
 		}
 
-		if flagDetail != nil {
-			properties.Set("$feature_flag_version", flagDetail.Metadata.Version)
-			properties.Set("$feature_flag_id", flagDetail.Metadata.ID)
-			if flagDetail.Reason != nil {
-				properties.Set("$feature_flag_reason", flagDetail.Reason.Description)
+		if flagResult.FlagDetail != nil {
+			properties.Set("$feature_flag_version", flagResult.FlagDetail.Metadata.Version)
+			properties.Set("$feature_flag_id", flagResult.FlagDetail.Metadata.ID)
+			if flagResult.FlagDetail.Reason != nil {
+				properties.Set("$feature_flag_reason", flagResult.FlagDetail.Reason.Description)
 			}
+		}
+
+		errorString := flagResult.GetErrorString()
+		if errorString != "" {
+			properties.Set("$feature_flag_error", errorString)
 		}
 
 		if c.Enqueue(Capture{
@@ -793,29 +802,42 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 }
 
 func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups Groups, personProperties Properties,
-	groupProperties map[string]Properties) (interface{}, *string, *int64, error) {
+	groupProperties map[string]Properties) *FeatureFlagResult {
+
+	result := &FeatureFlagResult{
+		Value: false,
+	}
 
 	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 
 	if err != nil {
-		return nil, nil, nil, err
+		result.Err = err
+		return result
 	}
 
 	if flagsResponse == nil {
-		return nil, nil, nil, nil // Should never happen, but just in case. Also helps with type inference.
+		return result
 	}
-	var requestId = &flagsResponse.RequestId
-	var evaluatedAt = flagsResponse.EvaluatedAt
 
-	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return false, requestId, evaluatedAt, nil
+	result.RequestID = &flagsResponse.RequestId
+	result.EvaluatedAt = flagsResponse.EvaluatedAt
+	result.ErrorsWhileComputingFlags = flagsResponse.ErrorsWhileComputingFlags
+	result.QuotaLimited = c.isFeatureFlagsQuotaLimited(flagsResponse)
+
+	if result.QuotaLimited {
+		return result
 	}
 
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
-		return flagDetail, requestId, evaluatedAt, nil
+		result.Value = flagDetail
+		result.FlagDetail = &flagDetail
+		result.FlagMissing = false
+	} else {
+		result.Value = false
+		result.FlagMissing = true
 	}
 
-	return false, requestId, evaluatedAt, nil
+	return result
 }
 
 func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {

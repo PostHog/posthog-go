@@ -227,7 +227,7 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, groups Groups, personP
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code from /flags/: %d", res.StatusCode)
+		return nil, NewAPIError(res.StatusCode, fmt.Sprintf("unexpected status code from /flags/: %d", res.StatusCode))
 	}
 
 	resBody, err := io.ReadAll(res.Body)
