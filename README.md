@@ -3,9 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/posthog/posthog-go.svg)](https://pkg.go.dev/github.com/posthog/posthog-go)
 ![min. Go Version](https://img.shields.io/github/go-mod/go-version/PostHog/posthog-go?label=min.%20Go%20version%20)
 
-Please see the main [PostHog docs](https://posthog.com/docs).
-
-Specifically, the [Go integration](https://posthog.com/docs/integrations/go-integration) details.
+Please see the main [PostHog docs](https://posthog.com/docs). See the [Go SDK Docs](https://posthog.com/docs/libraries/go).
 
 ## Quickstart
 
