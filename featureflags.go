@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +19,8 @@ import (
 )
 
 const LONG_SCALE = 0xfffffffffffffff
+
+var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
 
 type FeatureFlagsPoller struct {
 	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
@@ -41,6 +42,7 @@ type FeatureFlagsPoller struct {
 	flagTimeout                     time.Duration
 	decider                         decider
 	disableGeoIP                    bool
+	flagsEtag                       string // ETag for conditional requests to reduce bandwidth
 }
 
 type FeatureFlag struct {
@@ -75,11 +77,12 @@ type FeatureFlagCondition struct {
 }
 
 type FlagProperty struct {
-	Key      string      `json:"key"`
-	Operator string      `json:"operator"`
-	Value    interface{} `json:"value"`
-	Type     string      `json:"type"` // Supported types: "person", "group", "cohort", "flag" (flag dependencies not implemented in local evaluation)
-	Negation bool        `json:"negation"`
+	Key             string      `json:"key"`
+	Operator        string      `json:"operator"`
+	Value           interface{} `json:"value"`
+	Type            string      `json:"type"` // Supported types: "person", "group", "cohort", "flag"
+	Negation        bool        `json:"negation"`
+	DependencyChain []string    `json:"dependency_chain"` // For flag dependencies
 }
 
 type PropertyGroup struct {
@@ -119,6 +122,141 @@ type InconclusiveMatchError struct {
 
 func (e *InconclusiveMatchError) Error() string {
 	return e.msg
+}
+
+// RequiresServerEvaluationError is returned when feature flag evaluation
+// requires server-side data that is not available locally (e.g., static cohorts,
+// experience continuity). This error should propagate immediately to trigger
+// API fallback, unlike InconclusiveMatchError which allows trying other conditions.
+type RequiresServerEvaluationError struct {
+	msg string
+}
+
+func (e *RequiresServerEvaluationError) Error() string {
+	return e.msg
+}
+
+// evaluateFlagDependency evaluates a flag dependency property according to the dependency chain algorithm
+func (poller *FeatureFlagsPoller) evaluateFlagDependency(
+	property FlagProperty,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]interface{},
+	distinctId string,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+) (bool, error) {
+	// Some of these conditions should never happen, but we'll check them to be defensive.
+	if property.Value == nil {
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key),
+		}
+	}
+
+	if property.Operator != "flag_evaluates_to" {
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", property.Operator, property.Key),
+		}
+	}
+
+	if flagsByKey == nil || evaluationCache == nil {
+		// Cannot evaluate flag dependencies without required context
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without flagsByKey and evaluationCache", property.Key),
+		}
+	}
+
+	// Check if dependency_chain is present - it should always be provided for flag dependencies
+	if property.DependencyChain == nil {
+		// Missing dependency_chain indicates malformed server data
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Flag dependency property for '%s' is missing required 'dependency_chain' field", property.Key),
+		}
+	}
+
+	dependencyChain := property.DependencyChain
+
+	// Handle circular dependency (empty chain means circular)
+	if len(dependencyChain) == 0 {
+		if poller.Logger != nil {
+			poller.Logger.Debugf("Circular dependency detected for flag: %s", property.Key)
+		}
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key),
+		}
+	}
+
+	// Evaluate all dependencies in the chain order
+	for _, depFlagKey := range dependencyChain {
+		if _, exists := evaluationCache[depFlagKey]; exists {
+			continue
+		}
+
+		// Need to evaluate this dependency first
+		depFlag, flagExists := flagsByKey[depFlagKey]
+		if !flagExists {
+			// Missing flag dependency - cannot evaluate locally
+			evaluationCache[depFlagKey] = nil
+			return false, &InconclusiveMatchError{
+				msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
+			}
+		}
+
+		// Check if the flag is active (same check as in computeFlagLocally)
+		if !depFlag.Active {
+			evaluationCache[depFlagKey] = false
+		} else {
+			// Recursively evaluate the dependency
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
+			if err != nil {
+				// If we can't evaluate a dependency, store nil and propagate the error
+				evaluationCache[depFlagKey] = nil
+				return false, &InconclusiveMatchError{
+					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+				}
+			}
+			evaluationCache[depFlagKey] = result
+		}
+	}
+
+	// Check if the dependency result matches the expected value and operator
+	if cachedResult, exists := evaluationCache[property.Key]; exists && cachedResult != nil {
+		match, err := checkFlagDependencyValue(property.Value, cachedResult)
+		if err != nil {
+			return false, err
+		}
+		return match, nil
+	}
+
+	// The main dependency couldn't be evaluated
+	return false, &InconclusiveMatchError{
+		msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
+	}
+}
+
+// checkFlagDependencyValue checks if a flag dependency result matches the expected value and operator
+func checkFlagDependencyValue(expectedValue interface{}, actualResult interface{}) (bool, error) {
+	// String variant case - check for exact match or boolean true
+	if actualStr, ok := actualResult.(string); ok && len(actualStr) > 0 {
+		if expectedBool, ok := expectedValue.(bool); ok {
+			// Any variant matches boolean true
+			return expectedBool, nil
+		} else if expectedStr, ok := expectedValue.(string); ok {
+			// variants are case-sensitive, hence our comparison is too
+			return actualStr == expectedStr, nil
+		} else {
+			return false, nil
+		}
+	}
+
+	// Boolean case - must match expected boolean value
+	if actualBool, ok := actualResult.(bool); ok {
+		if expectedBool, ok := expectedValue.(bool); ok {
+			return actualBool == expectedBool, nil
+		}
+	}
+
+	// Default case
+	return false, nil
 }
 
 func newFeatureFlagsPoller(
@@ -190,12 +328,31 @@ func (poller *FeatureFlagsPoller) run() {
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
-	res, cancel, err := poller.localEvaluationFlags(headers)
+
+	// Read current ETag under lock
+	poller.mutex.RLock()
+	currentEtag := poller.flagsEtag
+	poller.mutex.RUnlock()
+
+	res, cancel, err := poller.localEvaluationFlags(headers, currentEtag)
 	if err != nil {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
 	defer cancel()
+	defer res.Body.Close()
+
+	// Handle 304 Not Modified - flags haven't changed, skip processing
+	if res.StatusCode == http.StatusNotModified {
+		poller.Logger.Debugf("[FEATURE FLAGS] Flags not modified (304), using cached data")
+		// Update ETag if server returned one (preserve existing if not)
+		if newEtag := res.Header.Get("ETag"); newEtag != "" {
+			poller.mutex.Lock()
+			poller.flagsEtag = newEtag
+			poller.mutex.Unlock()
+		}
+		return
+	}
 
 	// Handle quota limit response (HTTP 402)
 	if res.StatusCode == http.StatusPaymentRequired {
@@ -204,6 +361,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.featureFlags = []FeatureFlag{}
 		poller.cohorts = map[string]PropertyGroup{}
 		poller.groups = map[string]string{}
+		poller.flagsEtag = "" // Clear ETag on quota limit
 		poller.mutex.Unlock()
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
 		return
@@ -214,7 +372,6 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 
-	defer res.Body.Close()
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
@@ -226,10 +383,15 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 	newFlags := append(make([]FeatureFlag, 0, len(featureFlagsResponse.Flags)), featureFlagsResponse.Flags...)
+
+	// Store new ETag from response (clear if server stops sending)
+	newEtag := res.Header.Get("ETag")
+
 	poller.mutex.Lock()
 	defer poller.mutex.Unlock()
 	poller.featureFlags = newFlags
 	poller.cohorts = featureFlagsResponse.Cohorts
+	poller.flagsEtag = newEtag
 	if featureFlagsResponse.GroupTypeMapping != nil {
 		poller.groups = *featureFlagsResponse.GroupTypeMapping
 	}
@@ -281,7 +443,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 		)
 	}
 	if err != nil {
-		poller.Logger.Errorf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
+		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
 	} else if variant != nil {
 		payload, ok := flag.Filters.Payloads[fmt.Sprintf("%v", variant)]
 		if ok {
@@ -341,7 +503,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 				cohorts,
 			)
 			if err != nil {
-				poller.Logger.Errorf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
+				poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
 				fallbackToDecide = true
 			} else {
 				response[storedFlag.Key] = result
@@ -385,6 +547,19 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		return false, nil
 	}
 
+	// Create evaluation cache for flag dependencies
+	evaluationCache := make(map[string]interface{})
+
+	// Create flags by key map for dependency evaluation
+	featureFlags, err := poller.GetFeatureFlags()
+	if err != nil {
+		return nil, err
+	}
+	flagsByKey := make(map[string]FeatureFlag)
+	for _, f := range featureFlags {
+		flagsByKey[f.Key] = f
+	}
+
 	if flag.Filters.AggregationGroupTypeIndex != nil {
 		groupType, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
@@ -404,13 +579,13 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts)
+		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts, flagsByKey, evaluationCache)
 	} else {
 		localPersonProperties := personProperties
 		if _, ok := localPersonProperties["distinct_id"]; !ok {
 			localPersonProperties = Properties{"distinct_id": distinctId}.Merge(localPersonProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts)
+		return poller.matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts, flagsByKey, evaluationCache)
 	}
 }
 
@@ -452,34 +627,25 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	distinctId string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]interface{},
 ) (interface{}, error) {
 	conditions := flag.Filters.Groups
 	isInconclusive := false
 
-	// # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
-	// # evaluated first, and the variant override is applied to the first matching condition.
-	// conditionsCopy := make([]PropertyGroup, len(conditions))
-	sortedConditions := append([]FeatureFlagCondition{}, conditions...)
-
-	sort.SliceStable(sortedConditions, func(i, j int) bool {
-		iValue := 1
-		jValue := 1
-		if sortedConditions[i].Variant != nil {
-			iValue = -1
-		}
-
-		if sortedConditions[j].Variant != nil {
-			jValue = -1
-		}
-
-		return iValue < jValue
-	})
-
-	for _, condition := range sortedConditions {
-		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts)
+	for _, condition := range conditions {
+		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
+			var serverEvalErr *RequiresServerEvaluationError
+			if errors.As(err, &serverEvalErr) {
+				// Static cohort or other missing server-side data - must fallback to API
+				return nil, err
+			}
+
 			var inconclusiveErr *InconclusiveMatchError
 			if errors.As(err, &inconclusiveErr) {
+				// Evaluation error (bad regex, invalid date, missing property, etc.)
+				// Track that we had an inconclusive match, but try other conditions
 				isInconclusive = true
 			} else {
 				return nil, err
@@ -511,6 +677,8 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	condition FeatureFlagCondition,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]interface{},
 ) (bool, error) {
 	if len(condition.Properties) > 0 {
 		var (
@@ -519,14 +687,9 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 		)
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = matchCohort(prop, properties, cohorts)
+				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 			} else if prop.Type == "flag" {
-				// Flag dependencies are not supported in local evaluation yet
-				// Skip this condition to allow other conditions to be evaluated
-				if poller.Logger != nil {
-					poller.Logger.Warnf("Flag dependency filters are not supported in local evaluation. Skipping condition for flag '%s' with dependency on flag '%s'", flag.Key, prop.Key)
-				}
-				continue
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, properties, cohorts)
 			} else {
 				isMatch, err = matchProperty(prop, properties)
 			}
@@ -544,17 +707,19 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	return true, nil
 }
 
-func matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string) (bool, error) {
 	cohortId := fmt.Sprint(property.Value)
 	propertyGroup, ok := cohorts[cohortId]
 	if !ok {
-		return false, fmt.Errorf("can't match cohort: cohort %s not found", cohortId)
+		return false, &RequiresServerEvaluationError{
+			msg: fmt.Sprintf("cohort %s not found in local cohorts - likely a static cohort that requires server evaluation", cohortId),
+		}
 	}
 
-	return matchPropertyGroup(propertyGroup, properties, cohorts)
+	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 }
 
-func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup) (bool, error) {
+func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string) (bool, error) {
 	groupType := propertyGroup.Type
 	values := propertyGroup.Values
 
@@ -570,11 +735,17 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 		case map[string]any:
 			if _, ok := prop["values"]; ok {
 				// PropertyGroup
-				matches, err := matchPropertyGroup(PropertyGroup{
+				matches, err := poller.matchPropertyGroup(PropertyGroup{
 					Type:   getSafeProp[string](prop, "type"),
 					Values: getSafeProp[[]any](prop, "values"),
-				}, properties, cohorts)
+				}, properties, cohorts, flagsByKey, evaluationCache, distinctId)
 				if err != nil {
+					var serverEvalErr *RequiresServerEvaluationError
+					if errors.As(err, &serverEvalErr) {
+						// Immediately propagate - this condition requires server-side data
+						return false, err
+					}
+
 					var inconclusiveErr *InconclusiveMatchError
 					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
@@ -598,19 +769,28 @@ func matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, coho
 				var matches bool
 				var err error
 				flagProperty := FlagProperty{
-					Key:      getSafeProp[string](prop, "key"),
-					Operator: getSafeProp[string](prop, "operator"),
-					Value:    getSafeProp[any](prop, "value"),
-					Type:     getSafeProp[string](prop, "type"),
-					Negation: getSafeProp[bool](prop, "negation"),
+					Key:             getSafeProp[string](prop, "key"),
+					Operator:        getSafeProp[string](prop, "operator"),
+					Value:           getSafeProp[any](prop, "value"),
+					Type:            getSafeProp[string](prop, "type"),
+					Negation:        getSafeProp[bool](prop, "negation"),
+					DependencyChain: getSafeProp[[]string](prop, "dependency_chain"),
 				}
 				if prop["type"] == "cohort" {
-					matches, err = matchCohort(flagProperty, properties, cohorts)
+					matches, err = poller.matchCohort(flagProperty, properties, cohorts, flagsByKey, evaluationCache, distinctId)
+				} else if prop["type"] == "flag" {
+					matches, err = poller.evaluateFlagDependency(flagProperty, flagsByKey, evaluationCache, distinctId, properties, cohorts)
 				} else {
 					matches, err = matchProperty(flagProperty, properties)
 				}
 
 				if err != nil {
+					var serverEvalErr *RequiresServerEvaluationError
+					if errors.As(err, &serverEvalErr) {
+						// Immediately propagate - this condition requires server-side data
+						return false, err
+					}
+
 					var inconclusiveErr *InconclusiveMatchError
 					if errors.As(err, &inconclusiveErr) {
 						errorMatchingLocally = true
@@ -783,6 +963,24 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return overrideValueOrderable <= valueOrderable, nil
 	}
 
+	if operator == "is_date_before" || operator == "is_date_after" {
+		overrideTime, err := validateDates(override_value)
+		if err != nil {
+			return false, err
+		}
+
+		valueTime, err := validateDates(value)
+		if err != nil {
+			return false, err
+		}
+
+		if operator == "is_date_before" {
+			return overrideTime.Before(valueTime), nil
+		}
+
+		return overrideTime.After(valueTime), nil
+	}
+
 	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
 
 }
@@ -800,6 +998,88 @@ func validateOrderable(firstValue interface{}, secondValue interface{}) (float64
 	}
 
 	return convertedFirstValue, convertedSecondValue, nil
+}
+
+func validateDates(value interface{}) (time.Time, error) {
+	dateStr, ok := value.(string)
+	if !ok {
+		return time.Time{}, errors.New("date comparison requires string values")
+	}
+
+	parsedTime, err := parseDate(dateStr)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return parsedTime, nil
+}
+
+// parseDate parses a date string which can be in various ISO 8601 formats or relative format (e.g., "-7d")
+// Supported formats:
+// - RFC3339 with fractional seconds and timezone offsets: "2020-01-01T10:00:00.123Z", "2020-01-01T10:00:00.123+05:30"
+// - RFC3339: "2020-01-01T10:00:00Z" or "2020-01-01T10:00:00+00:00"
+// - Date only: "2020-01-01"
+// - DateTime without timezone: "2020-01-01T10:00:00"
+// - Relative: "-7d", "1h", etc.
+func parseDate(dateStr string) (time.Time, error) {
+	formats := []string{
+		time.RFC3339Nano,      // Handles: fractional seconds, timezone offsets, and Z (e.g., 2024-01-15T10:30:00.123Z, 2024-01-15T10:30:00+05:30)
+		time.RFC3339,          // Handles: basic RFC3339 without fractional seconds (e.g., 2024-01-15T10:30:00Z)
+		time.DateOnly,         // Handles: date-only format (e.g., 2024-01-15)
+		time.DateTime,         // Handles: datetime with space separator (e.g., 2024-01-15 10:30:00)
+		"2006-01-02T15:04:05", // Handles: datetime without timezone (e.g., 2024-01-15T10:30:05)
+	}
+
+	for _, format := range formats {
+		t, err := time.Parse(format, dateStr)
+		if err == nil {
+			return t, nil
+		}
+	}
+
+	relativeTime, relErr := parseRelativeDate(dateStr)
+	if relErr == nil {
+		return relativeTime, nil
+	}
+
+	return time.Time{}, errors.New("invalid date format, must be ISO 8601 or relative format (e.g., '-7d')")
+}
+
+// parseRelativeDate parses relative date format (e.g., "-1d" or "1d" for 1 day ago).
+// Always produces a date in the past.
+func parseRelativeDate(dateStr string) (time.Time, error) {
+	matches := relativeDateRegex.FindStringSubmatch(dateStr)
+	if matches == nil {
+		return time.Time{}, errors.New("invalid relative date format")
+	}
+
+	number, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return time.Time{}, errors.New("invalid number in relative date")
+	}
+
+	// Avoid overflow or overly large date ranges
+	if number >= 10000 {
+		return time.Time{}, errors.New("relative date number too large (must be < 10000)")
+	}
+
+	interval := matches[2]
+	now := time.Now()
+
+	switch interval {
+	case "h":
+		return now.Add(-time.Duration(number) * time.Hour), nil
+	case "d":
+		return now.AddDate(0, 0, -number), nil
+	case "w":
+		return now.AddDate(0, 0, -number*7), nil
+	case "m":
+		return now.AddDate(0, -number, 0), nil
+	case "y":
+		return now.AddDate(-number, 0, 0), nil
+	default:
+		return time.Time{}, errors.New("invalid interval in relative date")
+	}
 }
 
 func interfaceToFloat(val interface{}) (float64, error) {
@@ -879,12 +1159,16 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	return poller.featureFlags, nil
 }
 
-func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header) (*http.Response, context.CancelFunc, error) {
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header, etag string) (*http.Response, context.CancelFunc, error) {
 	u := url.URL(*poller.localEvalUrl)
 	searchParams := u.Query()
 	searchParams.Add("token", poller.projectApiKey)
 	searchParams.Add("send_cohorts", "true")
 	u.RawQuery = searchParams.Encode()
+
+	if etag != "" {
+		headers.Set("If-None-Match", etag)
+	}
 
 	return poller.request("GET", u.String(), nil, headers, poller.flagTimeout)
 }

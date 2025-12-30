@@ -22,12 +22,7 @@ const (
 	propertyGeoipDisable = "$geoip_disable"
 )
 
-// Client interface is the main API exposed by the posthog package.
-// Values that satisfy this interface are returned by the client constructors
-// provided by the package and provide a way to send messages via the HTTP API.
-type Client interface {
-	io.Closer
-
+type EnqueueClient interface {
 	// Enqueue queues a message to be sent by the client when the conditions for a batch
 	// upload are met.
 	// This is the main method you'll be using, a typical flow would look like
@@ -43,6 +38,14 @@ type Client interface {
 	// happens if the client was already closed at the time the method was
 	// called or if the message was malformed.
 	Enqueue(Message) error
+}
+
+// Client interface is the main API exposed by the posthog package.
+// Values that satisfy this interface are returned by the client constructors
+// provided by the package and provide a way to send messages via the HTTP API.
+type Client interface {
+	io.Closer
+	EnqueueClient
 
 	// IsFeatureEnabled returns if a feature flag is on for a given user based on their distinct ID
 	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
@@ -207,6 +210,11 @@ func dereferenceMessage(msg Message) Message {
 			return nil
 		}
 		return *m
+	case *Exception:
+		if m == nil {
+			return nil
+		}
+		return *m
 	}
 
 	return msg
@@ -246,7 +254,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 			personProperties := NewProperties()
 			groupProperties := map[string]Properties{}
 			opts := m.getFeatureFlagsOptions()
-			
+
 			// Use custom properties if provided via options
 			if opts != nil {
 				if opts.PersonProperties != nil {
@@ -256,7 +264,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 					groupProperties = opts.GroupProperties
 				}
 			}
-			
+
 			featureVariants, err := c.getFeatureVariantsWithOptions(m.DistinctId, m.Groups, personProperties, groupProperties, opts)
 			if err != nil {
 				c.Errorf("unable to get feature variants - %s", err)
@@ -284,6 +292,12 @@ func (c *client) Enqueue(msg Message) (err error) {
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
 		c.setLastCapturedEvent(m)
+		msg = m
+
+	case Exception:
+		m.Type = "exception"
+		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.DisableGeoIP = c.GetDisableGeoIP()
 		msg = m
 
 	default:
@@ -375,6 +389,7 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	var flagValue interface{}
 	var err error
 	var requestId *string
+	var evaluatedAt *int64
 	var flagDetail *FlagDetail
 
 	if c.featureFlagsPoller != nil {
@@ -384,7 +399,7 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		flagValue, requestId, err = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+		flagValue, requestId, evaluatedAt, err = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
@@ -401,6 +416,10 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 
 		if requestId != nil {
 			properties.Set("$feature_flag_request_id", *requestId)
+		}
+
+		if evaluatedAt != nil {
+			properties.Set("$feature_flag_evaluated_at", *evaluatedAt)
 		}
 
 		if flagDetail != nil {
@@ -507,7 +526,6 @@ func (c *client) sendAsync(msgs []message, wg *sync.WaitGroup, ex *executor) {
 
 // Send batch request.
 func (c *client) send(msgs []message) {
-	const attempts = 10
 
 	b, err := json.Marshal(batch{
 		ApiKey:              c.key,
@@ -521,7 +539,7 @@ func (c *client) send(msgs []message) {
 		return
 	}
 
-	for i := 0; i != attempts; i++ {
+	for i := 0; i != c.maxAttempts; i++ {
 		if err = c.upload(b); err == nil {
 			c.notifySuccess(msgs)
 			return
@@ -537,7 +555,7 @@ func (c *client) send(msgs []message) {
 		}
 	}
 
-	c.Errorf("%d messages dropped because they failed to be sent after %d attempts", len(msgs), attempts)
+	c.Errorf("%d messages dropped because they failed to be sent after %d attempts", len(msgs), c.maxAttempts)
 	c.notifyFailure(msgs, err)
 }
 
@@ -559,7 +577,7 @@ func (c *client) upload(b []byte) error {
 	res, err := c.http.Do(req)
 
 	if err != nil {
-		c.Errorf("sending request - %s", err)
+		c.Warnf("sending request - %s", err)
 		return err
 	}
 
@@ -662,6 +680,10 @@ func (c *client) debugf(format string, args ...interface{}) {
 
 func (c *client) Errorf(format string, args ...interface{}) {
 	c.Logger.Errorf(format, args...)
+}
+
+func (c *client) Warnf(format string, args ...interface{}) {
+	c.Logger.Warnf(format, args...)
 }
 
 func (c *client) maxBatchBytes() int {
@@ -771,28 +793,29 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 }
 
 func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups Groups, personProperties Properties,
-	groupProperties map[string]Properties) (interface{}, *string, error) {
+	groupProperties map[string]Properties) (interface{}, *string, *int64, error) {
 
 	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if flagsResponse == nil {
-		return nil, nil, nil // Should never happen, but just in case. Also helps with type inference.
+		return nil, nil, nil, nil // Should never happen, but just in case. Also helps with type inference.
 	}
 	var requestId = &flagsResponse.RequestId
+	var evaluatedAt = flagsResponse.EvaluatedAt
 
 	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return false, requestId, nil
+		return false, requestId, evaluatedAt, nil
 	}
 
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
-		return flagDetail, requestId, nil
+		return flagDetail, requestId, evaluatedAt, nil
 	}
 
-	return false, requestId, nil
+	return false, requestId, evaluatedAt, nil
 }
 
 func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {

@@ -31,3 +31,10 @@ _testmain.go
 
 # Artifacts
 tmp/*
+
+# Environment files
+.env
+examples/.env
+
+# Macos
+.DS_Store

@@ -1,0 +1,46 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 720,
+            "name": "Order Test Feature",
+            "key": "order-test-flag",
+            "filters": {
+                "groups": [
+                    {
+                        "rollout_percentage": 100.0,
+                        "variant": "first-condition"
+                    },
+                    {
+                        "properties": [{"key": "email", "type": "person", "value": "@vip.com", "operator": "icontains"}],
+                        "rollout_percentage": 100.0,
+                        "variant": "vip-variant"
+                    },
+                    {
+                        "properties": [{"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}],
+                        "rollout_percentage": 100.0,
+                        "variant": "specific-email-variant"
+                    }
+                ],
+                "multivariate": {
+                    "variants": [
+                        {"key": "first-condition", "name": "First Condition", "rollout_percentage": 33},
+                        {"key": "vip-variant", "name": "VIP Variant", "rollout_percentage": 33},
+                        {"key": "specific-email-variant", "name": "Specific Email", "rollout_percentage": 34}
+                    ]
+                },
+                "payloads": {
+                    "first-condition": "{\"order\": 1}",
+                    "vip-variant": "{\"order\": 2}",
+                    "specific-email-variant": "{\"order\": 3}"
+                }
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ]
+}

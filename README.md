@@ -1,10 +1,9 @@
 # PostHog Go
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/posthog/posthog-go.svg)](https://pkg.go.dev/github.com/posthog/posthog-go)
+![min. Go Version](https://img.shields.io/github/go-mod/go-version/PostHog/posthog-go?label=min.%20Go%20version%20)
 
-Please see the main [PostHog docs](https://posthog.com/docs).
-
-Specifically, the [Go integration](https://posthog.com/docs/integrations/go-integration) details.
+Please see the main [PostHog docs](https://posthog.com/docs). See the [Go SDK Docs](https://posthog.com/docs/libraries/go).
 
 ## Quickstart
 
@@ -26,7 +25,7 @@ import (
 
 func main() {
     client := posthog.New(os.Getenv("POSTHOG_API_KEY")) // This value must be set to the project API key in PostHog
-    // alternatively, you can do 
+    // alternatively, you can do
     // client, _ := posthog.NewWithConfig(
     //     os.Getenv("POSTHOG_API_KEY"),
     //     posthog.Config{
@@ -44,7 +43,7 @@ func main() {
         Set("plan", "Enterprise").
         Set("friends", 42),
     })
-    
+
     // Add context for a user
     client.Enqueue(posthog.Identify{
       DistinctId: "user:123",
@@ -52,13 +51,13 @@ func main() {
         Set("email", "john@doe.com").
         Set("proUser", false),
     })
-    
+
     // Link user contexts
     client.Enqueue(posthog.Alias{
       DistinctId: "user:123",
       Alias: "user:12345",
     })
-    
+
     // Capture a pageview
     client.Enqueue(posthog.Capture{
       DistinctId: "test-user",
@@ -66,8 +65,27 @@ func main() {
       Properties: posthog.NewProperties().
         Set("$current_url", "https://example.com"),
     })
-    
-    // Capture event with calculated uuid to deduplicate repeated events. 
+
+    // Capture an error / exception
+    client.Enqueue(posthog.NewDefaultException(
+      time.Now(),
+      "distinct-id",
+      "Error title",
+      "Error Description",
+    ))
+
+    // Create a logger which automatically captures warning logs and above
+    baseLogHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+    logger := slog.New(posthog.NewSlogCaptureHandler(baseLogHandler, client,
+      posthog.WithMinCaptureLevel(slog.LevelWarn),
+      posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
+        // for demo purposes, real applications should likely pull this value from the context.
+        return "my-user-id"
+      }),
+    })
+    logger.Warn("Log that something broke", "error", fmt.Errorf("this is a dummy scenario"))
+
+    // Capture event with calculated uuid to deduplicate repeated events.
     // The library github.com/google/uuid is used
     key := myEvent.Id + myEvent.Project
     uid := uuid.NewSHA1(uuid.NameSpaceX500, []byte(key)).String()
@@ -134,6 +152,20 @@ Check out the [examples](examples/README.md) for more detailed examples of how t
 
 The examples demonstrate different features of the PostHog Go client. To run all examples:
 
+### Option 1: Using .env file (Recommended)
+
+```bash
+# Copy the example .env file and fill in your credentials
+cd examples
+cp .env.example .env
+# Edit .env with your actual API keys
+
+# Run all examples
+go run *.go
+```
+
+### Option 2: Using environment variables
+
 ```bash
 # Set your PostHog API keys and endpoint (optional)
 export POSTHOG_PROJECT_API_KEY="your-project-api-key"
@@ -155,10 +187,12 @@ This will run:
 Before running the examples, you'll need to:
 
 1. Have a PostHog instance running (default: http://localhost:8000)
+
    - You can modify the endpoint by setting the `POSTHOG_ENDPOINT` environment variable
    - If not set, it defaults to "http://localhost:8000"
 
 2. Set up the following feature flags in your PostHog instance:
+
    - `multivariate-test` (a multivariate flag)
    - `simple-test` (a simple boolean flag)
    - `multivariate-simple-test` (a multivariate flag)
@@ -172,20 +206,114 @@ Before running the examples, you'll need to:
 
 ## Releasing
 
-To release a new version of the PostHog Go client, follow these steps:
+Releases are semi-automated via GitHub Actions. When a PR with the `release` and a version bump label is merged to `master`, the release workflow is triggered.
 
-1. Update the version in the `version.go` file
-2. Update the changelog in `CHANGELOG.md`
-3. Once your changes are merged into main, create a new tag with the new version
+You'll need an approval from a PostHog engineer. If you're an employee, you can see the request in the [#approvals-client-libraries](https://app.slack.com/client/TSS5W8YQZ/C0A3UEVDDNF) channel.
 
-```bash
-git tag v1.4.7
-git push --tags
-```
+### Release Process
 
-4. [create a new release on GitHub](https://github.com/PostHog/posthog-go/releases/new).
+1. **Create your PR** with the changes you want to release
+2. **Add the `release` label** to the PR
+3. **Add a version bump label** that should be either `patch`, `minor` or `major`
+4. **Merge the PR** to `master`
+
+Once merged, the following happens automatically:
+
+1. A Slack notification is sent to the client libraries channel requesting approval
+2. A maintainer approves the release in the GitHub `Release` environment
+3. The version is bumped in `version.go` based on the version label (`patch`, `minor`, or `major`)
+4. The `CHANGELOG.md` is updated with a link to the full changelog
+5. Changes are committed and pushed to `master`
+6. A git tag is created (e.g., `v1.8.0`)
+7. A GitHub release is created with the changelog content
+8. Slack is notified of the successful release
 
 Releases are installed directly from GitHub.
+
+## Event Delivery and Retry Behavior
+
+The PostHog Go client includes automatic retry logic for handling transient network failures. Understanding when events are delivered vs dropped helps ensure reliable analytics.
+
+### Events Are Delivered (Not Dropped)
+
+The client automatically retries on network errors and will successfully deliver events when:
+
+- **Transient network failures** - EOF errors, connection resets, TCP drops that recover within retry attempts
+- **Server temporarily unavailable** - If the server starts responding before max retries are exhausted
+- **Connection drops at any stage** - Whether after connect, during headers, or while sending body
+
+Example scenarios that recover successfully:
+
+- Server closes connection without response (EOF) but succeeds on retry
+- TCP connection dropped after partial body read
+- Temporary network interruption lasting a few seconds
+
+### Events Are Dropped
+
+Events will be permanently lost in these scenarios:
+
+| Scenario                       | Behavior                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| **Max retries exceeded**       | After 10 failed attempts, events are dropped and `Failure` callback is invoked |
+| **Client closed during retry** | If `client.Close()` is called while retrying, pending events are dropped       |
+| **Non-retryable errors**       | JSON marshalling failures cause immediate drop (no retry)                      |
+| **HTTP 4xx responses**         | Client errors (e.g., invalid API key) are not retried                          |
+
+### Configuring Retry Behavior
+
+You can customize retry timing via the `RetryAfter` config option:
+
+```go
+client, _ := posthog.NewWithConfig(
+    "api-key",
+    posthog.Config{
+        RetryAfter: func(attempt int) time.Duration {
+            // Custom backoff: 100ms, 200ms, 400ms, ...
+            return time.Duration(100<<attempt) * time.Millisecond
+        },
+    },
+)
+```
+
+To limit the number of retries (default is 9 retries = 10 total attempts):
+
+```go
+client, _ := posthog.NewWithConfig(
+    "api-key",
+    posthog.Config{
+        MaxRetries: posthog.Ptr(3), // 3 retries = 4 total attempts
+    },
+)
+```
+
+Setting `MaxRetries` to 0 means only one attempt with no retries (disable retries):
+
+```go
+posthog.Config{
+    MaxRetries: posthog.Ptr(0), // 3 retries = 4 total attempts
+},
+```
+
+### Monitoring Event Delivery
+
+Use the `Callback` interface to track successes and failures:
+
+```go
+type MyCallback struct{}
+
+func (c *MyCallback) Success(msg posthog.APIMessage) {
+    log.Printf("Event delivered: %v", msg)
+}
+
+func (c *MyCallback) Failure(msg posthog.APIMessage, err error) {
+    log.Printf("Event dropped: %v, error: %v", msg, err)
+    // Optionally: persist to disk, send to dead-letter queue, etc.
+}
+
+client, _ := posthog.NewWithConfig("api-key", posthog.Config{
+    Callback: &MyCallback{},
+})
+```
 
 ## Questions?
 

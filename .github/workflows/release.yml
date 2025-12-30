@@ -1,0 +1,215 @@
+name: "Release"
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [master]
+
+permissions:
+  contents: read
+
+# Concurrency control: only one release process can run at a time
+# This prevents race conditions if multiple PRs with 'release' label merge simultaneously
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check-release-label:
+    name: Check for release label
+    runs-on: ubuntu-latest
+    # Run when PR with 'release' label is merged to master, or when manually triggered
+    if: |
+      github.event.pull_request.merged == true
+       && contains(github.event.pull_request.labels.*.name, 'release')
+    outputs:
+      should-release: ${{ steps.check.outputs.should-release }}
+      bump-type: ${{ steps.check.outputs.bump-type }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Check release conditions
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Determine bump type from PR labels
+          if ${{ contains(github.event.pull_request.labels.*.name, 'bump-major') }}; then
+            echo "bump-type=major" >> "$GITHUB_OUTPUT"
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+          elif ${{ contains(github.event.pull_request.labels.*.name, 'bump-minor') }}; then
+            echo "bump-type=minor" >> "$GITHUB_OUTPUT"
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+          elif ${{ contains(github.event.pull_request.labels.*.name, 'bump-patch') }}; then
+            echo "bump-type=patch" >> "$GITHUB_OUTPUT"
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  notify-approval-needed:
+    name: Notify Slack - Approval Needed
+    needs: check-release-label
+    if: needs.check-release-label.outputs.should-release == 'true'
+    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@main
+    with:
+      slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+      slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
+    secrets:
+      slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+      posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
+
+  release:
+    name: Bump versions and release
+    needs: [check-release-label, notify-approval-needed]
+    runs-on: ubuntu-latest
+    # Use `always()` to ensure the job runs even if the check-release-label job fails
+    # but still depend on it to be able to use `needs.notify-approval-needed.outputs.slack_ts`
+    if: always() && needs.check-release-label.outputs.should-release == 'true'
+    environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
+    permissions:
+      contents: write
+      actions: write
+      id-token: write
+    steps:
+      - name: Notify Slack - Approved
+        if: needs.notify-approval-needed.outputs.slack_ts != ''
+        uses: posthog/.github/.github/actions/slack-thread-reply@main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "✅ Release approved! Version bump in progress..."
+          emoji_reaction: "white_check_mark"
+
+      - name: Get GitHub App token
+        id: releaser
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_APP_ID }}
+          private-key: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_PRIVATE_KEY }} # Secrets available only inside the 'Release' environment, requires approval from a maintainer
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ steps.releaser.outputs.token }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump-version
+        run: |
+          current_version=$(grep -oP 'const Version = "\K[^"]+' version.go)
+          IFS='.' read -ra version_parts <<< "$current_version"
+          major=${version_parts[0]}
+          minor=${version_parts[1]}
+          patch=${version_parts[2]}
+
+          if [ "${{ needs.check-release-label.outputs.bump-type }}" == "major" ]; then
+            new_version="$((major + 1)).0.0"
+          elif [ "${{ needs.check-release-label.outputs.bump-type }}" == "minor" ]; then
+            new_version="$major.$((minor + 1)).0"
+          else
+            new_version="$major.$minor.$((patch + 1))"
+          fi
+
+          sed -i "s/const Version = \"$current_version\"/const Version = \"$new_version\"/" version.go
+          echo "current_version=$current_version" >> $GITHUB_OUTPUT
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+
+      - name: Update CHANGELOG.md
+        run: |
+          current_version="${{ steps.bump-version.outputs.current_version }}"
+          new_version="${{ steps.bump-version.outputs.new_version }}"
+          echo -e "## $new_version\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
+
+      - name: Commit version bump
+        id: commit-version-bump
+        run: |
+          git add version.go CHANGELOG.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore: bump version to ${{ steps.bump-version.outputs.new_version }} [version bump]"
+            git push origin master
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
+
+      - name: Create and push tag
+        if: steps.commit-version-bump.outputs.committed == 'true'
+        run: |
+          git tag -a "v${{ steps.bump-version.outputs.new_version }}" -m "v${{ steps.bump-version.outputs.new_version }}"
+          git push origin "v${{ steps.bump-version.outputs.new_version }}"
+
+      - name: Create GitHub release
+        if: steps.commit-version-bump.outputs.committed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+        run: |
+          # Extract the latest changelog entry
+          LAST_CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/PostHog/posthog-go/releases \
+            -f tag_name="v${{ steps.bump-version.outputs.new_version }}" \
+            -f target_commitish='master' \
+            -f name="v${{ steps.bump-version.outputs.new_version }}" \
+            -f body="$LAST_CHANGELOG_ENTRY" \
+            -F draft=false \
+            -F prerelease=false \
+            -F generate_release_notes=false
+
+      # Notify in case of a failure
+      - name: Send failure event to PostHog
+        if: ${{ failure() }}
+        uses: PostHog/posthog-github-action@v0.1
+        with:
+          posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
+          event: "posthog-go-github-release-workflow-failure"
+          properties: >-
+            {
+              "commitSha": "${{ github.sha }}",
+              "jobStatus": "${{ job.status }}",
+              "ref": "${{ github.ref }}",
+              "version": "v${{ steps.bump-version.outputs.new_version }}"
+            }
+
+      - name: Notify Slack - Failed
+        if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
+        uses: posthog/.github/.github/actions/slack-thread-reply@9b04bf3288aca2b4cd3883070858b034b4f7f334
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "❌ Failed to release `posthog-go@v${{ steps.bump-version.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+          emoji_reaction: "x"
+
+  notify-released:
+    name: Notify Slack - Released
+    needs: [notify-approval-needed, release]
+    runs-on: ubuntu-latest
+    if: always() && needs.release.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Notify Slack - Released
+        uses: posthog/.github/.github/actions/slack-thread-reply@9b04bf3288aca2b4cd3883070858b034b4f7f334
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "🚀 posthog-go released successfully!"
+          emoji_reaction: "rocket"
