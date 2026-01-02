@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,7 +110,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader("")),
 			Request:    r,
 		}, nil
 	})
@@ -126,7 +126,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(strings.NewReader(body)),
+			Body:       io.NopCloser(strings.NewReader(body)),
 			Request:    r,
 		}, nil
 	})
@@ -145,7 +145,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader("")),
 			Request:    r,
 		}, nil
 	})
@@ -158,7 +158,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(readFunc(func(b []byte) (int, error) { return 0, testError })),
+			Body:       io.NopCloser(readFunc(func(b []byte) (int, error) { return 0, testError })),
 			Request:    r,
 		}, nil
 	})
@@ -175,7 +175,7 @@ func fixture(name string) string {
 		panic(err)
 	}
 	defer f.Close()
-	b, err := ioutil.ReadAll(f)
+	b, err := io.ReadAll(f)
 	if err != nil {
 		panic(err)
 	}
@@ -1130,7 +1130,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 				}
 
 				// Check request body
-				body, _ := ioutil.ReadAll(r.Body)
+				body, _ := io.ReadAll(r.Body)
 				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {
@@ -1179,11 +1179,27 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// Capture events via callback
+	var capturedEvent *CaptureInApi
+	var mu sync.Mutex
+	eventCaptured := make(chan struct{}, 1)
+
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Endpoint: server.URL,
-		Logger:   testLogger{t.Logf, t.Logf},
+		Endpoint:  server.URL,
+		BatchSize: 1, // Send immediately
+		Logger:    testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
-			func(m APIMessage) {},
+			func(m APIMessage) {
+				if capture, ok := m.(CaptureInApi); ok {
+					mu.Lock()
+					capturedEvent = &capture
+					mu.Unlock()
+					select {
+					case eventCaptured <- struct{}{}:
+					default:
+					}
+				}
+			},
 			func(m APIMessage, e error) {},
 		},
 	})
@@ -1205,7 +1221,17 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 		t.Errorf("Expected flag value %v, got: %v", expectedValue, flagValue)
 	}
 
-	lastEvent := client.GetLastCapturedEvent()
+	// Wait for event to be captured
+	select {
+	case <-eventCaptured:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for captured event")
+	}
+
+	mu.Lock()
+	lastEvent := capturedEvent
+	mu.Unlock()
+
 	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
 		t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
 	}
@@ -1330,7 +1356,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 				}
 
 				// Check request body
-				body, _ := ioutil.ReadAll(r.Body)
+				body, _ := io.ReadAll(r.Body)
 				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {
@@ -1467,7 +1493,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 				}
 
 				// Check request body
-				body, _ := ioutil.ReadAll(r.Body)
+				body, _ := io.ReadAll(r.Body)
 				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {

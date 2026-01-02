@@ -2,14 +2,15 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -71,8 +72,18 @@ type Client interface {
 	// NB: This is only available when using a PersonalApiKey
 	GetFeatureFlags() ([]FeatureFlag, error)
 
-	// GetLastCapturedEvent returns the last captured event
-	GetLastCapturedEvent() *Capture
+	// CloseWithContext gracefully shuts down the client with the provided context.
+	// The context can be used to control the shutdown deadline.
+	CloseWithContext(context.Context) error
+
+	// GetFeatureFlagWithContext returns variant value if multivariant flag or otherwise a boolean
+	// indicating if the given flag is on or off for the user.
+	// The context can be used to control the request timeout.
+	GetFeatureFlagWithContext(context.Context, FeatureFlagPayload) (interface{}, error)
+
+	// GetAllFlagsWithContext returns all flags for a user.
+	// The context can be used to control the request timeout.
+	GetAllFlagsWithContext(context.Context, FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 }
 
 type client struct {
@@ -92,6 +103,18 @@ type client struct {
 	quit     chan struct{}
 	shutdown chan struct{}
 
+	// Context and cancel function for graceful shutdown.
+	// When Close is called, the context is cancelled to signal all goroutines
+	// to stop, including in-flight HTTP requests.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// closeOnce ensures Close is idempotent
+	closeOnce sync.Once
+
+	// closed is set to true when the client is closed, used to fast-fail Enqueue
+	closed atomic.Bool
+
 	// This HTTP client is used to send requests to the backend, it uses the
 	// HTTP transport provided in the configuration.
 	http http.Client
@@ -100,11 +123,6 @@ type client struct {
 	featureFlagsPoller *FeatureFlagsPoller
 
 	distinctIdsFeatureFlagsReported *lru.Cache[flagUser, struct{}]
-
-	// Last captured event
-	lastCapturedEvent *Capture
-	// Mutex to protect last captured event
-	lastEventMutex sync.RWMutex
 
 	// Decider for feature flag methods
 	decider decider
@@ -139,12 +157,16 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	if err != nil && config.Logger != nil {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
 		msgs:                            make(chan APIMessage, 100),
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
+		ctx:                             ctx,
+		cancel:                          cancel,
 		http:                            makeHttpClient(config.Transport),
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
@@ -221,6 +243,11 @@ func dereferenceMessage(msg Message) Message {
 }
 
 func (c *client) Enqueue(msg Message) (err error) {
+	// Fast path: check if client is closed before doing any work
+	if c.closed.Load() {
+		return ErrClosed
+	}
+
 	msg = dereferenceMessage(msg)
 	if err = msg.Validate(); err != nil {
 		return
@@ -291,7 +318,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
-		c.setLastCapturedEvent(m)
 		msg = m
 
 	case Exception:
@@ -318,23 +344,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 	c.msgs <- msg.APIfy()
 
 	return
-}
-
-func (c *client) setLastCapturedEvent(event Capture) {
-	c.lastEventMutex.Lock()
-	defer c.lastEventMutex.Unlock()
-	c.lastCapturedEvent = &event
-}
-
-func (c *client) GetLastCapturedEvent() *Capture {
-	c.lastEventMutex.RLock()
-	defer c.lastEventMutex.RUnlock()
-	if c.lastCapturedEvent == nil {
-		return nil
-	}
-	// Return a copy to avoid data races
-	eventCopy := *c.lastCapturedEvent
-	return &eventCopy
 }
 
 func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
@@ -382,6 +391,18 @@ func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, e
 }
 
 func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
+	return c.GetFeatureFlagWithContext(context.Background(), flagConfig)
+}
+
+// GetFeatureFlagWithContext returns variant value if multivariant flag or otherwise a boolean
+// indicating if the given flag is on or off for the user.
+// The context can be used to control timeouts and cancellation.
+func (c *client) GetFeatureFlagWithContext(ctx context.Context, flagConfig FeatureFlagPayload) (interface{}, error) {
+	// Check context before starting
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
 	if err := flagConfig.validate(); err != nil {
 		return false, err
 	}
@@ -409,6 +430,11 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 			flagValue = f.GetValue()
 			flagResult.Value = flagValue
 		}
+	}
+
+	// Check context after flag evaluation
+	if ctx.Err() != nil {
+		return false, ctx.Err()
 	}
 
 	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key}
@@ -476,6 +502,18 @@ func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 // This first attempts local evaluation if a poller exists, otherwise it falls
 // back to the flags endpoint
 func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+	return c.GetAllFlagsWithContext(context.Background(), flagConfig)
+}
+
+// GetAllFlagsWithContext returns all flags and their values for a given user.
+// The context can be used to control timeouts and cancellation.
+// A flag value is either a boolean or a variant string (for multivariate flags)
+func (c *client) GetAllFlagsWithContext(ctx context.Context, flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+	// Check context before starting
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
 	}
@@ -494,21 +532,62 @@ func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]int
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
+	// Check context after operation
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	return flagsValue, err
 }
 
-// Close and flush metrics.
-func (c *client) Close() (err error) {
-	defer func() {
-		// Always recover, a panic could be raised if `c`.quit was closed which
-		// means the method was called more than once.
-		if recover() != nil {
-			err = ErrClosed
+// Close gracefully shuts down the client, flushing any pending messages.
+// It waits up to ShutdownTimeout for in-flight requests to complete.
+// Close is safe to call multiple times; subsequent calls return ErrClosed.
+func (c *client) Close() error {
+	if c.ShutdownTimeout < 0 {
+		// Negative timeout means wait indefinitely
+		return c.CloseWithContext(context.Background())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.ShutdownTimeout)
+	defer cancel()
+	return c.CloseWithContext(ctx)
+}
+
+// CloseWithContext gracefully shuts down the client with the provided context.
+// The context can be used to control the shutdown deadline. If the context
+// is cancelled before shutdown completes, in-flight requests may be aborted.
+// CloseWithContext is safe to call multiple times; subsequent calls return ErrClosed.
+func (c *client) CloseWithContext(ctx context.Context) error {
+	var err error
+	alreadyClosed := true
+
+	c.closeOnce.Do(func() {
+		alreadyClosed = false
+		// Mark as closed to fast-fail new Enqueue calls
+		c.closed.Store(true)
+
+		// Signal the batch loop to stop and drain
+		close(c.quit)
+
+		// Wait for shutdown with timeout from provided context
+		select {
+		case <-c.shutdown:
+			// Clean shutdown completed
+			c.debugf("shutdown completed successfully")
+		case <-ctx.Done():
+			// Timeout exceeded - cancel client context to abort in-flight requests
+			c.cancel()
+			err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
+			c.Warnf("shutdown timeout exceeded, some messages may be lost")
+			// Wait for shutdown to acknowledge cancellation
+			<-c.shutdown
 		}
-	}()
-	close(c.quit)
-	<-c.shutdown
-	return
+	})
+
+	if alreadyClosed {
+		return ErrClosed
+	}
+	return err
 }
 
 // Asynchronously send a batched requests.
@@ -535,7 +614,6 @@ func (c *client) sendAsync(msgs []message, wg *sync.WaitGroup, ex *executor) {
 
 // Send batch request.
 func (c *client) send(msgs []message) {
-
 	b, err := json.Marshal(batch{
 		ApiKey:              c.key,
 		HistoricalMigration: c.HistoricalMigration,
@@ -549,14 +627,22 @@ func (c *client) send(msgs []message) {
 	}
 
 	for i := 0; i != c.maxAttempts; i++ {
-		if err = c.upload(b); err == nil {
+		if err = c.upload(c.ctx, b); err == nil {
 			c.notifySuccess(msgs)
 			return
 		}
 
-		// Wait for either a retry timeout or the client to be closed.
+		// Check if context is cancelled (hard shutdown timeout exceeded)
+		if c.ctx.Err() != nil {
+			c.Errorf("%d messages dropped because shutdown timeout exceeded", len(msgs))
+			c.notifyFailure(msgs, err)
+			return
+		}
+
+		// Wait for either a retry timeout or the client to be closed
 		select {
 		case <-time.After(c.RetryAfter(i)):
+			// Continue to next retry attempt
 		case <-c.quit:
 			c.Errorf("%d messages dropped because they failed to be sent and the client was closed", len(msgs))
 			c.notifyFailure(msgs, err)
@@ -569,9 +655,9 @@ func (c *client) send(msgs []message) {
 }
 
 // Upload serialized batch message.
-func (c *client) upload(b []byte) error {
+func (c *client) upload(ctx context.Context, b []byte) error {
 	url := c.Endpoint + "/batch/"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 	if err != nil {
 		c.Errorf("creating request - %s", err)
 		return err
@@ -584,7 +670,6 @@ func (c *client) upload(b []byte) error {
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(b)))
 
 	res, err := c.http.Do(req)
-
 	if err != nil {
 		c.Warnf("sending request - %s", err)
 		return err
@@ -603,7 +688,7 @@ func (c *client) report(res *http.Response) (err error) {
 		return
 	}
 
-	if body, err = ioutil.ReadAll(res.Body); err != nil {
+	if body, err = io.ReadAll(res.Body); err != nil {
 		c.Errorf("response %d %s - %s", res.StatusCode, res.Status, err)
 		return
 	}
@@ -620,7 +705,6 @@ func (c *client) loop() {
 	}
 
 	wg := &sync.WaitGroup{}
-	defer wg.Wait()
 
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
@@ -642,7 +726,7 @@ func (c *client) loop() {
 			c.flush(&mq, wg, ex)
 
 		case <-c.quit:
-			c.debugf("exit requested – draining messages")
+			c.debugf("shutdown requested – draining messages")
 
 			// Drain the msg channel, we have to close it first so no more
 			// messages can be pushed and otherwise the loop would never end.
@@ -651,8 +735,24 @@ func (c *client) loop() {
 				c.push(&mq, msg, wg, ex)
 			}
 
+			// Flush any remaining messages in the queue
 			c.flush(&mq, wg, ex)
-			c.debugf("exit")
+
+			// Wait for in-flight requests to complete, respecting shutdown context
+			done := make(chan struct{})
+			go func() {
+				wg.Wait()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				c.debugf("all in-flight requests completed")
+			case <-c.ctx.Done():
+				c.debugf("shutdown timeout, some requests may still be in flight")
+			}
+
+			c.debugf("shutdown complete")
 			return
 		}
 	}

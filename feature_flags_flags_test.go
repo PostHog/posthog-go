@@ -4,9 +4,47 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"time"
 
 	"testing"
 )
+
+// eventCapture is a test helper that captures events via the Callback interface
+type eventCapture struct {
+	mu     sync.Mutex
+	events []CaptureInApi
+}
+
+func (e *eventCapture) Success(m APIMessage) {
+	if capture, ok := m.(CaptureInApi); ok {
+		e.mu.Lock()
+		e.events = append(e.events, capture)
+		e.mu.Unlock()
+	}
+}
+
+func (e *eventCapture) Failure(m APIMessage, err error) {}
+
+func (e *eventCapture) getLastEvent() *CaptureInApi {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.events) == 0 {
+		return nil
+	}
+	return &e.events[len(e.events)-1]
+}
+
+func (e *eventCapture) waitForEvent(timeout time.Duration) *CaptureInApi {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if event := e.getLastEvent(); event != nil {
+			return event
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return nil
+}
 
 /*
 Tests of the feature flag api against the flags endpoint, no local evaluation.
@@ -14,22 +52,20 @@ This is primarily here to ensure we handle the different versions of the flags
 endpoint correctly.
 */
 func TestFlags(t *testing.T) {
-	validateCapturedEvent := func(t *testing.T, client Client) {
-		lastEvent := client.GetLastCapturedEvent()
-
-		if lastEvent == nil {
+	validateCapturedEvent := func(t *testing.T, event *CaptureInApi) {
+		if event == nil {
 			return
 		}
-		if lastEvent.Event != "$feature_flag_called" {
-			t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
+		if event.Event != "$feature_flag_called" {
+			t.Errorf("Expected a $feature_flag_called event, got: %v", event.Event)
 		}
 
-		if lastEvent.Properties["$feature_flag_request_id"] != "42853c54-1431-4861-996e-3a548989fa2c" {
-			t.Errorf("Expected $feature_flag_request_id property to be 42853c54-1431-4861-996e-3a548989fa2c, got: %v", lastEvent.Properties["$feature_flag_request_id"])
+		if event.Properties["$feature_flag_request_id"] != "42853c54-1431-4861-996e-3a548989fa2c" {
+			t.Errorf("Expected $feature_flag_request_id property to be 42853c54-1431-4861-996e-3a548989fa2c, got: %v", event.Properties["$feature_flag_request_id"])
 		}
 
-		if lastEvent.Properties["$feature_flag_evaluated_at"] != int64(1737312368000) {
-			t.Errorf("Expected $feature_flag_evaluated_at property to be 1737312368000, got: %v", lastEvent.Properties["$feature_flag_evaluated_at"])
+		if event.Properties["$feature_flag_evaluated_at"] != int64(1737312368000) {
+			t.Errorf("Expected $feature_flag_evaluated_at property to be 1737312368000, got: %v", event.Properties["$feature_flag_evaluated_at"])
 		}
 	}
 
@@ -62,8 +98,11 @@ func TestFlags(t *testing.T) {
 
 			for _, subTest := range subTests {
 				t.Run(subTest.name+" "+subTest.flagKey, func(t *testing.T) {
+					capture := &eventCapture{}
 					client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-						Endpoint: server.URL,
+						Endpoint:  server.URL,
+						BatchSize: 1, // Send immediately
+						Callback:  capture,
 					})
 					defer client.Close()
 
@@ -79,7 +118,8 @@ func TestFlags(t *testing.T) {
 						t.Errorf("Expected IsFeatureEnabled to return %v but was %v", subTest.expected, isMatch)
 					}
 
-					validateCapturedEvent(t, client)
+					event := capture.waitForEvent(time.Second)
+					validateCapturedEvent(t, event)
 				})
 			}
 		})
@@ -98,8 +138,11 @@ func TestFlags(t *testing.T) {
 
 			for _, subTest := range subTests {
 				t.Run(subTest.name+" "+subTest.flagKey, func(t *testing.T) {
+					capture := &eventCapture{}
 					client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-						Endpoint: server.URL,
+						Endpoint:  server.URL,
+						BatchSize: 1, // Send immediately
+						Callback:  capture,
 					})
 					defer client.Close()
 
@@ -115,7 +158,8 @@ func TestFlags(t *testing.T) {
 						t.Errorf("Expected GetFeatureFlag to return %v but was %v", subTest.expected, flag)
 					}
 
-					validateCapturedEvent(t, client)
+					event := capture.waitForEvent(time.Second)
+					validateCapturedEvent(t, event)
 				})
 			}
 		})
@@ -134,8 +178,11 @@ func TestFlags(t *testing.T) {
 
 			for _, subTest := range subTests {
 				t.Run(subTest.name+" "+subTest.flagKey, func(t *testing.T) {
+					capture := &eventCapture{}
 					client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-						Endpoint: server.URL,
+						Endpoint:  server.URL,
+						BatchSize: 1, // Send immediately
+						Callback:  capture,
 					})
 					defer client.Close()
 
@@ -151,7 +198,8 @@ func TestFlags(t *testing.T) {
 						t.Errorf("Expected GetFeatureFlagPayload to return %v but was %v", subTest.expected, payload)
 					}
 
-					validateCapturedEvent(t, client)
+					event := capture.waitForEvent(time.Second)
+					validateCapturedEvent(t, event)
 				})
 			}
 		})
@@ -371,11 +419,6 @@ func TestFlagsV4(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Endpoint: server.URL,
-	})
-	defer client.Close()
-
 	tests := []struct {
 		name            string
 		flagKey         string
@@ -390,7 +433,15 @@ func TestFlagsV4(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(test.name+" "+test.flagKey, func(t *testing.T) {
+			capture := &eventCapture{}
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1, // Send immediately
+				Callback:  capture,
+			})
+			defer client.Close()
+
 			flag, _ := client.GetFeatureFlag(
 				FeatureFlagPayload{
 					Key:        test.flagKey,
@@ -402,9 +453,9 @@ func TestFlagsV4(t *testing.T) {
 				t.Errorf("Expected GetFeatureFlag(%s) to return %v but was %v", test.flagKey, test.expected, flag)
 			}
 
-			capturedEvent := client.GetLastCapturedEvent()
+			capturedEvent := capture.waitForEvent(time.Second)
 			if capturedEvent == nil {
-				t.Errorf("Expected a $feature_flag_called for %s event, got: %v", test.flagKey, capturedEvent)
+				t.Fatalf("Expected a $feature_flag_called for %s event, got nil", test.flagKey)
 			}
 
 			if capturedEvent.Properties["$feature_flag"] != test.flagKey {

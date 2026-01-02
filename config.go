@@ -88,6 +88,11 @@ type Config struct {
 	// MaxRetries is a maximum number of a request is retried on failure.
 	MaxRetries *int
 
+	// ShutdownTimeout is the maximum time to wait for in-flight messages
+	// to be sent during Close(). If zero, defaults to 30 seconds.
+	// Set to a negative value to wait indefinitely (not recommended).
+	ShutdownTimeout time.Duration
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
@@ -128,6 +133,10 @@ const (
 	// DefaultBatchSize sets the default batch size used by client instances if none
 	// was explicitly set.
 	DefaultBatchSize = 250
+
+	// DefaultShutdownTimeout is the default maximum time to wait for in-flight
+	// messages during shutdown.
+	DefaultShutdownTimeout = 30 * time.Second
 )
 
 // Validate verifies that fields that don't have zero-values are set to valid values,
@@ -215,6 +224,10 @@ func makeConfig(c Config) Config {
 
 	if c.maxConcurrentRequests == 0 {
 		c.maxConcurrentRequests = 1000
+	}
+
+	if c.ShutdownTimeout == 0 {
+		c.ShutdownTimeout = DefaultShutdownTimeout
 	}
 
 	if c.GetDisableGeoIP() {
