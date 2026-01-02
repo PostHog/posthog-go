@@ -75,15 +75,6 @@ type Client interface {
 	// CloseWithContext gracefully shuts down the client with the provided context.
 	// The context can be used to control the shutdown deadline.
 	CloseWithContext(context.Context) error
-
-	// GetFeatureFlagWithContext returns variant value if multivariant flag or otherwise a boolean
-	// indicating if the given flag is on or off for the user.
-	// The context can be used to control the request timeout.
-	GetFeatureFlagWithContext(context.Context, FeatureFlagPayload) (interface{}, error)
-
-	// GetAllFlagsWithContext returns all flags for a user.
-	// The context can be used to control the request timeout.
-	GetAllFlagsWithContext(context.Context, FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 }
 
 type client struct {
@@ -167,7 +158,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		shutdown:                        make(chan struct{}),
 		ctx:                             ctx,
 		cancel:                          cancel,
-		http:                            makeHttpClient(config.Transport),
+		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
 
@@ -200,12 +191,12 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	return
 }
 
-func makeHttpClient(transport http.RoundTripper) http.Client {
+func makeHttpClient(transport http.RoundTripper, timeout time.Duration) http.Client {
 	httpClient := http.Client{
 		Transport: transport,
 	}
 	if supportsTimeout(transport) {
-		httpClient.Timeout = 10 * time.Second
+		httpClient.Timeout = timeout
 	}
 	return httpClient
 }
@@ -391,13 +382,13 @@ func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, e
 }
 
 func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
-	return c.GetFeatureFlagWithContext(context.Background(), flagConfig)
+	return c.getFeatureFlagWithContext(context.Background(), flagConfig)
 }
 
-// GetFeatureFlagWithContext returns variant value if multivariant flag or otherwise a boolean
+// getFeatureFlagWithContext returns variant value if multivariant flag or otherwise a boolean
 // indicating if the given flag is on or off for the user.
 // The context can be used to control timeouts and cancellation.
-func (c *client) GetFeatureFlagWithContext(ctx context.Context, flagConfig FeatureFlagPayload) (interface{}, error) {
+func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig FeatureFlagPayload) (interface{}, error) {
 	// Check context before starting
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -502,13 +493,13 @@ func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 // This first attempts local evaluation if a poller exists, otherwise it falls
 // back to the flags endpoint
 func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
-	return c.GetAllFlagsWithContext(context.Background(), flagConfig)
+	return c.getAllFlagsWithContext(context.Background(), flagConfig)
 }
 
-// GetAllFlagsWithContext returns all flags and their values for a given user.
+// getAllFlagsWithContext returns all flags and their values for a given user.
 // The context can be used to control timeouts and cancellation.
 // A flag value is either a boolean or a variant string (for multivariate flags)
-func (c *client) GetAllFlagsWithContext(ctx context.Context, flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
 	// Check context before starting
 	if err := ctx.Err(); err != nil {
 		return nil, err

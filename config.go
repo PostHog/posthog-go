@@ -93,6 +93,10 @@ type Config struct {
 	// Set to a negative value to wait indefinitely (not recommended).
 	ShutdownTimeout time.Duration
 
+	// BatchUploadTimeout is the timeout for uploading batched events to the
+	// /batch/ endpoint. If zero, defaults to 10 seconds.
+	BatchUploadTimeout time.Duration
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
@@ -137,6 +141,10 @@ const (
 	// DefaultShutdownTimeout is the default maximum time to wait for in-flight
 	// messages during shutdown.
 	DefaultShutdownTimeout = 30 * time.Second
+
+	// DefaultBatchUploadTimeout is the default timeout for uploading batched
+	// events to the /batch/ endpoint.
+	DefaultBatchUploadTimeout = 10 * time.Second
 )
 
 // Validate verifies that fields that don't have zero-values are set to valid values,
@@ -228,6 +236,10 @@ func makeConfig(c Config) Config {
 
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = DefaultShutdownTimeout
+	}
+
+	if c.BatchUploadTimeout == 0 {
+		c.BatchUploadTimeout = DefaultBatchUploadTimeout
 	}
 
 	if c.GetDisableGeoIP() {
