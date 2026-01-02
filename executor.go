@@ -1,43 +1,48 @@
 package posthog
 
-import "sync"
-
+// executor manages concurrent task execution with a bounded capacity.
+// It uses a channel-based semaphore pattern for lock-free operation.
 type executor struct {
-	m         sync.Mutex
-	available int
-	closed    bool
+	// sem is a buffered channel that acts as a counting semaphore.
+	// Each slot in the channel represents permission to run a task.
+	sem chan struct{}
+
+	// done signals that the executor has been closed and should reject new tasks.
+	done chan struct{}
 }
 
+// newExecutor creates a new executor with the given maximum concurrency.
 func newExecutor(cap int) *executor {
-	e := &executor{
-		available: cap,
+	return &executor{
+		sem:  make(chan struct{}, cap),
+		done: make(chan struct{}),
 	}
-
-	return e
 }
 
+// do attempts to execute a task asynchronously if capacity is available.
+// Returns true if the task was accepted and will be executed, false otherwise.
+// The task will not be executed if:
+// - The executor is closed
+// - All capacity slots are currently in use
 func (e *executor) do(task func()) bool {
-	e.m.Lock()
-	defer e.m.Unlock()
-
-	if e.closed || e.available <= 0 {
+	select {
+	case e.sem <- struct{}{}: // Acquire a semaphore slot
+		go func() {
+			defer func() { <-e.sem }() // Release slot when done
+			task()
+		}()
+		return true
+	case <-e.done:
+		// Executor is closed
+		return false
+	default:
+		// No capacity available (non-blocking)
 		return false
 	}
-
-	e.available--
-	go func() {
-		defer func() {
-			e.m.Lock()
-			defer e.m.Unlock()
-			e.available++
-		}()
-		task()
-	}()
-	return true
 }
 
+// close marks the executor as closed. New tasks will be rejected.
+// Note: This does not wait for running tasks to complete.
 func (e *executor) close() {
-	e.m.Lock()
-	defer e.m.Unlock()
-	e.closed = true
+	close(e.done)
 }
