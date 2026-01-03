@@ -200,8 +200,18 @@ func BenchmarkEnqueueThroughputWithCardinality(b *testing.B) {
 
 // BenchmarkFeatureFlagLocalEvaluation measures flag evaluation performance
 func BenchmarkFeatureFlagLocalEvaluation(b *testing.B) {
-	// Setup client with pre-loaded flags (no network calls)
-	server := httptest.NewServer(NoOpHandler())
+	// Setup server that returns actual flag definitions
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
+			w.Write([]byte(fixture("test-api-feature-flag.json")))
+		case strings.HasPrefix(r.URL.Path, "/batch"):
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(200)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
 	defer server.Close()
 
 	client, _ := NewWithConfig("test-key", Config{
@@ -210,8 +220,13 @@ func BenchmarkFeatureFlagLocalEvaluation(b *testing.B) {
 	})
 	defer client.Close()
 
-	// Pre-warm cache
-	client.GetFeatureFlag(FeatureFlagPayload{Key: "simpleFlag", DistinctId: "warmup"})
+	// Pre-warm cache - wait for flags to load
+	for i := 0; i < 10; i++ {
+		result, _ := client.GetFeatureFlag(FeatureFlagPayload{Key: "simpleFlag", DistinctId: "warmup"})
+		if result != nil {
+			break
+		}
+	}
 
 	distinctIds := make([]string, 1000)
 	for i := range distinctIds {
