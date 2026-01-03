@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,20 @@ import (
 	json "github.com/goccy/go-json"
 	"github.com/hashicorp/golang-lru/v2"
 )
+
+// #region agent log
+func debugLog(msg string, hypothesisId string, data map[string]interface{}) {
+	f, err := os.OpenFile("/Users/elireisman/src/posthog-go/.cursor/debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	entry := map[string]interface{}{"timestamp": time.Now().UnixMilli(), "message": msg, "hypothesisId": hypothesisId, "data": data, "sessionId": "debug-session"}
+	b, _ := json.Marshal(entry)
+	f.Write(append(b, '\n'))
+}
+
+// #endregion
 
 const (
 	unimplementedError = "not implemented"
@@ -297,7 +312,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
-			err = serErr
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg})
@@ -310,7 +325,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
-			err = serErr
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg})
@@ -322,7 +337,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
-			err = serErr
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg})
@@ -376,7 +391,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
-			err = serErr
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg})
@@ -389,7 +404,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
-			err = serErr
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg})
@@ -610,6 +625,9 @@ func (c *client) Close() error {
 // is cancelled before shutdown completes, in-flight requests may be aborted.
 // CloseWithContext is safe to call multiple times; subsequent calls return ErrClosed.
 func (c *client) CloseWithContext(ctx context.Context) error {
+	// #region agent log
+	debugLog("CloseWithContext_start", "H1", map[string]interface{}{"endpoint": c.Endpoint})
+	// #endregion
 	var err error
 	alreadyClosed := true
 
@@ -620,13 +638,22 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 
 		// Signal the batch loop to stop and drain
 		close(c.quit)
+		// #region agent log
+		debugLog("quit_closed", "H1", nil)
+		// #endregion
 
 		// Wait for shutdown with timeout from provided context
 		select {
 		case <-c.shutdown:
+			// #region agent log
+			debugLog("shutdown_received", "H1", nil)
+			// #endregion
 			// Clean shutdown completed
 			c.debugf("shutdown completed successfully")
 		case <-ctx.Done():
+			// #region agent log
+			debugLog("ctx_timeout", "H1", map[string]interface{}{"err": ctx.Err().Error()})
+			// #endregion
 			// Timeout exceeded - cancel client context to abort in-flight requests
 			c.cancel()
 			err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
@@ -644,6 +671,10 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 
 // worker consumes batches from channel until closed.
 func (c *client) worker() {
+	// #region agent log
+	debugLog("worker_start", "H3", nil)
+	defer debugLog("worker_exit", "H3", nil)
+	// #endregion
 	for batch := range c.batches {
 		c.processBatch(batch)
 	}
@@ -682,14 +713,29 @@ func (c *client) sendBatch(batch preparedBatch) bool {
 
 // awaitDrain polls until all in-flight batches complete or context times out.
 func (c *client) awaitDrain(ctx context.Context) error {
+	// #region agent log
+	pollCount := 0
+	// #endregion
 	for c.inFlight.Load() > 0 {
+		// #region agent log
+		pollCount++
+		if pollCount <= 3 || pollCount%10 == 0 {
+			debugLog("awaitDrain_polling", "H2", map[string]interface{}{"inFlight": c.inFlight.Load(), "pollCount": pollCount})
+		}
+		// #endregion
 		select {
 		case <-ctx.Done():
+			// #region agent log
+			debugLog("awaitDrain_ctx_done", "H2", map[string]interface{}{"inFlight": c.inFlight.Load(), "pollCount": pollCount})
+			// #endregion
 			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 			// continue polling
 		}
 	}
+	// #region agent log
+	debugLog("awaitDrain_complete", "H2", map[string]interface{}{"pollCount": pollCount})
+	// #endregion
 	c.debugf("all in-flight batches completed")
 	return nil
 }
@@ -727,7 +773,12 @@ func (c *client) send(pb preparedBatch) {
 		select {
 		case <-time.After(c.RetryAfter(i)):
 			// continue to next attempt
+		case <-c.quit:
+			// Shutdown initiated - exit retry loop immediately
+			c.notifyFailure(pb.msgs, err)
+			return
 		case <-c.ctx.Done():
+			// Context cancelled (shutdown timeout exceeded)
 			c.notifyFailure(pb.msgs, err)
 			return
 		}
@@ -783,6 +834,9 @@ func (c *client) report(res *http.Response) (err error) {
 // loop processes messages from the msgs channel, batches them by size,
 // and sends batches to the worker pool.
 func (c *client) loop() {
+	// #region agent log
+	debugLog("loop_start", "H1", map[string]interface{}{"endpoint": c.Endpoint})
+	// #endregion
 	defer close(c.batches) // signal workers to exit
 	defer close(c.shutdown)
 	if c.featureFlagsPoller != nil {
@@ -815,37 +869,40 @@ func (c *client) loop() {
 		batchData, batchMsgs, batchSize = nil, nil, 0
 	}
 
+	// Helper to process a single message: validate, batch, flush if needed.
+	// Returns false if message was rejected (oversized).
+	processMessage := func(prepared preparedMessage) bool {
+		msgSize := len(prepared.data)
+
+		if msgSize > maxMessageBytes {
+			c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
+			c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
+			return false
+		}
+
+		if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
+			flushBatch()
+			resetBatch()
+		}
+
+		batchData = append(batchData, prepared.data)
+		batchMsgs = append(batchMsgs, prepared.msg)
+		batchSize += msgSize
+
+		if len(batchData) >= c.BatchSize {
+			flushBatch()
+			resetBatch()
+		}
+		return true
+	}
+
 	for {
 		select {
 		case prepared := <-c.msgs:
-			msgSize := len(prepared.data)
-
-			// Early reject oversized messages
-			if msgSize > maxMessageBytes {
-				c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
-				c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
+			if !processMessage(prepared) {
 				continue
 			}
-
-			// Flush current batch if adding this message would exceed byte limit
-			if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
-				c.debugf("batch size limit reached (%d bytes) – flushing %d messages", batchSize, len(batchData))
-				flushBatch()
-				resetBatch()
-			}
-
-			// Add pre-serialized data and original message to batch
-			batchData = append(batchData, prepared.data)
-			batchMsgs = append(batchMsgs, prepared.msg)
-			batchSize += msgSize
 			c.debugf("buffer (%d/%d, %d bytes) %v", len(batchData), c.BatchSize, batchSize, prepared.msg)
-
-			// Flush if batch count limit reached
-			if len(batchData) >= c.BatchSize {
-				c.debugf("batch count limit reached – flushing %d messages", len(batchData))
-				flushBatch()
-				resetBatch()
-			}
 
 		case <-tick.C:
 			if len(batchData) > 0 {
@@ -855,6 +912,9 @@ func (c *client) loop() {
 			}
 
 		case <-c.quit:
+			// #region agent log
+			debugLog("quit_received", "H1", map[string]interface{}{"batchLen": len(batchData), "inFlight": c.inFlight.Load()})
+			// #endregion
 			c.debugf("shutdown requested – draining messages")
 
 			// Close msgs channel to stop accepting new messages
@@ -862,27 +922,7 @@ func (c *client) loop() {
 
 			// Drain remaining messages using same logic as normal processing
 			for prepared := range c.msgs {
-				msgSize := len(prepared.data)
-
-				if msgSize > maxMessageBytes {
-					c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
-					c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
-					continue
-				}
-
-				if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
-					flushBatch()
-					resetBatch()
-				}
-
-				batchData = append(batchData, prepared.data)
-				batchMsgs = append(batchMsgs, prepared.msg)
-				batchSize += msgSize
-
-				if len(batchData) >= c.BatchSize {
-					flushBatch()
-					resetBatch()
-				}
+				processMessage(prepared)
 			}
 
 			// Flush any remaining messages
@@ -891,10 +931,16 @@ func (c *client) loop() {
 				flushBatch()
 			}
 
+			// #region agent log
+			debugLog("before_awaitDrain", "H2", map[string]interface{}{"inFlight": c.inFlight.Load()})
+			// #endregion
 			// Wait for workers with timeout
 			if err := c.awaitDrain(c.ctx); err != nil {
 				c.Warnf("shutdown timeout: %d batches still in flight", c.inFlight.Load())
 			}
+			// #region agent log
+			debugLog("after_awaitDrain", "H2", map[string]interface{}{"inFlight": c.inFlight.Load()})
+			// #endregion
 
 			c.debugf("shutdown complete")
 			return

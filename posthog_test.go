@@ -22,6 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// #region agent log
+func init() {
+	debugLog("test_package_init", "H6", map[string]interface{}{"file": "posthog_test.go"})
+}
+
+// #endregion
+
 // Helper type used to implement the io.Reader interface on function values.
 type readFunc func([]byte) (int, error)
 
