@@ -2,8 +2,9 @@ package posthog
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+
+	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -279,6 +280,69 @@ func BenchmarkPropertyIteration(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// legacyBatch represents the old batch structure with []APIMessage for comparison benchmarks.
+// In the old flow, messages were serialized together with the batch wrapper in a single Marshal call.
+type legacyBatch struct {
+	ApiKey              string       `json:"api_key"`
+	HistoricalMigration bool         `json:"historical_migration,omitempty"`
+	Messages            []APIMessage `json:"batch"`
+}
+
+// BenchmarkOldVsNewSerializationFlow compares serialization approaches:
+// - Old: APIfy all messages, then marshal entire batch (single Marshal call)
+// - New: prepareForSend each message (marshal individually), then marshal batch wrapper
+func BenchmarkOldVsNewSerializationFlow(b *testing.B) {
+	batchSizes := []int{10, 50, 100, 250}
+	cardinalities := []struct {
+		name        string
+		cardinality PropertyCardinality
+	}{
+		{"low", CardinalityLow},
+		{"medium", CardinalityMedium},
+	}
+
+	for _, size := range batchSizes {
+		for _, tc := range cardinalities {
+			// Pre-generate captures
+			captures := make([]Capture, size)
+			for i := range captures {
+				captures[i] = Capture{
+					Type:       "capture",
+					DistinctId: fmt.Sprintf("user_%d", i),
+					Event:      "test_event",
+					Properties: generatePropertiesWithCardinality(i, tc.cardinality),
+					Groups:     generateGroupsWithCardinality(i, tc.cardinality),
+				}
+			}
+
+			// Old flow: APIfy then marshal entire batch
+			b.Run(fmt.Sprintf("old_batch_%d_%s", size, tc.name), func(b *testing.B) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					apiMsgs := make([]APIMessage, size)
+					for j, c := range captures {
+						apiMsgs[j] = c.APIfy()
+					}
+					json.Marshal(legacyBatch{ApiKey: "test", Messages: apiMsgs})
+				}
+			})
+
+			// New flow: prepareForSend (marshal individually) then marshal batch wrapper
+			b.Run(fmt.Sprintf("new_batch_%d_%s", size, tc.name), func(b *testing.B) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					rawMsgs := make([]json.RawMessage, size)
+					for j, c := range captures {
+						data, _, _ := c.prepareForSend()
+						rawMsgs[j] = data
+					}
+					json.Marshal(batch{ApiKey: "test", Messages: rawMsgs})
+				}
+			})
+		}
 	}
 }
 

@@ -1,8 +1,9 @@
 package posthog
 
 import (
-	"encoding/json"
 	"fmt"
+
+	json "github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
 	"sync"

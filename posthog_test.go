@@ -2,8 +2,8 @@ package posthog
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	json "github.com/goccy/go-json"
 	"github.com/stretchr/testify/require"
 )
 

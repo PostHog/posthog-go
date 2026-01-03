@@ -1,8 +1,9 @@
 package posthog
 
 import (
-	"encoding/json"
 	"io"
+
+	json "github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -439,6 +440,88 @@ func TestPrepareForSend_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		require.Greater(t, len(data), 0)
 		require.NotNil(t, apiMsg)
+	})
+}
+
+// TestPrepareForSend_SerializationErrors tests that prepareForSend returns errors for unencodable values
+func TestPrepareForSend_SerializationErrors(t *testing.T) {
+	t.Run("channel_in_properties", func(t *testing.T) {
+		ch := make(chan int)
+		capture := Capture{
+			Type:       "capture",
+			DistinctId: "user",
+			Event:      "event",
+			Properties: Properties{"channel": ch},
+		}
+		data, apiMsg, err := capture.prepareForSend()
+		require.Error(t, err, "Should fail to serialize channel")
+		require.Nil(t, data, "Data should be nil on error")
+		require.Nil(t, apiMsg, "APIMessage should be nil on error")
+	})
+
+	t.Run("function_in_properties", func(t *testing.T) {
+		fn := func() {}
+		capture := Capture{
+			Type:       "capture",
+			DistinctId: "user",
+			Event:      "event",
+			Properties: Properties{"func": fn},
+		}
+		data, apiMsg, err := capture.prepareForSend()
+		require.Error(t, err, "Should fail to serialize function")
+		require.Nil(t, data)
+		require.Nil(t, apiMsg)
+	})
+
+	t.Run("channel_in_groups", func(t *testing.T) {
+		ch := make(chan string)
+		capture := Capture{
+			Type:       "capture",
+			DistinctId: "user",
+			Event:      "event",
+			Groups:     Groups{"company": ch},
+		}
+		data, apiMsg, err := capture.prepareForSend()
+		require.Error(t, err, "Should fail to serialize channel in groups")
+		require.Nil(t, data)
+		require.Nil(t, apiMsg)
+	})
+
+	t.Run("identify_with_unencodable", func(t *testing.T) {
+		ch := make(chan int)
+		identify := Identify{
+			DistinctId: "user",
+			Properties: Properties{"channel": ch},
+		}
+		data, apiMsg, err := identify.prepareForSend()
+		require.Error(t, err, "Identify should fail with unencodable value")
+		require.Nil(t, data)
+		require.Nil(t, apiMsg)
+	})
+
+	t.Run("alias_serializes_ok", func(t *testing.T) {
+		// Alias has no Properties, so should always serialize successfully
+		alias := Alias{
+			DistinctId: "user",
+			Alias:      "alias",
+		}
+		data, apiMsg, err := alias.prepareForSend()
+		require.NoError(t, err, "Alias should serialize successfully")
+		require.NotNil(t, data)
+		require.NotNil(t, apiMsg)
+	})
+
+	t.Run("group_identify_with_unencodable", func(t *testing.T) {
+		fn := func() {}
+		groupIdentify := GroupIdentify{
+			Type:       "company",
+			Key:        "company_1",
+			Properties: Properties{"func": fn},
+		}
+		data, apiMsg, err := groupIdentify.prepareForSend()
+		require.Error(t, err, "GroupIdentify should fail with unencodable value")
+		require.Nil(t, data)
+		require.Nil(t, apiMsg)
 	})
 }
 
