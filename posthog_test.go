@@ -733,6 +733,7 @@ func TestClientErrorWithMalformedEndpoint(t *testing.T) {
 }
 
 func TestClientRoundTripperError(t *testing.T) {
+	t.Parallel()
 	errchan := make(chan error, 1)
 
 	client, _ := NewWithConfig("0123456789", Config{
@@ -794,6 +795,7 @@ func TestClientRetryError(t *testing.T) {
 }
 
 func TestClientResponse400(t *testing.T) {
+	t.Parallel()
 	errchan := make(chan error, 1)
 
 	client, _ := NewWithConfig("0123456789", Config{
@@ -815,6 +817,7 @@ func TestClientResponse400(t *testing.T) {
 }
 
 func TestClientResponseBodyError(t *testing.T) {
+	t.Parallel()
 	errchan := make(chan error, 1)
 
 	client, _ := NewWithConfig("0123456789", Config{

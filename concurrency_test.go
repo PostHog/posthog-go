@@ -15,6 +15,7 @@ import (
 
 // TestConcurrentEnqueue tests thread-safety of the client under concurrent load
 func TestConcurrentEnqueue(t *testing.T) {
+	t.Parallel()
 	goroutines := 20
 	eventsPerGoroutine := 50
 	totalEvents := goroutines * eventsPerGoroutine
@@ -61,6 +62,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 
 // TestConcurrentEnqueueDifferentMessageTypes tests concurrent enqueueing of different message types
 func TestConcurrentEnqueueDifferentMessageTypes(t *testing.T) {
+	t.Parallel()
 	goroutines := 10
 	messagesPerGoroutine := 20
 
@@ -126,6 +128,7 @@ func TestConcurrentEnqueueDifferentMessageTypes(t *testing.T) {
 
 // TestConcurrentFeatureFlagEvaluation tests concurrent flag evaluation with cache updates
 func TestConcurrentFeatureFlagEvaluation(t *testing.T) {
+	t.Parallel()
 	// Setup mock server with feature flags
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -177,6 +180,7 @@ func TestConcurrentFeatureFlagEvaluation(t *testing.T) {
 
 // TestConcurrentClientOperations tests mixing Enqueue with Close operations
 func TestConcurrentClientOperations(t *testing.T) {
+	t.Parallel()
 	// This tests that Close() properly waits for all pending operations
 
 	for iteration := 0; iteration < 5; iteration++ {
@@ -278,6 +282,7 @@ func TestConcurrentEnqueueWithSlowServer(t *testing.T) {
 
 // TestConcurrentSizeEstimation tests that size estimation is thread-safe
 func TestConcurrentSizeEstimation(t *testing.T) {
+	t.Parallel()
 	capture := Capture{
 		DistinctId: "test_user",
 		Event:      "test_event",
@@ -317,6 +322,7 @@ func TestConcurrentSizeEstimation(t *testing.T) {
 
 // TestConcurrentEventPoolAccess tests thread-safe access to EventPool
 func TestConcurrentEventPoolAccess(t *testing.T) {
+	t.Parallel()
 	poolSize := 1000
 	pool := NewEventPool(poolSize)
 
@@ -347,6 +353,7 @@ func TestConcurrentEventPoolAccess(t *testing.T) {
 
 // TestConcurrentCallbackExecution tests that callbacks are executed thread-safely
 func TestConcurrentCallbackExecution(t *testing.T) {
+	t.Parallel()
 	callback := NewUnifiedCallback(t)
 
 	var received atomic.Int64
@@ -398,6 +405,7 @@ func TestConcurrentCallbackExecution(t *testing.T) {
 // TestRaceConditionDetection is specifically designed to trigger race detection
 // Run with: go test -race -run TestRaceConditionDetection
 func TestRaceConditionDetection(t *testing.T) {
+	t.Parallel()
 	t.Run("concurrent_enqueue_and_close", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(200)

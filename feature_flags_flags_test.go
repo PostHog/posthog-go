@@ -52,6 +52,7 @@ This is primarily here to ensure we handle the different versions of the flags
 endpoint correctly.
 */
 func TestFlags(t *testing.T) {
+	t.Parallel()
 	validateCapturedEvent := func(t *testing.T, event *CaptureInApi) {
 		if event == nil {
 			return
