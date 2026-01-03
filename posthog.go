@@ -159,7 +159,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
-		msgs:                            make(chan Message, 500),
+		msgs:                            make(chan Message, config.BatchSize*config.NumWorkers),
 		batches:                         make(chan []APIMessage, config.NumWorkers),
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
