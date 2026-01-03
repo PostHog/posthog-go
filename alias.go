@@ -40,6 +40,14 @@ func (msg Alias) Validate() error {
 	return nil
 }
 
+// EstimatedSize returns an estimate of the JSON-encoded size in bytes.
+func (msg Alias) EstimatedSize() int {
+	size := 100 // base JSON overhead
+	size += len(msg.Type) + len(msg.Alias) + len(msg.DistinctId)
+	size += 30 // timestamp
+	return size
+}
+
 type AliasInApiProperties struct {
 	DistinctId   string `json:"distinct_id"`
 	Alias        string `json:"alias"`

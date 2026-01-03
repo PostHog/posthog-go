@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,6 +97,8 @@ func (m testErrorMessage) Validate() error { return testError }
 func (m testErrorMessage) APIfy() APIMessage {
 	return testAPIErrorMessage{}
 }
+
+func (m testErrorMessage) EstimatedSize() int { return 100 }
 
 var (
 	// A control error returned by mock functions to emulate a failure.
@@ -482,6 +485,10 @@ func (c *customMessage) APIfy() APIMessage {
 	return customAPIMessage{}
 }
 
+func (c *customMessage) EstimatedSize() int {
+	return 100
+}
+
 func TestEnqueuingCustomTypeFails(t *testing.T) {
 	client := New("0123456789")
 	err := client.Enqueue(&customMessage{})
@@ -831,38 +838,29 @@ func TestClientResponseBodyError(t *testing.T) {
 	}
 }
 
-func TestClientMaxConcurrentRequests(t *testing.T) {
-	reschan := make(chan bool, 1)
-	errchan := make(chan error, 1)
+func TestClientWorkerPool(t *testing.T) {
+	successCount := atomic.Int32{}
 
 	client, err := NewWithConfig("0123456789", Config{
 		Logger: testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
-			func(m APIMessage) { reschan <- true },
-			func(m APIMessage, e error) { errchan <- e },
+			func(m APIMessage) { successCount.Add(1) },
+			func(m APIMessage, e error) { t.Errorf("unexpected failure: %v", e) },
 		},
 		Transport: testTransportDelayed,
-		// Only one concurrency request can be submitted, because the transport
-		// introduces a short delay one of the uploads should fail.
-		BatchSize:             1,
-		maxConcurrentRequests: 1,
+		// Use single worker with small batch size to test sequential processing
+		BatchSize:  1,
+		NumWorkers: 1,
 	})
 	require.NoError(t, err)
 
+	// Both messages should succeed with the worker pool (they queue up)
 	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
 	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
 	require.NoError(t, client.Close())
-	close(reschan)
-	close(errchan)
 
-	if _, ok := <-reschan; !ok {
-		t.Error("one of the requests should have succeeded but the result channel was empty")
-	}
-
-	if err := <-errchan; err == nil {
-		t.Error("failure callback not triggered after reaching the request limit")
-	} else if err != ErrTooManyRequests {
-		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
+	if successCount.Load() != 2 {
+		t.Errorf("expected 2 successful callbacks, got %d", successCount.Load())
 	}
 }
 

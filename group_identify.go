@@ -39,6 +39,21 @@ func (msg GroupIdentify) Validate() error {
 	return nil
 }
 
+// EstimatedSize returns an estimate of the JSON-encoded size in bytes.
+func (msg GroupIdentify) EstimatedSize() int {
+	size := 100 // base JSON overhead
+	size += len(msg.Type) + len(msg.Key) + len(msg.DistinctId)
+	size += 30 // timestamp
+
+	if msg.Properties != nil {
+		for k, v := range msg.Properties {
+			size += len(k) + 4 + estimateJSONSize(v)
+		}
+	}
+
+	return size
+}
+
 type GroupIdentifyInApi struct {
 	Library        string    `json:"library"`
 	LibraryVersion string    `json:"library_version"`

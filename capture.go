@@ -105,6 +105,27 @@ func (msg Capture) Validate() error {
 	return nil
 }
 
+// EstimatedSize returns an estimate of the JSON-encoded size in bytes.
+func (msg Capture) EstimatedSize() int {
+	size := 100 // base JSON overhead for structure, type, library fields
+	size += len(msg.Type) + len(msg.Uuid) + len(msg.DistinctId) + len(msg.Event)
+	size += 30 // timestamp
+
+	if msg.Properties != nil {
+		for k, v := range msg.Properties {
+			size += len(k) + 4 + estimateJSONSize(v)
+		}
+	}
+
+	if msg.Groups != nil {
+		for k, v := range msg.Groups {
+			size += len(k) + 4 + estimateJSONSize(v)
+		}
+	}
+
+	return size
+}
+
 type CaptureInApi struct {
 	Type           string    `json:"type"`
 	Uuid           string    `json:"uuid"`
