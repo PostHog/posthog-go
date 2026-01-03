@@ -1,6 +1,10 @@
 package posthog
 
-import "time"
+import (
+	"time"
+
+	json "github.com/goccy/go-json"
+)
 
 // SendFeatureFlagsValue defines the interface for feature flag configuration
 type SendFeatureFlagsValue interface {
@@ -105,27 +109,6 @@ func (msg Capture) Validate() error {
 	return nil
 }
 
-// EstimatedSize returns an estimate of the JSON-encoded size in bytes.
-func (msg Capture) EstimatedSize() int {
-	size := 100 // base JSON overhead for structure, type, library fields
-	size += len(msg.Type) + len(msg.Uuid) + len(msg.DistinctId) + len(msg.Event)
-	size += 30 // timestamp
-
-	if msg.Properties != nil {
-		for k, v := range msg.Properties {
-			size += len(k) + 4 + estimateJSONSize(v)
-		}
-	}
-
-	if msg.Groups != nil {
-		for k, v := range msg.Groups {
-			size += len(k) + 4 + estimateJSONSize(v)
-		}
-	}
-
-	return size
-}
-
 type CaptureInApi struct {
 	Type           string    `json:"type"`
 	Uuid           string    `json:"uuid"`
@@ -167,4 +150,17 @@ func (msg Capture) APIfy() APIMessage {
 	}
 
 	return apified
+}
+
+// prepareForSend creates the API message and serializes it to JSON.
+// Returns pre-serialized JSON for efficient batch building, the original
+// APIMessage for callbacks, and any serialization error.
+// Size is derived from len(json.RawMessage) when needed - O(1) operation.
+func (msg Capture) prepareForSend() (json.RawMessage, APIMessage, error) {
+	apiMsg := msg.APIfy()
+	data, err := json.Marshal(apiMsg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return json.RawMessage(data), apiMsg, nil
 }

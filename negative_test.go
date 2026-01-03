@@ -403,34 +403,42 @@ func TestBatch_EmptyAndLarge(t *testing.T) {
 	})
 }
 
-// TestSizeEstimation_EdgeCases tests size estimation with edge case data
-func TestSizeEstimation_EdgeCases(t *testing.T) {
+// TestPrepareForSend_EdgeCases tests prepareForSend with edge case data
+func TestPrepareForSend_EdgeCases(t *testing.T) {
 	t.Run("empty_capture", func(t *testing.T) {
-		capture := Capture{}
-		size := capture.EstimatedSize()
-		require.Greater(t, size, 0, "Even empty capture should have non-zero estimated size")
+		capture := Capture{Type: "capture"}
+		data, apiMsg, err := capture.prepareForSend()
+		require.NoError(t, err)
+		require.Greater(t, len(data), 0, "Even empty capture should have non-zero serialized size")
+		require.NotNil(t, apiMsg, "APIMessage should not be nil")
 	})
 
 	t.Run("nil_properties_and_groups", func(t *testing.T) {
 		capture := Capture{
+			Type:       "capture",
 			DistinctId: "user",
 			Event:      "event",
 			Properties: nil,
 			Groups:     nil,
 		}
-		size := capture.EstimatedSize()
-		require.Greater(t, size, 0)
+		data, apiMsg, err := capture.prepareForSend()
+		require.NoError(t, err)
+		require.Greater(t, len(data), 0)
+		require.NotNil(t, apiMsg)
 	})
 
 	t.Run("empty_properties_and_groups", func(t *testing.T) {
 		capture := Capture{
+			Type:       "capture",
 			DistinctId: "user",
 			Event:      "event",
 			Properties: Properties{},
 			Groups:     Groups{},
 		}
-		size := capture.EstimatedSize()
-		require.Greater(t, size, 0)
+		data, apiMsg, err := capture.prepareForSend()
+		require.NoError(t, err)
+		require.Greater(t, len(data), 0)
+		require.NotNil(t, apiMsg)
 	})
 }
 

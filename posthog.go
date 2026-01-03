@@ -3,7 +3,6 @@ package posthog
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
+	json "github.com/goccy/go-json"
+	"github.com/hashicorp/golang-lru/v2"
 )
 
 const (
@@ -77,17 +77,34 @@ type Client interface {
 	CloseWithContext(context.Context) error
 }
 
+// preparedMessage bundles a pre-serialized message with the original APIMessage.
+// The data field contains pre-serialized JSON for efficient batch building.
+// The msg field retains the original APIMessage for callbacks.
+// Size is obtained via len(data) - O(1) since json.RawMessage is []byte.
+type preparedMessage struct {
+	data json.RawMessage // pre-serialized JSON for batch submission
+	msg  APIMessage      // original message for callbacks
+}
+
+// preparedBatch holds both raw data for efficient serialization and
+// original API messages for callbacks.
+type preparedBatch struct {
+	data []json.RawMessage // pre-serialized messages for batch submission
+	msgs []APIMessage      // original messages for callbacks
+}
+
 type client struct {
 	Config
 	key string
 
 	// This channel is where the `Enqueue` method writes messages so they can be
 	// picked up and pushed by the backend goroutine taking care of applying the
-	// batching rules.
-	msgs chan Message
+	// batching rules. Messages are pre-converted to APIMessage format with
+	// pre-computed size to avoid race conditions.
+	msgs chan preparedMessage
 
 	// Channel for sending batches to worker pool
-	batches chan []APIMessage
+	batches chan preparedBatch
 
 	// Tracks in-flight batches for graceful shutdown
 	inFlight atomic.Int64
@@ -159,8 +176,8 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
-		msgs:                            make(chan Message, config.BatchSize*config.NumWorkers),
-		batches:                         make(chan []APIMessage, config.NumWorkers),
+		msgs:                            make(chan preparedMessage, config.BatchSize*config.NumWorkers),
+		batches:                         make(chan preparedBatch, config.NumWorkers),
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
 		ctx:                             ctx,
@@ -258,23 +275,58 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	var ts = c.now()
 
+	// Helper to send prepared message with panic recovery
+	sendPrepared := func(prepared preparedMessage) {
+		defer func() {
+			// When the `msgs` channel is closed writing to it will trigger a panic.
+			// To avoid letting the panic propagate to the caller we recover from it
+			// and instead report that the client has been closed and shouldn't be
+			// used anymore.
+			if recover() != nil {
+				err = ErrClosed
+			}
+		}()
+		c.msgs <- prepared
+	}
+
 	switch m := msg.(type) {
 	case Alias:
 		m.Type = "alias"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		// Prepare message: serialize to JSON for efficient batch building
+		data, apiMsg, serErr := m.prepareForSend()
+		if serErr != nil {
+			err = serErr
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case Identify:
 		m.Type = "identify"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		// Prepare message: serialize to JSON for efficient batch building
+		data, apiMsg, serErr := m.prepareForSend()
+		if serErr != nil {
+			err = serErr
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		// Prepare message: serialize to JSON for efficient batch building
+		data, apiMsg, serErr := m.prepareForSend()
+		if serErr != nil {
+			err = serErr
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case Capture:
 		m.Type = "capture"
@@ -321,32 +373,32 @@ func (c *client) Enqueue(msg Message) (err error) {
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
-		msg = m
+		// Prepare message: serialize to JSON for efficient batch building
+		data, apiMsg, serErr := m.prepareForSend()
+		if serErr != nil {
+			err = serErr
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case Exception:
 		m.Type = "exception"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		// Prepare message: serialize to JSON for efficient batch building
+		data, apiMsg, serErr := m.prepareForSend()
+		if serErr != nil {
+			err = serErr
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	default:
 		err = fmt.Errorf("messages with custom types cannot be enqueued: %T", msg)
 		return
 	}
-
-	defer func() {
-		// When the `msgs` channel is closed writing to it will trigger a panic.
-		// To avoid letting the panic propagate to the caller we recover from it
-		// and instead report that the client has been closed and shouldn't be
-		// used anymore.
-		if recover() != nil {
-			err = ErrClosed
-		}
-	}()
-
-	c.msgs <- msg
-
-	return
 }
 
 func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
@@ -601,7 +653,7 @@ func (c *client) worker() {
 }
 
 // processBatch handles a single batch with guaranteed counter decrement.
-func (c *client) processBatch(msgs []APIMessage) {
+func (c *client) processBatch(batch preparedBatch) {
 	// CRITICAL: defer ensures counter decrements on ANY exit path
 	// (success, JSON error, HTTP error, panic, context cancellation)
 	defer c.inFlight.Add(-1)
@@ -610,16 +662,16 @@ func (c *client) processBatch(msgs []APIMessage) {
 	defer func() {
 		if err := recover(); err != nil {
 			c.Errorf("panic in worker: %v", err)
-			c.notifyFailure(msgs, fmt.Errorf("panic: %v", err))
+			c.notifyFailure(batch.msgs, fmt.Errorf("panic: %v", err))
 		}
 	}()
 
-	c.send(msgs)
+	c.send(batch)
 }
 
 // sendBatch attempts to send a batch to the worker pool.
 // Returns true if successful, false if the worker pool is at capacity.
-func (c *client) sendBatch(batch []APIMessage) bool {
+func (c *client) sendBatch(batch preparedBatch) bool {
 	c.inFlight.Add(1)
 	select {
 	case c.batches <- batch:
@@ -637,7 +689,7 @@ func (c *client) awaitDrain(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(100 * time.Millisecond):
 			// continue polling
 		}
 	}
@@ -645,30 +697,32 @@ func (c *client) awaitDrain(ctx context.Context) error {
 	return nil
 }
 
-// send encodes batch and performs HTTP POST with retries.
-func (c *client) send(msgs []APIMessage) {
+// send encodes batch wrapper and performs HTTP POST with retries.
+// Messages are already pre-serialized, so only the batch wrapper is serialized here.
+func (c *client) send(pb preparedBatch) {
+	// Build batch with pre-serialized messages - only the wrapper is serialized here
 	b, err := json.Marshal(batch{
 		ApiKey:              c.key,
 		HistoricalMigration: c.HistoricalMigration,
-		Messages:            msgs,
+		Messages:            pb.data,
 	})
 
 	if err != nil {
-		c.Errorf("marshalling messages - %s", err)
-		c.notifyFailure(msgs, err)
+		c.Errorf("marshalling batch wrapper - %s", err)
+		c.notifyFailure(pb.msgs, err)
 		return
 	}
 
 	for i := 0; i < c.maxAttempts; i++ {
 		if err = c.upload(c.ctx, b); err == nil {
-			c.notifySuccess(msgs)
+			c.notifySuccess(pb.msgs)
 			return
 		}
 
 		// Check if context is cancelled (shutdown timeout exceeded)
 		if c.ctx.Err() != nil {
-			c.Errorf("%d messages dropped: shutdown timeout", len(msgs))
-			c.notifyFailure(msgs, err)
+			c.Errorf("%d messages dropped: shutdown timeout", len(pb.msgs))
+			c.notifyFailure(pb.msgs, err)
 			return
 		}
 
@@ -677,13 +731,13 @@ func (c *client) send(msgs []APIMessage) {
 		case <-time.After(c.RetryAfter(i)):
 			// continue to next attempt
 		case <-c.ctx.Done():
-			c.notifyFailure(msgs, err)
+			c.notifyFailure(pb.msgs, err)
 			return
 		}
 	}
 
-	c.Errorf("%d messages dropped after %d attempts", len(msgs), c.maxAttempts)
-	c.notifyFailure(msgs, err)
+	c.Errorf("%d messages dropped after %d attempts", len(pb.msgs), c.maxAttempts)
+	c.notifyFailure(pb.msgs, err)
 }
 
 // Upload serialized batch message.
@@ -729,7 +783,7 @@ func (c *client) report(res *http.Response) (err error) {
 	return fmt.Errorf("%d %s", res.StatusCode, res.Status)
 }
 
-// loop processes messages from the msgs channel, batches them by estimated size,
+// loop processes messages from the msgs channel, batches them by size,
 // and sends batches to the worker pool.
 func (c *client) loop() {
 	defer close(c.batches) // signal workers to exit
@@ -738,57 +792,69 @@ func (c *client) loop() {
 		defer c.featureFlagsPoller.shutdownPoller()
 	}
 
-	var batch []APIMessage
+	var batchData []json.RawMessage
+	var batchMsgs []APIMessage
 	var batchSize int
 
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
 
+	// Helper to create and send a batch
+	flushBatch := func() bool {
+		if len(batchData) == 0 {
+			return true
+		}
+		batch := preparedBatch{data: batchData, msgs: batchMsgs}
+		if !c.sendBatch(batch) {
+			c.Errorf("sending batch failed - %s", ErrTooManyRequests)
+			c.notifyFailure(batchMsgs, ErrTooManyRequests)
+			return false
+		}
+		return true
+	}
+
+	// Helper to reset batch state
+	resetBatch := func() {
+		batchData, batchMsgs, batchSize = nil, nil, 0
+	}
+
 	for {
 		select {
-		case msg := <-c.msgs:
-			msgSize := msg.EstimatedSize()
+		case prepared := <-c.msgs:
+			msgSize := len(prepared.data)
 
 			// Early reject oversized messages
 			if msgSize > maxMessageBytes {
 				c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
-				c.notifyFailure([]APIMessage{msg.APIfy()}, ErrMessageTooBig)
+				c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
 				continue
 			}
 
 			// Flush current batch if adding this message would exceed byte limit
-			if batchSize+msgSize > maxBatchBytes && len(batch) > 0 {
-				c.debugf("batch size limit reached (%d bytes) – flushing %d messages", batchSize, len(batch))
-				if !c.sendBatch(batch) {
-					c.Errorf("sending batch failed - %s", ErrTooManyRequests)
-					c.notifyFailure(batch, ErrTooManyRequests)
-				}
-				batch, batchSize = nil, 0
+			if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
+				c.debugf("batch size limit reached (%d bytes) – flushing %d messages", batchSize, len(batchData))
+				flushBatch()
+				resetBatch()
 			}
 
-			// Convert to APIMessage and add to batch
-			batch = append(batch, msg.APIfy())
+			// Add pre-serialized data and original message to batch
+			batchData = append(batchData, prepared.data)
+			batchMsgs = append(batchMsgs, prepared.msg)
 			batchSize += msgSize
-			c.debugf("buffer (%d/%d, %d bytes) %v", len(batch), c.BatchSize, batchSize, msg)
+			c.debugf("buffer (%d/%d, %d bytes) %v", len(batchData), c.BatchSize, batchSize, prepared.msg)
 
 			// Flush if batch count limit reached
-			if len(batch) >= c.BatchSize {
-				c.debugf("batch count limit reached – flushing %d messages", len(batch))
-				if !c.sendBatch(batch) {
-					c.Errorf("sending batch failed - %s", ErrTooManyRequests)
-					c.notifyFailure(batch, ErrTooManyRequests)
-				}
-				batch, batchSize = nil, 0
+			if len(batchData) >= c.BatchSize {
+				c.debugf("batch count limit reached – flushing %d messages", len(batchData))
+				flushBatch()
+				resetBatch()
 			}
 
 		case <-tick.C:
-			if len(batch) > 0 {
-				c.debugf("interval flush – sending %d messages", len(batch))
-				if !c.sendBatch(batch) {
-					c.Errorf("sending batch failed - %s", ErrTooManyRequests)
-					c.notifyFailure(batch, ErrTooManyRequests)
-				}
-				batch, batchSize = nil, 0
+			if len(batchData) > 0 {
+				c.debugf("interval flush – sending %d messages", len(batchData))
+				flushBatch()
+				resetBatch()
 			}
 
 		case <-c.quit:
@@ -798,31 +864,32 @@ func (c *client) loop() {
 			close(c.msgs)
 
 			// Drain remaining messages
-			for msg := range c.msgs {
-				msgSize := msg.EstimatedSize()
+			for prepared := range c.msgs {
+				msgSize := len(prepared.data)
 				if msgSize > maxMessageBytes {
-					c.notifyFailure([]APIMessage{msg.APIfy()}, ErrMessageTooBig)
+					c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
 					continue
 				}
 
-				if batchSize+msgSize > maxBatchBytes && len(batch) > 0 {
-					if !c.sendBatch(batch) {
+				if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
+					if !c.sendBatch(preparedBatch{data: batchData, msgs: batchMsgs}) {
 						c.Errorf("sending batch failed during shutdown - %s", ErrTooManyRequests)
-						c.notifyFailure(batch, ErrTooManyRequests)
+						c.notifyFailure(batchMsgs, ErrTooManyRequests)
 					}
-					batch, batchSize = nil, 0
+					resetBatch()
 				}
 
-				batch = append(batch, msg.APIfy())
+				batchData = append(batchData, prepared.data)
+				batchMsgs = append(batchMsgs, prepared.msg)
 				batchSize += msgSize
 			}
 
 			// Flush any remaining messages
-			if len(batch) > 0 {
-				c.debugf("flushing final batch of %d messages", len(batch))
-				if !c.sendBatch(batch) {
+			if len(batchData) > 0 {
+				c.debugf("flushing final batch of %d messages", len(batchData))
+				if !c.sendBatch(preparedBatch{data: batchData, msgs: batchMsgs}) {
 					c.Errorf("sending final batch failed - %s", ErrTooManyRequests)
-					c.notifyFailure(batch, ErrTooManyRequests)
+					c.notifyFailure(batchMsgs, ErrTooManyRequests)
 				}
 			}
 

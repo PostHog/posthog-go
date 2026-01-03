@@ -1,6 +1,10 @@
 package posthog
 
-import "time"
+import (
+	"time"
+
+	json "github.com/goccy/go-json"
+)
 
 var _ Message = (*Alias)(nil)
 
@@ -38,14 +42,6 @@ func (msg Alias) Validate() error {
 	}
 
 	return nil
-}
-
-// EstimatedSize returns an estimate of the JSON-encoded size in bytes.
-func (msg Alias) EstimatedSize() int {
-	size := 100 // base JSON overhead
-	size += len(msg.Type) + len(msg.Alias) + len(msg.DistinctId)
-	size += 30 // timestamp
-	return size
 }
 
 type AliasInApiProperties struct {
@@ -86,4 +82,16 @@ func (msg Alias) APIfy() APIMessage {
 	}
 
 	return apified
+}
+
+// prepareForSend creates the API message and serializes it to JSON.
+// Returns pre-serialized JSON for efficient batch building, the original
+// APIMessage for callbacks, and any serialization error.
+func (msg Alias) prepareForSend() (json.RawMessage, APIMessage, error) {
+	apiMsg := msg.APIfy()
+	data, err := json.Marshal(apiMsg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return json.RawMessage(data), apiMsg, nil
 }

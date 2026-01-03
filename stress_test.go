@@ -36,9 +36,8 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 				defer server.Close()
 
 				client, err := NewWithConfig("test-key", Config{
-					Endpoint:   server.URL,
-					BatchSize:  50,
-					NumWorkers: 100,
+					Endpoint: server.URL,
+					// Uses production defaults: BatchSize=250, NumWorkers=100
 				})
 				require.NoError(t, err)
 
@@ -46,6 +45,7 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 
 				// Distribute events across goroutines
 				var wg sync.WaitGroup
+				var errorCount atomic.Int64
 				eventsPerGoroutine := eventCount / concurrency
 				if eventsPerGoroutine == 0 {
 					eventsPerGoroutine = 1
@@ -71,7 +71,9 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 					go func(start, end int) {
 						defer wg.Done()
 						for i := start; i < end; i++ {
-							client.Enqueue(events[i])
+							if err := client.Enqueue(events[i]); err != nil {
+								errorCount.Add(1)
+							}
 						}
 					}(startIdx, endIdx)
 				}
@@ -84,9 +86,10 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 
 				t.Logf("Throughput: %.2f events/sec, Total time: %v", throughput, elapsed)
 
-				if received.Load() != int64(eventCount) {
-					t.Errorf("Expected %d events delivered, got %d", eventCount, received.Load())
-				}
+				require.Equal(t, int64(0), errorCount.Load(),
+					"No enqueue errors should occur")
+				require.Equal(t, int64(eventCount), received.Load(),
+					"All events should be delivered")
 			})
 		}
 	}
@@ -120,10 +123,14 @@ func TestStress_BatchSizeBoundaries(t *testing.T) {
 			})
 			require.NoError(t, err)
 
+			var errorCount int
 			for _, e := range pool.Events() {
-				client.Enqueue(e)
+				if err := client.Enqueue(e); err != nil {
+					errorCount++
+				}
 			}
 			client.Close()
+			require.Equal(t, 0, errorCount, "No enqueue errors should occur")
 
 			expectedBatches := (eventCount + batchSize - 1) / batchSize
 			// Allow for some variance due to byte-based batching
@@ -179,16 +186,16 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := NewWithConfig("test-key", Config{
-				Endpoint:   server.URL,
-				BatchSize:  50,
-				NumWorkers: 100,
-			})
+		client, err := NewWithConfig("test-key", Config{
+			Endpoint: server.URL,
+			// Uses production defaults: BatchSize=250, NumWorkers=100
+		})
 			require.NoError(t, err)
 
 			start := time.Now()
 
 			var wg sync.WaitGroup
+			var errorCount atomic.Int64
 			eventsPerGoroutine := eventCount / concurrency
 			for g := 0; g < concurrency; g++ {
 				wg.Add(1)
@@ -200,7 +207,9 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 				go func(start, end int) {
 					defer wg.Done()
 					for i := start; i < end; i++ {
-						client.Enqueue(events[i])
+						if err := client.Enqueue(events[i]); err != nil {
+							errorCount.Add(1)
+						}
 					}
 				}(startIdx, endIdx)
 			}
@@ -215,6 +224,8 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 			t.Logf("Cardinality: %s, Throughput: %.2f events/sec, Avg bytes/event: %.0f",
 				tc.name, throughput, avgBytesPerEvent)
 
+			require.Equal(t, int64(0), errorCount.Load(),
+				"No enqueue errors should occur")
 			require.Equal(t, int64(eventCount), received.Load(),
 				"All events should be delivered")
 		})
@@ -239,22 +250,24 @@ func TestStress_HighConcurrencyLowVolume(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:   server.URL,
-		BatchSize:  100,
-		NumWorkers: 100,
+		Endpoint: server.URL,
+		// Uses production defaults: BatchSize=250, NumWorkers=100
 	})
 	require.NoError(t, err)
 
 	start := time.Now()
 
 	var wg sync.WaitGroup
+	var errorCount atomic.Int64
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
 		go func(goroutineID int) {
 			defer wg.Done()
 			for i := 0; i < eventsPerGoroutine; i++ {
 				idx := goroutineID*eventsPerGoroutine + i
-				client.Enqueue(pool.Get(idx))
+				if err := client.Enqueue(pool.Get(idx)); err != nil {
+					errorCount.Add(1)
+				}
 			}
 		}(g)
 	}
@@ -267,6 +280,8 @@ func TestStress_HighConcurrencyLowVolume(t *testing.T) {
 
 	t.Logf("High concurrency: %d goroutines, %d events, %.2f events/sec, %v total",
 		goroutines, totalEvents, throughput, elapsed)
+	require.Equal(t, int64(0), errorCount.Load(),
+		"No enqueue errors should occur")
 
 	require.Equal(t, int64(totalEvents), received.Load(),
 		"All events should be delivered")
@@ -289,23 +304,25 @@ func TestStress_LowConcurrencyHighVolume(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewWithConfig("test-key", Config{
-		Endpoint:   server.URL,
-		BatchSize:  50,
-		NumWorkers: 100,
+		client, err := NewWithConfig("test-key", Config{
+		Endpoint: server.URL,
+		// Uses production defaults: BatchSize=250, NumWorkers=100
 	})
 	require.NoError(t, err)
 
 	start := time.Now()
 
 	var wg sync.WaitGroup
+	var errorCount atomic.Int64
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
 		go func(goroutineID int) {
 			defer wg.Done()
 			for i := 0; i < eventsPerGoroutine; i++ {
 				idx := goroutineID*eventsPerGoroutine + i
-				client.Enqueue(pool.Get(idx))
+				if err := client.Enqueue(pool.Get(idx)); err != nil {
+					errorCount.Add(1)
+				}
 			}
 		}(g)
 	}
@@ -318,6 +335,8 @@ func TestStress_LowConcurrencyHighVolume(t *testing.T) {
 
 	t.Logf("Low concurrency: %d goroutines, %d events, %.2f events/sec, %v total",
 		goroutines, totalEvents, throughput, elapsed)
+	require.Equal(t, int64(0), errorCount.Load(),
+		"No enqueue errors should occur")
 
 	require.Equal(t, int64(totalEvents), received.Load(),
 		"All events should be delivered")
@@ -344,15 +363,15 @@ func TestStress_MixedCardinality(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:   server.URL,
-		BatchSize:  25,
-		NumWorkers: 100,
+		Endpoint: server.URL,
+		// Uses production defaults: BatchSize=250, NumWorkers=100
 	})
 	require.NoError(t, err)
 
 	start := time.Now()
 
 	var wg sync.WaitGroup
+	var errorCount atomic.Int64
 	eventsPerGoroutine := eventCount / concurrency
 	for g := 0; g < concurrency; g++ {
 		wg.Add(1)
@@ -364,7 +383,9 @@ func TestStress_MixedCardinality(t *testing.T) {
 		go func(start, end int) {
 			defer wg.Done()
 			for i := start; i < end; i++ {
-				client.Enqueue(pool.Get(i))
+				if err := client.Enqueue(pool.Get(i)); err != nil {
+					errorCount.Add(1)
+				}
 			}
 		}(startIdx, endIdx)
 	}
@@ -382,6 +403,8 @@ func TestStress_MixedCardinality(t *testing.T) {
 	t.Logf("Mixed cardinality: %d events, %.2f events/sec, %.0f avg bytes/event",
 		eventCount, throughput, avgBytesPerEvent)
 
+	require.Equal(t, int64(0), errorCount.Load(),
+		"No enqueue errors should occur")
 	require.Equal(t, int64(eventCount), received.Load(),
 		"All events should be delivered")
 }
@@ -403,6 +426,7 @@ func TestStress_RapidCloseReopen(t *testing.T) {
 	}))
 	defer server.Close()
 
+	var totalErrors int
 	for i := 0; i < iterations; i++ {
 		client, err := NewWithConfig("test-key", Config{
 			Endpoint:   server.URL,
@@ -413,19 +437,23 @@ func TestStress_RapidCloseReopen(t *testing.T) {
 
 		for j := 0; j < eventsPerIteration; j++ {
 			idx := i*eventsPerIteration + j
-			client.Enqueue(pool.Get(idx))
+			if err := client.Enqueue(pool.Get(idx)); err != nil {
+				totalErrors++
+			}
 		}
 
 		client.Close()
 	}
 
+	require.Equal(t, 0, totalErrors,
+		"No enqueue errors should occur")
 	expectedTotal := int64(iterations * eventsPerIteration)
 	require.Equal(t, expectedTotal, totalReceived.Load(),
 		"All events across all iterations should be delivered")
 }
 
-// TestStress_SizeEstimationUnderLoad verifies size estimation accuracy under concurrent load
-func TestStress_SizeEstimationUnderLoad(t *testing.T) {
+// TestStress_PrepareForSendUnderLoad verifies prepareForSend works correctly under concurrent load
+func TestStress_PrepareForSendUnderLoad(t *testing.T) {
 	t.Parallel()
 	cardinalities := []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh}
 
@@ -436,15 +464,22 @@ func TestStress_SizeEstimationUnderLoad(t *testing.T) {
 			var wg sync.WaitGroup
 			errorCount := atomic.Int64{}
 
-			// Concurrent size estimation
+			// Concurrent prepareForSend
 			for g := 0; g < 10; g++ {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
 					for i := 0; i < 100; i++ {
 						capture := pool.Get(i)
-						estimated := capture.EstimatedSize()
-						if estimated <= 0 {
+						capture.Type = "capture"
+						data, apiMsg, err := capture.prepareForSend()
+						if err != nil {
+							errorCount.Add(1)
+						}
+						if len(data) <= 0 {
+							errorCount.Add(1)
+						}
+						if apiMsg == nil {
 							errorCount.Add(1)
 						}
 					}
@@ -453,7 +488,7 @@ func TestStress_SizeEstimationUnderLoad(t *testing.T) {
 
 			wg.Wait()
 			require.Equal(t, int64(0), errorCount.Load(),
-				"Size estimation should never return non-positive values")
+				"prepareForSend should never return error, non-positive size, or nil message")
 		})
 	}
 }

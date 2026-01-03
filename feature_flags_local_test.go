@@ -4273,7 +4273,7 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 }
 
 func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
-	t.Parallel()
+	// Not run in parallel - timeout-based tests are sensitive to system load
 	// create buffer to write logs to
 	var buf bytes.Buffer
 
@@ -4281,7 +4281,8 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
-			time.Sleep(11 * time.Second)
+			// Sleep longer than client timeout (100ms) to trigger timeout
+			time.Sleep(1 * time.Second)
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
 			// Ignore batch requests
@@ -4291,12 +4292,15 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	client, clientErr := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey:            "some very secret key",
 		Endpoint:                  server.URL,
-		FeatureFlagRequestTimeout: 10 * time.Millisecond,
+		FeatureFlagRequestTimeout: 100 * time.Millisecond,
 		Logger:                    StdLogger(log.New(&buf, "posthog-test", log.LstdFlags), false),
 	})
+	if clientErr != nil {
+		t.Fatalf("Client creation failed: %v", clientErr)
+	}
 	defer client.Close()
 
 	_, err := client.IsFeatureEnabled(
@@ -4311,11 +4315,11 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 
 	output := buf.String()
 	if !strings.Contains(output, "Unable to fetch feature flags") {
-		t.Error("Expected error fetching flags")
+		t.Errorf("Expected error fetching flags, got: %q", output)
 	}
 
 	if !strings.Contains(output, "context deadline exceeded") {
-		t.Error("Expected timeout error fetching flags")
+		t.Errorf("Expected timeout error fetching flags, got: %q", output)
 	}
 }
 

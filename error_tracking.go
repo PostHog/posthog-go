@@ -1,6 +1,10 @@
 package posthog
 
-import "time"
+import (
+	"time"
+
+	json "github.com/goccy/go-json"
+)
 
 var _ Message = (*Exception)(nil)
 
@@ -94,32 +98,6 @@ func (msg Exception) Validate() error {
 	return nil
 }
 
-// EstimatedSize returns an estimate of the JSON-encoded size in bytes.
-func (msg Exception) EstimatedSize() int {
-	size := 100 // base JSON overhead
-	size += len(msg.Type) + len(msg.DistinctId)
-	size += 30 // timestamp
-
-	// Estimate exception list size
-	for _, item := range msg.ExceptionList {
-		size += 50 // base overhead per item
-		size += len(item.Type) + len(item.Value)
-		if item.Stacktrace != nil {
-			size += 20 + len(item.Stacktrace.Type)
-			for _, frame := range item.Stacktrace.Frames {
-				size += 80 // base overhead per frame
-				size += len(frame.Filename) + len(frame.Function) + len(frame.Platform)
-			}
-		}
-	}
-
-	if msg.ExceptionFingerprint != nil {
-		size += len(*msg.ExceptionFingerprint) + 30
-	}
-
-	return size
-}
-
 func (msg ExceptionItem) Validate() error {
 	if msg.Type == "" {
 		return FieldError{
@@ -157,6 +135,18 @@ func (msg Exception) APIfy() APIMessage {
 			ExceptionFingerprint: msg.ExceptionFingerprint,
 		},
 	}
+}
+
+// prepareForSend creates the API message and serializes it to JSON.
+// Returns pre-serialized JSON for efficient batch building, the original
+// APIMessage for callbacks, and any serialization error.
+func (msg Exception) prepareForSend() (json.RawMessage, APIMessage, error) {
+	apiMsg := msg.APIfy()
+	data, err := json.Marshal(apiMsg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return json.RawMessage(data), apiMsg, nil
 }
 
 // NewDefaultException is a convenience function to build an Exception object (usable for `client.Enqueue`)
