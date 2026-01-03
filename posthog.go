@@ -537,9 +537,6 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 	return c.makeRemoteConfigRequest(flagKey)
 }
 
-// ErrNoPersonalAPIKey is returned when oen tries to use feature flags without specifying a PersonalAPIKey
-var ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
-
 // GetFeatureFlags returns all feature flag definitions used for local evaluation
 // This is only available when using a PersonalApiKey. Not to be confused with
 // GetAllFlags, which returns all flags and their values for a given user.
