@@ -456,7 +456,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 		data, apiMsg, err := prepareForSend(capture)
 		require.Error(t, err, "Should fail to serialize channel")
 		require.Nil(t, data, "Data should be nil on error")
-		require.Nil(t, apiMsg, "APIMessage should be nil on error")
+		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
 	})
 
 	t.Run("function_in_properties", func(t *testing.T) {
@@ -470,7 +470,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 		data, apiMsg, err := prepareForSend(capture)
 		require.Error(t, err, "Should fail to serialize function")
 		require.Nil(t, data)
-		require.Nil(t, apiMsg)
+		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
 	})
 
 	t.Run("channel_in_groups", func(t *testing.T) {
@@ -484,7 +484,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 		data, apiMsg, err := prepareForSend(capture)
 		require.Error(t, err, "Should fail to serialize channel in groups")
 		require.Nil(t, data)
-		require.Nil(t, apiMsg)
+		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
 	})
 
 	t.Run("identify_with_unencodable", func(t *testing.T) {
@@ -496,7 +496,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 		data, apiMsg, err := prepareForSend(identify)
 		require.Error(t, err, "Identify should fail with unencodable value")
 		require.Nil(t, data)
-		require.Nil(t, apiMsg)
+		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
 	})
 
 	t.Run("alias_serializes_ok", func(t *testing.T) {
@@ -521,7 +521,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 		data, apiMsg, err := prepareForSend(groupIdentify)
 		require.Error(t, err, "GroupIdentify should fail with unencodable value")
 		require.Nil(t, data)
-		require.Nil(t, apiMsg)
+		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
 	})
 }
 
