@@ -94,6 +94,7 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 
 // TestStress_BatchSizeBoundaries tests behavior at batch size limits
 func TestStress_BatchSizeBoundaries(t *testing.T) {
+	t.Parallel()
 	// Test batch sizes around common boundaries (50, 250 are defaults)
 	batchSizes := []int{49, 50, 51, 100, 249, 250, 251, 500}
 
@@ -387,6 +388,7 @@ func TestStress_MixedCardinality(t *testing.T) {
 
 // TestStress_RapidCloseReopen tests rapid client close and reopen
 func TestStress_RapidCloseReopen(t *testing.T) {
+	t.Parallel()
 	iterations := 10
 	eventsPerIteration := 50
 
@@ -424,6 +426,7 @@ func TestStress_RapidCloseReopen(t *testing.T) {
 
 // TestStress_SizeEstimationUnderLoad verifies size estimation accuracy under concurrent load
 func TestStress_SizeEstimationUnderLoad(t *testing.T) {
+	t.Parallel()
 	cardinalities := []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh}
 
 	for _, cardinality := range cardinalities {

@@ -4273,6 +4273,7 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 }
 
 func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
+	t.Parallel()
 	// create buffer to write logs to
 	var buf bytes.Buffer
 
