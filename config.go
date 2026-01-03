@@ -29,7 +29,7 @@ type Config struct {
 
 	// The flushing interval of the client. Messages will be sent when they've
 	// been queued up to the maximum batch size or when the flushing interval
-	// timer triggers.
+	// timer triggers. If zero, defaults to 5 seconds.
 	Interval time.Duration
 
 	// Interval at which to fetch new feature flag definitions, 5min by default
@@ -69,7 +69,7 @@ type Config struct {
 
 	// The maximum number of messages that will be sent in one API call.
 	// Messages will be sent when they've been queued up to the maximum batch
-	// size or when the flushing interval timer triggers.
+	// size or when the flushing interval timer triggers. If zero, defaults to 250.
 	// Note that the API will still enforce a 500KB limit on each HTTP request
 	// which is independent from the number of embedded messages.
 	BatchSize int
@@ -85,7 +85,8 @@ type Config struct {
 	// If not set the client will fallback to use a default retry policy.
 	RetryAfter func(int) time.Duration
 
-	// MaxRetries is a maximum number of a request is retried on failure.
+	// MaxRetries is the maximum number of times a request is retried on failure.
+	// Must be in range [0,9]. If nil, defaults to 9 (10 total attempts).
 	MaxRetries *int
 
 	// ShutdownTimeout is the maximum time to wait for in-flight messages
@@ -97,15 +98,14 @@ type Config struct {
 	// /batch/ endpoint. If zero, defaults to 10 seconds.
 	BatchUploadTimeout time.Duration
 
+	// NumWorkers is the number of worker goroutines for sending batches.
+	// If zero, defaults to 100.
+	NumWorkers int
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
 	now func() time.Time
-
-	// The maximum number of goroutines that will be spawned by a client to send
-	// requests to the backend API.
-	// This field is not exported and only exposed internally to control concurrency.
-	maxConcurrentRequests int
 
 	// maxAttempts is a maximum numbers we try to send data to capture endpoint, must be in range [1,10].
 	maxAttempts int
@@ -145,6 +145,9 @@ const (
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
 	// events to the /batch/ endpoint.
 	DefaultBatchUploadTimeout = 10 * time.Second
+
+	// DefaultNumWorkers is the default number of worker goroutines for sending batches.
+	DefaultNumWorkers = 100
 )
 
 // Validate verifies that fields that don't have zero-values are set to valid values,
@@ -230,16 +233,16 @@ func makeConfig(c Config) Config {
 		c.maxAttempts = 10
 	}
 
-	if c.maxConcurrentRequests == 0 {
-		c.maxConcurrentRequests = 1000
-	}
-
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = DefaultShutdownTimeout
 	}
 
 	if c.BatchUploadTimeout == 0 {
 		c.BatchUploadTimeout = DefaultBatchUploadTimeout
+	}
+
+	if c.NumWorkers == 0 {
+		c.NumWorkers = DefaultNumWorkers
 	}
 
 	if c.GetDisableGeoIP() {
