@@ -32,9 +32,8 @@ func TestConcurrentEnqueue(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:   server.URL,
-		BatchSize:  100,
-		NumWorkers: 100,
+		Endpoint: server.URL,
+		// Uses production defaults: BatchSize=250, NumWorkers=100
 	})
 	require.NoError(t, err)
 
@@ -76,9 +75,8 @@ func TestConcurrentEnqueueDifferentMessageTypes(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:   server.URL,
-		BatchSize:  25,
-		NumWorkers: 100,
+		Endpoint: server.URL,
+		// Uses production defaults: BatchSize=250, NumWorkers=100
 	})
 	require.NoError(t, err)
 
@@ -250,9 +248,8 @@ func TestConcurrentEnqueueWithSlowServer(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:   server.URL,
-		BatchSize:  20,
-		NumWorkers: 4,
+		Endpoint: server.URL,
+		// Uses production defaults: BatchSize=250, NumWorkers=100
 	})
 	require.NoError(t, err)
 
@@ -280,10 +277,11 @@ func TestConcurrentEnqueueWithSlowServer(t *testing.T) {
 		"All events should be delivered even with slow server")
 }
 
-// TestConcurrentSizeEstimation tests that size estimation is thread-safe
-func TestConcurrentSizeEstimation(t *testing.T) {
+// TestConcurrentPrepareForSend tests that prepareForSend is thread-safe
+func TestConcurrentPrepareForSend(t *testing.T) {
 	t.Parallel()
 	capture := Capture{
+		Type:       "capture",
 		DistinctId: "test_user",
 		Event:      "test_event",
 		Properties: generatePropertiesWithCardinality(42, CardinalityMedium),
@@ -291,7 +289,7 @@ func TestConcurrentSizeEstimation(t *testing.T) {
 	}
 
 	goroutines := 100
-	estimationsPerGoroutine := 100
+	callsPerGoroutine := 100
 
 	var wg sync.WaitGroup
 	results := make([]int, goroutines)
@@ -301,10 +299,15 @@ func TestConcurrentSizeEstimation(t *testing.T) {
 		go func(goroutineID int) {
 			defer wg.Done()
 			var total int
-			for i := 0; i < estimationsPerGoroutine; i++ {
-				total += capture.EstimatedSize()
+			for i := 0; i < callsPerGoroutine; i++ {
+				data, _, err := capture.prepareForSend()
+				if err != nil {
+					t.Errorf("prepareForSend error: %v", err)
+					return
+				}
+				total += len(data)
 			}
-			results[goroutineID] = total / estimationsPerGoroutine
+			results[goroutineID] = total / callsPerGoroutine
 		}(g)
 	}
 
@@ -314,7 +317,7 @@ func TestConcurrentSizeEstimation(t *testing.T) {
 	first := results[0]
 	for i, result := range results {
 		if result != first {
-			t.Errorf("Inconsistent size estimation: goroutine 0 got %d, goroutine %d got %d",
+			t.Errorf("Inconsistent prepareForSend size: goroutine 0 got %d, goroutine %d got %d",
 				first, i, result)
 		}
 	}
@@ -396,10 +399,12 @@ func TestConcurrentCallbackExecution(t *testing.T) {
 	successCount, failureCount := callback.GetCounts()
 	t.Logf("Callback counts: success=%d, failure=%d", successCount, failureCount)
 
-	// All events should have been delivered
+	// All events should have been delivered with zero failures
 	totalEvents := int64(goroutines * eventsPerGoroutine)
 	require.Equal(t, totalEvents, received.Load(),
 		"All events should be delivered")
+	require.Equal(t, 0, failureCount,
+		"No callback failures should occur")
 }
 
 // TestRaceConditionDetection is specifically designed to trigger race detection
@@ -414,9 +419,8 @@ func TestRaceConditionDetection(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			client, _ := NewWithConfig("test-key", Config{
-				Endpoint:   server.URL,
-				BatchSize:  5,
-				NumWorkers: 2,
+				Endpoint: server.URL,
+				// Uses production defaults: BatchSize=250, NumWorkers=100
 			})
 
 			var wg sync.WaitGroup

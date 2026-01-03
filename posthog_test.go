@@ -98,8 +98,6 @@ func (m testErrorMessage) APIfy() APIMessage {
 	return testAPIErrorMessage{}
 }
 
-func (m testErrorMessage) EstimatedSize() int { return 100 }
-
 var (
 	// A control error returned by mock functions to emulate a failure.
 	//lint:ignore ST1012 variable name is fine :D
@@ -483,10 +481,6 @@ func (c *customMessage) Validate() error {
 
 func (c *customMessage) APIfy() APIMessage {
 	return customAPIMessage{}
-}
-
-func (c *customMessage) EstimatedSize() int {
-	return 100
 }
 
 func TestEnqueuingCustomTypeFails(t *testing.T) {

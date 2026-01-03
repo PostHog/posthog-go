@@ -2,6 +2,8 @@ package posthog
 
 import (
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 // Values implementing this interface are used by posthog clients to notify
@@ -37,10 +39,6 @@ type Message interface {
 	Validate() error
 	APIfy() APIMessage
 
-	// EstimatedSize returns an estimate of the JSON-encoded size in bytes.
-	// Used for batch size calculations without performing actual JSON encoding.
-	EstimatedSize() int
-
 	// internal is an unexposed interface function to ensure only types defined within this package can satisfy the Message interface. Invoking this method will panic.
 	internal()
 }
@@ -54,13 +52,13 @@ func makeTimestamp(t time.Time, def time.Time) time.Time {
 	return t
 }
 
-// This structure represents objects sent to the /batch/ endpoint. We don't
-// export this type because it's only meant to be used internally to send groups
-// of messages in one API call.
+// batch represents objects sent to the /batch/ endpoint with pre-serialized messages.
+// Messages are pre-serialized as json.RawMessage for efficient batch building -
+// json.Marshal embeds them directly without re-encoding.
 type batch struct {
-	ApiKey              string       `json:"api_key"`
-	HistoricalMigration bool         `json:"historical_migration,omitempty"`
-	Messages            []APIMessage `json:"batch"`
+	ApiKey              string            `json:"api_key"`
+	HistoricalMigration bool              `json:"historical_migration,omitempty"`
+	Messages            []json.RawMessage `json:"batch"`
 }
 
 type APIMessage interface{}
