@@ -2,8 +2,6 @@ package posthog
 
 import (
 	"time"
-
-	json "github.com/goccy/go-json"
 )
 
 // SendFeatureFlagsValue defines the interface for feature flag configuration
@@ -152,15 +150,3 @@ func (msg Capture) APIfy() APIMessage {
 	return apified
 }
 
-// prepareForSend creates the API message and serializes it to JSON.
-// Returns pre-serialized JSON for efficient batch building, the original
-// APIMessage for callbacks, and any serialization error.
-// Size is derived from len(json.RawMessage) when needed - O(1) operation.
-func (msg Capture) prepareForSend() (json.RawMessage, APIMessage, error) {
-	apiMsg := msg.APIfy()
-	data, err := json.Marshal(apiMsg)
-	if err != nil {
-		return nil, nil, err
-	}
-	return json.RawMessage(data), apiMsg, nil
-}

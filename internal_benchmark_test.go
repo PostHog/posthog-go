@@ -100,7 +100,7 @@ func BenchmarkPrepareForSend_Cardinality(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				captures[i%100].prepareForSend()
+				prepareForSend(captures[i%100])
 			}
 		})
 	}
@@ -243,7 +243,7 @@ func BenchmarkPrepareVsMarshaling(b *testing.B) {
 		b.Run(tc.name+"_prepare", func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				capture.prepareForSend()
+				prepareForSend(capture)
 			}
 		})
 
@@ -336,7 +336,7 @@ func BenchmarkOldVsNewSerializationFlow(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					rawMsgs := make([]json.RawMessage, size)
 					for j, c := range captures {
-						data, _, _ := c.prepareForSend()
+						data, _, _ := prepareForSend(c)
 						rawMsgs[j] = data
 					}
 					json.Marshal(batch{ApiKey: "test", Messages: rawMsgs})

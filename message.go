@@ -63,6 +63,19 @@ type batch struct {
 
 type APIMessage interface{}
 
+// prepareForSend creates the API message and serializes it to JSON.
+// Returns pre-serialized JSON for efficient batch building, the original
+// APIMessage for callbacks, and any serialization error.
+// Size is derived from len(json.RawMessage) when needed - O(1) operation.
+func prepareForSend(msg Message) (json.RawMessage, APIMessage, error) {
+	apiMsg := msg.APIfy()
+	data, err := json.Marshal(apiMsg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return json.RawMessage(data), apiMsg, nil
+}
+
 const (
 	maxBatchBytes   = 500000
 	maxMessageBytes = 500000

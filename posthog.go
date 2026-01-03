@@ -295,7 +295,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		// Prepare message: serialize to JSON for efficient batch building
-		data, apiMsg, serErr := m.prepareForSend()
+		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			err = serErr
 			return
@@ -308,7 +308,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		// Prepare message: serialize to JSON for efficient batch building
-		data, apiMsg, serErr := m.prepareForSend()
+		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			err = serErr
 			return
@@ -320,7 +320,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		// Prepare message: serialize to JSON for efficient batch building
-		data, apiMsg, serErr := m.prepareForSend()
+		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			err = serErr
 			return
@@ -374,7 +374,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
 		// Prepare message: serialize to JSON for efficient batch building
-		data, apiMsg, serErr := m.prepareForSend()
+		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			err = serErr
 			return
@@ -387,7 +387,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		// Prepare message: serialize to JSON for efficient batch building
-		data, apiMsg, serErr := m.prepareForSend()
+		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			err = serErr
 			return
@@ -863,34 +863,35 @@ func (c *client) loop() {
 			// Close msgs channel to stop accepting new messages
 			close(c.msgs)
 
-			// Drain remaining messages
+			// Drain remaining messages using same logic as normal processing
 			for prepared := range c.msgs {
 				msgSize := len(prepared.data)
+
 				if msgSize > maxMessageBytes {
+					c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
 					c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
 					continue
 				}
 
 				if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
-					if !c.sendBatch(preparedBatch{data: batchData, msgs: batchMsgs}) {
-						c.Errorf("sending batch failed during shutdown - %s", ErrTooManyRequests)
-						c.notifyFailure(batchMsgs, ErrTooManyRequests)
-					}
+					flushBatch()
 					resetBatch()
 				}
 
 				batchData = append(batchData, prepared.data)
 				batchMsgs = append(batchMsgs, prepared.msg)
 				batchSize += msgSize
+
+				if len(batchData) >= c.BatchSize {
+					flushBatch()
+					resetBatch()
+				}
 			}
 
 			// Flush any remaining messages
 			if len(batchData) > 0 {
 				c.debugf("flushing final batch of %d messages", len(batchData))
-				if !c.sendBatch(preparedBatch{data: batchData, msgs: batchMsgs}) {
-					c.Errorf("sending final batch failed - %s", ErrTooManyRequests)
-					c.notifyFailure(batchMsgs, ErrTooManyRequests)
-				}
+				flushBatch()
 			}
 
 			// Wait for workers with timeout

@@ -2,8 +2,6 @@ package posthog
 
 import (
 	"time"
-
-	json "github.com/goccy/go-json"
 )
 
 var _ Message = (*Exception)(nil)
@@ -140,14 +138,6 @@ func (msg Exception) APIfy() APIMessage {
 // prepareForSend creates the API message and serializes it to JSON.
 // Returns pre-serialized JSON for efficient batch building, the original
 // APIMessage for callbacks, and any serialization error.
-func (msg Exception) prepareForSend() (json.RawMessage, APIMessage, error) {
-	apiMsg := msg.APIfy()
-	data, err := json.Marshal(apiMsg)
-	if err != nil {
-		return nil, nil, err
-	}
-	return json.RawMessage(data), apiMsg, nil
-}
 
 // NewDefaultException is a convenience function to build an Exception object (usable for `client.Enqueue`)
 // with sane defaults. If you want more control, please manually build the Exception object.
