@@ -1,10 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
+	json "github.com/goccy/go-json"
 	"github.com/posthog/posthog-go"
 )
 
