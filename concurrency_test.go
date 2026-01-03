@@ -301,7 +301,7 @@ func TestConcurrentPrepareForSend(t *testing.T) {
 			defer wg.Done()
 			var total int
 			for i := 0; i < callsPerGoroutine; i++ {
-				data, _, err := capture.prepareForSend()
+				data, _, err := prepareForSend(capture)
 				if err != nil {
 					t.Errorf("prepareForSend error: %v", err)
 					return

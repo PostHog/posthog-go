@@ -3,8 +3,6 @@ package posthog
 import (
 	"fmt"
 	"time"
-
-	json "github.com/goccy/go-json"
 )
 
 type GroupIdentify struct {
@@ -77,14 +75,3 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	return apified
 }
 
-// prepareForSend creates the API message and serializes it to JSON.
-// Returns pre-serialized JSON for efficient batch building, the original
-// APIMessage for callbacks, and any serialization error.
-func (msg GroupIdentify) prepareForSend() (json.RawMessage, APIMessage, error) {
-	apiMsg := msg.APIfy()
-	data, err := json.Marshal(apiMsg)
-	if err != nil {
-		return nil, nil, err
-	}
-	return json.RawMessage(data), apiMsg, nil
-}
