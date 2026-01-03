@@ -2,8 +2,9 @@ package posthog
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+
+
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	json "github.com/goccy/go-json"
 )
 
 // Note: Property matching tests (TestMatchProperty*) have been moved to feature_flags_matching_test.go

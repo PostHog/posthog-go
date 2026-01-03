@@ -3,13 +3,12 @@ package posthog
 import (
 	"bytes"
 	"fmt"
-
-	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"testing"
+
+	json "github.com/goccy/go-json"
 )
 
 // BenchmarkJSONMarshalBatch benchmarks JSON serialization at various batch sizes
@@ -101,45 +100,6 @@ func BenchmarkPrepareForSend_Cardinality(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				prepareForSend(captures[i%100])
-			}
-		})
-	}
-}
-
-// BenchmarkStructToMap benchmarks struct-to-map conversion
-func BenchmarkStructToMap(b *testing.B) {
-	capture := generateVariedCapture(42)
-	v := reflect.ValueOf(capture)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		structToMap(v, nil)
-	}
-}
-
-// BenchmarkStructToMapWithCardinality benchmarks struct-to-map with various cardinalities
-func BenchmarkStructToMapWithCardinality(b *testing.B) {
-	cardinalities := []struct {
-		name        string
-		cardinality PropertyCardinality
-	}{
-		{"low", CardinalityLow},
-		{"medium", CardinalityMedium},
-		{"high", CardinalityHigh},
-	}
-
-	for _, tc := range cardinalities {
-		b.Run(tc.name, func(b *testing.B) {
-			capture := Capture{
-				DistinctId: "user_1",
-				Event:      "test_event",
-				Properties: generatePropertiesWithCardinality(42, tc.cardinality),
-				Groups:     generateGroupsWithCardinality(42, tc.cardinality),
-			}
-			v := reflect.ValueOf(capture)
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				structToMap(v, nil)
 			}
 		})
 	}
