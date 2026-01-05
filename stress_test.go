@@ -430,9 +430,9 @@ func TestStress_RapidCloseReopen(t *testing.T) {
 	var totalErrors int
 	for i := 0; i < iterations; i++ {
 		client, err := NewWithConfig("test-key", Config{
-			Endpoint:   server.URL,
-			BatchSize:  25,
-			MaxEnqueuedRequests: 100,
+			Endpoint:  server.URL,
+			BatchSize: 25,
+			// Uses production defaults for MaxEnqueuedRequests
 		})
 		require.NoError(t, err)
 

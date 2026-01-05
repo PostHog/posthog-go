@@ -218,9 +218,9 @@ func TestConcurrentClientOperations(t *testing.T) {
 			defer server.Close()
 
 			client, err := NewWithConfig("test-key", Config{
-				Endpoint:   server.URL,
-				BatchSize:  50,
-				MaxEnqueuedRequests: 100,
+				Endpoint:  server.URL,
+				BatchSize: 50,
+				// Uses production defaults for MaxEnqueuedRequests
 			})
 			require.NoError(t, err)
 
@@ -394,10 +394,10 @@ func TestConcurrentCallbackExecution(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:   server.URL,
-		BatchSize:  50,
-		MaxEnqueuedRequests: 100,
-		Callback:   callback,
+		Endpoint:  server.URL,
+		BatchSize: 50,
+		Callback:  callback,
+		// Uses production defaults for MaxEnqueuedRequests
 	})
 	require.NoError(t, err)
 
