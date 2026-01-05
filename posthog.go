@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,20 +15,6 @@ import (
 	json "github.com/goccy/go-json"
 	"github.com/hashicorp/golang-lru/v2"
 )
-
-// #region agent log
-func debugLog(msg string, hypothesisId string, data map[string]interface{}) {
-	f, err := os.OpenFile("/Users/elireisman/src/posthog-go/.cursor/debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	entry := map[string]interface{}{"timestamp": time.Now().UnixMilli(), "message": msg, "hypothesisId": hypothesisId, "data": data, "sessionId": "debug-session"}
-	b, _ := json.Marshal(entry)
-	f.Write(append(b, '\n'))
-}
-
-// #endregion
 
 const (
 	unimplementedError = "not implemented"
@@ -625,9 +610,6 @@ func (c *client) Close() error {
 // is cancelled before shutdown completes, in-flight requests may be aborted.
 // CloseWithContext is safe to call multiple times; subsequent calls return ErrClosed.
 func (c *client) CloseWithContext(ctx context.Context) error {
-	// #region agent log
-	debugLog("CloseWithContext_start", "H1", map[string]interface{}{"endpoint": c.Endpoint})
-	// #endregion
 	var err error
 	alreadyClosed := true
 
@@ -638,22 +620,13 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 
 		// Signal the batch loop to stop and drain
 		close(c.quit)
-		// #region agent log
-		debugLog("quit_closed", "H1", nil)
-		// #endregion
 
 		// Wait for shutdown with timeout from provided context
 		select {
 		case <-c.shutdown:
-			// #region agent log
-			debugLog("shutdown_received", "H1", nil)
-			// #endregion
 			// Clean shutdown completed
 			c.debugf("shutdown completed successfully")
 		case <-ctx.Done():
-			// #region agent log
-			debugLog("ctx_timeout", "H1", map[string]interface{}{"err": ctx.Err().Error()})
-			// #endregion
 			// Timeout exceeded - cancel client context to abort in-flight requests
 			c.cancel()
 			err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
@@ -671,10 +644,6 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 
 // worker consumes batches from channel until closed.
 func (c *client) worker() {
-	// #region agent log
-	debugLog("worker_start", "H3", nil)
-	defer debugLog("worker_exit", "H3", nil)
-	// #endregion
 	for batch := range c.batches {
 		c.processBatch(batch)
 	}
@@ -698,14 +667,31 @@ func (c *client) processBatch(batch preparedBatch) {
 }
 
 // sendBatch attempts to send a batch to the worker pool.
-// Returns true if successful, false if the worker pool is at capacity.
+// Returns true if successful, false if the worker pool is at capacity after
+// waiting for BatchSubmitTimeout (default 100ms). This backpressure smoothing
+// allows workers to complete during transient latency spikes, reducing data loss.
+// Set BatchSubmitTimeout to a negative value for non-blocking behavior.
 func (c *client) sendBatch(batch preparedBatch) bool {
 	c.inFlight.Add(1)
+
+	// Negative timeout = non-blocking (immediate drop when queue is full)
+	if c.BatchSubmitTimeout < 0 {
+		select {
+		case c.batches <- batch:
+			return true
+		default:
+			c.inFlight.Add(-1)
+			return false
+		}
+	}
+
+	// Blocking send with timeout - allows workers to complete during latency spikes
+	timer := time.NewTimer(c.BatchSubmitTimeout)
 	select {
 	case c.batches <- batch:
+		timer.Stop()
 		return true
-	default:
-		// Channel full - reject batch
+	case <-timer.C:
 		c.inFlight.Add(-1)
 		return false
 	}
@@ -713,29 +699,17 @@ func (c *client) sendBatch(batch preparedBatch) bool {
 
 // awaitDrain polls until all in-flight batches complete or context times out.
 func (c *client) awaitDrain(ctx context.Context) error {
-	// #region agent log
-	pollCount := 0
-	// #endregion
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	for c.inFlight.Load() > 0 {
-		// #region agent log
-		pollCount++
-		if pollCount <= 3 || pollCount%10 == 0 {
-			debugLog("awaitDrain_polling", "H2", map[string]interface{}{"inFlight": c.inFlight.Load(), "pollCount": pollCount})
-		}
-		// #endregion
 		select {
 		case <-ctx.Done():
-			// #region agent log
-			debugLog("awaitDrain_ctx_done", "H2", map[string]interface{}{"inFlight": c.inFlight.Load(), "pollCount": pollCount})
-			// #endregion
 			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-ticker.C:
 			// continue polling
 		}
 	}
-	// #region agent log
-	debugLog("awaitDrain_complete", "H2", map[string]interface{}{"pollCount": pollCount})
-	// #endregion
 	c.debugf("all in-flight batches completed")
 	return nil
 }
@@ -770,15 +744,22 @@ func (c *client) send(pb preparedBatch) {
 		}
 
 		// Wait for retry or shutdown
+		retryTimer := time.NewTimer(c.RetryAfter(i))
 		select {
-		case <-time.After(c.RetryAfter(i)):
+		case <-retryTimer.C:
 			// continue to next attempt
 		case <-c.quit:
-			// Shutdown initiated - exit retry loop immediately
+			// Shutdown initiated - stop timer and exit retry loop
+			if !retryTimer.Stop() {
+				<-retryTimer.C // Drain channel if timer already fired
+			}
 			c.notifyFailure(pb.msgs, err)
 			return
 		case <-c.ctx.Done():
-			// Context cancelled (shutdown timeout exceeded)
+			// Context cancelled - stop timer and exit
+			if !retryTimer.Stop() {
+				<-retryTimer.C // Drain channel if timer already fired
+			}
 			c.notifyFailure(pb.msgs, err)
 			return
 		}
@@ -834,9 +815,6 @@ func (c *client) report(res *http.Response) (err error) {
 // loop processes messages from the msgs channel, batches them by size,
 // and sends batches to the worker pool.
 func (c *client) loop() {
-	// #region agent log
-	debugLog("loop_start", "H1", map[string]interface{}{"endpoint": c.Endpoint})
-	// #endregion
 	defer close(c.batches) // signal workers to exit
 	defer close(c.shutdown)
 	if c.featureFlagsPoller != nil {
@@ -912,9 +890,6 @@ func (c *client) loop() {
 			}
 
 		case <-c.quit:
-			// #region agent log
-			debugLog("quit_received", "H1", map[string]interface{}{"batchLen": len(batchData), "inFlight": c.inFlight.Load()})
-			// #endregion
 			c.debugf("shutdown requested – draining messages")
 
 			// Close msgs channel to stop accepting new messages
@@ -931,16 +906,10 @@ func (c *client) loop() {
 				flushBatch()
 			}
 
-			// #region agent log
-			debugLog("before_awaitDrain", "H2", map[string]interface{}{"inFlight": c.inFlight.Load()})
-			// #endregion
 			// Wait for workers with timeout
 			if err := c.awaitDrain(c.ctx); err != nil {
 				c.Warnf("shutdown timeout: %d batches still in flight", c.inFlight.Load())
 			}
-			// #region agent log
-			debugLog("after_awaitDrain", "H2", map[string]interface{}{"inFlight": c.inFlight.Load()})
-			// #endregion
 
 			c.debugf("shutdown complete")
 			return

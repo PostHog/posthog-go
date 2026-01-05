@@ -98,6 +98,13 @@ type Config struct {
 	// /batch/ endpoint. If zero, defaults to 10 seconds.
 	BatchUploadTimeout time.Duration
 
+	// BatchSubmitTimeout is the maximum time to wait when submitting a batch
+	// to the worker pool if the queue is full. This provides backpressure
+	// smoothing during transient backend latency spikes, reducing data loss.
+	// If zero, defaults to 100ms. Set to a negative value for non-blocking
+	// behavior (immediate drop when queue is full).
+	BatchSubmitTimeout time.Duration
+
 	// NumWorkers is the number of worker goroutines for sending batches.
 	// If zero, defaults to 100.
 	NumWorkers int
@@ -145,6 +152,11 @@ const (
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
 	// events to the /batch/ endpoint.
 	DefaultBatchUploadTimeout = 10 * time.Second
+
+	// DefaultBatchSubmitTimeout is the default timeout for submitting batches
+	// to the worker pool when the queue is full. This allows workers time to
+	// complete during transient latency spikes, reducing unnecessary data loss.
+	DefaultBatchSubmitTimeout = 100 * time.Millisecond
 
 	// DefaultNumWorkers is the default number of worker goroutines for sending batches.
 	DefaultNumWorkers = 100
@@ -239,6 +251,10 @@ func makeConfig(c Config) Config {
 
 	if c.BatchUploadTimeout == 0 {
 		c.BatchUploadTimeout = DefaultBatchUploadTimeout
+	}
+
+	if c.BatchSubmitTimeout == 0 {
+		c.BatchSubmitTimeout = DefaultBatchSubmitTimeout
 	}
 
 	if c.NumWorkers == 0 {

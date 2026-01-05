@@ -246,3 +246,128 @@ func (c *testCallbackCounter) Failure(msg APIMessage, err error) {
 	}
 }
 
+// TestConfigBatchSubmitTimeout verifies the default and custom BatchSubmitTimeout config
+func TestConfigBatchSubmitTimeout(t *testing.T) {
+	t.Parallel()
+
+	// Test default value
+	cfg := makeConfig(Config{})
+	require.Equal(t, DefaultBatchSubmitTimeout, cfg.BatchSubmitTimeout, "default BatchSubmitTimeout should be %v", DefaultBatchSubmitTimeout)
+
+	// Test custom value
+	customTimeout := 200 * time.Millisecond
+	cfg = makeConfig(Config{BatchSubmitTimeout: customTimeout})
+	require.Equal(t, customTimeout, cfg.BatchSubmitTimeout, "custom BatchSubmitTimeout should be preserved")
+
+	// Test negative value (non-blocking mode)
+	cfg = makeConfig(Config{BatchSubmitTimeout: -1})
+	require.Equal(t, time.Duration(-1), cfg.BatchSubmitTimeout, "negative BatchSubmitTimeout should be preserved")
+}
+
+// TestBatchSubmitTimeout_WaitsForWorkers verifies that batch submission waits
+// when queue is full, giving workers time to complete during latency spikes
+func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var batchCount int
+
+	// Create a slow handler that simulates backend latency
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond) // Simulate latency
+		mu.Lock()
+		batchCount++
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+
+	// Use minimal workers to easily saturate the queue
+	client, err := NewWithConfig("test-key", Config{
+		Endpoint:           server.URL,
+		BatchSize:          1,                      // 1 event per batch
+		Interval:           1 * time.Millisecond,   // Flush immediately
+		NumWorkers:         2,                      // Only 2 workers
+		BatchSubmitTimeout: 200 * time.Millisecond, // Wait up to 200ms for queue space
+	})
+	require.NoError(t, err)
+
+	// Send events - some may need to wait for queue space
+	for i := 0; i < 10; i++ {
+		client.Enqueue(Capture{
+			DistinctId: "test-user",
+			Event:      "test-event",
+		})
+	}
+
+	client.Close()
+
+	mu.Lock()
+	finalBatchCount := batchCount
+	mu.Unlock()
+
+	// With timeout, we should be able to send all events even with slow backend
+	require.GreaterOrEqual(t, finalBatchCount, 8, "With BatchSubmitTimeout, most events should be delivered even with slow backend")
+}
+
+// TestBatchSubmitTimeout_NonBlocking verifies that negative timeout gives non-blocking behavior
+func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var successCount int
+	var failureCount int
+
+	// Create a very slow handler to saturate workers
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond) // Very slow backend
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+
+	callback := &testCallbackCounter{
+		onSuccess: func() {
+			mu.Lock()
+			successCount++
+			mu.Unlock()
+		},
+		onFailure: func() {
+			mu.Lock()
+			failureCount++
+			mu.Unlock()
+		},
+	}
+
+	// Use non-blocking mode with negative timeout
+	client, err := NewWithConfig("test-key", Config{
+		Endpoint:           server.URL,
+		BatchSize:          1,                    // 1 event per batch
+		Interval:           1 * time.Millisecond, // Flush immediately
+		NumWorkers:         1,                    // Only 1 worker
+		BatchSubmitTimeout: -1,                   // Non-blocking (immediate drop)
+		Callback:           callback,
+	})
+	require.NoError(t, err)
+
+	// Blast events quickly - most will be dropped since worker is busy
+	for i := 0; i < 50; i++ {
+		client.Enqueue(Capture{
+			DistinctId: "test-user",
+			Event:      "test-event",
+		})
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	client.Close()
+
+	mu.Lock()
+	finalSuccess := successCount
+	finalFailure := failureCount
+	mu.Unlock()
+
+	t.Logf("Non-blocking mode: %d succeeded, %d failed", finalSuccess, finalFailure)
+
+	// In non-blocking mode with slow backend, some events should be dropped
+	require.Greater(t, finalFailure, 0, "In non-blocking mode with slow backend, some events should be dropped")
+}
+
