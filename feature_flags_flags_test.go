@@ -79,6 +79,7 @@ func TestFlags(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		test := test // Capture loop variable for Go 1.21 compatibility
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/flags") {
 				w.Write([]byte(fixture(test.fixture)))

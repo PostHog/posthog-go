@@ -132,11 +132,32 @@ func TestConcurrentFeatureFlagEvaluation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"featureFlags": map[string]interface{}{
-				"test-flag": true,
-			},
-		})
+		// Return proper format for both local evaluation and flags endpoints
+		if r.URL.Path == "/api/feature_flag/local_evaluation" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"flags": []map[string]interface{}{
+					{
+						"id":     1,
+						"key":    "test-flag",
+						"active": true,
+						"filters": map[string]interface{}{
+							"groups": []map[string]interface{}{
+								{
+									"rollout_percentage": 100,
+								},
+							},
+						},
+					},
+				},
+				"group_type_mapping": map[string]string{},
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"featureFlags": map[string]interface{}{
+					"test-flag": true,
+				},
+			})
+		}
 	}))
 	defer server.Close()
 
@@ -146,6 +167,9 @@ func TestConcurrentFeatureFlagEvaluation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer client.Close()
+
+	// Wait for initial flag fetch to complete
+	time.Sleep(100 * time.Millisecond)
 
 	goroutines := 100
 	evaluationsPerGoroutine := 50
