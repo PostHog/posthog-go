@@ -352,13 +352,14 @@ func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Blast events quickly - most will be dropped since worker is busy
-	for i := 0; i < 50; i++ {
+	// Blast events as fast as possible - no sleep between enqueues.
+	// This ensures the channel fills faster than processBatch goroutines can drain it,
+	// causing the non-blocking send to drop events when the queue is full.
+	for i := 0; i < 100; i++ {
 		client.Enqueue(Capture{
 			DistinctId: "test-user",
 			Event:      "test-event",
 		})
-		time.Sleep(1 * time.Millisecond)
 	}
 
 	client.Close()
