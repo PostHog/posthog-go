@@ -34,7 +34,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	require.NoError(t, err)
 
@@ -77,7 +77,7 @@ func TestConcurrentEnqueueDifferentMessageTypes(t *testing.T) {
 
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	require.NoError(t, err)
 
@@ -220,7 +220,7 @@ func TestConcurrentClientOperations(t *testing.T) {
 			client, err := NewWithConfig("test-key", Config{
 				Endpoint:   server.URL,
 				BatchSize:  50,
-				NumWorkers: 100,
+				MaxEnqueuedRequests: 100,
 			})
 			require.NoError(t, err)
 
@@ -274,7 +274,7 @@ func TestConcurrentEnqueueWithSlowServer(t *testing.T) {
 
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	require.NoError(t, err)
 
@@ -396,7 +396,7 @@ func TestConcurrentCallbackExecution(t *testing.T) {
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:   server.URL,
 		BatchSize:  50,
-		NumWorkers: 100,
+		MaxEnqueuedRequests: 100,
 		Callback:   callback,
 	})
 	require.NoError(t, err)
@@ -445,7 +445,7 @@ func TestRaceConditionDetection(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			client, _ := NewWithConfig("test-key", Config{
 				Endpoint: server.URL,
-				// Uses production defaults: BatchSize=250, NumWorkers=100
+				// Uses production defaults for BatchSize, MaxEnqueuedRequests
 			})
 
 			var wg sync.WaitGroup

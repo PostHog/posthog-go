@@ -46,7 +46,7 @@ func BenchmarkConcurrentEnqueue(b *testing.B) {
 			client, _ := NewWithConfig("test-key", Config{
 				Transport: NoOpTransport(),
 				Callback:  callback,
-				// Uses production defaults: BatchSize=250, NumWorkers=100
+				// Uses production defaults for BatchSize, MaxEnqueuedRequests
 			})
 			defer client.Close()
 
@@ -98,7 +98,7 @@ func BenchmarkConcurrentEnqueueWithCardinality(b *testing.B) {
 			client, _ := NewWithConfig("test-key", Config{
 				Transport: NoOpTransport(),
 				Callback:  callback,
-				// Uses production defaults: BatchSize=250, NumWorkers=100
+				// Uses production defaults for BatchSize, MaxEnqueuedRequests
 			})
 			defer client.Close()
 
@@ -126,7 +126,7 @@ func BenchmarkConcurrentEnqueueWithCardinality(b *testing.B) {
 }
 
 // BenchmarkEnqueueThroughput measures raw enqueue speed (no HTTP)
-// Uses production defaults: BatchSize=250, NumWorkers=100
+// Uses production defaults for BatchSize, MaxEnqueuedRequests
 func BenchmarkEnqueueThroughput(b *testing.B) {
 	pool := NewEventPool(b.N + 1000)
 
@@ -137,7 +137,7 @@ func BenchmarkEnqueueThroughput(b *testing.B) {
 	client, _ := NewWithConfig("test-key", Config{
 		Transport: NoOpTransport(),
 		Callback:  callback,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	defer client.Close()
 
@@ -156,7 +156,7 @@ func BenchmarkEnqueueThroughput(b *testing.B) {
 }
 
 // BenchmarkEnqueueThroughputWithCardinality measures enqueue speed at different cardinalities
-// Uses production defaults: BatchSize=250, NumWorkers=100
+// Uses production defaults for BatchSize, MaxEnqueuedRequests
 func BenchmarkEnqueueThroughputWithCardinality(b *testing.B) {
 	cardinalities := []struct {
 		name        string
@@ -178,7 +178,7 @@ func BenchmarkEnqueueThroughputWithCardinality(b *testing.B) {
 			client, _ := NewWithConfig("test-key", Config{
 				Transport: NoOpTransport(),
 				Callback:  callback,
-				// Uses production defaults: BatchSize=250, NumWorkers=100
+				// Uses production defaults for BatchSize, MaxEnqueuedRequests
 			})
 			defer client.Close()
 
@@ -279,7 +279,7 @@ func BenchmarkBatchSizes(b *testing.B) {
 }
 
 // BenchmarkEndToEndWithServer measures end-to-end throughput including HTTP
-// Uses production defaults: BatchSize=250, NumWorkers=100
+// Uses production defaults for BatchSize, MaxEnqueuedRequests
 func BenchmarkEndToEndWithServer(b *testing.B) {
 	pool := NewEventPool(b.N + 1000)
 
@@ -292,7 +292,7 @@ func BenchmarkEndToEndWithServer(b *testing.B) {
 	client, _ := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
 		Callback: callback,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	defer client.Close()
 

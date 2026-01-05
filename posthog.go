@@ -21,6 +21,13 @@ const (
 	CACHE_DEFAULT_SIZE = 300_000
 
 	propertyGeoipDisable = "$geoip_disable"
+
+	// DefaultIdleConns is the default max idle connections for the HTTP client.
+	DefaultIdleConns = 100
+	// DefaultIdleConnsPerHost is the default max idle connections per host.
+	// This is higher than http.DefaultTransport's value of 2 to reduce
+	// connection churn when sending batches.
+	DefaultIdleConnsPerHost = 10
 )
 
 type EnqueueClient interface {
@@ -103,7 +110,8 @@ type client struct {
 	// pre-computed size to avoid race conditions.
 	msgs chan preparedMessage
 
-	// Channel for sending batches to worker pool
+	// Channel for sending batches to workers. Acts as both a queue and
+	// concurrency limiter - when full, new batches are shed via failure callback.
 	batches chan preparedBatch
 
 	// Tracks in-flight batches for graceful shutdown
@@ -172,10 +180,11 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
 	}
 
-	// Ensure channel buffers have a reasonable minimum size,
-	// preventing backpressure from a small NumWorkers value
-	batchesQueueSize := max(10, config.NumWorkers)
-	msgQueueSize := config.BatchSize * batchesQueueSize
+	// Channel sizing:
+	// - batches queue sized by MaxEnqueuedRequests (default 1000)
+	// - msgs queue sized to hold multiple batches worth of messages
+	batchesQueueSize := config.MaxEnqueuedRequests
+	msgQueueSize := max(100, config.BatchSize*10)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &client{
@@ -214,11 +223,6 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		}
 	}
 
-	// Start fixed worker pool
-	for i := 0; i < config.NumWorkers; i++ {
-		go c.worker()
-	}
-
 	go c.loop()
 
 	cli = c
@@ -226,6 +230,14 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 }
 
 func makeHttpClient(transport http.RoundTripper, timeout time.Duration) http.Client {
+	// If no custom transport provided, clone DefaultTransport with tuned connection pool
+	if transport == nil {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.MaxIdleConns = DefaultIdleConns
+		t.MaxIdleConnsPerHost = DefaultIdleConnsPerHost
+		transport = t
+	}
+
 	httpClient := http.Client{
 		Transport: transport,
 	}
@@ -642,23 +654,25 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 	return err
 }
 
-// worker consumes batches from channel until closed.
-func (c *client) worker() {
-	for batch := range c.batches {
-		c.processBatch(batch)
-	}
-}
-
 // processBatch handles a single batch with guaranteed counter decrement.
-func (c *client) processBatch(batch preparedBatch) {
+// It receives the batch from the channel and processes it.
+func (c *client) processBatch() {
+	// Receive batch from channel - this also "releases" the semaphore slot
+	batch, ok := <-c.batches
+	if !ok {
+		// Channel closed during shutdown
+		c.inFlight.Add(-1)
+		return
+	}
+
 	// CRITICAL: defer ensures counter decrements on ANY exit path
 	// (success, JSON error, HTTP error, panic, context cancellation)
 	defer c.inFlight.Add(-1)
 
-	// Recover from panics to prevent worker death
+	// Recover from panics to prevent goroutine death without cleanup
 	defer func() {
 		if err := recover(); err != nil {
-			c.Errorf("panic in worker: %v", err)
+			c.Errorf("panic in batch processor: %v", err)
 			c.notifyFailure(batch.msgs, fmt.Errorf("panic: %v", err))
 		}
 	}()
@@ -666,11 +680,14 @@ func (c *client) processBatch(batch preparedBatch) {
 	c.send(batch)
 }
 
-// sendBatch attempts to send a batch to the worker pool.
-// Returns true if successful, false if the worker pool is at capacity after
-// waiting for BatchSubmitTimeout (default 100ms). This backpressure smoothing
-// allows workers to complete during transient latency spikes, reducing data loss.
+// sendBatch attempts to enqueue a batch for processing.
+// Returns true if successful, false if the queue is full after waiting for
+// BatchSubmitTimeout (default 100ms). This backpressure smoothing allows
+// in-flight requests to complete during transient latency spikes, reducing data loss.
 // Set BatchSubmitTimeout to a negative value for non-blocking behavior.
+//
+// On success, spawns a goroutine to process the batch. The batches channel
+// acts as both a queue and concurrency limiter.
 func (c *client) sendBatch(batch preparedBatch) bool {
 	c.inFlight.Add(1)
 
@@ -678,6 +695,7 @@ func (c *client) sendBatch(batch preparedBatch) bool {
 	if c.BatchSubmitTimeout < 0 {
 		select {
 		case c.batches <- batch:
+			go c.processBatch()
 			return true
 		default:
 			c.inFlight.Add(-1)
@@ -685,11 +703,12 @@ func (c *client) sendBatch(batch preparedBatch) bool {
 		}
 	}
 
-	// Blocking send with timeout - allows workers to complete during latency spikes
+	// Blocking send with timeout - allows in-flight requests to complete during latency spikes
 	timer := time.NewTimer(c.BatchSubmitTimeout)
 	select {
 	case c.batches <- batch:
 		timer.Stop()
+		go c.processBatch()
 		return true
 	case <-timer.C:
 		c.inFlight.Add(-1)
@@ -813,9 +832,9 @@ func (c *client) report(res *http.Response) (err error) {
 }
 
 // loop processes messages from the msgs channel, batches them by size,
-// and sends batches to the worker pool.
+// and spawns goroutines to send batches.
 func (c *client) loop() {
-	defer close(c.batches) // signal workers to exit
+	defer close(c.batches) // prevent any pending receives from blocking
 	defer close(c.shutdown)
 	if c.featureFlagsPoller != nil {
 		defer c.featureFlagsPoller.shutdownPoller()
@@ -906,7 +925,7 @@ func (c *client) loop() {
 				flushBatch()
 			}
 
-			// Wait for workers with timeout
+			// Wait for in-flight batches to complete
 			if err := c.awaitDrain(c.ctx); err != nil {
 				c.Warnf("shutdown timeout: %d batches still in flight", c.inFlight.Load())
 			}

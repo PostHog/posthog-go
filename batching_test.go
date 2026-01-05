@@ -283,14 +283,14 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Config: queue buffer = NumWorkers = 10
-	// With 20 events, queue will fill and submissions must wait for workers
+	// Config: queue buffer = MaxEnqueuedRequests = 10
+	// With 20 events, queue will fill and submissions must wait for goroutines
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:           server.URL,
-		BatchSize:          1,                      // 1 event per batch
-		Interval:           1 * time.Millisecond,   // Flush immediately
-		NumWorkers:         10,                     // Queue buffer = 10
-		BatchSubmitTimeout: 500 * time.Millisecond, // Ample time for race mode
+		Endpoint:            server.URL,
+		BatchSize:           1,                      // 1 event per batch
+		Interval:            1 * time.Millisecond,   // Flush immediately
+		MaxEnqueuedRequests: 10,                     // Queue buffer = 10
+		BatchSubmitTimeout:  500 * time.Millisecond, // Ample time for race mode
 	})
 	require.NoError(t, err)
 
@@ -344,10 +344,10 @@ func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
 	// Use non-blocking mode with negative timeout
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:           server.URL,
-		BatchSize:          1,                    // 1 event per batch
-		Interval:           1 * time.Millisecond, // Flush immediately
-		NumWorkers:         1,                    // Only 1 worker
-		BatchSubmitTimeout: -1,                   // Non-blocking (immediate drop)
+		BatchSize:           1,                    // 1 event per batch
+		Interval:            1 * time.Millisecond, // Flush immediately
+		MaxEnqueuedRequests: 1,                    // Only 1 batch can be queued
+		BatchSubmitTimeout:  -1,                   // Non-blocking (immediate drop)
 		Callback:           callback,
 	})
 	require.NoError(t, err)

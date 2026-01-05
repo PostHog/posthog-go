@@ -847,8 +847,8 @@ func TestClientWorkerPool(t *testing.T) {
 		},
 		Transport: testTransportDelayed,
 		// Use single worker with small batch size to test sequential processing
-		BatchSize:  1,
-		NumWorkers: 1,
+		BatchSize:           1,
+		MaxEnqueuedRequests: 1,
 	})
 	require.NoError(t, err)
 

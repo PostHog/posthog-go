@@ -38,7 +38,7 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 
 				client, err := NewWithConfig("test-key", Config{
 					Endpoint: server.URL,
-					// Uses production defaults: BatchSize=250, NumWorkers=100
+					// Uses production defaults for BatchSize, MaxEnqueuedRequests
 				})
 				require.NoError(t, err)
 
@@ -189,9 +189,9 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 
 		client, err := NewWithConfig("test-key", Config{
 			Endpoint: server.URL,
-			// Uses production defaults: BatchSize=250, NumWorkers=100
+			// Uses production defaults for BatchSize, MaxEnqueuedRequests
 		})
-			require.NoError(t, err)
+		require.NoError(t, err)
 
 			start := time.Now()
 
@@ -252,7 +252,7 @@ func TestStress_HighConcurrencyLowVolume(t *testing.T) {
 
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	require.NoError(t, err)
 
@@ -305,9 +305,9 @@ func TestStress_LowConcurrencyHighVolume(t *testing.T) {
 	}))
 	defer server.Close()
 
-		client, err := NewWithConfig("test-key", Config{
+	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	require.NoError(t, err)
 
@@ -365,7 +365,7 @@ func TestStress_MixedCardinality(t *testing.T) {
 
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		// Uses production defaults: BatchSize=250, NumWorkers=100
+		// Uses production defaults for BatchSize, MaxEnqueuedRequests
 	})
 	require.NoError(t, err)
 
@@ -432,7 +432,7 @@ func TestStress_RapidCloseReopen(t *testing.T) {
 		client, err := NewWithConfig("test-key", Config{
 			Endpoint:   server.URL,
 			BatchSize:  25,
-			NumWorkers: 100,
+			MaxEnqueuedRequests: 100,
 		})
 		require.NoError(t, err)
 

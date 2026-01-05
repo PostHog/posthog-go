@@ -105,9 +105,10 @@ type Config struct {
 	// behavior (immediate drop when queue is full).
 	BatchSubmitTimeout time.Duration
 
-	// NumWorkers is the number of worker goroutines for sending batches.
-	// If zero, defaults to 100.
-	NumWorkers int
+	// MaxEnqueuedRequests is the maximum number of batches that can be queued
+	// for sending. When the queue is full, new batches are dropped and the
+	// failure callback is invoked. If zero, defaults to 1000.
+	MaxEnqueuedRequests int
 
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
@@ -158,8 +159,9 @@ const (
 	// complete during transient latency spikes, reducing unnecessary data loss.
 	DefaultBatchSubmitTimeout = 100 * time.Millisecond
 
-	// DefaultNumWorkers is the default number of worker goroutines for sending batches.
-	DefaultNumWorkers = 100
+	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
+	// can be queued for sending.
+	DefaultMaxEnqueuedRequests = 1000
 )
 
 // Validate verifies that fields that don't have zero-values are set to valid values,
@@ -189,7 +191,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.MaxRetries != nil && (*c.MaxRetries < 0 || 9 < *c.MaxRetries) {
+	if c.MaxRetries != nil && (*c.MaxRetries < 0 || *c.MaxRetries > 9) {
 		return ConfigError{
 			Reason: "max retries out of range [0,9]",
 			Field:  "MaxRetries",
@@ -219,9 +221,8 @@ func makeConfig(c Config) Config {
 		c.FeatureFlagRequestTimeout = DefaultFeatureFlagRequestTimeout
 	}
 
-	if c.Transport == nil {
-		c.Transport = http.DefaultTransport
-	}
+	// Note: c.Transport == nil is handled by makeHttpClient() which clones
+	// DefaultTransport with tuned connection pool settings
 
 	if c.Logger == nil {
 		c.Logger = newDefaultLogger(c.Verbose)
@@ -257,8 +258,8 @@ func makeConfig(c Config) Config {
 		c.BatchSubmitTimeout = DefaultBatchSubmitTimeout
 	}
 
-	if c.NumWorkers == 0 {
-		c.NumWorkers = DefaultNumWorkers
+	if c.MaxEnqueuedRequests == 0 {
+		c.MaxEnqueuedRequests = DefaultMaxEnqueuedRequests
 	}
 
 	if c.GetDisableGeoIP() {
