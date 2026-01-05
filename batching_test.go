@@ -265,16 +265,17 @@ func TestConfigBatchSubmitTimeout(t *testing.T) {
 }
 
 // TestBatchSubmitTimeout_WaitsForWorkers verifies that batch submission waits
-// when queue is full, giving workers time to complete during latency spikes
+// when queue is full, giving workers time to complete during latency spikes.
+// Note: params are tuned for reliability under -race (adds ~10x overhead).
 func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
 	var batchCount int
 
-	// Create a slow handler that simulates backend latency
+	// Create a handler with moderate latency
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond) // Simulate latency
+		time.Sleep(20 * time.Millisecond)
 		mu.Lock()
 		batchCount++
 		mu.Unlock()
@@ -282,18 +283,19 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Use minimal workers to easily saturate the queue
+	// Config: queue buffer = NumWorkers = 10
+	// With 20 events, queue will fill and submissions must wait for workers
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:           server.URL,
 		BatchSize:          1,                      // 1 event per batch
 		Interval:           1 * time.Millisecond,   // Flush immediately
-		NumWorkers:         2,                      // Only 2 workers
-		BatchSubmitTimeout: 200 * time.Millisecond, // Wait up to 200ms for queue space
+		NumWorkers:         10,                     // Queue buffer = 10
+		BatchSubmitTimeout: 500 * time.Millisecond, // Ample time for race mode
 	})
 	require.NoError(t, err)
 
-	// Send events - some may need to wait for queue space
-	for i := 0; i < 10; i++ {
+	// Send 20 events - will exceed queue buffer (10), so some must wait
+	for i := 0; i < 20; i++ {
 		client.Enqueue(Capture{
 			DistinctId: "test-user",
 			Event:      "test-event",
@@ -306,8 +308,9 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	finalBatchCount := batchCount
 	mu.Unlock()
 
-	// With timeout, we should be able to send all events even with slow backend
-	require.GreaterOrEqual(t, finalBatchCount, 8, "With BatchSubmitTimeout, most events should be delivered even with slow backend")
+	// With 500ms timeout and 20ms latency, 10 workers can process ~250 batches
+	// All 20 events should be delivered
+	require.GreaterOrEqual(t, finalBatchCount, 18, "With BatchSubmitTimeout, nearly all events should be delivered")
 }
 
 // TestBatchSubmitTimeout_NonBlocking verifies that negative timeout gives non-blocking behavior

@@ -172,12 +172,17 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
 	}
 
+	// Ensure channel buffers have a reasonable minimum size,
+	// preventing backpressure from a small NumWorkers value
+	batchesQueueSize := max(10, config.NumWorkers)
+	msgQueueSize := config.BatchSize * batchesQueueSize
+
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
-		msgs:                            make(chan preparedMessage, config.BatchSize*config.NumWorkers),
-		batches:                         make(chan preparedBatch, config.NumWorkers),
+		msgs:                            make(chan preparedMessage, msgQueueSize),
+		batches:                         make(chan preparedBatch, batchesQueueSize),
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
 		ctx:                             ctx,
