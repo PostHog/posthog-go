@@ -135,10 +135,6 @@ func (msg Exception) APIfy() APIMessage {
 	}
 }
 
-// prepareForSend creates the API message and serializes it to JSON.
-// Returns pre-serialized JSON for efficient batch building, the original
-// APIMessage for callbacks, and any serialization error.
-
 // NewDefaultException is a convenience function to build an Exception object (usable for `client.Enqueue`)
 // with sane defaults. If you want more control, please manually build the Exception object.
 func NewDefaultException(

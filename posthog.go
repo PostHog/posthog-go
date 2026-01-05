@@ -299,7 +299,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Type = "alias"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -312,7 +311,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Type = "identify"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -324,7 +322,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -378,7 +375,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
-		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -391,7 +387,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Type = "exception"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		// Prepare message: serialize to JSON for efficient batch building
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
