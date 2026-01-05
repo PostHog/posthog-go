@@ -309,6 +309,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 	switch m := msg.(type) {
 	case Alias:
 		m.Type = "alias"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)
@@ -321,6 +322,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	case Identify:
 		m.Type = "identify"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)
@@ -332,6 +334,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		return
 
 	case GroupIdentify:
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)
@@ -344,6 +347,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	case Capture:
 		m.Type = "capture"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		if m.shouldSendFeatureFlags() {
 			// Add all feature variants to event
@@ -397,6 +401,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	case Exception:
 		m.Type = "exception"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)

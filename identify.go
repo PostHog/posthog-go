@@ -11,6 +11,8 @@ type Identify struct {
 	// This field is exported for serialization purposes and shouldn't be set by
 	// the application, its value is always overwritten by the library.
 	Type string
+	// Uuid is optional. If not provided, a random UUID will be generated.
+	Uuid string
 
 	DistinctId   string
 	Timestamp    time.Time
@@ -36,6 +38,7 @@ func (msg Identify) Validate() error {
 
 type IdentifyInApi struct {
 	Type           string    `json:"type"`
+	Uuid           string    `json:"uuid"`
 	Library        string    `json:"library"`
 	LibraryVersion string    `json:"library_version"`
 	Timestamp      time.Time `json:"timestamp"`
@@ -54,6 +57,7 @@ func (msg Identify) APIfy() APIMessage {
 
 	apified := IdentifyInApi{
 		Type:           msg.Type,
+		Uuid:           msg.Uuid,
 		Event:          "$identify",
 		Library:        SDKName,
 		LibraryVersion: getVersion(),
