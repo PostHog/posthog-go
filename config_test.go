@@ -83,3 +83,29 @@ func TestConfigGetDisableGeoIP(t *testing.T) {
 	c.DisableGeoIP = &fv
 	require.False(t, c.GetDisableGeoIP())
 }
+
+func TestConfigCompression(t *testing.T) {
+	// CompressionNone (0) should be valid
+	c := Config{Compression: CompressionNone}
+	require.NoError(t, c.Validate())
+
+	// CompressionGzip (1) should be valid
+	c = Config{Compression: CompressionGzip}
+	require.NoError(t, c.Validate())
+
+	// Values > CompressionGzip should be invalid
+	c = Config{Compression: 2}
+	err := c.Validate()
+	require.Error(t, err)
+	configErr, ok := err.(ConfigError)
+	require.True(t, ok, "expected ConfigError")
+	require.Equal(t, "Compression", configErr.Field)
+	require.Equal(t, CompressionMode(2), configErr.Value)
+	require.Contains(t, configErr.Reason, "invalid compression mode")
+
+	// Higher invalid values should also fail
+	c = Config{Compression: 255}
+	err = c.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "invalid compression mode")
+}
