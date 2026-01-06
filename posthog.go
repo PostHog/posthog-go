@@ -605,11 +605,12 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 }
 
 // Close gracefully shuts down the client, flushing any pending messages.
-// It waits up to ShutdownTimeout for in-flight requests to complete.
+// If ShutdownTimeout is set to a positive duration, Close waits up to that
+// duration for in-flight requests to complete. Otherwise, it waits indefinitely.
 // Close is safe to call multiple times; subsequent calls return ErrClosed.
 func (c *client) Close() error {
-	if c.ShutdownTimeout < 0 {
-		// Negative timeout means wait indefinitely
+	if c.ShutdownTimeout <= 0 {
+		// Zero or negative timeout means wait indefinitely (backward compatible)
 		return c.CloseWithContext(context.Background())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.ShutdownTimeout)

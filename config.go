@@ -90,8 +90,9 @@ type Config struct {
 	MaxRetries *int
 
 	// ShutdownTimeout is the maximum time to wait for in-flight messages
-	// to be sent during Close(). If zero, defaults to 30 seconds.
-	// Set to a negative value to wait indefinitely (not recommended).
+	// to be sent during Close(). If zero or negative, waits indefinitely
+	// (preserving backward-compatible behavior). Set to a positive duration
+	// to enable timeout-based shutdown.
 	ShutdownTimeout time.Duration
 
 	// BatchUploadTimeout is the timeout for uploading batched events to the
@@ -145,10 +146,6 @@ const (
 	// DefaultBatchSize sets the default batch size used by client instances if none
 	// was explicitly set.
 	DefaultBatchSize = 250
-
-	// DefaultShutdownTimeout is the default maximum time to wait for in-flight
-	// messages during shutdown.
-	DefaultShutdownTimeout = 30 * time.Second
 
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
 	// events to the /batch/ endpoint.
@@ -246,9 +243,8 @@ func makeConfig(c Config) Config {
 		c.maxAttempts = 10
 	}
 
-	if c.ShutdownTimeout == 0 {
-		c.ShutdownTimeout = DefaultShutdownTimeout
-	}
+	// Note: ShutdownTimeout == 0 means wait indefinitely (backward compatible).
+	// Users opt-in to timeout by setting a positive duration.
 
 	if c.BatchUploadTimeout == 0 {
 		c.BatchUploadTimeout = DefaultBatchUploadTimeout
