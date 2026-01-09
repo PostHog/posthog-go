@@ -158,6 +158,211 @@ func TestFlags(t *testing.T) {
 	}
 }
 
+func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
+	t.Run("success - no $feature_flag_error property", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{
+				"flags": {
+					"test-flag": {"key": "test-flag", "enabled": true, "variant": null}
+				},
+				"requestId": "req-123",
+				"errorsWhileComputingFlags": false
+			}`))
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		defer client.Close()
+
+		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+		})
+
+		event := client.GetLastCapturedEvent()
+		if event == nil {
+			t.Fatal("Expected a captured event")
+		}
+		if _, exists := event.Properties["$feature_flag_error"]; exists {
+			t.Errorf("Expected no $feature_flag_error property on success, got: %v", event.Properties["$feature_flag_error"])
+		}
+	})
+
+	t.Run("errorsWhileComputingFlags sets $feature_flag_error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{
+				"flags": {
+					"test-flag": {"key": "test-flag", "enabled": true, "variant": null}
+				},
+				"requestId": "req-123",
+				"errorsWhileComputingFlags": true
+			}`))
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		defer client.Close()
+
+		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+		})
+
+		event := client.GetLastCapturedEvent()
+		if event == nil {
+			t.Fatal("Expected a captured event")
+		}
+		errorProp := event.Properties["$feature_flag_error"]
+		if errorProp != "errors_while_computing_flags" {
+			t.Errorf("Expected $feature_flag_error to be 'errors_while_computing_flags', got: %v", errorProp)
+		}
+	})
+
+	t.Run("quota limited sets $feature_flag_error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{
+				"flags": {},
+				"requestId": "req-123",
+				"quota_limited": ["feature_flags"]
+			}`))
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		defer client.Close()
+
+		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+		})
+
+		event := client.GetLastCapturedEvent()
+		if event == nil {
+			t.Fatal("Expected a captured event")
+		}
+		errorProp := event.Properties["$feature_flag_error"]
+		if errorProp != "quota_limited" {
+			t.Errorf("Expected $feature_flag_error to be 'quota_limited', got: %v", errorProp)
+		}
+	})
+
+	t.Run("missing flag sets $feature_flag_error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{
+				"flags": {
+					"other-flag": {"key": "other-flag", "enabled": true, "variant": null}
+				},
+				"requestId": "req-123"
+			}`))
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		defer client.Close()
+
+		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "non-existent-flag",
+			DistinctId: "user-123",
+		})
+
+		event := client.GetLastCapturedEvent()
+		if event == nil {
+			t.Fatal("Expected a captured event")
+		}
+		errorProp := event.Properties["$feature_flag_error"]
+		if errorProp != "flag_missing" {
+			t.Errorf("Expected $feature_flag_error to be 'flag_missing', got: %v", errorProp)
+		}
+	})
+
+	t.Run("API error sets $feature_flag_error with status code", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "Internal Server Error"}`))
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		defer client.Close()
+
+		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+		})
+
+		event := client.GetLastCapturedEvent()
+		if event == nil {
+			t.Fatal("Expected a captured event")
+		}
+		errorProp := event.Properties["$feature_flag_error"]
+		if errorProp != "api_error_500" {
+			t.Errorf("Expected $feature_flag_error to be 'api_error_500', got: %v", errorProp)
+		}
+	})
+
+	t.Run("multiple errors are comma-separated", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{
+				"flags": {},
+				"requestId": "req-123",
+				"errorsWhileComputingFlags": true
+			}`))
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		defer client.Close()
+
+		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "missing-flag",
+			DistinctId: "user-123",
+		})
+
+		event := client.GetLastCapturedEvent()
+		if event == nil {
+			t.Fatal("Expected a captured event")
+		}
+		errorProp, ok := event.Properties["$feature_flag_error"].(string)
+		if !ok {
+			t.Fatalf("Expected $feature_flag_error to be a string, got: %T", event.Properties["$feature_flag_error"])
+		}
+		// Should contain both errors (order: errorsWhileComputingFlags, then flag_missing)
+		if !strings.Contains(errorProp, "errors_while_computing_flags") {
+			t.Errorf("Expected $feature_flag_error to contain 'errors_while_computing_flags', got: %v", errorProp)
+		}
+		if !strings.Contains(errorProp, "flag_missing") {
+			t.Errorf("Expected $feature_flag_error to contain 'flag_missing', got: %v", errorProp)
+		}
+	})
+
+	t.Run("$feature_flag_errored is true when errors exist", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		defer client.Close()
+
+		_, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+		})
+
+		if err == nil {
+			t.Error("Expected an error from GetFeatureFlag")
+		}
+
+		event := client.GetLastCapturedEvent()
+		if event == nil {
+			t.Fatal("Expected a captured event")
+		}
+		if event.Properties["$feature_flag_errored"] != true {
+			t.Errorf("Expected $feature_flag_errored to be true, got: %v", event.Properties["$feature_flag_errored"])
+		}
+	})
+}
+
 func TestFlagsV4(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
