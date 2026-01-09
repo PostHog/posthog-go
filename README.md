@@ -213,14 +213,14 @@ You'll need an approval from a PostHog engineer. If you're an employee, you can 
 
 1. **Create your PR** with the changes you want to release
 2. **Add the `release` label** to the PR
-3. **Add a version bump label** that should be either `patch`, `minor` or `major`
+3. **Add a version bump label** that should be either `bump-patch`, `bump-minor` or `bump-major`
 4. **Merge the PR** to `master`
 
 Once merged, the following happens automatically:
 
 1. A Slack notification is sent to the client libraries channel requesting approval
 2. A maintainer approves the release in the GitHub `Release` environment
-3. The version is bumped in `version.go` based on the version label (`patch`, `minor`, or `major`)
+3. The version is bumped in `version.go` based on the version label (`patch`, `minor`, or `major`, extracted from the label)
 4. The `CHANGELOG.md` is updated with a link to the full changelog
 5. Changes are committed and pushed to `master`
 6. A git tag is created (e.g., `v1.8.0`)
