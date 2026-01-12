@@ -221,7 +221,8 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		capture := &eventCapture{}
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
 		defer client.Close()
 
 		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
@@ -229,7 +230,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := client.GetLastCapturedEvent()
+		event := capture.waitForEvent(time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -250,7 +251,8 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		capture := &eventCapture{}
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
 		defer client.Close()
 
 		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
@@ -258,7 +260,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := client.GetLastCapturedEvent()
+		event := capture.waitForEvent(time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -278,7 +280,8 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		capture := &eventCapture{}
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
 		defer client.Close()
 
 		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
@@ -286,7 +289,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := client.GetLastCapturedEvent()
+		event := capture.waitForEvent(time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -307,7 +310,8 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		capture := &eventCapture{}
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
 		defer client.Close()
 
 		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
@@ -315,7 +319,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := client.GetLastCapturedEvent()
+		event := capture.waitForEvent(time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -327,12 +331,16 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 
 	t.Run("API error sets $feature_flag_error with status code", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error": "Internal Server Error"}`))
+			if strings.HasPrefix(r.URL.Path, "/flags") {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"error": "Internal Server Error"}`))
+			}
+			// /batch/ returns 200 OK (default) to allow event capture
 		}))
 		defer server.Close()
 
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		capture := &eventCapture{}
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
 		defer client.Close()
 
 		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
@@ -340,7 +348,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := client.GetLastCapturedEvent()
+		event := capture.waitForEvent(time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -360,7 +368,8 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		capture := &eventCapture{}
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
 		defer client.Close()
 
 		_, _ = client.GetFeatureFlag(FeatureFlagPayload{
@@ -368,7 +377,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := client.GetLastCapturedEvent()
+		event := capture.waitForEvent(time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -387,11 +396,15 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 
 	t.Run("$feature_flag_errored is true when errors exist", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
+			if strings.HasPrefix(r.URL.Path, "/flags") {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+			// /batch/ returns 200 OK (default) to allow event capture
 		}))
 		defer server.Close()
 
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		capture := &eventCapture{}
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
 		defer client.Close()
 
 		_, err := client.GetFeatureFlag(FeatureFlagPayload{
@@ -403,7 +416,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			t.Error("Expected an error from GetFeatureFlag")
 		}
 
-		event := client.GetLastCapturedEvent()
+		event := capture.waitForEvent(time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
