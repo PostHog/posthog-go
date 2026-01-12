@@ -34,7 +34,7 @@ func TestBatching_SmallEventsBatchTogether(t *testing.T) {
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:  server.URL,
 		BatchSize: 250, // Use default
-		Interval:  50 * time.Millisecond,
+		Interval:  5 * time.Second, // Long interval - rely on Close() to flush
 	})
 	require.NoError(t, err)
 
