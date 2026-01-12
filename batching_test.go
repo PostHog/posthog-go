@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"context"
 	"net/http"
 
 	json "github.com/goccy/go-json"
@@ -375,3 +376,164 @@ func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
 	require.Greater(t, finalFailure, 0, "In non-blocking mode with slow backend, some events should be dropped")
 }
 
+// TestShutdownTimeout_DefaultWaitsForCompletion verifies that with default config
+// (ShutdownTimeout=0), Close() waits indefinitely for in-flight batches to complete.
+func TestShutdownTimeout_DefaultWaitsForCompletion(t *testing.T) {
+	t.Parallel()
+
+	var received atomic.Int64
+
+	// Create a slow server (200ms per request)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		var b batch
+		json.NewDecoder(r.Body).Decode(&b)
+		received.Add(int64(len(b.Messages)))
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+
+	// Default config - ShutdownTimeout is zero (wait indefinitely)
+	client, err := NewWithConfig("test-key", Config{
+		Endpoint:  server.URL,
+		BatchSize: 5,
+		Interval:  10 * time.Millisecond,
+		// ShutdownTimeout is intentionally not set (zero value = wait indefinitely)
+	})
+	require.NoError(t, err)
+
+	// Send events
+	for i := 0; i < 10; i++ {
+		err := client.Enqueue(Capture{
+			DistinctId: "test-user",
+			Event:      "test-event",
+		})
+		require.NoError(t, err)
+	}
+
+	// Close should wait for all events to be delivered despite slow server
+	start := time.Now()
+	err = client.Close()
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "Close() should succeed without error when waiting indefinitely")
+	require.Equal(t, int64(10), received.Load(), "All events should be delivered")
+	require.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "Close() should have waited for slow server")
+	t.Logf("Close() waited %v for slow server to complete", elapsed)
+}
+
+// TestShutdownTimeout_AbortsAfterTimeout verifies that when ShutdownTimeout is set,
+// Close() aborts in-flight requests after the timeout and returns an error.
+func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
+	t.Parallel()
+
+	var received atomic.Int64
+	var mu sync.Mutex
+	var failureCount int
+
+	// Create a very slow server (2s per request) - will exceed our timeout
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		var b batch
+		json.NewDecoder(r.Body).Decode(&b)
+		received.Add(int64(len(b.Messages)))
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+
+	callback := &testCallbackCounter{
+		onFailure: func() {
+			mu.Lock()
+			failureCount++
+			mu.Unlock()
+		},
+	}
+
+	// Set a short shutdown timeout (100ms)
+	client, err := NewWithConfig("test-key", Config{
+		Endpoint:        server.URL,
+		BatchSize:       5,
+		Interval:        10 * time.Millisecond,
+		ShutdownTimeout: 100 * time.Millisecond, // Short timeout - will abort
+		Callback:        callback,
+	})
+	require.NoError(t, err)
+
+	// Send events
+	for i := 0; i < 10; i++ {
+		err := client.Enqueue(Capture{
+			DistinctId: "test-user",
+			Event:      "test-event",
+		})
+		require.NoError(t, err)
+	}
+
+	// Close should abort after timeout
+	start := time.Now()
+	err = client.Close()
+	elapsed := time.Since(start)
+
+	// Should return a timeout error
+	require.Error(t, err, "Close() should return error when timeout is exceeded")
+	require.Contains(t, err.Error(), "shutdown timeout", "Error should mention shutdown timeout")
+
+	// Should have aborted relatively quickly (not waited 2s for server)
+	require.Less(t, elapsed, 500*time.Millisecond, "Close() should abort quickly, not wait for slow server")
+
+	// Some events may have been dropped
+	mu.Lock()
+	failures := failureCount
+	mu.Unlock()
+	t.Logf("Close() aborted after %v, received=%d, failures=%d", elapsed, received.Load(), failures)
+}
+
+// TestCloseWithContext_RespectsDeadline verifies that CloseWithContext honors
+// the provided context's deadline for shutdown.
+func TestCloseWithContext_RespectsDeadline(t *testing.T) {
+	t.Parallel()
+
+	var received atomic.Int64
+
+	// Create a slow server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		var b batch
+		json.NewDecoder(r.Body).Decode(&b)
+		received.Add(int64(len(b.Messages)))
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+
+	// No ShutdownTimeout configured - will use context deadline instead
+	client, err := NewWithConfig("test-key", Config{
+		Endpoint:  server.URL,
+		BatchSize: 5,
+		Interval:  10 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	// Send events
+	for i := 0; i < 10; i++ {
+		err := client.Enqueue(Capture{
+			DistinctId: "test-user",
+			Event:      "test-event",
+		})
+		require.NoError(t, err)
+	}
+
+	// Use CloseWithContext with a short deadline
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = client.CloseWithContext(ctx)
+	elapsed := time.Since(start)
+
+	// Should return a timeout error
+	require.Error(t, err, "CloseWithContext should return error when context deadline exceeded")
+	require.Contains(t, err.Error(), "shutdown timeout", "Error should mention shutdown timeout")
+
+	// Should have aborted at context deadline
+	require.Less(t, elapsed, 500*time.Millisecond, "CloseWithContext should respect context deadline")
+	t.Logf("CloseWithContext aborted after %v", elapsed)
+}
