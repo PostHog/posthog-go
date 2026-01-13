@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 
+	json "github.com/goccy/go-json"
 	"github.com/posthog/posthog-go"
 	"github.com/urfave/cli"
 )

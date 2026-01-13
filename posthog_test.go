@@ -2,11 +2,10 @@ package posthog
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,9 +13,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	json "github.com/goccy/go-json"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,7 +112,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader("")),
 			Request:    r,
 		}, nil
 	})
@@ -126,7 +128,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(strings.NewReader(body)),
+			Body:       io.NopCloser(strings.NewReader(body)),
 			Request:    r,
 		}, nil
 	})
@@ -145,7 +147,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader("")),
 			Request:    r,
 		}, nil
 	})
@@ -158,7 +160,7 @@ var (
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       ioutil.NopCloser(readFunc(func(b []byte) (int, error) { return 0, testError })),
+			Body:       io.NopCloser(readFunc(func(b []byte) (int, error) { return 0, testError })),
 			Request:    r,
 		}, nil
 	})
@@ -175,7 +177,7 @@ func fixture(name string) string {
 		panic(err)
 	}
 	defer f.Close()
-	b, err := ioutil.ReadAll(f)
+	b, err := io.ReadAll(f)
 	if err != nil {
 		panic(err)
 	}
@@ -726,6 +728,7 @@ func TestClientErrorWithMalformedEndpoint(t *testing.T) {
 }
 
 func TestClientRoundTripperError(t *testing.T) {
+	t.Parallel()
 	errchan := make(chan error, 1)
 
 	client, _ := NewWithConfig("0123456789", Config{
@@ -787,6 +790,7 @@ func TestClientRetryError(t *testing.T) {
 }
 
 func TestClientResponse400(t *testing.T) {
+	t.Parallel()
 	errchan := make(chan error, 1)
 
 	client, _ := NewWithConfig("0123456789", Config{
@@ -808,6 +812,7 @@ func TestClientResponse400(t *testing.T) {
 }
 
 func TestClientResponseBodyError(t *testing.T) {
+	t.Parallel()
 	errchan := make(chan error, 1)
 
 	client, _ := NewWithConfig("0123456789", Config{
@@ -831,38 +836,29 @@ func TestClientResponseBodyError(t *testing.T) {
 	}
 }
 
-func TestClientMaxConcurrentRequests(t *testing.T) {
-	reschan := make(chan bool, 1)
-	errchan := make(chan error, 1)
+func TestClientWorkerPool(t *testing.T) {
+	successCount := atomic.Int32{}
 
 	client, err := NewWithConfig("0123456789", Config{
 		Logger: testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
-			func(m APIMessage) { reschan <- true },
-			func(m APIMessage, e error) { errchan <- e },
+			func(m APIMessage) { successCount.Add(1) },
+			func(m APIMessage, e error) { t.Errorf("unexpected failure: %v", e) },
 		},
 		Transport: testTransportDelayed,
-		// Only one concurrency request can be submitted, because the transport
-		// introduces a short delay one of the uploads should fail.
-		BatchSize:             1,
-		maxConcurrentRequests: 1,
+		// Use single worker with small batch size to test sequential processing
+		BatchSize:           1,
+		MaxEnqueuedRequests: 1,
 	})
 	require.NoError(t, err)
 
+	// Both messages should succeed with the worker pool (they queue up)
 	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
 	require.NoError(t, client.Enqueue(Capture{DistinctId: "A", Event: "B"}))
 	require.NoError(t, client.Close())
-	close(reschan)
-	close(errchan)
 
-	if _, ok := <-reschan; !ok {
-		t.Error("one of the requests should have succeeded but the result channel was empty")
-	}
-
-	if err := <-errchan; err == nil {
-		t.Error("failure callback not triggered after reaching the request limit")
-	} else if err != ErrTooManyRequests {
-		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
+	if successCount.Load() != 2 {
+		t.Errorf("expected 2 successful callbacks, got %d", successCount.Load())
 	}
 }
 
@@ -1130,7 +1126,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 				}
 
 				// Check request body
-				body, _ := ioutil.ReadAll(r.Body)
+				body, _ := io.ReadAll(r.Body)
 				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {
@@ -1179,11 +1175,27 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// Capture events via callback
+	var capturedEvent *CaptureInApi
+	var mu sync.Mutex
+	eventCaptured := make(chan struct{}, 1)
+
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Endpoint: server.URL,
-		Logger:   testLogger{t.Logf, t.Logf},
+		Endpoint:  server.URL,
+		BatchSize: 1, // Send immediately
+		Logger:    testLogger{t.Logf, t.Logf},
 		Callback: testCallback{
-			func(m APIMessage) {},
+			func(m APIMessage) {
+				if capture, ok := m.(CaptureInApi); ok {
+					mu.Lock()
+					capturedEvent = &capture
+					mu.Unlock()
+					select {
+					case eventCaptured <- struct{}{}:
+					default:
+					}
+				}
+			},
 			func(m APIMessage, e error) {},
 		},
 	})
@@ -1205,7 +1217,17 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 		t.Errorf("Expected flag value %v, got: %v", expectedValue, flagValue)
 	}
 
-	lastEvent := client.GetLastCapturedEvent()
+	// Wait for event to be captured
+	select {
+	case <-eventCaptured:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for captured event")
+	}
+
+	mu.Lock()
+	lastEvent := capturedEvent
+	mu.Unlock()
+
 	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
 		t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
 	}
@@ -1330,7 +1352,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 				}
 
 				// Check request body
-				body, _ := ioutil.ReadAll(r.Body)
+				body, _ := io.ReadAll(r.Body)
 				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {
@@ -1467,7 +1489,7 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 				}
 
 				// Check request body
-				body, _ := ioutil.ReadAll(r.Body)
+				body, _ := io.ReadAll(r.Body)
 				var requestData FlagsRequestData
 				json.Unmarshal(body, &requestData)
 				if requestData.DistinctId != tt.flagConfig.DistinctId {

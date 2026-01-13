@@ -2,17 +2,18 @@ package posthog
 
 import (
 	"bytes"
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
+	json "github.com/goccy/go-json"
+	"github.com/hashicorp/golang-lru/v2"
 )
 
 const (
@@ -20,6 +21,13 @@ const (
 	CACHE_DEFAULT_SIZE = 300_000
 
 	propertyGeoipDisable = "$geoip_disable"
+
+	// DefaultIdleConns is the default max idle connections for the HTTP client.
+	DefaultIdleConns = 100
+	// DefaultIdleConnsPerHost is the default max idle connections per host.
+	// This is higher than http.DefaultTransport's value of 2 to reduce
+	// connection churn when sending batches.
+	DefaultIdleConnsPerHost = 10
 )
 
 type EnqueueClient interface {
@@ -71,8 +79,25 @@ type Client interface {
 	// NB: This is only available when using a PersonalApiKey
 	GetFeatureFlags() ([]FeatureFlag, error)
 
-	// GetLastCapturedEvent returns the last captured event
-	GetLastCapturedEvent() *Capture
+	// CloseWithContext gracefully shuts down the client with the provided context.
+	// The context can be used to control the shutdown deadline.
+	CloseWithContext(context.Context) error
+}
+
+// preparedMessage bundles a pre-serialized message with the original APIMessage.
+// The data field contains pre-serialized JSON for efficient batch building.
+// The msg field retains the original APIMessage for callbacks.
+// Size is obtained via len(data) - O(1) since json.RawMessage is []byte.
+type preparedMessage struct {
+	data json.RawMessage // pre-serialized JSON for batch submission
+	msg  APIMessage      // original message for callbacks
+}
+
+// preparedBatch holds both raw data for efficient serialization and
+// original API messages for callbacks.
+type preparedBatch struct {
+	data []json.RawMessage // pre-serialized messages for batch submission
+	msgs []APIMessage      // original messages for callbacks
 }
 
 type client struct {
@@ -81,8 +106,16 @@ type client struct {
 
 	// This channel is where the `Enqueue` method writes messages so they can be
 	// picked up and pushed by the backend goroutine taking care of applying the
-	// batching rules.
-	msgs chan APIMessage
+	// batching rules. Messages are pre-converted to APIMessage format with
+	// pre-computed size to avoid race conditions.
+	msgs chan preparedMessage
+
+	// Channel for sending batches to workers. Acts as both a queue and
+	// concurrency limiter - when full, new batches are shed via failure callback.
+	batches chan preparedBatch
+
+	// Tracks in-flight batches for graceful shutdown
+	inFlight atomic.Int64
 
 	// These two channels are used to synchronize the client shutting down when
 	// `Close` is called.
@@ -92,6 +125,18 @@ type client struct {
 	quit     chan struct{}
 	shutdown chan struct{}
 
+	// Context and cancel function for graceful shutdown.
+	// When Close is called, the context is cancelled to signal all goroutines
+	// to stop, including in-flight HTTP requests.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// closeOnce ensures Close is idempotent
+	closeOnce sync.Once
+
+	// closed is set to true when the client is closed, used to fast-fail Enqueue
+	closed atomic.Bool
+
 	// This HTTP client is used to send requests to the backend, it uses the
 	// HTTP transport provided in the configuration.
 	http http.Client
@@ -100,11 +145,6 @@ type client struct {
 	featureFlagsPoller *FeatureFlagsPoller
 
 	distinctIdsFeatureFlagsReported *lru.Cache[flagUser, struct{}]
-
-	// Last captured event
-	lastCapturedEvent *Capture
-	// Mutex to protect last captured event
-	lastEventMutex sync.RWMutex
 
 	// Decider for feature flag methods
 	decider decider
@@ -139,13 +179,24 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	if err != nil && config.Logger != nil {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
 	}
+
+	// Channel sizing:
+	// - batches queue sized by MaxEnqueuedRequests (default 1000)
+	// - msgs queue sized to hold multiple batches worth of messages
+	batchesQueueSize := config.MaxEnqueuedRequests
+	msgQueueSize := max(100, config.BatchSize*10)
+
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
-		msgs:                            make(chan APIMessage, 100),
+		msgs:                            make(chan preparedMessage, msgQueueSize),
+		batches:                         make(chan preparedBatch, batchesQueueSize),
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
-		http:                            makeHttpClient(config.Transport),
+		ctx:                             ctx,
+		cancel:                          cancel,
+		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
 
@@ -178,12 +229,20 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	return
 }
 
-func makeHttpClient(transport http.RoundTripper) http.Client {
+func makeHttpClient(transport http.RoundTripper, timeout time.Duration) http.Client {
+	// If no custom transport provided, clone DefaultTransport with tuned connection pool
+	if transport == nil {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.MaxIdleConns = DefaultIdleConns
+		t.MaxIdleConnsPerHost = DefaultIdleConnsPerHost
+		transport = t
+	}
+
 	httpClient := http.Client{
 		Transport: transport,
 	}
 	if supportsTimeout(transport) {
-		httpClient.Timeout = 10 * time.Second
+		httpClient.Timeout = timeout
 	}
 	return httpClient
 }
@@ -221,6 +280,11 @@ func dereferenceMessage(msg Message) Message {
 }
 
 func (c *client) Enqueue(msg Message) (err error) {
+	// Fast path: check if client is closed before doing any work
+	if c.closed.Load() {
+		return ErrClosed
+	}
+
 	msg = dereferenceMessage(msg)
 	if err = msg.Validate(); err != nil {
 		return
@@ -228,23 +292,55 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	var ts = c.now()
 
+	// Helper to send prepared message with panic recovery
+	sendPrepared := func(prepared preparedMessage) {
+		defer func() {
+			// When the `msgs` channel is closed writing to it will trigger a panic.
+			// To avoid letting the panic propagate to the caller we recover from it
+			// and instead report that the client has been closed and shouldn't be
+			// used anymore.
+			if recover() != nil {
+				err = ErrClosed
+			}
+		}()
+		c.msgs <- prepared
+	}
+
 	switch m := msg.(type) {
 	case Alias:
 		m.Type = "alias"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		data, apiMsg, serErr := prepareForSend(m)
+		if serErr != nil {
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case Identify:
 		m.Type = "identify"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		data, apiMsg, serErr := prepareForSend(m)
+		if serErr != nil {
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case GroupIdentify:
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		data, apiMsg, serErr := prepareForSend(m)
+		if serErr != nil {
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case Capture:
 		m.Type = "capture"
@@ -291,50 +387,30 @@ func (c *client) Enqueue(msg Message) (err error) {
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
-		c.setLastCapturedEvent(m)
-		msg = m
+		data, apiMsg, serErr := prepareForSend(m)
+		if serErr != nil {
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	case Exception:
 		m.Type = "exception"
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		msg = m
+		data, apiMsg, serErr := prepareForSend(m)
+		if serErr != nil {
+			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			return
+		}
+		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		return
 
 	default:
 		err = fmt.Errorf("messages with custom types cannot be enqueued: %T", msg)
 		return
 	}
-
-	defer func() {
-		// When the `msgs` channel is closed writing to it will trigger a panic.
-		// To avoid letting the panic propagate to the caller we recover from it
-		// and instead report that the client has been closed and shouldn't be
-		// used anymore.
-		if recover() != nil {
-			err = ErrClosed
-		}
-	}()
-
-	c.msgs <- msg.APIfy()
-
-	return
-}
-
-func (c *client) setLastCapturedEvent(event Capture) {
-	c.lastEventMutex.Lock()
-	defer c.lastEventMutex.Unlock()
-	c.lastCapturedEvent = &event
-}
-
-func (c *client) GetLastCapturedEvent() *Capture {
-	c.lastEventMutex.RLock()
-	defer c.lastEventMutex.RUnlock()
-	if c.lastCapturedEvent == nil {
-		return nil
-	}
-	// Return a copy to avoid data races
-	eventCopy := *c.lastCapturedEvent
-	return &eventCopy
 }
 
 func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
@@ -382,6 +458,18 @@ func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, e
 }
 
 func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
+	return c.getFeatureFlagWithContext(context.Background(), flagConfig)
+}
+
+// getFeatureFlagWithContext returns variant value if multivariant flag or otherwise a boolean
+// indicating if the given flag is on or off for the user.
+// The context can be used to control timeouts and cancellation.
+func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig FeatureFlagPayload) (interface{}, error) {
+	// Check context before starting
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
 	if err := flagConfig.validate(); err != nil {
 		return false, err
 	}
@@ -409,6 +497,11 @@ func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, err
 			flagValue = f.GetValue()
 			flagResult.Value = flagValue
 		}
+	}
+
+	// Check context after flag evaluation
+	if ctx.Err() != nil {
+		return false, ctx.Err()
 	}
 
 	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key}
@@ -456,9 +549,6 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 	return c.makeRemoteConfigRequest(flagKey)
 }
 
-// ErrNoPersonalAPIKey is returned when oen tries to use feature flags without specifying a PersonalAPIKey
-var ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
-
 // GetFeatureFlags returns all feature flag definitions used for local evaluation
 // This is only available when using a PersonalApiKey. Not to be confused with
 // GetAllFlags, which returns all flags and their values for a given user.
@@ -476,6 +566,18 @@ func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 // This first attempts local evaluation if a poller exists, otherwise it falls
 // back to the flags endpoint
 func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+	return c.getAllFlagsWithContext(context.Background(), flagConfig)
+}
+
+// getAllFlagsWithContext returns all flags and their values for a given user.
+// The context can be used to control timeouts and cancellation.
+// A flag value is either a boolean or a variant string (for multivariate flags)
+func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+	// Check context before starting
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
 	}
@@ -494,84 +596,203 @@ func (c *client) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]int
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
+	// Check context after operation
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	return flagsValue, err
 }
 
-// Close and flush metrics.
-func (c *client) Close() (err error) {
-	defer func() {
-		// Always recover, a panic could be raised if `c`.quit was closed which
-		// means the method was called more than once.
-		if recover() != nil {
-			err = ErrClosed
-		}
-	}()
-	close(c.quit)
-	<-c.shutdown
-	return
-}
-
-// Asynchronously send a batched requests.
-func (c *client) sendAsync(msgs []message, wg *sync.WaitGroup, ex *executor) {
-	wg.Add(1)
-
-	if !ex.do(func() {
-		defer wg.Done()
-		defer func() {
-			// In case a bug is introduced in the send function that triggers
-			// a panic, we don't want this to ever crash the application so we
-			// catch it here and log it instead.
-			if err := recover(); err != nil {
-				c.Errorf("panic - %s", err)
-			}
-		}()
-		c.send(msgs)
-	}) {
-		wg.Done()
-		c.Errorf("sending messages failed - %s", ErrTooManyRequests)
-		c.notifyFailure(msgs, ErrTooManyRequests)
+// Close gracefully shuts down the client, flushing any pending messages.
+// If ShutdownTimeout is set to a positive duration, Close waits up to that
+// duration for in-flight requests to complete. Otherwise, it waits indefinitely.
+// Close is safe to call multiple times; subsequent calls return ErrClosed.
+func (c *client) Close() error {
+	if c.ShutdownTimeout <= 0 {
+		// Zero or negative timeout means wait indefinitely (backward compatible)
+		return c.CloseWithContext(context.Background())
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.ShutdownTimeout)
+	defer cancel()
+	return c.CloseWithContext(ctx)
 }
 
-// Send batch request.
-func (c *client) send(msgs []message) {
+// CloseWithContext gracefully shuts down the client with the provided context.
+// The context can be used to control the shutdown deadline. If the context
+// is cancelled before shutdown completes, in-flight requests may be aborted.
+// CloseWithContext is safe to call multiple times; subsequent calls return ErrClosed.
+func (c *client) CloseWithContext(ctx context.Context) error {
+	var err error
+	alreadyClosed := true
 
-	b, err := json.Marshal(batch{
-		ApiKey:              c.key,
-		HistoricalMigration: c.HistoricalMigration,
-		Messages:            msgs,
+	c.closeOnce.Do(func() {
+		alreadyClosed = false
+		// Mark as closed to fast-fail new Enqueue calls
+		c.closed.Store(true)
+
+		// Signal the batch loop to stop and drain
+		close(c.quit)
+
+		// Wait for shutdown with timeout from provided context
+		select {
+		case <-c.shutdown:
+			// Clean shutdown completed
+			c.debugf("shutdown completed successfully")
+		case <-ctx.Done():
+			// Timeout exceeded - cancel client context to abort in-flight requests
+			c.cancel()
+			err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
+			c.Warnf("shutdown timeout exceeded, some messages may be lost")
+			// Wait for shutdown to acknowledge cancellation
+			<-c.shutdown
+		}
 	})
 
-	if err != nil {
-		c.Errorf("marshalling messages - %s", err)
-		c.notifyFailure(msgs, err)
+	if alreadyClosed {
+		return ErrClosed
+	}
+	return err
+}
+
+// processBatch handles a single batch with guaranteed counter decrement.
+// It receives the batch from the channel and processes it.
+func (c *client) processBatch() {
+	// Receive batch from channel - this also "releases" the semaphore slot
+	batch, ok := <-c.batches
+	if !ok {
+		// Channel closed during shutdown
+		c.inFlight.Add(-1)
 		return
 	}
 
-	for i := 0; i != c.maxAttempts; i++ {
-		if err = c.upload(b); err == nil {
-			c.notifySuccess(msgs)
+	// CRITICAL: defer ensures counter decrements on ANY exit path
+	// (success, JSON error, HTTP error, panic, context cancellation)
+	defer c.inFlight.Add(-1)
+
+	// Recover from panics to prevent goroutine death without cleanup
+	defer func() {
+		if err := recover(); err != nil {
+			c.Errorf("panic in batch processor: %v", err)
+			c.notifyFailure(batch.msgs, fmt.Errorf("panic: %v", err))
+		}
+	}()
+
+	c.send(batch)
+}
+
+// sendBatch attempts to enqueue a batch for processing.
+// Returns true if successful, false if the queue is full after waiting for
+// BatchSubmitTimeout (default 100ms). This backpressure smoothing allows
+// in-flight requests to complete during transient latency spikes, reducing data loss.
+// Set BatchSubmitTimeout to a negative value for non-blocking behavior.
+//
+// On success, spawns a goroutine to process the batch. The batches channel
+// acts as both a queue and concurrency limiter.
+func (c *client) sendBatch(batch preparedBatch) bool {
+	c.inFlight.Add(1)
+
+	// Negative timeout = non-blocking (immediate drop when queue is full)
+	if c.BatchSubmitTimeout < 0 {
+		select {
+		case c.batches <- batch:
+			go c.processBatch()
+			return true
+		default:
+			c.inFlight.Add(-1)
+			return false
+		}
+	}
+
+	// Blocking send with timeout - allows in-flight requests to complete during latency spikes
+	timer := time.NewTimer(c.BatchSubmitTimeout)
+	select {
+	case c.batches <- batch:
+		timer.Stop()
+		go c.processBatch()
+		return true
+	case <-timer.C:
+		c.inFlight.Add(-1)
+		return false
+	}
+}
+
+// awaitDrain polls until all in-flight batches complete or context times out.
+func (c *client) awaitDrain(ctx context.Context) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for c.inFlight.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// continue polling
+		}
+	}
+	c.debugf("all in-flight batches completed")
+	return nil
+}
+
+// send encodes batch wrapper and performs HTTP POST with retries.
+// Messages are already pre-serialized, so only the batch wrapper is serialized here.
+func (c *client) send(pb preparedBatch) {
+	// Build batch with pre-serialized messages - only the wrapper is serialized here
+	b, err := json.Marshal(batch{
+		ApiKey:              c.key,
+		HistoricalMigration: c.HistoricalMigration,
+		Messages:            pb.data,
+	})
+
+	if err != nil {
+		c.Errorf("marshalling batch wrapper - %s", err)
+		c.notifyFailure(pb.msgs, err)
+		return
+	}
+
+	for i := 0; i < c.maxAttempts; i++ {
+		if err = c.upload(c.ctx, b); err == nil {
+			c.notifySuccess(pb.msgs)
 			return
 		}
 
-		// Wait for either a retry timeout or the client to be closed.
+		// Check if context is cancelled (shutdown timeout exceeded)
+		if c.ctx.Err() != nil {
+			c.Errorf("%d messages dropped: shutdown timeout", len(pb.msgs))
+			c.notifyFailure(pb.msgs, err)
+			return
+		}
+
+		// Wait for retry or shutdown
+		retryTimer := time.NewTimer(c.RetryAfter(i))
 		select {
-		case <-time.After(c.RetryAfter(i)):
+		case <-retryTimer.C:
+			// continue to next attempt
 		case <-c.quit:
-			c.Errorf("%d messages dropped because they failed to be sent and the client was closed", len(msgs))
-			c.notifyFailure(msgs, err)
+			// Shutdown initiated - stop timer and exit retry loop
+			if !retryTimer.Stop() {
+				<-retryTimer.C // Drain channel if timer already fired
+			}
+			c.notifyFailure(pb.msgs, err)
+			return
+		case <-c.ctx.Done():
+			// Context cancelled - stop timer and exit
+			if !retryTimer.Stop() {
+				<-retryTimer.C // Drain channel if timer already fired
+			}
+			c.notifyFailure(pb.msgs, err)
 			return
 		}
 	}
 
-	c.Errorf("%d messages dropped because they failed to be sent after %d attempts", len(msgs), c.maxAttempts)
-	c.notifyFailure(msgs, err)
+	c.Errorf("%d messages dropped after %d attempts", len(pb.msgs), c.maxAttempts)
+	c.notifyFailure(pb.msgs, err)
 }
 
 // Upload serialized batch message.
-func (c *client) upload(b []byte) error {
+func (c *client) upload(ctx context.Context, b []byte) error {
 	url := c.Endpoint + "/batch/"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 	if err != nil {
 		c.Errorf("creating request - %s", err)
 		return err
@@ -584,7 +805,6 @@ func (c *client) upload(b []byte) error {
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(b)))
 
 	res, err := c.http.Do(req)
-
 	if err != nil {
 		c.Warnf("sending request - %s", err)
 		return err
@@ -603,7 +823,7 @@ func (c *client) report(res *http.Response) (err error) {
 		return
 	}
 
-	if body, err = ioutil.ReadAll(res.Body); err != nil {
+	if body, err = io.ReadAll(res.Body); err != nil {
 		c.Errorf("response %d %s - %s", res.StatusCode, res.Status, err)
 		return
 	}
@@ -612,74 +832,108 @@ func (c *client) report(res *http.Response) (err error) {
 	return fmt.Errorf("%d %s", res.StatusCode, res.Status)
 }
 
-// Batch loop.
+// loop processes messages from the msgs channel, batches them by size,
+// and spawns goroutines to send batches.
 func (c *client) loop() {
+	defer close(c.batches) // prevent any pending receives from blocking
 	defer close(c.shutdown)
 	if c.featureFlagsPoller != nil {
 		defer c.featureFlagsPoller.shutdownPoller()
 	}
 
-	wg := &sync.WaitGroup{}
-	defer wg.Wait()
+	var batchData []json.RawMessage
+	var batchMsgs []APIMessage
+	var batchSize int
 
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
 
-	ex := newExecutor(c.maxConcurrentRequests)
-	defer ex.close()
+	// Helper to create and send a batch
+	flushBatch := func() bool {
+		if len(batchData) == 0 {
+			return true
+		}
+		batch := preparedBatch{data: batchData, msgs: batchMsgs}
+		if !c.sendBatch(batch) {
+			c.Errorf("sending batch failed - %s", ErrTooManyRequests)
+			c.notifyFailure(batchMsgs, ErrTooManyRequests)
+			return false
+		}
+		return true
+	}
 
-	mq := messageQueue{
-		maxBatchSize:  c.BatchSize,
-		maxBatchBytes: c.maxBatchBytes(),
+	// Helper to reset batch state
+	resetBatch := func() {
+		batchData, batchMsgs, batchSize = nil, nil, 0
+	}
+
+	// Helper to process a single message: validate, batch, flush if needed.
+	// Returns false if message was rejected (oversized).
+	processMessage := func(prepared preparedMessage) bool {
+		msgSize := len(prepared.data)
+
+		if msgSize > maxMessageBytes {
+			c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
+			c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
+			return false
+		}
+
+		if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
+			flushBatch()
+			resetBatch()
+		}
+
+		batchData = append(batchData, prepared.data)
+		batchMsgs = append(batchMsgs, prepared.msg)
+		batchSize += msgSize
+
+		if len(batchData) >= c.BatchSize {
+			flushBatch()
+			resetBatch()
+		}
+		return true
 	}
 
 	for {
 		select {
-		case msg := <-c.msgs:
-			c.push(&mq, msg, wg, ex)
+		case prepared := <-c.msgs:
+			if !processMessage(prepared) {
+				continue
+			}
+			c.debugf("buffer (%d/%d, %d bytes) %v", len(batchData), c.BatchSize, batchSize, prepared.msg)
 
 		case <-tick.C:
-			c.flush(&mq, wg, ex)
-
-		case <-c.quit:
-			c.debugf("exit requested – draining messages")
-
-			// Drain the msg channel, we have to close it first so no more
-			// messages can be pushed and otherwise the loop would never end.
-			close(c.msgs)
-			for msg := range c.msgs {
-				c.push(&mq, msg, wg, ex)
+			if len(batchData) > 0 {
+				c.debugf("interval flush – sending %d messages", len(batchData))
+				flushBatch()
+				resetBatch()
 			}
 
-			c.flush(&mq, wg, ex)
-			c.debugf("exit")
+		case <-c.quit:
+			c.debugf("shutdown requested – draining messages")
+
+			// Close msgs channel to stop accepting new messages
+			close(c.msgs)
+
+			// Drain remaining messages using same logic as normal processing
+			for prepared := range c.msgs {
+				processMessage(prepared)
+			}
+
+			// Flush any remaining messages
+			if len(batchData) > 0 {
+				c.debugf("flushing final batch of %d messages", len(batchData))
+				flushBatch()
+			}
+
+			// Wait for in-flight batches to complete
+			if err := c.awaitDrain(c.ctx); err != nil {
+				c.Warnf("shutdown timeout: %d batches still in flight", c.inFlight.Load())
+			}
+
+			c.debugf("shutdown complete")
 			return
 		}
-	}
-}
-
-func (c *client) push(q *messageQueue, m APIMessage, wg *sync.WaitGroup, ex *executor) {
-	var msg message
-	var err error
-
-	if msg, err = makeMessage(m, maxMessageBytes); err != nil {
-		c.Errorf("%s - %v", err, m)
-		c.notifyFailure([]message{{m, nil}}, err)
-		return
-	}
-
-	c.debugf("buffer (%d/%d) %v", len(q.pending), c.BatchSize, m)
-
-	if msgs := q.push(msg); msgs != nil {
-		c.debugf("exceeded messages batch limit with batch of %d messages – flushing", len(msgs))
-		c.sendAsync(msgs, wg, ex)
-	}
-}
-
-func (c *client) flush(q *messageQueue, wg *sync.WaitGroup, ex *executor) {
-	if msgs := q.flush(); msgs != nil {
-		c.debugf("flushing %d messages", len(msgs))
-		c.sendAsync(msgs, wg, ex)
 	}
 }
 
@@ -695,25 +949,18 @@ func (c *client) Warnf(format string, args ...interface{}) {
 	c.Logger.Warnf(format, args...)
 }
 
-func (c *client) maxBatchBytes() int {
-	b, _ := json.Marshal(batch{
-		Messages: []message{},
-	})
-	return maxBatchBytes - len(b)
-}
-
-func (c *client) notifySuccess(msgs []message) {
+func (c *client) notifySuccess(msgs []APIMessage) {
 	if c.Callback != nil {
 		for _, m := range msgs {
-			c.Callback.Success(m.msg)
+			c.Callback.Success(m)
 		}
 	}
 }
 
-func (c *client) notifyFailure(msgs []message, err error) {
+func (c *client) notifyFailure(msgs []APIMessage, err error) {
 	if c.Callback != nil {
 		for _, m := range msgs {
-			c.Callback.Failure(m.msg, err)
+			c.Callback.Failure(m, err)
 		}
 	}
 }
