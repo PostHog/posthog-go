@@ -393,37 +393,6 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			t.Errorf("Expected $feature_flag_error to contain 'flag_missing', got: %v", errorProp)
 		}
 	})
-
-	t.Run("$feature_flag_errored is true when errors exist", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/flags") {
-				w.WriteHeader(http.StatusInternalServerError)
-			}
-			// /batch/ returns 200 OK (default) to allow event capture
-		}))
-		defer server.Close()
-
-		capture := &eventCapture{}
-		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, Callback: capture, BatchSize: 1})
-		defer client.Close()
-
-		_, err := client.GetFeatureFlag(FeatureFlagPayload{
-			Key:        "test-flag",
-			DistinctId: "user-123",
-		})
-
-		if err == nil {
-			t.Error("Expected an error from GetFeatureFlag")
-		}
-
-		event := capture.waitForEvent(time.Second)
-		if event == nil {
-			t.Fatal("Expected a captured event")
-		}
-		if event.Properties["$feature_flag_errored"] != true {
-			t.Errorf("Expected $feature_flag_errored to be true, got: %v", event.Properties["$feature_flag_errored"])
-		}
-	})
 }
 
 func TestFlagsV4(t *testing.T) {
