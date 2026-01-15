@@ -508,8 +508,7 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
 		var properties = NewProperties().
 			Set("$feature_flag", flagConfig.Key).
-			Set("$feature_flag_response", flagValue).
-			Set("$feature_flag_errored", err != nil)
+			Set("$feature_flag_response", flagValue)
 
 		if flagResult.RequestID != nil {
 			properties.Set("$feature_flag_request_id", *flagResult.RequestID)
