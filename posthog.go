@@ -153,6 +153,7 @@ type client struct {
 type flagUser struct {
 	distinctID string
 	flagKey    string
+	deviceID   string
 }
 
 // Instantiate a new client that uses the write key passed as first argument to
@@ -504,7 +505,11 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 		return false, ctx.Err()
 	}
 
-	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key}
+	deviceID := ""
+	if flagConfig.DeviceId != nil {
+		deviceID = *flagConfig.DeviceId
+	}
+	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key, deviceID}
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
 		var properties = NewProperties().
 			Set("$feature_flag", flagConfig.Key).
