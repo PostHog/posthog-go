@@ -979,6 +979,135 @@ func TestIsFeatureEnabled(t *testing.T) {
 	}
 }
 
+func TestDeviceIdInFlagsRequest(t *testing.T) {
+	t.Run("GetFeatureFlag passes device_id when provided", func(t *testing.T) {
+		var requestData FlagsRequestData
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/flags") {
+				body, _ := io.ReadAll(r.Body)
+				json.Unmarshal(body, &requestData)
+				w.Write([]byte(`{"featureFlags": {"test-flag": true}}`))
+			}
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer client.Close()
+
+		deviceId := "test-device-123"
+		_, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+			DeviceId:   &deviceId,
+		})
+
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+		if requestData.DeviceId == nil {
+			t.Error("Expected device_id to be set in request, got nil")
+		} else if *requestData.DeviceId != "test-device-123" {
+			t.Errorf("Expected device_id 'test-device-123', got: %s", *requestData.DeviceId)
+		}
+	})
+
+	t.Run("GetFeatureFlag omits device_id when nil", func(t *testing.T) {
+		var receivedBody string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/flags") {
+				body, _ := io.ReadAll(r.Body)
+				receivedBody = string(body)
+				w.Write([]byte(`{"featureFlags": {"test-flag": true}}`))
+			}
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer client.Close()
+
+		_, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+		})
+
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+		if strings.Contains(receivedBody, "device_id") {
+			t.Errorf("Expected request to NOT contain device_id when nil, got: %s", receivedBody)
+		}
+	})
+
+	t.Run("GetAllFlags passes device_id when provided", func(t *testing.T) {
+		var requestData FlagsRequestData
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/flags") {
+				body, _ := io.ReadAll(r.Body)
+				json.Unmarshal(body, &requestData)
+				w.Write([]byte(`{"featureFlags": {"test-flag": true}}`))
+			}
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer client.Close()
+
+		deviceId := "test-device-456"
+		_, err := client.GetAllFlags(FeatureFlagPayloadNoKey{
+			DistinctId: "user-123",
+			DeviceId:   &deviceId,
+		})
+
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+		if requestData.DeviceId == nil {
+			t.Error("Expected device_id to be set in request, got nil")
+		} else if *requestData.DeviceId != "test-device-456" {
+			t.Errorf("Expected device_id 'test-device-456', got: %s", *requestData.DeviceId)
+		}
+	})
+
+	t.Run("GetFeatureFlagPayload passes device_id when provided", func(t *testing.T) {
+		var requestData FlagsRequestData
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/flags") {
+				body, _ := io.ReadAll(r.Body)
+				json.Unmarshal(body, &requestData)
+				w.Write([]byte(`{"featureFlags": {"test-flag": true}, "featureFlagPayloads": {"test-flag": "payload-value"}}`))
+			}
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer client.Close()
+
+		deviceId := "test-device-789"
+		_, err := client.GetFeatureFlagPayload(FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "user-123",
+			DeviceId:   &deviceId,
+		})
+
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+		if requestData.DeviceId == nil {
+			t.Error("Expected device_id to be set in request, got nil")
+		} else if *requestData.DeviceId != "test-device-789" {
+			t.Errorf("Expected device_id 'test-device-789', got: %s", *requestData.DeviceId)
+		}
+	})
+}
+
 func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {

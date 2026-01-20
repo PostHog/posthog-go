@@ -34,7 +34,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
@@ -74,7 +74,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("variant-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("variant-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
@@ -99,7 +99,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("missing-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("missing-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
@@ -133,7 +133,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
@@ -167,7 +167,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
@@ -189,7 +189,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err == nil {
 			t.Error("Expected an error for failed HTTP request")
@@ -217,7 +217,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err == nil {
 			t.Error("Expected an error for unauthorized request")
@@ -241,7 +241,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err == nil {
 			t.Error("Expected an error for invalid JSON response")
@@ -255,7 +255,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		c := posthog.(*client)
-		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
 		if result.Err == nil {
 			t.Error("Expected an error when server is unreachable")
@@ -325,7 +325,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 		c := posthog.(*client)
 		personProps := NewProperties().Set("email", "test@example.com")
-		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, personProps, nil)
+		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, personProps, nil)
 
 		if !strings.Contains(receivedBody, "test@example.com") {
 			t.Errorf("Expected request body to contain person properties, got: %s", receivedBody)
@@ -349,10 +349,57 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 		c := posthog.(*client)
 		groups := Groups{"company": "posthog"}
-		c.getFeatureFlagFromRemote("test-flag", "user-123", groups, nil, nil)
+		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, groups, nil, nil)
 
 		if !strings.Contains(receivedBody, "posthog") {
 			t.Errorf("Expected request body to contain groups, got: %s", receivedBody)
+		}
+	})
+
+	t.Run("passes device_id in request when provided", func(t *testing.T) {
+		var receivedBody string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			buf := make([]byte, 1024)
+			n, _ := r.Body.Read(buf)
+			receivedBody = string(buf[:n])
+			w.Write([]byte(`{"flags": {}, "requestId": "req-device-id"}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		deviceId := "device-456"
+		c.getFeatureFlagFromRemote("test-flag", "user-123", &deviceId, nil, nil, nil)
+
+		if !strings.Contains(receivedBody, `"device_id":"device-456"`) {
+			t.Errorf("Expected request body to contain device_id, got: %s", receivedBody)
+		}
+	})
+
+	t.Run("omits device_id in request when nil", func(t *testing.T) {
+		var receivedBody string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			buf := make([]byte, 1024)
+			n, _ := r.Body.Read(buf)
+			receivedBody = string(buf[:n])
+			w.Write([]byte(`{"flags": {}, "requestId": "req-no-device-id"}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
+
+		if strings.Contains(receivedBody, "device_id") {
+			t.Errorf("Expected request body to NOT contain device_id when nil, got: %s", receivedBody)
 		}
 	})
 }

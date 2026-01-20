@@ -438,7 +438,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, err
 		}
@@ -472,7 +472,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 	}
 
 	if (variant == nil || err != nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err := poller.getFeatureFlagPayload(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err := poller.getFeatureFlagPayload(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return "", err
 		}
@@ -534,6 +534,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
 		flagsResponse, err := poller.getFeatureFlagVariants(
 			flagConfig.DistinctId,
+			flagConfig.DeviceId,
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
@@ -1258,8 +1259,8 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 // a given distinctId, groups, personProperties, and groupProperties.
 // This makes a request to the flags endpoint and returns the response.
 // This is used in fallback scenarios where we can't compute the flag locally.
-func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
-	return poller.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, poller.disableGeoIP)
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
+	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP)
 }
 
 // getFeatureFlagVariantsLocalOnly evaluates all feature flags using only local evaluation
@@ -1300,10 +1301,10 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 	return result, nil
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
-	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
 
 	if variantErr != nil {
 		return false, variantErr
@@ -1317,8 +1318,8 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId s
 	return result, nil
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
+	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
 	if err != nil {
 		return "", err
 	}
