@@ -19,7 +19,10 @@ import (
 	"time"
 )
 
-const LONG_SCALE = 0xfffffffffffffff
+const (
+	LONG_SCALE                = 0xfffffffffffffff
+	bucketingIdentifierDevice = "device_id"
+)
 
 var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
 
@@ -60,6 +63,7 @@ type FeatureFlag struct {
 	Active                     bool     `json:"active"`
 	Filters                    Filter   `json:"filters"`
 	EnsureExperienceContinuity *bool    `json:"ensure_experience_continuity"`
+	BucketingIdentifier        *string  `json:"bucketing_identifier"`
 }
 
 type Filter struct {
@@ -151,6 +155,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
 	distinctId string,
+	deviceId *string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
 ) (bool, error) {
@@ -215,7 +220,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			evaluationCache[depFlagKey] = false
 		} else {
 			// Recursively evaluate the dependency
-			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, properties, cohorts, flagsByKey, evaluationCache)
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache)
 			if err != nil {
 				// If we can't evaluate a dependency, store nil and propagate the error
 				evaluationCache[depFlagKey] = nil
@@ -426,6 +431,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 		result, err = poller.computeFlagLocally(
 			flag,
 			flagConfig.DistinctId,
+			flagConfig.DeviceId,
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
@@ -456,6 +462,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 		variant, err = poller.computeFlagLocally(
 			flag,
 			flagConfig.DistinctId,
+			flagConfig.DeviceId,
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
@@ -517,6 +524,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 			result, err := poller.computeFlagLocally(
 				storedFlag,
 				flagConfig.DistinctId,
+				flagConfig.DeviceId,
 				flagConfig.Groups,
 				flagConfig.PersonProperties,
 				flagConfig.GroupProperties,
@@ -555,6 +563,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,
 	distinctId string,
+	deviceId *string,
 	groups Groups,
 	personProperties Properties,
 	groupProperties map[string]Properties,
@@ -600,20 +609,20 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), focusedGroupProperties, cohorts, flagsByKey, evaluationCache)
+		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache)
 	} else {
 		localPersonProperties := personProperties
 		if _, ok := localPersonProperties["distinct_id"]; !ok {
 			localPersonProperties = Properties{"distinct_id": distinctId}.Merge(localPersonProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, distinctId, localPersonProperties, cohorts, flagsByKey, evaluationCache)
+		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache)
 	}
 }
 
-func getMatchingVariant(flag FeatureFlag, distinctId string) interface{} {
+func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
 	lookupTable := getVariantLookupTable(flag)
 
-	hashValue := calculateHash(flag.Key+".", distinctId, "variant")
+	hashValue := calculateHash(flag.Key+".", bucketingId, "variant")
 	for _, variant := range lookupTable {
 		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
 			return variant.Key
@@ -621,6 +630,13 @@ func getMatchingVariant(flag FeatureFlag, distinctId string) interface{} {
 	}
 
 	return true
+}
+
+func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) string {
+	if flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice && deviceId != nil {
+		return *deviceId
+	}
+	return distinctId
 }
 
 func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
@@ -646,16 +662,18 @@ func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
 func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	flag FeatureFlag,
 	distinctId string,
+	deviceId *string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
 ) (interface{}, error) {
 	conditions := flag.Filters.Groups
+	bucketingId := getBucketingID(flag, distinctId, deviceId)
 	isInconclusive := false
 
 	for _, condition := range conditions {
-		isMatch, err := poller.isConditionMatch(flag, distinctId, condition, properties, cohorts, flagsByKey, evaluationCache)
+		isMatch, err := poller.isConditionMatch(flag, distinctId, bucketingId, deviceId, condition, properties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
 			var serverEvalErr *RequiresServerEvaluationError
 			if errors.As(err, &serverEvalErr) {
@@ -680,7 +698,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil && containsVariant(multivariates.Variants, *variantOverride) {
 				return *variantOverride, nil
 			} else {
-				return getMatchingVariant(flag, distinctId), nil
+				return getMatchingVariant(flag, bucketingId), nil
 			}
 		}
 	}
@@ -695,6 +713,8 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 func (poller *FeatureFlagsPoller) isConditionMatch(
 	flag FeatureFlag,
 	distinctId string,
+	bucketingId string,
+	deviceId *string,
 	condition FeatureFlagCondition,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
@@ -708,9 +728,9 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 		)
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId)
+				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
 			} else if prop.Type == "flag" {
-				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, properties, cohorts)
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts)
 			} else {
 				isMatch, err = matchProperty(prop, properties)
 			}
@@ -722,13 +742,13 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	}
 
 	if condition.RolloutPercentage != nil {
-		return checkIfSimpleFlagEnabled(flag.Key, distinctId, *condition.RolloutPercentage), nil
+		return checkIfSimpleFlagEnabled(flag.Key, bucketingId, *condition.RolloutPercentage), nil
 	}
 
 	return true, nil
 }
 
-func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string) (bool, error) {
+func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string) (bool, error) {
 	cohortId := fmt.Sprint(property.Value)
 	propertyGroup, ok := cohorts[cohortId]
 	if !ok {
@@ -737,10 +757,10 @@ func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties 
 		}
 	}
 
-	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId)
+	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
 }
 
-func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string) (bool, error) {
+func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string) (bool, error) {
 	groupType := propertyGroup.Type
 	values := propertyGroup.Values
 
@@ -759,7 +779,7 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 				matches, err := poller.matchPropertyGroup(PropertyGroup{
 					Type:   getSafeProp[string](prop, "type"),
 					Values: getSafeProp[[]any](prop, "values"),
-				}, properties, cohorts, flagsByKey, evaluationCache, distinctId)
+				}, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
 				if err != nil {
 					var serverEvalErr *RequiresServerEvaluationError
 					if errors.As(err, &serverEvalErr) {
@@ -798,9 +818,9 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 					DependencyChain: getSafeProp[[]string](prop, "dependency_chain"),
 				}
 				if prop["type"] == "cohort" {
-					matches, err = poller.matchCohort(flagProperty, properties, cohorts, flagsByKey, evaluationCache, distinctId)
+					matches, err = poller.matchCohort(flagProperty, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
 				} else if prop["type"] == "flag" {
-					matches, err = poller.evaluateFlagDependency(flagProperty, flagsByKey, evaluationCache, distinctId, properties, cohorts)
+					matches, err = poller.evaluateFlagDependency(flagProperty, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts)
 				} else {
 					matches, err = matchProperty(flagProperty, properties)
 				}
@@ -1155,8 +1175,8 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 }
 
 // extracted as a regular func for testing purposes
-func checkIfSimpleFlagEnabled(key, distinctId string, rolloutPercentage float64) bool {
-	hash := calculateHash(key+".", distinctId, "")
+func checkIfSimpleFlagEnabled(key, bucketingId string, rolloutPercentage float64) bool {
+	hash := calculateHash(key+".", bucketingId, "")
 	return hash <= rolloutPercentage/100.
 }
 
@@ -1264,7 +1284,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, devi
 }
 
 // getFeatureFlagVariantsLocalOnly evaluates all feature flags using only local evaluation
-func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
 	flags, err := poller.GetFeatureFlags()
 	if err != nil {
 		return nil, err
@@ -1274,14 +1294,15 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 	cohorts := poller.getCohorts()
 
 	for _, flag := range flags {
-		flagValue, err := poller.computeFlagLocally(
-			flag,
-			distinctId,
-			groups,
-			personProperties,
-			groupProperties,
-			cohorts,
-		)
+			flagValue, err := poller.computeFlagLocally(
+				flag,
+				distinctId,
+				deviceId,
+				groups,
+				personProperties,
+				groupProperties,
+				cohorts,
+			)
 
 		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
 		if err != nil {

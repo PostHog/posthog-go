@@ -980,14 +980,14 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 		return nil, errors.New(errorMessage)
 	}
 
-	// If OnlyEvaluateLocally is set, only use local evaluation
-	if options != nil && options.OnlyEvaluateLocally {
-		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, groups, personProperties, groupProperties)
-	}
-
 	var deviceId *string
 	if options != nil && options.DeviceId != nil {
 		deviceId = options.DeviceId
+	}
+
+	// If OnlyEvaluateLocally is set, only use local evaluation
+	if options != nil && options.OnlyEvaluateLocally {
+		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, deviceId, groups, personProperties, groupProperties)
 	}
 
 	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
