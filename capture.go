@@ -1,6 +1,8 @@
 package posthog
 
-import "time"
+import (
+	"time"
+)
 
 // SendFeatureFlagsValue defines the interface for feature flag configuration
 type SendFeatureFlagsValue interface {
@@ -147,3 +149,4 @@ func (msg Capture) APIfy() APIMessage {
 
 	return apified
 }
+

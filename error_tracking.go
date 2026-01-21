@@ -1,6 +1,8 @@
 package posthog
 
-import "time"
+import (
+	"time"
+)
 
 var _ Message = (*Exception)(nil)
 

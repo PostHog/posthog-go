@@ -3,12 +3,13 @@ package posthog
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 type FlagsRequestData struct {

@@ -1,6 +1,8 @@
 package posthog
 
-import "time"
+import (
+	"time"
+)
 
 var _ Message = (*Alias)(nil)
 
@@ -79,3 +81,4 @@ func (msg Alias) APIfy() APIMessage {
 
 	return apified
 }
+

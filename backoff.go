@@ -66,10 +66,12 @@ func (b *Backoff) NewTicker() *Ticker {
 
 	go func() {
 		for i := 0; ; i++ {
+			timer := time.NewTimer(b.Duration(i))
 			select {
-			case t := <-time.After(b.Duration(i)):
+			case t := <-timer.C:
 				c <- t
 			case <-ticker.done:
+				timer.Stop()
 				close(c)
 				return
 			}

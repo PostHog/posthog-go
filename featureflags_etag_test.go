@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -27,7 +26,6 @@ func newTestPoller(t *testing.T, serverURL string) *FeatureFlagsPoller {
 		Logger:         newDefaultLogger(false),
 		Endpoint:       serverURL,
 		http:           http.Client{},
-		mutex:          sync.RWMutex{},
 		flagTimeout:    10 * time.Second,
 	}
 }
@@ -49,9 +47,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		poller := newTestPoller(t, server.URL)
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag := poller.flagsEtag
-		poller.mutex.RUnlock()
+		state := poller.state.Load()
+		etag := ""
+		if state != nil {
+			etag = state.flagsEtag
+		}
 
 		if etag != `"abc123"` {
 			t.Errorf("Expected ETag to be \"abc123\", got %q", etag)
@@ -128,24 +128,18 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		// First request - get flags
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		flags := poller.featureFlags
-		poller.mutex.RUnlock()
-
-		if len(flags) != 1 || flags[0].Key != "cached-flag" {
-			t.Errorf("Expected initial flag 'cached-flag', got %+v", flags)
+		state := poller.state.Load()
+		if state == nil || len(state.featureFlags) != 1 || state.featureFlags[0].Key != "cached-flag" {
+			t.Errorf("Expected initial flag 'cached-flag', got %+v", state)
 		}
 
 		// Second request - 304
 		poller.fetchNewFeatureFlags()
 
 		// Flags should still be available after 304
-		poller.mutex.RLock()
-		flags = poller.featureFlags
-		poller.mutex.RUnlock()
-
-		if len(flags) != 1 || flags[0].Key != "cached-flag" {
-			t.Errorf("Expected flags to remain 'cached-flag' after 304, got %+v", flags)
+		state = poller.state.Load()
+		if state == nil || len(state.featureFlags) != 1 || state.featureFlags[0].Key != "cached-flag" {
+			t.Errorf("Expected flags to remain 'cached-flag' after 304, got %+v", state)
 		}
 	})
 
@@ -179,9 +173,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag1 := poller.flagsEtag
-		poller.mutex.RUnlock()
+		state := poller.state.Load()
+		etag1 := ""
+		if state != nil {
+			etag1 = state.flagsEtag
+		}
 
 		if etag1 != `"etag-v1"` {
 			t.Errorf("Expected initial ETag to be \"etag-v1\", got %q", etag1)
@@ -190,10 +186,13 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		// Second request - new ETag
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag2 := poller.flagsEtag
-		flags := poller.featureFlags
-		poller.mutex.RUnlock()
+		state = poller.state.Load()
+		etag2 := ""
+		var flags []FeatureFlag
+		if state != nil {
+			etag2 = state.flagsEtag
+			flags = state.featureFlags
+		}
 
 		if etag2 != `"etag-v2"` {
 			t.Errorf("Expected updated ETag to be \"etag-v2\", got %q", etag2)
@@ -233,9 +232,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag1 := poller.flagsEtag
-		poller.mutex.RUnlock()
+		state := poller.state.Load()
+		etag1 := ""
+		if state != nil {
+			etag1 = state.flagsEtag
+		}
 
 		if etag1 != `"etag-v1"` {
 			t.Errorf("Expected initial ETag to be \"etag-v1\", got %q", etag1)
@@ -244,9 +245,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		// Second request - no ETag
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag2 := poller.flagsEtag
-		poller.mutex.RUnlock()
+		state = poller.state.Load()
+		etag2 := ""
+		if state != nil {
+			etag2 = state.flagsEtag
+		}
 
 		if etag2 != "" {
 			t.Errorf("Expected ETag to be cleared when server stops sending it, got %q", etag2)
@@ -279,9 +282,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag1 := poller.flagsEtag
-		poller.mutex.RUnlock()
+		state := poller.state.Load()
+		etag1 := ""
+		if state != nil {
+			etag1 = state.flagsEtag
+		}
 
 		if etag1 != `"etag-v1"` {
 			t.Errorf("Expected initial ETag to be \"etag-v1\", got %q", etag1)
@@ -290,10 +295,13 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		// Second request - 304 without ETag
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag2 := poller.flagsEtag
-		flags := poller.featureFlags
-		poller.mutex.RUnlock()
+		state = poller.state.Load()
+		etag2 := ""
+		var flags []FeatureFlag
+		if state != nil {
+			etag2 = state.flagsEtag
+			flags = state.featureFlags
+		}
 
 		if etag2 != `"etag-v1"` {
 			t.Errorf("Expected ETag to be preserved when 304 has no ETag header, got %q", etag2)
@@ -332,9 +340,11 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag1 := poller.flagsEtag
-		poller.mutex.RUnlock()
+		state := poller.state.Load()
+		etag1 := ""
+		if state != nil {
+			etag1 = state.flagsEtag
+		}
 
 		if etag1 != `"etag-v1"` {
 			t.Errorf("Expected initial ETag to be \"etag-v1\", got %q", etag1)
@@ -343,10 +353,13 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		// Second request - quota limited
 		poller.fetchNewFeatureFlags()
 
-		poller.mutex.RLock()
-		etag2 := poller.flagsEtag
-		flags := poller.featureFlags
-		poller.mutex.RUnlock()
+		state = poller.state.Load()
+		etag2 := ""
+		var flags []FeatureFlag
+		if state != nil {
+			etag2 = state.flagsEtag
+			flags = state.featureFlags
+		}
 
 		if etag2 != "" {
 			t.Errorf("Expected ETag to be cleared on quota limit, got %q", etag2)

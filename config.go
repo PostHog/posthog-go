@@ -29,7 +29,7 @@ type Config struct {
 
 	// The flushing interval of the client. Messages will be sent when they've
 	// been queued up to the maximum batch size or when the flushing interval
-	// timer triggers.
+	// timer triggers. If zero, defaults to 5 seconds.
 	Interval time.Duration
 
 	// Interval at which to fetch new feature flag definitions, 5min by default
@@ -69,7 +69,7 @@ type Config struct {
 
 	// The maximum number of messages that will be sent in one API call.
 	// Messages will be sent when they've been queued up to the maximum batch
-	// size or when the flushing interval timer triggers.
+	// size or when the flushing interval timer triggers. If zero, defaults to 250.
 	// Note that the API will still enforce a 500KB limit on each HTTP request
 	// which is independent from the number of embedded messages.
 	BatchSize int
@@ -85,7 +85,8 @@ type Config struct {
 	// If not set the client will fallback to use a default retry policy.
 	RetryAfter func(int) time.Duration
 
-	// MaxRetries is a maximum number of a request is retried on failure.
+	// MaxRetries is the maximum number of times a request is retried on failure.
+	// Must be in range [0,9]. If nil, defaults to 9 (10 total attempts).
 	MaxRetries *int
 
 	// BeforeSend is an optional hook function that is called before each message is sent to PostHog.
@@ -155,15 +156,32 @@ type Config struct {
 	//	})
 	BeforeSend func(Message) Message
 
+	// ShutdownTimeout is the maximum time to wait for in-flight messages
+	// to be sent during Close(). If zero or negative, waits indefinitely
+	// (preserving backward-compatible behavior). Set to a positive duration
+	// to enable timeout-based shutdown.
+	ShutdownTimeout time.Duration
+
+	// BatchUploadTimeout is the timeout for uploading batched events to the
+	// /batch/ endpoint. If zero, defaults to 10 seconds.
+	BatchUploadTimeout time.Duration
+
+	// BatchSubmitTimeout is the maximum time to wait when submitting a batch
+	// to the worker pool if the queue is full. This provides backpressure
+	// smoothing during transient backend latency spikes, reducing data loss.
+	// If zero, defaults to 100ms. Set to a negative value for non-blocking
+	// behavior (immediate drop when queue is full).
+	BatchSubmitTimeout time.Duration
+
+	// MaxEnqueuedRequests is the maximum number of batches that can be queued
+	// for sending. When the queue is full, new batches are dropped and the
+	// failure callback is invoked. If zero, defaults to 1000.
+	MaxEnqueuedRequests int
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
 	now func() time.Time
-
-	// The maximum number of goroutines that will be spawned by a client to send
-	// requests to the backend API.
-	// This field is not exported and only exposed internally to control concurrency.
-	maxConcurrentRequests int
 
 	// maxAttempts is a maximum numbers we try to send data to capture endpoint, must be in range [1,10].
 	maxAttempts int
@@ -195,6 +213,19 @@ const (
 	// DefaultBatchSize sets the default batch size used by client instances if none
 	// was explicitly set.
 	DefaultBatchSize = 250
+
+	// DefaultBatchUploadTimeout is the default timeout for uploading batched
+	// events to the /batch/ endpoint.
+	DefaultBatchUploadTimeout = 10 * time.Second
+
+	// DefaultBatchSubmitTimeout is the default timeout for submitting batches
+	// to the worker pool when the queue is full. This allows workers time to
+	// complete during transient latency spikes, reducing unnecessary data loss.
+	DefaultBatchSubmitTimeout = 100 * time.Millisecond
+
+	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
+	// can be queued for sending.
+	DefaultMaxEnqueuedRequests = 1000
 )
 
 // Validate verifies that fields that don't have zero-values are set to valid values,
@@ -224,7 +255,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.MaxRetries != nil && (*c.MaxRetries < 0 || 9 < *c.MaxRetries) {
+	if c.MaxRetries != nil && (*c.MaxRetries < 0 || *c.MaxRetries > 9) {
 		return ConfigError{
 			Reason: "max retries out of range [0,9]",
 			Field:  "MaxRetries",
@@ -254,9 +285,8 @@ func makeConfig(c Config) Config {
 		c.FeatureFlagRequestTimeout = DefaultFeatureFlagRequestTimeout
 	}
 
-	if c.Transport == nil {
-		c.Transport = http.DefaultTransport
-	}
+	// Note: c.Transport == nil is handled by makeHttpClient() which clones
+	// DefaultTransport with tuned connection pool settings
 
 	if c.Logger == nil {
 		c.Logger = newDefaultLogger(c.Verbose)
@@ -280,8 +310,19 @@ func makeConfig(c Config) Config {
 		c.maxAttempts = 10
 	}
 
-	if c.maxConcurrentRequests == 0 {
-		c.maxConcurrentRequests = 1000
+	// Note: ShutdownTimeout == 0 means wait indefinitely (backward compatible).
+	// Users opt-in to timeout by setting a positive duration.
+
+	if c.BatchUploadTimeout == 0 {
+		c.BatchUploadTimeout = DefaultBatchUploadTimeout
+	}
+
+	if c.BatchSubmitTimeout == 0 {
+		c.BatchSubmitTimeout = DefaultBatchSubmitTimeout
+	}
+
+	if c.MaxEnqueuedRequests == 0 {
+		c.MaxEnqueuedRequests = DefaultMaxEnqueuedRequests
 	}
 
 	if c.GetDisableGeoIP() {

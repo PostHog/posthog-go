@@ -57,4 +57,8 @@ var (
 	// failed because the JSON representation of a message exceeded the upper
 	// limit.
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
+
+	// ErrNoPersonalAPIKey is returned when one tries to use feature flags
+	// without specifying a PersonalAPIKey.
+	ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
 )

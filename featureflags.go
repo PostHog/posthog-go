@@ -5,16 +5,17 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
+
+	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,27 +23,35 @@ const LONG_SCALE = 0xfffffffffffffff
 
 var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
 
+// flagsState holds the feature flag data that is atomically swapped during updates.
+// This provides lock-free reads for the common path (flag evaluation).
+type flagsState struct {
+	featureFlags []FeatureFlag
+	cohorts      map[string]PropertyGroup
+	groups       map[string]string
+	flagsEtag    string
+}
+
 type FeatureFlagsPoller struct {
 	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
 	// After the request the channel get closed.
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
 	forceReload                     chan bool
-	featureFlags                    []FeatureFlag
-	cohorts                         map[string]PropertyGroup
-	groups                          map[string]string
-	personalApiKey                  string
-	projectApiKey                   string
-	localEvalUrl                    *url.URL
-	Logger                          Logger
-	Endpoint                        string
-	http                            http.Client
-	mutex                           sync.RWMutex
-	nextPollTick                    func() time.Duration
-	flagTimeout                     time.Duration
-	decider                         decider
-	disableGeoIP                    bool
-	flagsEtag                       string // ETag for conditional requests to reduce bandwidth
+
+	// state holds all flag-related data using atomic pointer for lock-free reads
+	state atomic.Pointer[flagsState]
+
+	personalApiKey string
+	projectApiKey  string
+	localEvalUrl   *url.URL
+	Logger         Logger
+	Endpoint       string
+	http           http.Client
+	nextPollTick   func() time.Duration
+	flagTimeout    time.Duration
+	decider        decider
+	disableGeoIP   bool
 }
 
 type FeatureFlag struct {
@@ -291,7 +300,6 @@ func newFeatureFlagsPoller(
 		Logger:                          logger,
 		Endpoint:                        endpoint,
 		http:                            httpClient,
-		mutex:                           sync.RWMutex{},
 		nextPollTick:                    nextPollTick,
 		flagTimeout:                     flagTimeout,
 		decider:                         decider,
@@ -329,10 +337,12 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	personalApiKey := poller.personalApiKey
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
 
-	// Read current ETag under lock
-	poller.mutex.RLock()
-	currentEtag := poller.flagsEtag
-	poller.mutex.RUnlock()
+	// Read current ETag from state (lock-free)
+	currentState := poller.state.Load()
+	currentEtag := ""
+	if currentState != nil {
+		currentEtag = currentState.flagsEtag
+	}
 
 	res, cancel, err := poller.localEvaluationFlags(headers, currentEtag)
 	if err != nil {
@@ -346,23 +356,28 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	if res.StatusCode == http.StatusNotModified {
 		poller.Logger.Debugf("[FEATURE FLAGS] Flags not modified (304), using cached data")
 		// Update ETag if server returned one (preserve existing if not)
-		if newEtag := res.Header.Get("ETag"); newEtag != "" {
-			poller.mutex.Lock()
-			poller.flagsEtag = newEtag
-			poller.mutex.Unlock()
+		if newEtag := res.Header.Get("ETag"); newEtag != "" && currentState != nil {
+			// Atomically swap with updated ETag
+			newState := &flagsState{
+				featureFlags: currentState.featureFlags,
+				cohorts:      currentState.cohorts,
+				groups:       currentState.groups,
+				flagsEtag:    newEtag,
+			}
+			poller.state.Store(newState)
 		}
 		return
 	}
 
 	// Handle quota limit response (HTTP 402)
 	if res.StatusCode == http.StatusPaymentRequired {
-		// Clear existing flags when quota limited
-		poller.mutex.Lock()
-		poller.featureFlags = []FeatureFlag{}
-		poller.cohorts = map[string]PropertyGroup{}
-		poller.groups = map[string]string{}
-		poller.flagsEtag = "" // Clear ETag on quota limit
-		poller.mutex.Unlock()
+		// Clear existing flags when quota limited - atomic swap
+		poller.state.Store(&flagsState{
+			featureFlags: []FeatureFlag{},
+			cohorts:      map[string]PropertyGroup{},
+			groups:       map[string]string{},
+			flagsEtag:    "",
+		})
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
 		return
 	}
@@ -387,14 +402,19 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	// Store new ETag from response (clear if server stops sending)
 	newEtag := res.Header.Get("ETag")
 
-	poller.mutex.Lock()
-	defer poller.mutex.Unlock()
-	poller.featureFlags = newFlags
-	poller.cohorts = featureFlagsResponse.Cohorts
-	poller.flagsEtag = newEtag
+	// Build new groups map
+	groups := map[string]string{}
 	if featureFlagsResponse.GroupTypeMapping != nil {
-		poller.groups = *featureFlagsResponse.GroupTypeMapping
+		groups = *featureFlagsResponse.GroupTypeMapping
 	}
+
+	// Atomic swap of entire state
+	poller.state.Store(&flagsState{
+		featureFlags: newFlags,
+		cohorts:      featureFlagsResponse.Cohorts,
+		groups:       groups,
+		flagsEtag:    newEtag,
+	})
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
@@ -409,7 +429,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
-			poller.cohorts,
+			poller.getCohorts(),
 		)
 	}
 
@@ -439,7 +459,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
-			poller.cohorts,
+			poller.getCohorts(),
 		)
 	}
 	if err != nil {
@@ -488,7 +508,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		return nil, err
 	}
 	fallbackToDecide := false
-	cohorts := poller.cohorts
+	cohorts := poller.getCohorts()
 
 	if len(featureFlags) == 0 {
 		fallbackToDecide = true
@@ -561,7 +581,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
-		groupType, exists := poller.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
+		groupType, exists := poller.getGroups()[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
 		if !exists {
 			errMessage := "flag has unknown group type index"
@@ -1149,14 +1169,39 @@ func calculateHash(prefix, distinctId, salt string) float64 {
 func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	// When channel is open this will block. When channel is closed it will immediately exit.
 	<-poller.firstFeatureFlagRequestFinished
-	poller.mutex.RLock()
-	defer poller.mutex.RUnlock()
-	if poller.featureFlags == nil {
+
+	// Lock-free read of state
+	state := poller.state.Load()
+	if state == nil || state.featureFlags == nil {
 		// There was an error with initial flag fetching
 		return nil, errors.New("flags were not successfully fetched yet")
 	}
 
-	return poller.featureFlags, nil
+	return state.featureFlags, nil
+}
+
+// getState returns the current flags state or nil if not initialized.
+// This is a lock-free read.
+func (poller *FeatureFlagsPoller) getState() *flagsState {
+	return poller.state.Load()
+}
+
+// getCohorts returns the current cohorts map or an empty map if not initialized.
+func (poller *FeatureFlagsPoller) getCohorts() map[string]PropertyGroup {
+	state := poller.state.Load()
+	if state == nil || state.cohorts == nil {
+		return map[string]PropertyGroup{}
+	}
+	return state.cohorts
+}
+
+// getGroups returns the current groups map or an empty map if not initialized.
+func (poller *FeatureFlagsPoller) getGroups() map[string]string {
+	state := poller.state.Load()
+	if state == nil || state.groups == nil {
+		return map[string]string{}
+	}
+	return state.groups
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header, etag string) (*http.Response, context.CancelFunc, error) {
@@ -1225,7 +1270,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 	}
 
 	result := make(map[string]interface{})
-	cohorts := poller.cohorts
+	cohorts := poller.getCohorts()
 
 	for _, flag := range flags {
 		flagValue, err := poller.computeFlagLocally(
