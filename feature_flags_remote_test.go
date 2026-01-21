@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+
+	json "github.com/goccy/go-json"
 )
 
 func TestGetFeatureFlagFromRemote(t *testing.T) {
@@ -309,11 +311,12 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	})
 
 	t.Run("passes person properties in request", func(t *testing.T) {
-		var receivedBody string
+		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			buf := make([]byte, 1024)
-			n, _ := r.Body.Read(buf)
-			receivedBody = string(buf[:n])
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
 			w.Write([]byte(`{"flags": {}, "requestId": "req-props"}`))
 		}))
 		defer server.Close()
@@ -327,17 +330,18 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		personProps := NewProperties().Set("email", "test@example.com")
 		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, personProps, nil)
 
-		if !strings.Contains(receivedBody, "test@example.com") {
-			t.Errorf("Expected request body to contain person properties, got: %s", receivedBody)
+		if requestData.PersonProperties["email"] != "test@example.com" {
+			t.Errorf("Expected request body to contain person properties, got: %v", requestData.PersonProperties)
 		}
 	})
 
 	t.Run("passes groups in request", func(t *testing.T) {
-		var receivedBody string
+		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			buf := make([]byte, 1024)
-			n, _ := r.Body.Read(buf)
-			receivedBody = string(buf[:n])
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
 			w.Write([]byte(`{"flags": {}, "requestId": "req-groups"}`))
 		}))
 		defer server.Close()
@@ -351,17 +355,18 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		groups := Groups{"company": "posthog"}
 		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, groups, nil, nil)
 
-		if !strings.Contains(receivedBody, "posthog") {
-			t.Errorf("Expected request body to contain groups, got: %s", receivedBody)
+		if requestData.Groups["company"] != "posthog" {
+			t.Errorf("Expected request body to contain groups, got: %v", requestData.Groups)
 		}
 	})
 
 	t.Run("passes device_id in request when provided", func(t *testing.T) {
-		var receivedBody string
+		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			buf := make([]byte, 1024)
-			n, _ := r.Body.Read(buf)
-			receivedBody = string(buf[:n])
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
 			w.Write([]byte(`{"flags": {}, "requestId": "req-device-id"}`))
 		}))
 		defer server.Close()
@@ -375,17 +380,18 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		deviceId := "device-456"
 		c.getFeatureFlagFromRemote("test-flag", "user-123", &deviceId, nil, nil, nil)
 
-		if !strings.Contains(receivedBody, `"device_id":"device-456"`) {
-			t.Errorf("Expected request body to contain device_id, got: %s", receivedBody)
+		if requestData.DeviceId == nil || *requestData.DeviceId != "device-456" {
+			t.Errorf("Expected request body to contain device_id, got: %v", requestData.DeviceId)
 		}
 	})
 
 	t.Run("omits device_id in request when nil", func(t *testing.T) {
-		var receivedBody string
+		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			buf := make([]byte, 1024)
-			n, _ := r.Body.Read(buf)
-			receivedBody = string(buf[:n])
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
 			w.Write([]byte(`{"flags": {}, "requestId": "req-no-device-id"}`))
 		}))
 		defer server.Close()
@@ -398,8 +404,8 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		c := posthog.(*client)
 		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
 
-		if strings.Contains(receivedBody, "device_id") {
-			t.Errorf("Expected request body to NOT contain device_id when nil, got: %s", receivedBody)
+		if requestData.DeviceId != nil {
+			t.Errorf("Expected request body to NOT contain device_id when nil, got: %v", requestData.DeviceId)
 		}
 	})
 }
