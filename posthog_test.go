@@ -1106,6 +1106,63 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 			t.Errorf("Expected device_id 'test-device-789', got: %s", *requestData.DeviceId)
 		}
 	})
+
+	t.Run("Capture SendFeatureFlagsOptions passes device_id when provided", func(t *testing.T) {
+		var requestData FlagsRequestData
+		received := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/flags"):
+				body, _ := io.ReadAll(r.Body)
+				if err := json.Unmarshal(body, &requestData); err != nil {
+					t.Errorf("Failed to parse request body: %v", err)
+				}
+				close(received)
+				w.Write([]byte(`{"featureFlags": {"test-flag": true}}`))
+			case strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"flags":[]}`))
+			case strings.HasPrefix(r.URL.Path, "/batch"):
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{}`))
+			default:
+				t.Errorf("Unexpected request to %s", r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{
+			Endpoint:       server.URL,
+			PersonalApiKey: "personal-key",
+			BatchSize:      1,
+			now:            mockTime,
+		})
+		defer client.Close()
+
+		deviceId := "test-device-456"
+		err := client.Enqueue(Capture{
+			Event:      "test_event",
+			DistinctId: "test_user",
+			SendFeatureFlags: &SendFeatureFlagsOptions{
+				DeviceId: &deviceId,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		select {
+		case <-received:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Timed out waiting for flags request")
+		}
+
+		if requestData.DeviceId == nil {
+			t.Error("Expected device_id to be set in request, got nil")
+		} else if *requestData.DeviceId != "test-device-456" {
+			t.Errorf("Expected device_id 'test-device-456', got: %s", *requestData.DeviceId)
+		}
+	})
 }
 
 func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {

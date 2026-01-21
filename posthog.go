@@ -985,7 +985,12 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, groups, personProperties, groupProperties)
 	}
 
-	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, nil, groups, personProperties, groupProperties)
+	var deviceId *string
+	if options != nil && options.DeviceId != nil {
+		deviceId = options.DeviceId
+	}
+
+	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
 	if err != nil {
 		return nil, err
 	}

@@ -14,6 +14,8 @@ type SendFeatureFlagsValue interface {
 type SendFeatureFlagsOptions struct {
 	// OnlyEvaluateLocally forces evaluation to only use local flags and never make API requests
 	OnlyEvaluateLocally bool
+	// DeviceId provides a device_id for remote flag evaluation requests
+	DeviceId *string
 	// PersonProperties provides explicit person properties for local flag evaluation
 	PersonProperties Properties
 	// GroupProperties provides explicit group properties for local flag evaluation
@@ -149,4 +151,3 @@ func (msg Capture) APIfy() APIMessage {
 
 	return apified
 }
-
