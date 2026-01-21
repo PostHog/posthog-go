@@ -1294,15 +1294,15 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 	cohorts := poller.getCohorts()
 
 	for _, flag := range flags {
-			flagValue, err := poller.computeFlagLocally(
-				flag,
-				distinctId,
-				deviceId,
-				groups,
-				personProperties,
-				groupProperties,
-				cohorts,
-			)
+		flagValue, err := poller.computeFlagLocally(
+			flag,
+			distinctId,
+			deviceId,
+			groups,
+			personProperties,
+			groupProperties,
+			cohorts,
+		)
 
 		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
 		if err != nil {

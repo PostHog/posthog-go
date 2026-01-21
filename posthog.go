@@ -510,18 +510,18 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 		deviceID = *flagConfig.DeviceId
 	}
 	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key, deviceID}
-		if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
-			var properties = NewProperties().
-				Set("$feature_flag", flagConfig.Key).
-				Set("$feature_flag_response", flagValue)
+	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
+		var properties = NewProperties().
+			Set("$feature_flag", flagConfig.Key).
+			Set("$feature_flag_response", flagValue)
 
-			if flagConfig.DeviceId != nil {
-				properties.Set("$device_id", *flagConfig.DeviceId)
-			}
+		if flagConfig.DeviceId != nil {
+			properties.Set("$device_id", *flagConfig.DeviceId)
+		}
 
-			if flagResult.RequestID != nil {
-				properties.Set("$feature_flag_request_id", *flagResult.RequestID)
-			}
+		if flagResult.RequestID != nil {
+			properties.Set("$feature_flag_request_id", *flagResult.RequestID)
+		}
 
 		if flagResult.EvaluatedAt != nil {
 			properties.Set("$feature_flag_evaluated_at", *flagResult.EvaluatedAt)
