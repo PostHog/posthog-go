@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -309,6 +310,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 	switch m := msg.(type) {
 	case Alias:
 		m.Type = "alias"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)
@@ -321,6 +323,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	case Identify:
 		m.Type = "identify"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)
@@ -332,6 +335,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 		return
 
 	case GroupIdentify:
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)
@@ -344,6 +348,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	case Capture:
 		m.Type = "capture"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		if m.shouldSendFeatureFlags() {
 			// Add all feature variants to event
@@ -397,6 +402,7 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	case Exception:
 		m.Type = "exception"
+		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		data, apiMsg, serErr := prepareForSend(m)
@@ -791,7 +797,24 @@ func (c *client) send(pb preparedBatch) {
 // Upload serialized batch message.
 func (c *client) upload(ctx context.Context, b []byte) error {
 	url := c.Endpoint + "/batch/"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
+	body := b
+
+	if c.Compression == CompressionGzip {
+		url += "?compression=gzip"
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, err := gw.Write(b); err != nil {
+			c.Errorf("gzip compression - %s", err)
+			return fmt.Errorf("gzip compression: %w", err)
+		}
+		if err := gw.Close(); err != nil {
+			c.Errorf("gzip close - %s", err)
+			return fmt.Errorf("gzip close: %w", err)
+		}
+		body = buf.Bytes()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		c.Errorf("creating request - %s", err)
 		return err
@@ -801,7 +824,10 @@ func (c *client) upload(ctx context.Context, b []byte) error {
 
 	req.Header.Add("User-Agent", SDKName+"/"+version)
 	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(b)))
+	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(body)))
+	if c.Compression == CompressionGzip {
+		req.Header.Add("Content-Encoding", "gzip")
+	}
 
 	res, err := c.http.Do(req)
 	if err != nil {

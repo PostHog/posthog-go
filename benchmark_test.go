@@ -444,3 +444,219 @@ func BenchmarkMessageEnqueueOverhead(b *testing.B) {
 			enqueueErrors.Load(), failures)
 	}
 }
+
+// BenchmarkCompressionOverhead measures the CPU and memory overhead of GZIP compression
+// Compares None vs Gzip compression modes with various payload sizes
+func BenchmarkCompressionOverhead(b *testing.B) {
+	compressionModes := []struct {
+		name string
+		mode CompressionMode
+	}{
+		{"none", CompressionNone},
+		{"gzip", CompressionGzip},
+	}
+
+	// Test with different property cardinalities (affects payload size)
+	cardinalities := []struct {
+		name        string
+		cardinality PropertyCardinality
+	}{
+		{"low_cardinality", CardinalityLow},
+		{"medium_cardinality", CardinalityMedium},
+		{"high_cardinality", CardinalityHigh},
+	}
+
+	for _, cm := range compressionModes {
+		for _, card := range cardinalities {
+			b.Run(fmt.Sprintf("%s/%s", cm.name, card.name), func(b *testing.B) {
+				pool := NewEventPoolWithDefaultSize(card.cardinality)
+
+				callback := &BenchmarkCallback{}
+				var enqueueErrors atomic.Int64
+
+				server := httptest.NewServer(NoOpHandler())
+				defer server.Close()
+
+				client, err := NewWithConfig("test-key", Config{
+					Endpoint:    server.URL,
+					Compression: cm.mode,
+					Callback:    callback,
+					MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
+					Logger:      testLogger{},  // Suppress log output in benchmarks
+				})
+				if err != nil {
+					b.Fatalf("Failed to create client: %v", err)
+				}
+				defer client.Close()
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := client.Enqueue(pool.Next()); err != nil {
+						enqueueErrors.Add(1)
+					}
+				}
+				b.StopTimer()
+
+				if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
+					b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
+						enqueueErrors.Load(), failures)
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkEndToEndWithCompression measures end-to-end throughput with GZIP compression
+// Uses production defaults for BatchSize, MaxEnqueuedRequests
+func BenchmarkEndToEndWithCompression(b *testing.B) {
+	compressionModes := []struct {
+		name string
+		mode CompressionMode
+	}{
+		{"none", CompressionNone},
+		{"gzip", CompressionGzip},
+	}
+
+	for _, cm := range compressionModes {
+		b.Run(cm.name, func(b *testing.B) {
+			pool := NewEventPool(b.N + 1000)
+
+			server := httptest.NewServer(NoOpHandler())
+			defer server.Close()
+
+			callback := &BenchmarkCallback{}
+			var enqueueErrors atomic.Int64
+
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:    server.URL,
+				Compression: cm.mode,
+				Callback:    callback,
+				MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
+				Logger:      testLogger{},  // Suppress log output in benchmarks
+			})
+			if err != nil {
+				b.Fatalf("Failed to create client: %v", err)
+			}
+			defer client.Close()
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := client.Enqueue(pool.Next()); err != nil {
+					enqueueErrors.Add(1)
+				}
+			}
+			b.StopTimer()
+
+			if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
+				b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
+					enqueueErrors.Load(), failures)
+			}
+		})
+	}
+}
+
+// BenchmarkCompressionRatio measures the compression ratio achieved
+// This is not a performance benchmark but useful for understanding compression effectiveness
+func BenchmarkCompressionRatio(b *testing.B) {
+	cardinalities := []struct {
+		name        string
+		cardinality PropertyCardinality
+	}{
+		{"low", CardinalityLow},
+		{"medium", CardinalityMedium},
+		{"high", CardinalityHigh},
+	}
+
+	for _, card := range cardinalities {
+		b.Run(card.name, func(b *testing.B) {
+			var uncompressedTotal, compressedTotal atomic.Int64
+
+			// Use two servers to measure sizes
+			uncompressedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				uncompressedTotal.Add(int64(len(body)))
+				w.WriteHeader(200)
+			}))
+			defer uncompressedServer.Close()
+
+			compressedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				compressedTotal.Add(int64(len(body)))
+				w.WriteHeader(200)
+			}))
+			defer compressedServer.Close()
+
+			// Send same events to both
+			pool := NewEventPoolWithCardinality(100, card.cardinality)
+
+			callbackUncompressed := &BenchmarkCallback{}
+			callbackCompressed := &BenchmarkCallback{}
+			var enqueueErrorsUncompressed, enqueueErrorsCompressed atomic.Int64
+
+			clientUncompressed, err := NewWithConfig("test-key", Config{
+				Endpoint:    uncompressedServer.URL,
+				Compression: CompressionNone,
+				BatchSize:   50,
+				Callback:    callbackUncompressed,
+				MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
+				Logger:      testLogger{},  // Suppress log output in benchmarks
+			})
+			if err != nil {
+				b.Fatalf("Failed to create uncompressed client: %v", err)
+			}
+
+			clientCompressed, err := NewWithConfig("test-key", Config{
+				Endpoint:    compressedServer.URL,
+				Compression: CompressionGzip,
+				BatchSize:   50,
+				Callback:    callbackCompressed,
+				MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
+				Logger:      testLogger{},  // Suppress log output in benchmarks
+			})
+			if err != nil {
+				b.Fatalf("Failed to create compressed client: %v", err)
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N && i < 100; i++ {
+				event := pool.Next()
+				if err := clientUncompressed.Enqueue(event); err != nil {
+					enqueueErrorsUncompressed.Add(1)
+				}
+				// Create a copy for the compressed client to avoid race
+				eventCopy := Capture{
+					DistinctId: event.DistinctId,
+					Event:      event.Event,
+					Properties: cloneProperties(event.Properties),
+				}
+				if err := clientCompressed.Enqueue(eventCopy); err != nil {
+					enqueueErrorsCompressed.Add(1)
+				}
+			}
+			b.StopTimer()
+
+			clientUncompressed.Close()
+			clientCompressed.Close()
+
+			// Verify no errors occurred
+			if enqueueErrorsUncompressed.Load() > 0 || callbackUncompressed.FailureCount() > 0 {
+				b.Fatalf("Uncompressed client: %d enqueue errors, %d delivery failures",
+					enqueueErrorsUncompressed.Load(), callbackUncompressed.FailureCount())
+			}
+			if enqueueErrorsCompressed.Load() > 0 || callbackCompressed.FailureCount() > 0 {
+				b.Fatalf("Compressed client: %d enqueue errors, %d delivery failures",
+					enqueueErrorsCompressed.Load(), callbackCompressed.FailureCount())
+			}
+
+			uncompBytes := uncompressedTotal.Load()
+			compBytes := compressedTotal.Load()
+			if uncompBytes == 0 || compBytes == 0 {
+				b.Fatalf("No data received: uncompressed=%d, compressed=%d", uncompBytes, compBytes)
+			}
+
+			ratio := float64(compBytes) / float64(uncompBytes) * 100
+			b.Logf("Cardinality %s: Uncompressed=%d bytes, Compressed=%d bytes, Ratio=%.1f%%",
+				card.name, uncompBytes, compBytes, ratio)
+		})
+	}
+}

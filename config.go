@@ -6,6 +6,16 @@ import (
 	"time"
 )
 
+// CompressionMode specifies the compression algorithm for batch payloads.
+type CompressionMode uint8
+
+const (
+	// CompressionNone disables compression (default).
+	CompressionNone CompressionMode = 0
+	// CompressionGzip enables GZIP compression for batch payloads.
+	CompressionGzip CompressionMode = 1
+)
+
 // Config carries the different configuration options that may
 // be set when instantiating a client.
 //
@@ -111,6 +121,12 @@ type Config struct {
 	// failure callback is invoked. If zero, defaults to 1000.
 	MaxEnqueuedRequests int
 
+	// Compression specifies the compression mode for batch payloads.
+	// When set to CompressionGzip, payloads are GZIP compressed before
+	// sending, and appropriate headers/query params are added.
+	// Defaults to CompressionNone (no compression).
+	Compression CompressionMode
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
@@ -193,6 +209,14 @@ func (c *Config) Validate() error {
 			Reason: "max retries out of range [0,9]",
 			Field:  "MaxRetries",
 			Value:  *c.MaxRetries,
+		}
+	}
+
+	if c.Compression > CompressionGzip {
+		return ConfigError{
+			Reason: "invalid compression mode",
+			Field:  "Compression",
+			Value:  c.Compression,
 		}
 	}
 
