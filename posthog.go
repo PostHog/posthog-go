@@ -63,7 +63,15 @@ type Client interface {
 	// if the given flag is on or off for the user
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 
+	// GetFeatureFlagResult returns the flag value and payload together.
+	// Use this instead of calling GetFeatureFlag and GetFeatureFlagPayload separately.
+	// Returns an error if the flag cannot be evaluated (e.g., flag missing or cannot be computed
+	// when using OnlyEvaluateLocally).
+	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
+
 	// GetFeatureFlagPayload returns feature flag's payload value matching key for user (supports multivariate flags).
+	// Deprecated: Use GetFeatureFlagResult instead, which returns both
+	// the flag value and payload while properly tracking feature flag usage.
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
 	// GetRemoteConfigPayload returns decrypted feature flag payload value for remote config flags.
@@ -443,44 +451,55 @@ func (c *client) ReloadFeatureFlags() error {
 }
 
 func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
-	if err := flagConfig.validate(); err != nil {
+	// Non-standard: This method historically left `SendFeatureFlagEvents` as nil.
+	// Once `flagConfig.validate()` is called, it sets it to true by default.
+	//
+	// To preserve historical behavior, we do not coerce to false, deviating from
+	// other SDKs that _do not_ send events from getFeatureFlagPayload calls.
+	result, err := c.GetFeatureFlagResult(flagConfig)
+	if err != nil {
+		if errors.Is(err, ErrFlagNotFound) {
+			return "", nil
+		}
 		return "", err
 	}
-
-	var payload string
-	var err error
-
-	if c.featureFlagsPoller != nil {
-		// get feature flag from the poller, which uses the personal api key
-		// this is only available when using a PersonalApiKey
-		payload, err = c.featureFlagsPoller.GetFeatureFlagPayload(flagConfig)
-	} else {
-		// if there's no poller, get the feature flag from the flags endpoint
-		c.debugf("getting feature flag from flags endpoint")
-		payload, err = c.getFeatureFlagPayloadFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+	if result.RawPayload == nil {
+		return "", nil
 	}
-
-	return payload, err
+	return *result.RawPayload, nil
 }
 
 func (c *client) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
-	return c.getFeatureFlagWithContext(context.Background(), flagConfig)
+	result, err := c.GetFeatureFlagResult(flagConfig)
+	if err != nil {
+		if errors.Is(err, ErrFlagNotFound) {
+			return false, nil
+		}
+		return nil, err
+	}
+	if result.Variant != nil {
+		return *result.Variant, nil
+	}
+	return result.Enabled, nil
 }
 
-// getFeatureFlagWithContext returns variant value if multivariant flag or otherwise a boolean
-// indicating if the given flag is on or off for the user.
-// The context can be used to control timeouts and cancellation.
-func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig FeatureFlagPayload) (interface{}, error) {
+func (c *client) GetFeatureFlagResult(flagConfig FeatureFlagPayload) (*FeatureFlagResult, error) {
+	return c.getFeatureFlagResultWithContext(context.Background(), flagConfig)
+}
+
+func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig FeatureFlagPayload) (*FeatureFlagResult, error) {
 	// Check context before starting
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return nil, err
 	}
 
 	if err := flagConfig.validate(); err != nil {
-		return false, err
+		return nil, err
 	}
 
 	var flagValue interface{}
+	var payload *string
+	var variant *string
 	var err error
 	var evalResult *featureFlagEvaluationResult
 
@@ -492,6 +511,15 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 			Value: flagValue,
 			Err:   err,
 		}
+		if err == nil {
+			payloadStr, _ := c.featureFlagsPoller.GetFeatureFlagPayload(flagConfig)
+			if payloadStr != "" {
+				payload = &payloadStr
+			}
+		}
+		if v, ok := flagValue.(string); ok {
+			variant = &v
+		}
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
@@ -502,12 +530,14 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
 			evalResult.Value = flagValue
+			payload = f.Metadata.Payload
+			variant = f.Variant
 		}
 	}
 
 	// Check context after flag evaluation
 	if ctx.Err() != nil {
-		return false, ctx.Err()
+		return nil, ctx.Err()
 	}
 
 	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key}
@@ -547,7 +577,27 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 		}
 	}
 
-	return flagValue, err
+	if flagValue == nil {
+		if evalResult.Err != nil {
+			return nil, evalResult.Err
+		}
+		return nil, fmt.Errorf("%w: '%s' does not exist or is disabled", ErrFlagNotFound, flagConfig.Key)
+	}
+
+	enabled := false
+	switch v := flagValue.(type) {
+	case bool:
+		enabled = v
+	case string:
+		enabled = v != ""
+	}
+
+	return &FeatureFlagResult{
+		Key:        flagConfig.Key,
+		Enabled:    enabled,
+		RawPayload: payload,
+		Variant:    variant,
+	}, err
 }
 
 func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
@@ -1110,23 +1160,6 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups 
 	}
 
 	return result
-}
-
-func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
-	if err != nil {
-		return "", err
-	}
-
-	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return "", nil
-	}
-
-	if value, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
-		return value, nil
-	}
-
-	return "", nil
 }
 
 func (c *client) getAllFeatureFlagsFromRemote(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {

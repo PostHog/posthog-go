@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// ErrFlagNotFound is returned when a feature flag does not exist or is disabled.
+// Use errors.Is(err, ErrFlagNotFound) to check for this error.
+var ErrFlagNotFound = errors.New("feature flag not found")
+
 // Feature flag error type constants for the $feature_flag_error property.
 // These values are sent in analytics events to track flag evaluation failures.
 // They should not be changed without considering impact on existing dashboards
