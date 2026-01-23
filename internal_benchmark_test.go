@@ -305,4 +305,3 @@ func BenchmarkOldVsNewSerializationFlow(b *testing.B) {
 		}
 	}
 }
-

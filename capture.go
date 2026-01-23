@@ -149,4 +149,3 @@ func (msg Capture) APIfy() APIMessage {
 
 	return apified
 }
-

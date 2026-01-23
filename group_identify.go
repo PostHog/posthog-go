@@ -78,4 +78,3 @@ func (msg GroupIdentify) APIfy() APIMessage {
 
 	return apified
 }
-
