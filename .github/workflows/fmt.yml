@@ -1,0 +1,23 @@
+name: Check Formatting
+
+on:
+  pull_request:
+  merge_group:
+
+jobs:
+  fmt:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.21
+
+      - name: Check out source code
+        uses: actions/checkout@v5
+
+      - name: Check formatting
+        run: |
+          go fmt ./...
+          git diff --exit-code || (echo "Files are not formatted. Run \`go fmt ./...\` locally and commit the changes." && exit 1)
