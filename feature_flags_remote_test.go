@@ -268,32 +268,32 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("GetErrorString returns correct error strings", func(t *testing.T) {
 		tests := []struct {
 			name     string
-			result   FeatureFlagResult
+			result   featureFlagEvaluationResult
 			expected string
 		}{
 			{
 				name:     "no errors",
-				result:   FeatureFlagResult{Value: true},
+				result:   featureFlagEvaluationResult{Value: true},
 				expected: "",
 			},
 			{
 				name:     "flag missing",
-				result:   FeatureFlagResult{Value: false, FlagMissing: true},
+				result:   featureFlagEvaluationResult{Value: false, FlagMissing: true},
 				expected: "flag_missing",
 			},
 			{
 				name:     "quota limited",
-				result:   FeatureFlagResult{Value: false, QuotaLimited: true},
+				result:   featureFlagEvaluationResult{Value: false, QuotaLimited: true},
 				expected: "quota_limited",
 			},
 			{
 				name:     "errors while computing",
-				result:   FeatureFlagResult{Value: true, ErrorsWhileComputingFlags: true},
+				result:   featureFlagEvaluationResult{Value: true, ErrorsWhileComputingFlags: true},
 				expected: "errors_while_computing_flags",
 			},
 			{
 				name:     "multiple errors",
-				result:   FeatureFlagResult{Value: false, QuotaLimited: true, FlagMissing: true},
+				result:   featureFlagEvaluationResult{Value: false, QuotaLimited: true, FlagMissing: true},
 				expected: "quota_limited,flag_missing",
 			},
 		}
@@ -479,12 +479,12 @@ func TestClassifyError(t *testing.T) {
 func TestGetErrorStringWithRequestErrors(t *testing.T) {
 	tests := []struct {
 		name     string
-		result   FeatureFlagResult
+		result   featureFlagEvaluationResult
 		expected string
 	}{
 		{
 			name: "timeout error only",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value: false,
 				Err:   context.DeadlineExceeded,
 			},
@@ -492,7 +492,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "connection error only",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value: false,
 				Err:   &net.DNSError{Err: "no such host", Name: "example.com"},
 			},
@@ -500,7 +500,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "unknown error only",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value: false,
 				Err:   errors.New("something went wrong"),
 			},
@@ -508,7 +508,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "request error combined with errors_while_computing_flags",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:                     false,
 				Err:                       errors.New("something went wrong"),
 				ErrorsWhileComputingFlags: true,
@@ -517,7 +517,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "timeout combined with quota_limited",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:        false,
 				Err:          context.DeadlineExceeded,
 				QuotaLimited: true,
@@ -526,7 +526,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "connection error combined with flag_missing",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:       false,
 				Err:         &net.DNSError{Err: "no such host", Name: "example.com"},
 				FlagMissing: true,
@@ -535,7 +535,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "all error types combined",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:                     false,
 				Err:                       errors.New("request failed"),
 				ErrorsWhileComputingFlags: true,

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
-	"github.com/hashicorp/golang-lru/v2"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 const (
@@ -482,26 +482,26 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 
 	var flagValue interface{}
 	var err error
-	var flagResult *FeatureFlagResult
+	var evalResult *featureFlagEvaluationResult
 
 	if c.featureFlagsPoller != nil {
 		// get feature flag from the poller, which uses the personal api key
 		// this is only available when using a PersonalApiKey
 		flagValue, err = c.featureFlagsPoller.GetFeatureFlag(flagConfig)
-		flagResult = &FeatureFlagResult{
+		evalResult = &featureFlagEvaluationResult{
 			Value: flagValue,
 			Err:   err,
 		}
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		flagResult = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+		evalResult = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
-		flagValue = flagResult.Value
-		err = flagResult.Err
+		flagValue = evalResult.Value
+		err = evalResult.Err
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
-			flagResult.Value = flagValue
+			evalResult.Value = flagValue
 		}
 	}
 
@@ -516,23 +516,23 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue)
 
-		if flagResult.RequestID != nil {
-			properties.Set("$feature_flag_request_id", *flagResult.RequestID)
+		if evalResult.RequestID != nil {
+			properties.Set("$feature_flag_request_id", *evalResult.RequestID)
 		}
 
-		if flagResult.EvaluatedAt != nil {
-			properties.Set("$feature_flag_evaluated_at", *flagResult.EvaluatedAt)
+		if evalResult.EvaluatedAt != nil {
+			properties.Set("$feature_flag_evaluated_at", *evalResult.EvaluatedAt)
 		}
 
-		if flagResult.FlagDetail != nil {
-			properties.Set("$feature_flag_version", flagResult.FlagDetail.Metadata.Version)
-			properties.Set("$feature_flag_id", flagResult.FlagDetail.Metadata.ID)
-			if flagResult.FlagDetail.Reason != nil {
-				properties.Set("$feature_flag_reason", flagResult.FlagDetail.Reason.Description)
+		if evalResult.FlagDetail != nil {
+			properties.Set("$feature_flag_version", evalResult.FlagDetail.Metadata.Version)
+			properties.Set("$feature_flag_id", evalResult.FlagDetail.Metadata.ID)
+			if evalResult.FlagDetail.Reason != nil {
+				properties.Set("$feature_flag_reason", evalResult.FlagDetail.Reason.Description)
 			}
 		}
 
-		errorString := flagResult.GetErrorString()
+		errorString := evalResult.GetErrorString()
 		if errorString != "" {
 			properties.Set("$feature_flag_error", errorString)
 		}
@@ -1074,9 +1074,9 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 }
 
 func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups Groups, personProperties Properties,
-	groupProperties map[string]Properties) *FeatureFlagResult {
+	groupProperties map[string]Properties) *featureFlagEvaluationResult {
 
-	result := &FeatureFlagResult{
+	result := &featureFlagEvaluationResult{
 		Value: false,
 	}
 

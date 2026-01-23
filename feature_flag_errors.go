@@ -55,9 +55,9 @@ func NewAPIError(statusCode int, message string) *APIError {
 	}
 }
 
-// FeatureFlagResult holds the result of a feature flag evaluation
-// along with any error information that occurred during evaluation
-type FeatureFlagResult struct {
+// featureFlagEvaluationResult holds internal evaluation context
+// along with any error information that occurred during evaluation.
+type featureFlagEvaluationResult struct {
 	Value                     interface{}
 	Err                       error
 	ErrorsWhileComputingFlags bool
@@ -129,7 +129,7 @@ func classifyError(err error) string {
 // GetErrorString returns the error string for the $feature_flag_error property.
 // Returns empty string if there are no errors.
 // Multiple errors are joined with commas.
-func (r *FeatureFlagResult) GetErrorString() string {
+func (r *featureFlagEvaluationResult) GetErrorString() string {
 	var errorStrings []string
 
 	// Classify request error
