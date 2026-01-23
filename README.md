@@ -10,7 +10,7 @@ Please see the main [PostHog docs](https://posthog.com/docs). See the [Go SDK Do
 Install posthog to your gopath
 
 ```bash
-$ go get github.com/posthog/posthog-go
+go get github.com/posthog/posthog-go
 ```
 
 Go 🦔!
