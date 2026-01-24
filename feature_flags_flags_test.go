@@ -173,7 +173,7 @@ func TestFlags(t *testing.T) {
 				flagKey  string
 				expected interface{}
 			}{
-				{name: "GetFeatureFlagPayload", flagKey: "enabled-flag", expected: "{\"foo\": 1}"},
+				{name: "GetFeatureFlagPayload", flagKey: "enabled-flag", expected: `{"foo": 1}`},
 				{name: "GetFeatureFlagPayload", flagKey: "disabled-flag", expected: ""}, // Incorrectly returns "" for disabled flags
 				{name: "GetFeatureFlagPayload", flagKey: "multi-variate-flag", expected: "this is the payload"},
 				{name: "GetFeatureFlagPayload", flagKey: "non-existent-flag", expected: ""}, // Incorrectly returns "" for non-existent flags
@@ -465,6 +465,40 @@ func TestFlagsV4(t *testing.T) {
 
 			if id, ok := capturedEvent.Properties["$feature_flag_id"].(int); !ok || int(id) != test.expectedId {
 				t.Errorf("Expected $feature_flag_id for %s to be %v, got: %v", test.flagKey, test.expectedId, capturedEvent.Properties["$feature_flag_id"])
+			}
+		})
+	}
+}
+
+func TestRawMessageToString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "simple string", input: `"hello"`, expected: "hello"},
+		{name: "string with spaces", input: `"hello world"`, expected: "hello world"},
+		{name: "empty string", input: `""`, expected: ""},
+		{name: "string with JSON object", input: `"{\"foo\": 1}"`, expected: `{"foo": 1}`},
+		{name: "string with JSON array", input: `"[1, 2, 3]"`, expected: `[1, 2, 3]`},
+		{name: "object", input: `{"foo": 1}`, expected: `{"foo": 1}`},
+		{name: "nested object", input: `{"foo": {"bar": 2}}`, expected: `{"foo": {"bar": 2}}`},
+		{name: "array of numbers", input: `[1, 2, 3]`, expected: `[1, 2, 3]`},
+		{name: "array of strings", input: `["a", "b", "c"]`, expected: `["a", "b", "c"]`},
+		{name: "integer", input: `42`, expected: `42`},
+		{name: "float", input: `3.14`, expected: `3.14`},
+		{name: "negative number", input: `-10`, expected: `-10`},
+		{name: "true", input: `true`, expected: `true`},
+		{name: "false", input: `false`, expected: `false`},
+		{name: "null", input: `null`, expected: ``},
+		{name: "empty", input: ``, expected: ``},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := rawMessageToString([]byte(test.input))
+			if result != test.expected {
+				t.Errorf("rawMessageToString(%q) = %q, expected %q", test.input, result, test.expected)
 			}
 		})
 	}
