@@ -3,6 +3,7 @@ package posthog
 type FeatureFlagPayload struct {
 	Key                   string
 	DistinctId            string
+	DeviceId              *string
 	Groups                Groups
 	PersonProperties      Properties
 	GroupProperties       map[string]Properties
@@ -48,6 +49,7 @@ func (c *FeatureFlagPayload) validate() error {
 
 type FeatureFlagPayloadNoKey struct {
 	DistinctId            string
+	DeviceId              *string
 	Groups                Groups
 	PersonProperties      Properties
 	GroupProperties       map[string]Properties

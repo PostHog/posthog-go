@@ -154,6 +154,7 @@ type client struct {
 type flagUser struct {
 	distinctID string
 	flagKey    string
+	deviceID   string
 }
 
 // Instantiate a new client that uses the write key passed as first argument to
@@ -457,7 +458,7 @@ func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, e
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		payload, err = c.getFeatureFlagPayloadFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		payload, err = c.getFeatureFlagPayloadFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
 	return payload, err
@@ -495,7 +496,7 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		flagResult = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.Groups,
+		flagResult = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		flagValue = flagResult.Value
 		err = flagResult.Err
@@ -510,11 +511,19 @@ func (c *client) getFeatureFlagWithContext(ctx context.Context, flagConfig Featu
 		return false, ctx.Err()
 	}
 
-	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key}
+	deviceID := ""
+	if flagConfig.DeviceId != nil {
+		deviceID = *flagConfig.DeviceId
+	}
+	cacheKey := flagUser{flagConfig.DistinctId, flagConfig.Key, deviceID}
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
 		var properties = NewProperties().
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue)
+
+		if flagConfig.DeviceId != nil {
+			properties.Set("$device_id", *flagConfig.DeviceId)
+		}
 
 		if flagResult.RequestID != nil {
 			properties.Set("$feature_flag_request_id", *flagResult.RequestID)
@@ -597,7 +606,7 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 	} else {
 		// if there's no poller, get the feature flags from the flags endpoint
 		c.debugf("getting all feature flags from flags endpoint")
-		flagsValue, err = c.getAllFeatureFlagsFromRemote(flagConfig.DistinctId, flagConfig.Groups,
+		flagsValue, err = c.getAllFeatureFlagsFromRemote(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 	}
 
@@ -1001,12 +1010,17 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 		return nil, errors.New(errorMessage)
 	}
 
-	// If OnlyEvaluateLocally is set, only use local evaluation
-	if options != nil && options.OnlyEvaluateLocally {
-		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, groups, personProperties, groupProperties)
+	var deviceId *string
+	if options != nil && options.DeviceId != nil {
+		deviceId = options.DeviceId
 	}
 
-	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, groups, personProperties, groupProperties)
+	// If OnlyEvaluateLocally is set, only use local evaluation
+	if options != nil && options.OnlyEvaluateLocally {
+		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, deviceId, groups, personProperties, groupProperties)
+	}
+
+	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
 	if err != nil {
 		return nil, err
 	}
@@ -1073,14 +1087,14 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 	return false
 }
 
-func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups Groups, personProperties Properties,
+func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties,
 	groupProperties map[string]Properties) *FeatureFlagResult {
 
 	result := &FeatureFlagResult{
 		Value: false,
 	}
 
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 
 	if err != nil {
 		result.Err = err
@@ -1112,8 +1126,8 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups 
 	return result
 }
 
-func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
+func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 	if err != nil {
 		return "", err
 	}
@@ -1129,8 +1143,8 @@ func (c *client) getFeatureFlagPayloadFromRemote(key string, distinctId string, 
 	return "", nil
 }
 
-func (c *client) getAllFeatureFlagsFromRemote(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
+func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
 	if err != nil {
 		return nil, err
 	}

@@ -4517,6 +4517,40 @@ func TestFeatureFlagDistinctIDOverride(t *testing.T) {
 	}
 }
 
+func TestFeatureFlagDeviceIDBucketingLocalEvaluation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-device-id-bucketing.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	distinctId := "distinct-123"
+	deviceId := "device-456"
+	expectedDevice := checkIfSimpleFlagEnabled("device-bucket-flag", deviceId, 50)
+	expectedDistinct := checkIfSimpleFlagEnabled("device-bucket-flag", distinctId, 50)
+	require.NotEqual(t, expectedDistinct, expectedDevice)
+
+	enabled, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:                 "device-bucket-flag",
+		DistinctId:          distinctId,
+		DeviceId:            &deviceId,
+		OnlyEvaluateLocally: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedDevice, enabled)
+}
+
 func TestFeatureFlagWithFalseVariant(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {

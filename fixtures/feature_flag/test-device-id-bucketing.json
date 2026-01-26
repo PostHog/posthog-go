@@ -1,0 +1,19 @@
+{
+  "count": 1,
+  "flags": [
+    {
+      "id": 1,
+      "key": "device-bucket-flag",
+      "filters": {
+        "groups": [
+          {
+            "properties": [],
+            "rollout_percentage": 50
+          }
+        ]
+      },
+      "bucketing_identifier": "device_id",
+      "active": true
+    }
+  ]
+}
