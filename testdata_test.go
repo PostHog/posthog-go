@@ -297,11 +297,13 @@ func generatePropertiesWithCardinality(seed int, cardinality PropertyCardinality
 
 	// Realistic string patterns to simulate real payloads
 	stringPatterns := []func(seed, i int) string{
-		func(s, i int) string { return fmt.Sprintf("string_value_%d_%d", s, i) },                                          // short
-		func(s, i int) string { return fmt.Sprintf("https://app.example.com/dashboard/project/%d/page/%d", s%100, i%50) }, // URL
-		func(s, i int) string { return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" },             // user agent
-		func(s, i int) string { return fmt.Sprintf("user_%d@company%d.example.com", s, i%10) },                            // email
-		func(s, i int) string { return strings.Repeat("x", 50+i%200) },                                                    // varied length
+		func(s, i int) string { return fmt.Sprintf("string_value_%d_%d", s, i) }, // short
+		func(s, i int) string {
+			return fmt.Sprintf("https://app.example.com/dashboard/project/%d/page/%d", s%100, i%50)
+		}, // URL
+		func(s, i int) string { return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" }, // user agent
+		func(s, i int) string { return fmt.Sprintf("user_%d@company%d.example.com", s, i%10) },                // email
+		func(s, i int) string { return strings.Repeat("x", 50+i%200) },                                        // varied length
 	}
 
 	for i := 0; i < propCount; i++ {
@@ -388,4 +390,3 @@ func CardinalityName(c PropertyCardinality) string {
 		return "unknown"
 	}
 }
-

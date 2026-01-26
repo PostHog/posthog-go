@@ -74,15 +74,15 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 // AdapterState tracks SDK state for test assertions
 type AdapterState struct {
-	mu                    sync.Mutex
-	client                posthog.Client
-	config                *posthog.Config
-	totalEventsCaptured   int
-	totalEventsSent       int
-	totalRetries          int
-	lastError             string
-	requestsMade          []RequestInfo
-	pendingEvents         int
+	mu                  sync.Mutex
+	client              posthog.Client
+	config              *posthog.Config
+	totalEventsCaptured int
+	totalEventsSent     int
+	totalRetries        int
+	lastError           string
+	requestsMade        []RequestInfo
+	pendingEvents       int
 }
 
 // RequestInfo tracks HTTP request details
@@ -125,12 +125,12 @@ type CaptureRequest struct {
 
 // StateResponse represents /state endpoint response
 type StateResponse struct {
-	PendingEvents         int           `json:"pending_events"`
-	TotalEventsCaptured   int           `json:"total_events_captured"`
-	TotalEventsSent       int           `json:"total_events_sent"`
-	TotalRetries          int           `json:"total_retries"`
-	LastError             string        `json:"last_error,omitempty"`
-	RequestsMade          []RequestInfo `json:"requests_made"`
+	PendingEvents       int           `json:"pending_events"`
+	TotalEventsCaptured int           `json:"total_events_captured"`
+	TotalEventsSent     int           `json:"total_events_sent"`
+	TotalRetries        int           `json:"total_retries"`
+	LastError           string        `json:"last_error,omitempty"`
+	RequestsMade        []RequestInfo `json:"requests_made"`
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
@@ -175,7 +175,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		Endpoint:  req.Host,
 		Transport: &TrackedTransport{base: http.DefaultTransport, state: state},
 		// Set test-friendly defaults
-		BatchSize: 1,                   // Flush after each event by default
+		BatchSize: 1,                      // Flush after each event by default
 		Interval:  100 * time.Millisecond, // Short interval for tests
 	}
 

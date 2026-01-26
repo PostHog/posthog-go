@@ -70,4 +70,3 @@ func (msg Identify) APIfy() APIMessage {
 
 	return apified
 }
-

@@ -483,4 +483,3 @@ func TestRaceConditionDetection(t *testing.T) {
 		wg.Wait()
 	})
 }
-

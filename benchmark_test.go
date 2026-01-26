@@ -481,8 +481,8 @@ func BenchmarkCompressionOverhead(b *testing.B) {
 					Endpoint:    server.URL,
 					Compression: cm.mode,
 					Callback:    callback,
-					MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
-					Logger:      testLogger{},  // Suppress log output in benchmarks
+					MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
+					Logger:      testLogger{}, // Suppress log output in benchmarks
 				})
 				if err != nil {
 					b.Fatalf("Failed to create client: %v", err)
@@ -531,8 +531,8 @@ func BenchmarkEndToEndWithCompression(b *testing.B) {
 				Endpoint:    server.URL,
 				Compression: cm.mode,
 				Callback:    callback,
-				MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
-				Logger:      testLogger{},  // Suppress log output in benchmarks
+				MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
+				Logger:      testLogger{}, // Suppress log output in benchmarks
 			})
 			if err != nil {
 				b.Fatalf("Failed to create client: %v", err)
@@ -598,8 +598,8 @@ func BenchmarkCompressionRatio(b *testing.B) {
 				Compression: CompressionNone,
 				BatchSize:   50,
 				Callback:    callbackUncompressed,
-				MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
-				Logger:      testLogger{},  // Suppress log output in benchmarks
+				MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
+				Logger:      testLogger{}, // Suppress log output in benchmarks
 			})
 			if err != nil {
 				b.Fatalf("Failed to create uncompressed client: %v", err)
@@ -610,8 +610,8 @@ func BenchmarkCompressionRatio(b *testing.B) {
 				Compression: CompressionGzip,
 				BatchSize:   50,
 				Callback:    callbackCompressed,
-				MaxRetries:  Ptr(0),        // Disable retries to avoid noise during cleanup
-				Logger:      testLogger{},  // Suppress log output in benchmarks
+				MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
+				Logger:      testLogger{}, // Suppress log output in benchmarks
 			})
 			if err != nil {
 				b.Fatalf("Failed to create compressed client: %v", err)

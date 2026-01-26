@@ -556,4 +556,3 @@ func TestMatchPropertyDateComparison(t *testing.T) {
 		require.False(t, isMatch)
 	})
 }
-

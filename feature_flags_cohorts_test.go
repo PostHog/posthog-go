@@ -92,4 +92,3 @@ func TestComplexCohortsWithNegationLocally(t *testing.T) {
 		t.Error("Should match")
 	}
 }
-

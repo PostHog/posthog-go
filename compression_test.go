@@ -314,4 +314,3 @@ func TestCompressionNoneWithCallback(t *testing.T) {
 	require.Equal(t, 1, successCount, "should have 1 success callback")
 	require.Equal(t, 0, failureCount, "should have 0 failure callbacks")
 }
-

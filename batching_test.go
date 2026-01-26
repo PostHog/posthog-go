@@ -34,7 +34,7 @@ func TestBatching_SmallEventsBatchTogether(t *testing.T) {
 	// With 500KB batch limit, should fit ~100 events per batch
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:  server.URL,
-		BatchSize: 250, // Use default
+		BatchSize: 250,             // Use default
 		Interval:  5 * time.Second, // Long interval - rely on Close() to flush
 	})
 	require.NoError(t, err)
@@ -344,12 +344,12 @@ func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
 
 	// Use non-blocking mode with negative timeout
 	client, err := NewWithConfig("test-key", Config{
-		Endpoint:           server.URL,
+		Endpoint:            server.URL,
 		BatchSize:           1,                    // 1 event per batch
 		Interval:            1 * time.Millisecond, // Flush immediately
 		MaxEnqueuedRequests: 1,                    // Only 1 batch can be queued
 		BatchSubmitTimeout:  -1,                   // Non-blocking (immediate drop)
-		Callback:           callback,
+		Callback:            callback,
 	})
 	require.NoError(t, err)
 

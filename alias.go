@@ -85,4 +85,3 @@ func (msg Alias) APIfy() APIMessage {
 
 	return apified
 }
-
