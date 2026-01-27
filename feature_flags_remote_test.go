@@ -84,7 +84,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		}
 	})
 
-	t.Run("returns false with FlagMissing when flag not in response", func(t *testing.T) {
+	t.Run("returns nil with FlagMissing when flag not in response", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{
 				"flags": {},
@@ -104,15 +104,15 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil, got: %v", result.Value)
 		}
 		if !result.FlagMissing {
 			t.Error("Expected FlagMissing to be true")
 		}
 	})
 
-	t.Run("returns false with QuotaLimited when quota limited", func(t *testing.T) {
+	t.Run("returns nil with QuotaLimited when quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{
 				"flags": {
@@ -138,8 +138,8 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false when quota limited, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil when quota limited, got: %v", result.Value)
 		}
 		if !result.QuotaLimited {
 			t.Error("Expected QuotaLimited to be true")
@@ -194,8 +194,8 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err == nil {
 			t.Error("Expected an error for failed HTTP request")
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false on error, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil on error, got: %v", result.Value)
 		}
 
 		// Verify it's an APIError that classifies correctly
@@ -260,8 +260,8 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err == nil {
 			t.Error("Expected an error when server is unreachable")
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false on error, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil on error, got: %v", result.Value)
 		}
 	})
 

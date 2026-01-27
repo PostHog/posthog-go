@@ -1127,7 +1127,7 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups 
 	groupProperties map[string]Properties) *featureFlagEvaluationResult {
 
 	result := &featureFlagEvaluationResult{
-		Value: false,
+		Value: nil,
 	}
 
 	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
@@ -1155,7 +1155,6 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups 
 		result.FlagDetail = &flagDetail
 		result.FlagMissing = false
 	} else {
-		result.Value = false
 		result.FlagMissing = true
 	}
 

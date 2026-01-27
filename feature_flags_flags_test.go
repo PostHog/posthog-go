@@ -636,16 +636,14 @@ func TestGetFeatureFlagResult(t *testing.T) {
 				DistinctId: "some-distinct-id",
 			})
 
-			if err != nil {
-				t.Fatalf("Expected no error, got: %v", err)
+			if err == nil {
+				t.Fatal("Expected an error for non-existent flag")
 			}
-
-			if result.Enabled {
-				t.Error("Expected Enabled to be false for non-existent flag")
+			if !errors.Is(err, ErrFlagNotFound) {
+				t.Errorf("Expected ErrFlagNotFound, got: %v", err)
 			}
-
-			if result.RawPayload != nil {
-				t.Errorf("Expected RawPayload to be nil for non-existent flag, got: %v", result.RawPayload)
+			if result != nil {
+				t.Errorf("Expected nil result for non-existent flag, got: %v", result)
 			}
 
 			// Verify $feature_flag_called event was emitted with error
@@ -735,8 +733,8 @@ func TestGetFeatureFlagResultReturnsErrorForNonExistentFlag(t *testing.T) {
 		t.Fatal("Expected an error for non-existent flag with OnlyEvaluateLocally")
 	}
 
-	if !strings.Contains(err.Error(), "does not exist or is disabled") {
-		t.Errorf("Expected error message to contain 'does not exist or is disabled', got: %v", err)
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("Expected error message to contain 'does not exist', got: %v", err)
 	}
 
 	if result != nil {
@@ -759,7 +757,7 @@ func TestGetFeatureFlagResultPropagatesLocalEvaluationErrors(t *testing.T) {
 	})
 	defer client.Close()
 
-	_, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
 		Key:                 "any-flag",
 		DistinctId:          "some-distinct-id",
 		OnlyEvaluateLocally: true,
@@ -776,6 +774,10 @@ func TestGetFeatureFlagResultPropagatesLocalEvaluationErrors(t *testing.T) {
 
 	if errors.Is(err, ErrFlagNotFound) {
 		t.Error("Error should NOT be ErrFlagNotFound - it's an evaluation error")
+	}
+
+	if result != nil {
+		t.Errorf("Expected result to be nil, got: %v", result)
 	}
 }
 
@@ -808,9 +810,7 @@ func TestGetFeatureFlagResultPropagatesRemoteAPIErrors(t *testing.T) {
 		t.Error("Error should NOT be ErrFlagNotFound - it's an API error")
 	}
 
-	// For remote path, result may still be returned with error
-	// (current behavior returns both result and error)
-	if result != nil && result.Enabled {
-		t.Error("Expected Enabled to be false when API fails")
+	if result != nil {
+		t.Errorf("Expected result to be nil, got: %v", result)
 	}
 }
