@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 
-	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 const LONG_SCALE = 0xfffffffffffffff
@@ -143,6 +144,35 @@ type RequiresServerEvaluationError struct {
 
 func (e *RequiresServerEvaluationError) Error() string {
 	return e.msg
+}
+
+// FeatureFlagResult represents the result of a feature flag evaluation,
+// containing both the flag value and its payload.
+type FeatureFlagResult struct {
+	// Key is the feature flag key that was evaluated
+	Key string
+
+	// Enabled indicates whether the feature flag evaluation determined
+	// the flag to be in an enabled state.
+	Enabled bool
+
+	// RawPayload is the serialized JSON payload associated with the flag variant.
+	// Nil if no payload is configured.
+	// Use GetPayloadAs to unmarshal the payload into a specific type.
+	RawPayload *string
+
+	// Variant is the variant key if this is a multivariate flag.
+	// Nil for boolean flags.
+	Variant *string
+}
+
+// GetPayloadAs unmarshals the JSON payload into the provided type.
+// Returns an error if the payload is empty or cannot be unmarshaled.
+func (r *FeatureFlagResult) GetPayloadAs(v interface{}) error {
+	if r.RawPayload == nil || *r.RawPayload == "" {
+		return errors.New("no payload available")
+	}
+	return json.Unmarshal([]byte(*r.RawPayload), v)
 }
 
 // evaluateFlagDependency evaluates a flag dependency property according to the dependency chain algorithm

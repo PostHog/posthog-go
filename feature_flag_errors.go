@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// ErrFlagNotFound is returned when a feature flag does not exist or is disabled.
+// Use errors.Is(err, ErrFlagNotFound) to check for this error.
+var ErrFlagNotFound = errors.New("feature flag not found")
+
 // Feature flag error type constants for the $feature_flag_error property.
 // These values are sent in analytics events to track flag evaluation failures.
 // They should not be changed without considering impact on existing dashboards
@@ -55,9 +59,9 @@ func NewAPIError(statusCode int, message string) *APIError {
 	}
 }
 
-// FeatureFlagResult holds the result of a feature flag evaluation
-// along with any error information that occurred during evaluation
-type FeatureFlagResult struct {
+// featureFlagEvaluationResult holds internal evaluation context
+// along with any error information that occurred during evaluation.
+type featureFlagEvaluationResult struct {
 	Value                     interface{}
 	Err                       error
 	ErrorsWhileComputingFlags bool
@@ -129,7 +133,7 @@ func classifyError(err error) string {
 // GetErrorString returns the error string for the $feature_flag_error property.
 // Returns empty string if there are no errors.
 // Multiple errors are joined with commas.
-func (r *FeatureFlagResult) GetErrorString() string {
+func (r *featureFlagEvaluationResult) GetErrorString() string {
 	var errorStrings []string
 
 	// Classify request error

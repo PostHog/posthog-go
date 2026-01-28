@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -466,5 +467,350 @@ func TestFlagsV4(t *testing.T) {
 				t.Errorf("Expected $feature_flag_id for %s to be %v, got: %v", test.flagKey, test.expectedId, capturedEvent.Properties["$feature_flag_id"])
 			}
 		})
+	}
+}
+
+func TestGetFeatureFlagResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		fixture    string
+		apiVersion string
+	}{
+		{name: "v3", fixture: "test-flags-v3.json", apiVersion: "v3"},
+		{name: "v4", fixture: "test-flags-v4.json", apiVersion: "v4"},
+	}
+
+	for _, test := range tests {
+		test := test
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/flags") {
+				w.Write([]byte(fixture(test.fixture)))
+			}
+		}))
+		defer server.Close()
+
+		t.Run(test.name+" returns value and payload for boolean flag", func(t *testing.T) {
+			capture := &eventCapture{}
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				Callback:  capture,
+			})
+			defer client.Close()
+
+			result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+				Key:        "enabled-flag",
+				DistinctId: "some-distinct-id",
+			})
+
+			if err != nil {
+				t.Fatalf("Expected no error, got: %v", err)
+			}
+
+			if result.Key != "enabled-flag" {
+				t.Errorf("Expected Key to be 'enabled-flag', got: %v", result.Key)
+			}
+
+			if !result.Enabled {
+				t.Error("Expected Enabled to be true")
+			}
+
+			if result.RawPayload == nil || *result.RawPayload != "{\"foo\": 1}" {
+				t.Errorf("Expected RawPayload to be '{\"foo\": 1}', got: %v", result.RawPayload)
+			}
+
+			if result.Variant != nil {
+				t.Errorf("Expected Variant to be nil for boolean flag, got: %v", result.Variant)
+			}
+
+			// Verify $feature_flag_called event was emitted
+			event := capture.waitForEvent(time.Second)
+			if event == nil {
+				t.Fatal("Expected a $feature_flag_called event")
+			}
+
+			if event.Event != "$feature_flag_called" {
+				t.Errorf("Expected event to be '$feature_flag_called', got: %v", event.Event)
+			}
+
+			if event.Properties["$feature_flag"] != "enabled-flag" {
+				t.Errorf("Expected $feature_flag to be 'enabled-flag', got: %v", event.Properties["$feature_flag"])
+			}
+
+			if event.Properties["$feature_flag_response"] != true {
+				t.Errorf("Expected $feature_flag_response to be true, got: %v", event.Properties["$feature_flag_response"])
+			}
+		})
+
+		t.Run(test.name+" returns value and payload for multivariate flag", func(t *testing.T) {
+			capture := &eventCapture{}
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				Callback:  capture,
+			})
+			defer client.Close()
+
+			result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+				Key:        "multi-variate-flag",
+				DistinctId: "some-distinct-id",
+			})
+
+			if err != nil {
+				t.Fatalf("Expected no error, got: %v", err)
+			}
+
+			if result.Key != "multi-variate-flag" {
+				t.Errorf("Expected Key to be 'multi-variate-flag', got: %v", result.Key)
+			}
+
+			if !result.Enabled {
+				t.Error("Expected Enabled to be true for multivariate flag")
+			}
+
+			if result.RawPayload == nil || *result.RawPayload != "this is the payload" {
+				t.Errorf("Expected RawPayload to be 'this is the payload', got: %v", result.RawPayload)
+			}
+
+			if result.Variant == nil || *result.Variant != "hello" {
+				t.Errorf("Expected Variant to be 'hello', got: %v", result.Variant)
+			}
+
+			// Verify $feature_flag_called event was emitted
+			event := capture.waitForEvent(time.Second)
+			if event == nil {
+				t.Fatal("Expected a $feature_flag_called event")
+			}
+
+			if event.Properties["$feature_flag_response"] != "hello" {
+				t.Errorf("Expected $feature_flag_response to be 'hello', got: %v", event.Properties["$feature_flag_response"])
+			}
+		})
+
+		t.Run(test.name+" returns disabled flag correctly", func(t *testing.T) {
+			capture := &eventCapture{}
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				Callback:  capture,
+			})
+			defer client.Close()
+
+			result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+				Key:        "disabled-flag",
+				DistinctId: "some-distinct-id",
+			})
+
+			if err != nil {
+				t.Fatalf("Expected no error, got: %v", err)
+			}
+
+			if result.Enabled {
+				t.Error("Expected Enabled to be false for disabled flag")
+			}
+
+			if result.RawPayload != nil {
+				t.Errorf("Expected RawPayload to be nil for disabled flag, got: %v", result.RawPayload)
+			}
+
+			// Verify $feature_flag_called event was emitted
+			event := capture.waitForEvent(time.Second)
+			if event == nil {
+				t.Fatal("Expected a $feature_flag_called event")
+			}
+		})
+
+		t.Run(test.name+" returns non-existent flag correctly", func(t *testing.T) {
+			capture := &eventCapture{}
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				Callback:  capture,
+			})
+			defer client.Close()
+
+			result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+				Key:        "non-existent-flag",
+				DistinctId: "some-distinct-id",
+			})
+
+			if err == nil {
+				t.Fatal("Expected an error for non-existent flag")
+			}
+			if !errors.Is(err, ErrFlagNotFound) {
+				t.Errorf("Expected ErrFlagNotFound, got: %v", err)
+			}
+			if result != nil {
+				t.Errorf("Expected nil result for non-existent flag, got: %v", result)
+			}
+
+			// Verify $feature_flag_called event was emitted with error
+			event := capture.waitForEvent(time.Second)
+			if event == nil {
+				t.Fatal("Expected a $feature_flag_called event")
+			}
+
+			if event.Properties["$feature_flag_error"] != "flag_missing" {
+				t.Errorf("Expected $feature_flag_error to be 'flag_missing', got: %v", event.Properties["$feature_flag_error"])
+			}
+		})
+	}
+}
+
+func TestGetFeatureFlagResultGetPayloadAs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
+			w.Write([]byte(fixture("test-flags-v4.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+	})
+	defer client.Close()
+
+	t.Run("unmarshals JSON payload correctly", func(t *testing.T) {
+		result, _ := client.GetFeatureFlagResult(FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "some-distinct-id",
+		})
+
+		var payload struct {
+			Foo int `json:"foo"`
+		}
+		err := result.GetPayloadAs(&payload)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+
+		if payload.Foo != 1 {
+			t.Errorf("Expected Foo to be 1, got: %v", payload.Foo)
+		}
+	})
+
+	t.Run("returns error for empty payload", func(t *testing.T) {
+		result, _ := client.GetFeatureFlagResult(FeatureFlagPayload{
+			Key:        "disabled-flag",
+			DistinctId: "another-distinct-id",
+		})
+
+		var payload struct {
+			Foo int `json:"foo"`
+		}
+		err := result.GetPayloadAs(&payload)
+		if err == nil {
+			t.Error("Expected error for empty payload")
+		}
+	})
+}
+
+func TestGetFeatureFlagResultReturnsErrorForNonExistentFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			// Return empty flags - the requested flag won't exist
+			w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "some-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+		Key:                 "non-existent-flag",
+		DistinctId:          "some-distinct-id",
+		OnlyEvaluateLocally: true,
+	})
+
+	if err == nil {
+		t.Fatal("Expected an error for non-existent flag with OnlyEvaluateLocally")
+	}
+
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("Expected error message to contain 'does not exist', got: %v", err)
+	}
+
+	if result != nil {
+		t.Errorf("Expected result to be nil, got: %v", result)
+	}
+}
+
+func TestGetFeatureFlagResultPropagatesLocalEvaluationErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey:            "some-personal-api-key",
+		Endpoint:                  server.URL,
+		FeatureFlagRequestTimeout: 10 * time.Millisecond,
+	})
+	defer client.Close()
+
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+		Key:                 "any-flag",
+		DistinctId:          "some-distinct-id",
+		OnlyEvaluateLocally: true,
+	})
+
+	if err == nil {
+		t.Fatal("Expected an error when flags fail to fetch")
+	}
+
+	// Should get the original evaluation error, not ErrFlagNotFound
+	if err.Error() != "flags were not successfully fetched yet" {
+		t.Errorf("Expected error 'flags were not successfully fetched yet', got: %v", err)
+	}
+
+	if errors.Is(err, ErrFlagNotFound) {
+		t.Error("Error should NOT be ErrFlagNotFound - it's an evaluation error")
+	}
+
+	if result != nil {
+		t.Errorf("Expected result to be nil, got: %v", result)
+	}
+}
+
+func TestGetFeatureFlagResultPropagatesRemoteAPIErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "Internal Server Error"}`))
+		}
+	}))
+	defer server.Close()
+
+	// No PersonalApiKey = uses remote /flags path
+	client, _ := NewWithConfig("test-api-key", Config{
+		Endpoint: server.URL,
+	})
+	defer client.Close()
+
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+		Key:        "any-flag",
+		DistinctId: "some-distinct-id",
+	})
+
+	if err == nil {
+		t.Fatal("Expected an error when /flags returns 500")
+	}
+
+	// API errors should be propagated, not wrapped with ErrFlagNotFound
+	if errors.Is(err, ErrFlagNotFound) {
+		t.Error("Error should NOT be ErrFlagNotFound - it's an API error")
+	}
+
+	if result != nil {
+		t.Errorf("Expected result to be nil, got: %v", result)
 	}
 }
