@@ -1,3 +1,44 @@
+### New Features
+
+* **`GetFeatureFlagResult`**: New method that returns both the flag value and payload in a single call, while properly tracking feature flag usage via `$feature_flag_called` events.
+
+### Deprecations
+
+* **`GetFeatureFlagPayload`**: Deprecated in favor of `GetFeatureFlagResult`. The new method provides better tracking and a more convenient API.
+
+### Migration Guide
+
+```go
+// Before (two calls, no event tracking for payload-only):
+flag, _ := client.GetFeatureFlag(payload)
+payloadStr, _ := client.GetFeatureFlagPayload(payload)
+
+// After (single call, always tracks):
+result, err := client.GetFeatureFlagResult(payload)
+if err != nil { /* handle */ }
+if result.Enabled {
+    var config MyConfig
+    result.GetPayloadAs(&config)
+}
+```
+
+**Note**: `GetFeatureFlagResult` returns `nil, error` when a flag doesn't exist (rather than a result with `Enabled: false`). Check for errors to distinguish between a disabled flag and a missing flag:
+
+```go
+result, err := client.GetFeatureFlagResult(payload)
+if errors.Is(err, posthog.ErrFlagNotFound) {
+    // Flag doesn't exist - use default behavior
+}
+if err != nil {
+    // Other error (e.g., network issue)
+}
+if result.Enabled {
+    // Flag exists and is enabled
+} else {
+    // Flag exists but is disabled
+}
+```
+
 ## 1.9.1 - 2026-01-21
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.9.0...v1.9.1)
