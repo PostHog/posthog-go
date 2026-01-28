@@ -64,10 +64,10 @@ type FeatureFlag struct {
 }
 
 type Filter struct {
-	AggregationGroupTypeIndex *uint8                 `json:"aggregation_group_type_index"`
-	Groups                    []FeatureFlagCondition `json:"groups"`
-	Multivariate              *Variants              `json:"multivariate"`
-	Payloads                  map[string]string      `json:"payloads"`
+	AggregationGroupTypeIndex *uint8                     `json:"aggregation_group_type_index"`
+	Groups                    []FeatureFlagCondition     `json:"groups"`
+	Multivariate              *Variants                  `json:"multivariate"`
+	Payloads                  map[string]json.RawMessage `json:"payloads"`
 }
 
 type Variants struct {
@@ -122,8 +122,8 @@ type DecideRequestData struct {
 }
 
 type DecideResponse struct {
-	FeatureFlags        map[string]interface{} `json:"featureFlags"`
-	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+	FeatureFlags        map[string]interface{}     `json:"featureFlags"`
+	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 
 type InconclusiveMatchError struct {
@@ -497,7 +497,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 	} else if variant != nil {
 		payload, ok := flag.Filters.Payloads[fmt.Sprintf("%v", variant)]
 		if ok {
-			return payload, nil
+			return rawMessageToString(payload), nil
 		}
 	}
 
@@ -1353,7 +1353,9 @@ func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId s
 		return "", err
 	}
 	if flagsResponse != nil {
-		return flagsResponse.FeatureFlagPayloads[key], nil
+		if payload, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
+			return rawMessageToString(payload), nil
+		}
 	}
 	return "", nil
 }
