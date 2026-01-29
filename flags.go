@@ -28,6 +28,7 @@ type FlagDetail struct {
 	Variant  *string      `json:"variant"`
 	Reason   *FlagReason  `json:"reason"`
 	Metadata FlagMetadata `json:"metadata"`
+	Failed   *bool        `json:"failed,omitempty"`
 }
 
 // FlagReason represents why a flag was enabled/disabled

@@ -1151,9 +1151,14 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups 
 	}
 
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
-		result.Value = flagDetail
-		result.FlagDetail = &flagDetail
-		result.FlagMissing = false
+		// If the flag failed evaluation, treat it as missing
+		if flagDetail.Failed != nil && *flagDetail.Failed {
+			result.FlagMissing = true
+		} else {
+			result.Value = flagDetail
+			result.FlagDetail = &flagDetail
+			result.FlagMissing = false
+		}
 	} else {
 		result.FlagMissing = true
 	}
