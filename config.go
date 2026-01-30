@@ -99,6 +99,73 @@ type Config struct {
 	// Must be in range [0,9]. If nil, defaults to 9 (10 total attempts).
 	MaxRetries *int
 
+	// BeforeSend is an optional hook function that is called before each message is sent to PostHog.
+	// It allows you to modify messages before they are sent, or to drop messages entirely.
+	//
+	// The function receives a Message (Capture, Identify, Alias, GroupIdentify, or Exception)
+	// and should return a Message. You can:
+	//   - Modify and return the message to change what is sent
+	//   - Return nil to drop the message (it will not be sent)
+	//   - Return the original message unchanged to send it as-is
+	//
+	// The hook is called synchronously before the message is queued for sending. It runs in
+	// the same goroutine as the Enqueue call.
+	//
+	// If the hook panics or returns an invalid message, the error is logged and the original
+	// message is sent instead to ensure reliability.
+	//
+	// Example - Add custom property to all Capture events:
+	//
+	//	client, _ := posthog.NewWithConfig("api-key", posthog.Config{
+	//	    BeforeSend: func(msg posthog.Message) posthog.Message {
+	//	        if capture, ok := msg.(posthog.Capture); ok {
+	//	            if capture.Properties == nil {
+	//	                capture.Properties = posthog.NewProperties()
+	//	            }
+	//	            capture.Properties["environment"] = "production"
+	//	            capture.Properties["app_version"] = "1.2.3"
+	//	            return capture
+	//	        }
+	//	        return msg
+	//	    },
+	//	})
+	//
+	// Example - Filter out debug events:
+	//
+	//	client, _ := posthog.NewWithConfig("api-key", posthog.Config{
+	//	    BeforeSend: func(msg posthog.Message) posthog.Message {
+	//	        if capture, ok := msg.(posthog.Capture); ok {
+	//	            if capture.Event == "debug_event" {
+	//	                return nil  // Drop this event
+	//	            }
+	//	        }
+	//	        return msg
+	//	    },
+	//	})
+	//
+	// Example - Scrub sensitive data from all message types:
+	//
+	//	client, _ := posthog.NewWithConfig("api-key", posthog.Config{
+	//	    BeforeSend: func(msg posthog.Message) posthog.Message {
+	//	        switch m := msg.(type) {
+	//	        case posthog.Capture:
+	//	            if m.Properties != nil {
+	//	                delete(m.Properties, "password")
+	//	                delete(m.Properties, "credit_card")
+	//	            }
+	//	            return m
+	//	        case posthog.Identify:
+	//	            if m.Properties != nil {
+	//	                delete(m.Properties, "ssn")
+	//	            }
+	//	            return m
+	//	        default:
+	//	            return msg
+	//	        }
+	//	    },
+	//	})
+	BeforeSend func(Message) Message
+
 	// ShutdownTimeout is the maximum time to wait for in-flight messages
 	// to be sent during Close(). If zero or negative, waits indefinitely
 	// (preserving backward-compatible behavior). Set to a positive duration
