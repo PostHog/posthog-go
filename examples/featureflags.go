@@ -24,11 +24,10 @@ func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
 	}
 	defer client.Close()
 
-	boolResult, boolErr := client.IsFeatureEnabled(
-		posthog.FeatureFlagPayload{
-			Key:        "multivariate-test",
-			DistinctId: "hello",
-		})
+	boolResult, boolErr := client.IsFeatureEnabled(posthog.FeatureFlagPayload{
+		Key:        "multivariate-test",
+		DistinctId: "hello",
+	})
 
 	fmt.Println("boolResult:", boolResult)
 
