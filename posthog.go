@@ -530,7 +530,10 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
 			evalResult.Value = flagValue
-			payload = f.Metadata.Payload
+			payloadStr := rawMessageToString(f.Metadata.Payload)
+			if payloadStr != "" {
+				payload = &payloadStr
+			}
 			variant = f.Variant
 		}
 	}
