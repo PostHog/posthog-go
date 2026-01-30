@@ -292,6 +292,11 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 				expected: "errors_while_computing_flags",
 			},
 			{
+				name:     "evaluation failed",
+				result:   featureFlagEvaluationResult{Value: false, FlagFailed: true},
+				expected: "evaluation_failed",
+			},
+			{
 				name:     "multiple errors",
 				result:   featureFlagEvaluationResult{Value: false, QuotaLimited: true, FlagMissing: true},
 				expected: "quota_limited,flag_missing",
@@ -541,8 +546,9 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 				ErrorsWhileComputingFlags: true,
 				QuotaLimited:              true,
 				FlagMissing:               true,
+				FlagFailed:                true,
 			},
-			expected: "unknown_error,errors_while_computing_flags,quota_limited,flag_missing",
+			expected: "unknown_error,errors_while_computing_flags,quota_limited,flag_missing,evaluation_failed",
 		},
 	}
 
@@ -588,9 +594,12 @@ func TestFailedFlagShouldNotReturnValue(t *testing.T) {
 			t.Errorf("Expected no error, got: %v", result.Err)
 		}
 
-		// The flag should be treated as missing since it failed evaluation
-		if !result.FlagMissing {
-			t.Error("Expected FlagMissing to be true for a failed flag")
+		// The flag should be marked as failed, not missing
+		if result.FlagMissing {
+			t.Error("Expected FlagMissing to be false for a failed flag (it was present in the response)")
+		}
+		if !result.FlagFailed {
+			t.Error("Expected FlagFailed to be true for a failed flag")
 		}
 
 		// The value should be nil (not the failed enabled=false)
@@ -638,6 +647,9 @@ func TestFailedFlagShouldNotReturnValue(t *testing.T) {
 		// Non-failed flag should return its value normally
 		if result.FlagMissing {
 			t.Error("Expected FlagMissing to be false for a non-failed flag")
+		}
+		if result.FlagFailed {
+			t.Error("Expected FlagFailed to be false for a non-failed flag")
 		}
 
 		if result.FlagDetail == nil {

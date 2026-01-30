@@ -24,6 +24,9 @@ const (
 	// FeatureFlagErrorFlagMissing indicates the requested flag was not in the API response
 	FeatureFlagErrorFlagMissing = "flag_missing"
 
+	// FeatureFlagErrorEvaluationFailed indicates the flag was present but failed to evaluate due to a transient server error
+	FeatureFlagErrorEvaluationFailed = "evaluation_failed"
+
 	// FeatureFlagErrorQuotaLimited indicates rate/quota limit was exceeded
 	FeatureFlagErrorQuotaLimited = "quota_limited"
 
@@ -67,6 +70,7 @@ type featureFlagEvaluationResult struct {
 	ErrorsWhileComputingFlags bool
 	QuotaLimited              bool
 	FlagMissing               bool
+	FlagFailed                bool
 	RequestID                 *string
 	EvaluatedAt               *int64
 	FlagDetail                *FlagDetail
@@ -154,6 +158,11 @@ func (r *featureFlagEvaluationResult) GetErrorString() string {
 	// Flag was not in the response
 	if r.FlagMissing {
 		errorStrings = append(errorStrings, FeatureFlagErrorFlagMissing)
+	}
+
+	// Flag was present but failed to evaluate
+	if r.FlagFailed {
+		errorStrings = append(errorStrings, FeatureFlagErrorEvaluationFailed)
 	}
 
 	return strings.Join(errorStrings, ",")

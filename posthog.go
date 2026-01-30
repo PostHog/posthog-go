@@ -581,6 +581,9 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		if evalResult.Err != nil {
 			return nil, evalResult.Err
 		}
+		if evalResult.FlagFailed {
+			return nil, fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, flagConfig.Key)
+		}
 		return nil, fmt.Errorf("%w: '%s' does not exist or is disabled", ErrFlagNotFound, flagConfig.Key)
 	}
 
@@ -1151,9 +1154,10 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, groups 
 	}
 
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
-		// If the flag failed evaluation, treat it as missing
+		// If the flag failed evaluation due to a transient server error,
+		// don't return the incorrect enabled=false value
 		if flagDetail.Failed != nil && *flagDetail.Failed {
-			result.FlagMissing = true
+			result.FlagFailed = true
 		} else {
 			result.Value = flagDetail
 			result.FlagDetail = &flagDetail
