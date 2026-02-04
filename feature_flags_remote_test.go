@@ -86,7 +86,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		}
 	})
 
-	t.Run("returns false with FlagMissing when flag not in response", func(t *testing.T) {
+	t.Run("returns nil with FlagMissing when flag not in response", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{
 				"flags": {},
@@ -106,15 +106,15 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil, got: %v", result.Value)
 		}
 		if !result.FlagMissing {
 			t.Error("Expected FlagMissing to be true")
 		}
 	})
 
-	t.Run("returns false with QuotaLimited when quota limited", func(t *testing.T) {
+	t.Run("returns nil with QuotaLimited when quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{
 				"flags": {
@@ -140,8 +140,8 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err != nil {
 			t.Errorf("Expected no error, got: %v", result.Err)
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false when quota limited, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil when quota limited, got: %v", result.Value)
 		}
 		if !result.QuotaLimited {
 			t.Error("Expected QuotaLimited to be true")
@@ -196,8 +196,8 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err == nil {
 			t.Error("Expected an error for failed HTTP request")
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false on error, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil on error, got: %v", result.Value)
 		}
 
 		// Verify it's an APIError that classifies correctly
@@ -262,40 +262,45 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if result.Err == nil {
 			t.Error("Expected an error when server is unreachable")
 		}
-		if result.Value != false {
-			t.Errorf("Expected Value to be false on error, got: %v", result.Value)
+		if result.Value != nil {
+			t.Errorf("Expected Value to be nil on error, got: %v", result.Value)
 		}
 	})
 
 	t.Run("GetErrorString returns correct error strings", func(t *testing.T) {
 		tests := []struct {
 			name     string
-			result   FeatureFlagResult
+			result   featureFlagEvaluationResult
 			expected string
 		}{
 			{
 				name:     "no errors",
-				result:   FeatureFlagResult{Value: true},
+				result:   featureFlagEvaluationResult{Value: true},
 				expected: "",
 			},
 			{
 				name:     "flag missing",
-				result:   FeatureFlagResult{Value: false, FlagMissing: true},
+				result:   featureFlagEvaluationResult{Value: false, FlagMissing: true},
 				expected: "flag_missing",
 			},
 			{
 				name:     "quota limited",
-				result:   FeatureFlagResult{Value: false, QuotaLimited: true},
+				result:   featureFlagEvaluationResult{Value: false, QuotaLimited: true},
 				expected: "quota_limited",
 			},
 			{
 				name:     "errors while computing",
-				result:   FeatureFlagResult{Value: true, ErrorsWhileComputingFlags: true},
+				result:   featureFlagEvaluationResult{Value: true, ErrorsWhileComputingFlags: true},
 				expected: "errors_while_computing_flags",
 			},
 			{
+				name:     "evaluation failed",
+				result:   featureFlagEvaluationResult{Value: false, FlagFailed: true},
+				expected: "evaluation_failed",
+			},
+			{
 				name:     "multiple errors",
-				result:   FeatureFlagResult{Value: false, QuotaLimited: true, FlagMissing: true},
+				result:   featureFlagEvaluationResult{Value: false, QuotaLimited: true, FlagMissing: true},
 				expected: "quota_limited,flag_missing",
 			},
 		}
@@ -532,12 +537,12 @@ func TestClassifyError(t *testing.T) {
 func TestGetErrorStringWithRequestErrors(t *testing.T) {
 	tests := []struct {
 		name     string
-		result   FeatureFlagResult
+		result   featureFlagEvaluationResult
 		expected string
 	}{
 		{
 			name: "timeout error only",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value: false,
 				Err:   context.DeadlineExceeded,
 			},
@@ -545,7 +550,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "connection error only",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value: false,
 				Err:   &net.DNSError{Err: "no such host", Name: "example.com"},
 			},
@@ -553,7 +558,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "unknown error only",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value: false,
 				Err:   errors.New("something went wrong"),
 			},
@@ -561,7 +566,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "request error combined with errors_while_computing_flags",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:                     false,
 				Err:                       errors.New("something went wrong"),
 				ErrorsWhileComputingFlags: true,
@@ -570,7 +575,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "timeout combined with quota_limited",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:        false,
 				Err:          context.DeadlineExceeded,
 				QuotaLimited: true,
@@ -579,7 +584,7 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "connection error combined with flag_missing",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:       false,
 				Err:         &net.DNSError{Err: "no such host", Name: "example.com"},
 				FlagMissing: true,
@@ -588,14 +593,15 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 		},
 		{
 			name: "all error types combined",
-			result: FeatureFlagResult{
+			result: featureFlagEvaluationResult{
 				Value:                     false,
 				Err:                       errors.New("request failed"),
 				ErrorsWhileComputingFlags: true,
 				QuotaLimited:              true,
 				FlagMissing:               true,
+				FlagFailed:                true,
 			},
-			expected: "unknown_error,errors_while_computing_flags,quota_limited,flag_missing",
+			expected: "unknown_error,errors_while_computing_flags,quota_limited,flag_missing,evaluation_failed",
 		},
 	}
 
@@ -607,4 +613,100 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFailedFlagShouldNotReturnValue(t *testing.T) {
+	t.Run("flag with failed=true should be treated as missing", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{
+				"flags": {
+					"test-flag": {
+						"key": "test-flag",
+						"enabled": false,
+						"variant": null,
+						"reason": null,
+						"metadata": {"id": 1, "version": 1},
+						"failed": true
+					}
+				},
+				"requestId": "req-failed",
+				"errorsWhileComputingFlags": true
+			}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
+
+		if result.Err != nil {
+			t.Errorf("Expected no error, got: %v", result.Err)
+		}
+
+		// The flag should be marked as failed, not missing
+		if result.FlagMissing {
+			t.Error("Expected FlagMissing to be false for a failed flag (it was present in the response)")
+		}
+		if !result.FlagFailed {
+			t.Error("Expected FlagFailed to be true for a failed flag")
+		}
+
+		// The value should be nil (not the failed enabled=false)
+		if result.Value != nil {
+			t.Errorf("Expected nil value for a failed flag, got: %v", result.Value)
+		}
+
+		// FlagDetail should not be set for failed flags
+		if result.FlagDetail != nil {
+			t.Error("Expected FlagDetail to be nil for a failed flag")
+		}
+	})
+
+	t.Run("flag with failed=false should return normally", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{
+				"flags": {
+					"test-flag": {
+						"key": "test-flag",
+						"enabled": true,
+						"variant": null,
+						"reason": null,
+						"metadata": {"id": 1, "version": 1},
+						"failed": false
+					}
+				},
+				"requestId": "req-ok",
+				"errorsWhileComputingFlags": true
+			}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		result := c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, nil, nil)
+
+		if result.Err != nil {
+			t.Errorf("Expected no error, got: %v", result.Err)
+		}
+
+		// Non-failed flag should return its value normally
+		if result.FlagMissing {
+			t.Error("Expected FlagMissing to be false for a non-failed flag")
+		}
+		if result.FlagFailed {
+			t.Error("Expected FlagFailed to be false for a non-failed flag")
+		}
+
+		if result.FlagDetail == nil {
+			t.Error("Expected FlagDetail to be set for a non-failed flag")
+		}
+	})
 }

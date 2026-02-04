@@ -187,11 +187,11 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 			}))
 			defer server.Close()
 
-		client, err := NewWithConfig("test-key", Config{
-			Endpoint: server.URL,
-			// Uses production defaults for BatchSize, MaxEnqueuedRequests
-		})
-		require.NoError(t, err)
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint: server.URL,
+				// Uses production defaults for BatchSize, MaxEnqueuedRequests
+			})
+			require.NoError(t, err)
 
 			start := time.Now()
 
@@ -493,4 +493,3 @@ func TestStress_PrepareForSendUnderLoad(t *testing.T) {
 		})
 	}
 }
-

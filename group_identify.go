@@ -8,6 +8,8 @@ import (
 type GroupIdentify struct {
 	Type string
 	Key  string
+	// Uuid is optional. If not provided, a random UUID will be generated.
+	Uuid string
 
 	DistinctId   string
 	Timestamp    time.Time
@@ -40,6 +42,7 @@ func (msg GroupIdentify) Validate() error {
 }
 
 type GroupIdentifyInApi struct {
+	Uuid           string    `json:"uuid"`
 	Library        string    `json:"library"`
 	LibraryVersion string    `json:"library_version"`
 	Timestamp      time.Time `json:"timestamp"`
@@ -64,6 +67,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	distinctId := fmt.Sprintf("$%s_%s", msg.Type, msg.Key)
 
 	apified := GroupIdentifyInApi{
+		Uuid:           msg.Uuid,
 		Event:          "$groupidentify",
 		Properties:     myProperties,
 		DistinctId:     distinctId,
@@ -74,4 +78,3 @@ func (msg GroupIdentify) APIfy() APIMessage {
 
 	return apified
 }
-

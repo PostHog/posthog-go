@@ -19,8 +19,8 @@
       "metadata": {
         "id": 1,
         "version": 23,
-        "payload": "{\"foo\": 1}",
-        "description": "This is an enabled flag"  
+        "payload": {"foo": 1},
+        "description": "This is an enabled flag"
       }
     },
     "group-flag": {

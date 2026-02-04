@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// ErrFlagNotFound is returned when a feature flag does not exist or is disabled.
+// Use errors.Is(err, ErrFlagNotFound) to check for this error.
+var ErrFlagNotFound = errors.New("feature flag not found")
+
 // Feature flag error type constants for the $feature_flag_error property.
 // These values are sent in analytics events to track flag evaluation failures.
 // They should not be changed without considering impact on existing dashboards
@@ -19,6 +23,9 @@ const (
 
 	// FeatureFlagErrorFlagMissing indicates the requested flag was not in the API response
 	FeatureFlagErrorFlagMissing = "flag_missing"
+
+	// FeatureFlagErrorEvaluationFailed indicates the flag was present but failed to evaluate due to a transient server error
+	FeatureFlagErrorEvaluationFailed = "evaluation_failed"
 
 	// FeatureFlagErrorQuotaLimited indicates rate/quota limit was exceeded
 	FeatureFlagErrorQuotaLimited = "quota_limited"
@@ -55,14 +62,15 @@ func NewAPIError(statusCode int, message string) *APIError {
 	}
 }
 
-// FeatureFlagResult holds the result of a feature flag evaluation
-// along with any error information that occurred during evaluation
-type FeatureFlagResult struct {
+// featureFlagEvaluationResult holds internal evaluation context
+// along with any error information that occurred during evaluation.
+type featureFlagEvaluationResult struct {
 	Value                     interface{}
 	Err                       error
 	ErrorsWhileComputingFlags bool
 	QuotaLimited              bool
 	FlagMissing               bool
+	FlagFailed                bool
 	RequestID                 *string
 	EvaluatedAt               *int64
 	FlagDetail                *FlagDetail
@@ -129,7 +137,7 @@ func classifyError(err error) string {
 // GetErrorString returns the error string for the $feature_flag_error property.
 // Returns empty string if there are no errors.
 // Multiple errors are joined with commas.
-func (r *FeatureFlagResult) GetErrorString() string {
+func (r *featureFlagEvaluationResult) GetErrorString() string {
 	var errorStrings []string
 
 	// Classify request error
@@ -150,6 +158,11 @@ func (r *FeatureFlagResult) GetErrorString() string {
 	// Flag was not in the response
 	if r.FlagMissing {
 		errorStrings = append(errorStrings, FeatureFlagErrorFlagMissing)
+	}
+
+	// Flag was present but failed to evaluate
+	if r.FlagFailed {
+		errorStrings = append(errorStrings, FeatureFlagErrorEvaluationFailed)
 	}
 
 	return strings.Join(errorStrings, ",")

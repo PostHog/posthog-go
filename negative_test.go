@@ -548,4 +548,3 @@ func TestGroups_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
-

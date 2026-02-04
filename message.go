@@ -4,6 +4,7 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
 )
 
 // Values implementing this interface are used by posthog clients to notify
@@ -50,6 +51,15 @@ func makeTimestamp(t time.Time, def time.Time) time.Time {
 		return def
 	}
 	return t
+}
+
+// makeUUID returns the UUID passed as first argument if non-empty,
+// otherwise generates and returns a new random UUID (v4).
+func makeUUID(u string) string {
+	if u != "" {
+		return u
+	}
+	return uuid.New().String()
 }
 
 // batch represents objects sent to the /batch/ endpoint with pre-serialized messages.

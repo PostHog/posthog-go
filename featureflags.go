@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 
-	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 const (
@@ -67,10 +68,10 @@ type FeatureFlag struct {
 }
 
 type Filter struct {
-	AggregationGroupTypeIndex *uint8                 `json:"aggregation_group_type_index"`
-	Groups                    []FeatureFlagCondition `json:"groups"`
-	Multivariate              *Variants              `json:"multivariate"`
-	Payloads                  map[string]string      `json:"payloads"`
+	AggregationGroupTypeIndex *uint8                     `json:"aggregation_group_type_index"`
+	Groups                    []FeatureFlagCondition     `json:"groups"`
+	Multivariate              *Variants                  `json:"multivariate"`
+	Payloads                  map[string]json.RawMessage `json:"payloads"`
 }
 
 type Variants struct {
@@ -125,8 +126,8 @@ type DecideRequestData struct {
 }
 
 type DecideResponse struct {
-	FeatureFlags        map[string]interface{} `json:"featureFlags"`
-	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+	FeatureFlags        map[string]interface{}     `json:"featureFlags"`
+	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 
 type InconclusiveMatchError struct {
@@ -147,6 +148,35 @@ type RequiresServerEvaluationError struct {
 
 func (e *RequiresServerEvaluationError) Error() string {
 	return e.msg
+}
+
+// FeatureFlagResult represents the result of a feature flag evaluation,
+// containing both the flag value and its payload.
+type FeatureFlagResult struct {
+	// Key is the feature flag key that was evaluated
+	Key string
+
+	// Enabled indicates whether the feature flag evaluation determined
+	// the flag to be in an enabled state.
+	Enabled bool
+
+	// RawPayload is the serialized JSON payload associated with the flag variant.
+	// Nil if no payload is configured.
+	// Use GetPayloadAs to unmarshal the payload into a specific type.
+	RawPayload *string
+
+	// Variant is the variant key if this is a multivariate flag.
+	// Nil for boolean flags.
+	Variant *string
+}
+
+// GetPayloadAs unmarshals the JSON payload into the provided type.
+// Returns an error if the payload is empty or cannot be unmarshaled.
+func (r *FeatureFlagResult) GetPayloadAs(v interface{}) error {
+	if r.RawPayload == nil || *r.RawPayload == "" {
+		return errors.New("no payload available")
+	}
+	return json.Unmarshal([]byte(*r.RawPayload), v)
 }
 
 // evaluateFlagDependency evaluates a flag dependency property according to the dependency chain algorithm
@@ -474,7 +504,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 	} else if variant != nil {
 		payload, ok := flag.Filters.Payloads[fmt.Sprintf("%v", variant)]
 		if ok {
-			return payload, nil
+			return rawMessageToString(payload), nil
 		}
 	}
 
@@ -1345,7 +1375,9 @@ func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId s
 		return "", err
 	}
 	if flagsResponse != nil {
-		return flagsResponse.FeatureFlagPayloads[key], nil
+		if payload, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
+			return rawMessageToString(payload), nil
+		}
 	}
 	return "", nil
 }

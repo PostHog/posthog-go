@@ -31,7 +31,8 @@
         "distinct_id": "my-user-id"
       },
       "timestamp": "2025-08-11T20:43:37Z",
-      "type": "exception"
+      "type": "exception",
+      "uuid": "00000000-0000-0000-0000-000000000004"
     }
   ]
 }

@@ -29,6 +29,7 @@ type FlagDetail struct {
 	Variant  *string      `json:"variant"`
 	Reason   *FlagReason  `json:"reason"`
 	Metadata FlagMetadata `json:"metadata"`
+	Failed   *bool        `json:"failed,omitempty"`
 }
 
 // FlagReason represents why a flag was enabled/disabled
@@ -40,10 +41,10 @@ type FlagReason struct {
 
 // FlagMetadata contains additional information about a flag
 type FlagMetadata struct {
-	ID          int     `json:"id"`
-	Version     int     `json:"version"`
-	Payload     *string `json:"payload"`
-	Description *string `json:"description,omitempty"`
+	ID          int             `json:"id"`
+	Version     int             `json:"version"`
+	Payload     json.RawMessage `json:"payload"`
+	Description *string         `json:"description,omitempty"`
 }
 
 // GetValue returns the variant if it exists, otherwise returns the enabled status
@@ -55,7 +56,7 @@ func (f FlagDetail) GetValue() interface{} {
 }
 
 // NewFlagDetail creates a new FlagDetail from a key, value, and optional payload
-func NewFlagDetail(key string, value interface{}, payload *string) FlagDetail {
+func NewFlagDetail(key string, value interface{}, payload json.RawMessage) FlagDetail {
 	var variant *string
 	var enabled bool
 
@@ -89,8 +90,8 @@ type FlagsResponse struct {
 	Flags map[string]FlagDetail `json:"flags,omitempty"`
 
 	// v3 legacy fields
-	FeatureFlags        map[string]interface{} `json:"featureFlags"`
-	FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+	FeatureFlags        map[string]interface{}     `json:"featureFlags"`
+	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 
 // CommonResponseFields contains fields common to all flags response versions
@@ -117,12 +118,10 @@ func (r *FlagsResponse) UnmarshalJSON(data []byte) error {
 
 		// Calculate v3 format fields from Flags
 		r.FeatureFlags = make(map[string]interface{})
-		r.FeatureFlagPayloads = make(map[string]string)
+		r.FeatureFlagPayloads = make(map[string]json.RawMessage)
 		for key, flag := range r.Flags {
 			r.FeatureFlags[key] = flag.GetValue()
-			if flag.Metadata.Payload != nil {
-				r.FeatureFlagPayloads[key] = *flag.Metadata.Payload
-			}
+			r.FeatureFlagPayloads[key] = flag.Metadata.Payload
 		}
 		return nil
 	}
@@ -130,8 +129,8 @@ func (r *FlagsResponse) UnmarshalJSON(data []byte) error {
 	// If not v4, try v3 format
 	type V3Response struct {
 		CommonResponseFields
-		FeatureFlags        map[string]interface{} `json:"featureFlags"`
-		FeatureFlagPayloads map[string]string      `json:"featureFlagPayloads"`
+		FeatureFlags        map[string]interface{}     `json:"featureFlags"`
+		FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 	}
 
 	var v3 V3Response
@@ -147,11 +146,11 @@ func (r *FlagsResponse) UnmarshalJSON(data []byte) error {
 	// Construct v4 format from v3 data
 	r.Flags = make(map[string]FlagDetail)
 	for key, value := range v3.FeatureFlags {
-		var payloadPtr *string
+		var payloadRaw json.RawMessage
 		if payload, ok := v3.FeatureFlagPayloads[key]; ok {
-			payloadPtr = &payload
+			payloadRaw = payload
 		}
-		r.Flags[key] = NewFlagDetail(key, value, payloadPtr)
+		r.Flags[key] = NewFlagDetail(key, value, payloadRaw)
 	}
 	return nil
 }
@@ -249,4 +248,20 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	}
 
 	return &flagsResponse, nil
+}
+
+// rawMessageToString converts a json.RawMessage to a string.
+// If the raw message is a JSON string, it returns the unquoted string.
+// Otherwise, it returns the JSON representation.
+func rawMessageToString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try to unmarshal as a string first
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	// Return raw JSON for objects, arrays, numbers, booleans
+	return string(raw)
 }
