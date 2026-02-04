@@ -209,6 +209,40 @@ func TestFlags(t *testing.T) {
 	}
 }
 
+func TestFeatureFlagCalledIncludesDeviceId(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
+			w.Write([]byte(fixture("test-flags-v4.json")))
+		}
+	}))
+	defer server.Close()
+
+	capture := &eventCapture{}
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		Endpoint:  server.URL,
+		BatchSize: 1, // Send immediately
+		Callback:  capture,
+	})
+	defer client.Close()
+
+	deviceId := "device-123"
+	_, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "some-distinct-id",
+			DeviceId:   &deviceId,
+		},
+	)
+
+	event := capture.waitForEvent(time.Second)
+	if event == nil {
+		t.Fatal("Expected a $feature_flag_called event, got nil")
+	}
+	if event.Properties["$device_id"] != deviceId {
+		t.Errorf("Expected $device_id property to be %v, got: %v", deviceId, event.Properties["$device_id"])
+	}
+}
+
 func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 	t.Run("success - no $feature_flag_error property", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
