@@ -1,3 +1,7 @@
+## 1.10.0 - 2026-02-04
+
+* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.9.1...v1.10.0)
+
 ### New Features
 
 * **`GetFeatureFlagResult`**: New method that returns both the flag value and payload in a single call, while properly tracking feature flag usage via `$feature_flag_called` events.
