@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -826,6 +828,12 @@ func (c *client) send(pb preparedBatch) {
 			return
 		}
 
+		var httpErr *httpError
+		if errors.As(err, &httpErr) && !isRetryableStatus(httpErr.statusCode) {
+			c.notifyFailure(pb.msgs, err)
+			return
+		}
+
 		// Check if context is cancelled (shutdown timeout exceeded)
 		if c.ctx.Err() != nil {
 			c.Errorf("%d messages dropped: shutdown timeout", len(pb.msgs))
@@ -833,8 +841,13 @@ func (c *client) send(pb preparedBatch) {
 			return
 		}
 
+		retryDelay := c.RetryAfter(i)
+		if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
+			retryDelay = httpErr.retryAfter
+		}
+
 		// Wait for retry or shutdown
-		retryTimer := time.NewTimer(c.RetryAfter(i))
+		retryTimer := time.NewTimer(retryDelay)
 		select {
 		case <-retryTimer.C:
 			// continue to next attempt
@@ -919,7 +932,60 @@ func (c *client) report(res *http.Response) (err error) {
 	}
 
 	c.Logger.Logf("response %d %s – %s", res.StatusCode, res.Status, string(body))
-	return fmt.Errorf("%d %s", res.StatusCode, res.Status)
+	retryAfter, hasRetryAfter := parseRetryAfter(res.Header.Get("Retry-After"), c.now())
+	return &httpError{
+		statusCode:    res.StatusCode,
+		status:        res.Status,
+		retryAfter:    retryAfter,
+		hasRetryAfter: hasRetryAfter,
+	}
+}
+
+type httpError struct {
+	statusCode    int
+	status        string
+	retryAfter    time.Duration
+	hasRetryAfter bool
+}
+
+func (e *httpError) Error() string {
+	return fmt.Sprintf("%d %s", e.statusCode, e.status)
+}
+
+func isRetryableStatus(statusCode int) bool {
+	if statusCode >= 500 {
+		return true
+	}
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0, false
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+
+	if t, err := http.ParseTime(value); err == nil {
+		delay := t.Sub(now)
+		if delay <= 0 {
+			return 0, false
+		}
+		return delay, true
+	}
+
+	return 0, false
 }
 
 // loop processes messages from the msgs channel, batches them by size,
