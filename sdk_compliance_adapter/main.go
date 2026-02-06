@@ -186,6 +186,16 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	if req.FlushIntervalMs != nil {
 		config.Interval = time.Duration(*req.FlushIntervalMs) * time.Millisecond
 	}
+	if req.MaxRetries != nil {
+		config.MaxRetries = req.MaxRetries
+	}
+	if req.EnableCompression != nil {
+		if *req.EnableCompression {
+			config.Compression = posthog.CompressionGzip
+		} else {
+			config.Compression = posthog.CompressionNone
+		}
+	}
 
 	client, err := posthog.NewWithConfig(req.APIKey, config)
 	if err != nil {
