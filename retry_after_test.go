@@ -77,3 +77,32 @@ func TestParseRetryAfter(t *testing.T) {
 		})
 	}
 }
+
+func TestIsRetryableStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   bool
+	}{
+		{name: "request_timeout", status: http.StatusRequestTimeout, want: true},
+		{name: "too_many_requests", status: http.StatusTooManyRequests, want: true},
+		{name: "internal_server_error", status: http.StatusInternalServerError, want: true},
+		{name: "bad_gateway", status: http.StatusBadGateway, want: true},
+		{name: "service_unavailable", status: http.StatusServiceUnavailable, want: true},
+		{name: "gateway_timeout", status: http.StatusGatewayTimeout, want: true},
+		{name: "bad_request", status: http.StatusBadRequest, want: false},
+		{name: "unauthorized", status: http.StatusUnauthorized, want: false},
+		{name: "forbidden", status: http.StatusForbidden, want: false},
+		{name: "payload_too_large", status: http.StatusRequestEntityTooLarge, want: false},
+		{name: "not_found", status: http.StatusNotFound, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isRetryableStatus(tc.status)
+			if got != tc.want {
+				t.Fatalf("expected retryable=%v, got %v", tc.want, got)
+			}
+		})
+	}
+}
