@@ -38,11 +38,10 @@ func TestCapture(projectAPIKey, endpoint string) {
 	if err := client.Enqueue(posthog.Capture{
 		Event:      "$pageview",
 		DistinctId: "user_123456",
-		Properties: map[string]interface{}{
-			"$current_url": "https://example.com/dashboard",
-			"$title":       "Dashboard - PostHog",
-			"$referrer":    "https://google.com",
-		},
+		Properties: posthog.NewProperties().
+			WithCurrentURL("https://example.com/dashboard").
+			WithTitle("Dashboard - PostHog").
+			WithReferrer("https://google.com"),
 	}); err != nil {
 		fmt.Println("❌ Error sending Page View event:", err)
 		return

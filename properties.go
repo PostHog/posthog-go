@@ -36,3 +36,29 @@ func (p Properties) Merge(props Properties) Properties {
 
 	return p
 }
+
+// WithCurrentURL sets the $current_url property.
+// This is commonly used for pageview events.
+func (p Properties) WithCurrentURL(url string) Properties {
+	return p.Set("$current_url", url)
+}
+
+// WithReferrer sets the $referrer property.
+func (p Properties) WithReferrer(referrer string) Properties {
+	return p.Set("$referrer", referrer)
+}
+
+// WithTitle sets the $title property (page title).
+func (p Properties) WithTitle(title string) Properties {
+	return p.Set("$title", title)
+}
+
+// WithPath sets the $pathname property (URL path without query/hash).
+func (p Properties) WithPath(path string) Properties {
+	return p.Set("$pathname", path)
+}
+
+// WithScreen sets screen/viewport dimensions.
+func (p Properties) WithScreen(width, height int) Properties {
+	return p.Set("$screen_width", width).Set("$screen_height", height)
+}
