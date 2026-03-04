@@ -1064,7 +1064,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("person property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1103,7 +1103,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("person property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1128,7 +1128,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("person property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1153,7 +1153,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("person property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1316,19 +1316,26 @@ func parseSemver(value string) (semverTuple, error) {
 		text = text[1:]
 	}
 
-	// Strip pre-release (-) and build metadata (+) suffixes
-	if idx := strings.Index(text, "-"); idx >= 0 {
-		text = text[:idx]
-	}
-	if idx := strings.Index(text, "+"); idx >= 0 {
-		text = text[:idx]
-	}
-
 	if text == "" {
 		return semverTuple{}, errors.New("invalid semver: empty string")
 	}
 
-	parts := strings.Split(text, ".")
+	// Find the core version (before any - or +)
+	// We need to validate the core before stripping suffixes
+	coreEnd := len(text)
+	if idx := strings.Index(text, "-"); idx >= 0 {
+		coreEnd = idx
+	}
+	if idx := strings.Index(text, "+"); idx >= 0 && idx < coreEnd {
+		coreEnd = idx
+	}
+	core := text[:coreEnd]
+
+	if core == "" {
+		return semverTuple{}, errors.New("invalid semver: empty version before suffix")
+	}
+
+	parts := strings.Split(core, ".")
 	if len(parts) == 0 || parts[0] == "" {
 		return semverTuple{}, errors.New("invalid semver: no version components")
 	}
@@ -1339,7 +1346,10 @@ func parseSemver(value string) (semverTuple, error) {
 	}
 
 	minor := 0
-	if len(parts) > 1 && parts[1] != "" {
+	if len(parts) > 1 {
+		if parts[1] == "" {
+			return semverTuple{}, errors.New("invalid semver: empty minor version component")
+		}
 		minor, err = strconv.Atoi(parts[1])
 		if err != nil {
 			return semverTuple{}, fmt.Errorf("invalid semver: minor version '%s' is not a number", parts[1])
@@ -1347,7 +1357,10 @@ func parseSemver(value string) (semverTuple, error) {
 	}
 
 	patch := 0
-	if len(parts) > 2 && parts[2] != "" {
+	if len(parts) > 2 {
+		if parts[2] == "" {
+			return semverTuple{}, errors.New("invalid semver: empty patch version component")
+		}
 		patch, err = strconv.Atoi(parts[2])
 		if err != nil {
 			return semverTuple{}, fmt.Errorf("invalid semver: patch version '%s' is not a number", parts[2])
