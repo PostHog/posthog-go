@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -555,4 +556,686 @@ func TestMatchPropertyDateComparison(t *testing.T) {
 		require.Error(t, err)
 		require.False(t, isMatch)
 	})
+}
+
+func TestParseSemver(t *testing.T) {
+	t.Run("basic parsing", func(t *testing.T) {
+		testCases := []struct {
+			input    string
+			expected semverTuple
+		}{
+			{"1.2.3", semverTuple{1, 2, 3}},
+			{"0.0.0", semverTuple{0, 0, 0}},
+			{"10.20.30", semverTuple{10, 20, 30}},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.input, func(t *testing.T) {
+				result, err := parseSemver(tc.input)
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, result)
+			})
+		}
+	})
+
+	t.Run("v prefix", func(t *testing.T) {
+		result, err := parseSemver("v1.2.3")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+
+		result, err = parseSemver("V1.2.3")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+	})
+
+	t.Run("whitespace", func(t *testing.T) {
+		result, err := parseSemver("  1.2.3  ")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+
+		result, err = parseSemver(" v1.2.3 ")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+	})
+
+	t.Run("pre-release suffixes stripped", func(t *testing.T) {
+		result, err := parseSemver("1.2.3-alpha")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+
+		result, err = parseSemver("1.2.3-alpha.1")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+
+		result, err = parseSemver("1.2.3-rc.1+build.123")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+	})
+
+	t.Run("build metadata stripped", func(t *testing.T) {
+		result, err := parseSemver("1.2.3+build.123")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+	})
+
+	t.Run("partial versions default to zero", func(t *testing.T) {
+		result, err := parseSemver("1.2")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 0}, result)
+
+		result, err = parseSemver("1")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 0, 0}, result)
+	})
+
+	t.Run("extra components ignored", func(t *testing.T) {
+		result, err := parseSemver("1.2.3.4")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+
+		result, err = parseSemver("1.2.3.4.5.6")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+	})
+
+	t.Run("leading zeros parsed as decimal", func(t *testing.T) {
+		result, err := parseSemver("01.02.03")
+		require.NoError(t, err)
+		require.Equal(t, semverTuple{1, 2, 3}, result)
+	})
+
+	t.Run("invalid values", func(t *testing.T) {
+		invalidCases := []string{
+			"",
+			"   ",
+			"v",
+			"abc",
+			"1.2.abc",
+			".1.2.3",
+			"a.b.c",
+		}
+
+		for _, input := range invalidCases {
+			t.Run(input, func(t *testing.T) {
+				_, err := parseSemver(input)
+				require.Error(t, err)
+			})
+		}
+	})
+
+	t.Run("empty components rejected", func(t *testing.T) {
+		// These malformed inputs should be rejected, not silently parsed
+		invalidCases := []string{
+			"1..3",  // empty minor
+			"1.2.",  // empty patch (trailing dot)
+			"1.",    // trailing dot with no minor
+			"1.2..", // double trailing dot
+			".1.2",  // leading dot (empty major)
+		}
+
+		for _, input := range invalidCases {
+			t.Run(input, func(t *testing.T) {
+				_, err := parseSemver(input)
+				require.Error(t, err, "expected error for input: %s", input)
+			})
+		}
+	})
+
+	t.Run("malformed pre-release inputs rejected", func(t *testing.T) {
+		// Inputs where the core version is malformed should be rejected
+		invalidCases := []string{
+			"-alpha", // no version before pre-release
+			"+build", // no version before build metadata
+			"1.-2.3", // negative in wrong position (looks like suffix delimiter)
+		}
+
+		for _, input := range invalidCases {
+			t.Run(input, func(t *testing.T) {
+				_, err := parseSemver(input)
+				require.Error(t, err, "expected error for input: %s", input)
+			})
+		}
+	})
+}
+
+func TestMatchPropertySemverEq(t *testing.T) {
+	t.Run("exact match", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.3"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+
+		isMatch, err = matchProperty(property, NewProperties().Set("version", "1.2.4"))
+		require.NoError(t, err)
+		require.False(t, isMatch)
+	})
+
+	t.Run("pre-release equals base version", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.3-alpha.1"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+	})
+
+	t.Run("partial versions", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.0"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+	})
+
+	t.Run("v prefix", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "v1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.3"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+
+		isMatch, err = matchProperty(property, NewProperties().Set("version", "v1.2.3"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+	})
+}
+
+func TestMatchPropertySemverNeq(t *testing.T) {
+	property := FlagProperty{
+		Key:      "version",
+		Value:    "1.2.3",
+		Operator: "semver_neq",
+	}
+
+	isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.3"))
+	require.NoError(t, err)
+	require.False(t, isMatch)
+
+	isMatch, err = matchProperty(property, NewProperties().Set("version", "1.2.4"))
+	require.NoError(t, err)
+	require.True(t, isMatch)
+
+	isMatch, err = matchProperty(property, NewProperties().Set("version", "2.0.0"))
+	require.NoError(t, err)
+	require.True(t, isMatch)
+}
+
+func TestMatchPropertySemverGt(t *testing.T) {
+	property := FlagProperty{
+		Key:      "version",
+		Value:    "1.2.3",
+		Operator: "semver_gt",
+	}
+
+	testCases := []struct {
+		version  string
+		expected bool
+	}{
+		{"1.2.4", true},
+		{"1.3.0", true},
+		{"2.0.0", true},
+		{"1.2.3", false},
+		{"1.2.2", false},
+		{"1.1.9", false},
+		{"0.9.9", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.version, func(t *testing.T) {
+			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, isMatch)
+		})
+	}
+}
+
+func TestMatchPropertySemverGte(t *testing.T) {
+	property := FlagProperty{
+		Key:      "version",
+		Value:    "1.2.3",
+		Operator: "semver_gte",
+	}
+
+	testCases := []struct {
+		version  string
+		expected bool
+	}{
+		{"1.2.4", true},
+		{"1.3.0", true},
+		{"2.0.0", true},
+		{"1.2.3", true}, // Equal
+		{"1.2.2", false},
+		{"1.1.9", false},
+		{"0.9.9", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.version, func(t *testing.T) {
+			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, isMatch)
+		})
+	}
+}
+
+func TestMatchPropertySemverLt(t *testing.T) {
+	property := FlagProperty{
+		Key:      "version",
+		Value:    "1.2.3",
+		Operator: "semver_lt",
+	}
+
+	testCases := []struct {
+		version  string
+		expected bool
+	}{
+		{"1.2.2", true},
+		{"1.1.9", true},
+		{"0.9.9", true},
+		{"1.2.3", false}, // Equal
+		{"1.2.4", false},
+		{"1.3.0", false},
+		{"2.0.0", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.version, func(t *testing.T) {
+			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, isMatch)
+		})
+	}
+}
+
+func TestMatchPropertySemverLte(t *testing.T) {
+	property := FlagProperty{
+		Key:      "version",
+		Value:    "1.2.3",
+		Operator: "semver_lte",
+	}
+
+	testCases := []struct {
+		version  string
+		expected bool
+	}{
+		{"1.2.2", true},
+		{"1.1.9", true},
+		{"0.9.9", true},
+		{"1.2.3", true}, // Equal
+		{"1.2.4", false},
+		{"1.3.0", false},
+		{"2.0.0", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.version, func(t *testing.T) {
+			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, isMatch)
+		})
+	}
+}
+
+func TestMatchPropertySemverTilde(t *testing.T) {
+	// ~1.2.3 means >=1.2.3 and <1.3.0
+	property := FlagProperty{
+		Key:      "version",
+		Value:    "1.2.3",
+		Operator: "semver_tilde",
+	}
+
+	testCases := []struct {
+		version  string
+		expected bool
+	}{
+		// In range
+		{"1.2.3", true},  // Lower bound (inclusive)
+		{"1.2.4", true},  // Within range
+		{"1.2.99", true}, // Near upper bound
+		// Out of range
+		{"1.3.0", false}, // Upper bound (exclusive)
+		{"1.2.2", false}, // Below lower bound
+		{"1.1.0", false}, // Too low
+		{"2.0.0", false}, // Too high
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.version, func(t *testing.T) {
+			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, isMatch)
+		})
+	}
+
+	t.Run("tilde with partial version", func(t *testing.T) {
+		// ~1.2 means >=1.2.0 and <1.3.0
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2",
+			Operator: "semver_tilde",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.0"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+
+		isMatch, err = matchProperty(property, NewProperties().Set("version", "1.2.5"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+
+		isMatch, err = matchProperty(property, NewProperties().Set("version", "1.3.0"))
+		require.NoError(t, err)
+		require.False(t, isMatch)
+	})
+}
+
+func TestMatchPropertySemverCaret(t *testing.T) {
+	t.Run("major > 0: ^1.2.3 means >=1.2.3 <2.0.0", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_caret",
+		}
+
+		testCases := []struct {
+			version  string
+			expected bool
+		}{
+			{"1.2.3", true},   // Lower bound (inclusive)
+			{"1.2.4", true},   // Within range
+			{"1.3.0", true},   // Within range
+			{"1.99.99", true}, // Near upper bound
+			{"2.0.0", false},  // Upper bound (exclusive)
+			{"1.2.2", false},  // Below lower bound
+			{"0.9.9", false},  // Too low
+			{"3.0.0", false},  // Too high
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.version, func(t *testing.T) {
+				isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, isMatch)
+			})
+		}
+	})
+
+	t.Run("major == 0, minor > 0: ^0.2.3 means >=0.2.3 <0.3.0", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "0.2.3",
+			Operator: "semver_caret",
+		}
+
+		testCases := []struct {
+			version  string
+			expected bool
+		}{
+			{"0.2.3", true},  // Lower bound (inclusive)
+			{"0.2.4", true},  // Within range
+			{"0.2.99", true}, // Near upper bound
+			{"0.3.0", false}, // Upper bound (exclusive)
+			{"0.2.2", false}, // Below lower bound
+			{"0.1.9", false}, // Too low
+			{"1.0.0", false}, // Too high
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.version, func(t *testing.T) {
+				isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, isMatch)
+			})
+		}
+	})
+
+	t.Run("major == 0, minor == 0: ^0.0.3 means >=0.0.3 <0.0.4", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "0.0.3",
+			Operator: "semver_caret",
+		}
+
+		testCases := []struct {
+			version  string
+			expected bool
+		}{
+			{"0.0.3", true},  // Lower bound (inclusive)
+			{"0.0.4", false}, // Upper bound (exclusive)
+			{"0.0.2", false}, // Below lower bound
+			{"0.1.0", false}, // Too high
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.version, func(t *testing.T) {
+				isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, isMatch)
+			})
+		}
+	})
+}
+
+func TestMatchPropertySemverWildcard(t *testing.T) {
+	t.Run("1.* means >=1.0.0 <2.0.0", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.*",
+			Operator: "semver_wildcard",
+		}
+
+		testCases := []struct {
+			version  string
+			expected bool
+		}{
+			{"1.0.0", true},   // Lower bound (inclusive)
+			{"1.0.1", true},   // Within range
+			{"1.5.0", true},   // Within range
+			{"1.99.99", true}, // Near upper bound
+			{"2.0.0", false},  // Upper bound (exclusive)
+			{"0.9.9", false},  // Too low
+			{"3.0.0", false},  // Too high
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.version, func(t *testing.T) {
+				isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, isMatch)
+			})
+		}
+	})
+
+	t.Run("1.2.* means >=1.2.0 <1.3.0", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.*",
+			Operator: "semver_wildcard",
+		}
+
+		testCases := []struct {
+			version  string
+			expected bool
+		}{
+			{"1.2.0", true},  // Lower bound (inclusive)
+			{"1.2.5", true},  // Within range
+			{"1.2.99", true}, // Near upper bound
+			{"1.3.0", false}, // Upper bound (exclusive)
+			{"1.1.9", false}, // Too low
+			{"2.0.0", false}, // Too high
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.version, func(t *testing.T) {
+				isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, isMatch)
+			})
+		}
+	})
+
+	t.Run("wildcard without asterisk treated as major version match", func(t *testing.T) {
+		// Test that "1" alone matches same as "1.*"
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1",
+			Operator: "semver_wildcard",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.5.0"))
+		require.NoError(t, err)
+		require.True(t, isMatch)
+
+		isMatch, err = matchProperty(property, NewProperties().Set("version", "2.0.0"))
+		require.NoError(t, err)
+		require.False(t, isMatch)
+	})
+}
+
+func TestMatchPropertySemverErrorHandling(t *testing.T) {
+	t.Run("missing property key", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("other_key", "1.2.3"))
+		require.Error(t, err)
+		require.False(t, isMatch)
+
+		var inconclusiveErr *InconclusiveMatchError
+		require.True(t, errors.As(err, &inconclusiveErr))
+	})
+
+	t.Run("null/nil property value", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", nil))
+		require.Error(t, err)
+		require.False(t, isMatch)
+	})
+
+	t.Run("non-string property value", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", 123))
+		require.Error(t, err)
+		require.False(t, isMatch)
+
+		var inconclusiveErr *InconclusiveMatchError
+		require.True(t, errors.As(err, &inconclusiveErr))
+	})
+
+	t.Run("invalid semver in property value", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "not-a-semver"))
+		require.Error(t, err)
+		require.False(t, isMatch)
+
+		var inconclusiveErr *InconclusiveMatchError
+		require.True(t, errors.As(err, &inconclusiveErr))
+	})
+
+	t.Run("invalid semver in flag value", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "not-a-semver",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.3"))
+		require.Error(t, err)
+		require.False(t, isMatch)
+
+		var inconclusiveErr *InconclusiveMatchError
+		require.True(t, errors.As(err, &inconclusiveErr))
+	})
+
+	t.Run("empty string semver", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", ""))
+		require.Error(t, err)
+		require.False(t, isMatch)
+	})
+
+	t.Run("invalid wildcard pattern", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "*",
+			Operator: "semver_wildcard",
+		}
+
+		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.3"))
+		require.Error(t, err)
+		require.False(t, isMatch)
+	})
+}
+
+func TestSemverCompareTo(t *testing.T) {
+	testCases := []struct {
+		a        semverTuple
+		b        semverTuple
+		expected int
+	}{
+		// Equal
+		{semverTuple{1, 2, 3}, semverTuple{1, 2, 3}, 0},
+		{semverTuple{0, 0, 0}, semverTuple{0, 0, 0}, 0},
+		// Major difference
+		{semverTuple{2, 0, 0}, semverTuple{1, 9, 9}, 1},
+		{semverTuple{1, 9, 9}, semverTuple{2, 0, 0}, -1},
+		// Minor difference
+		{semverTuple{1, 3, 0}, semverTuple{1, 2, 9}, 1},
+		{semverTuple{1, 2, 9}, semverTuple{1, 3, 0}, -1},
+		// Patch difference
+		{semverTuple{1, 2, 4}, semverTuple{1, 2, 3}, 1},
+		{semverTuple{1, 2, 3}, semverTuple{1, 2, 4}, -1},
+	}
+
+	for _, tc := range testCases {
+		name := tc.a.String() + " vs " + tc.b.String()
+		t.Run(name, func(t *testing.T) {
+			result := tc.a.compareTo(tc.b)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// Helper for test naming
+func (s semverTuple) String() string {
+	return strconv.Itoa(s.major) + "." + strconv.Itoa(s.minor) + "." + strconv.Itoa(s.patch)
 }

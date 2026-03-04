@@ -1052,6 +1052,124 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return overrideTime.After(valueTime), nil
 	}
 
+	// Semver comparison operators
+	if operator == "semver_eq" || operator == "semver_neq" ||
+		operator == "semver_gt" || operator == "semver_gte" ||
+		operator == "semver_lt" || operator == "semver_lte" {
+
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		valueParsed, err := parseSemver(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not a valid semver", valueStr)}
+		}
+
+		cmp := overrideParsed.compareTo(valueParsed)
+
+		switch operator {
+		case "semver_eq":
+			return cmp == 0, nil
+		case "semver_neq":
+			return cmp != 0, nil
+		case "semver_gt":
+			return cmp > 0, nil
+		case "semver_gte":
+			return cmp >= 0, nil
+		case "semver_lt":
+			return cmp < 0, nil
+		case "semver_lte":
+			return cmp <= 0, nil
+		}
+	}
+
+	if operator == "semver_tilde" {
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		lower, upper, err := computeTildeBounds(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not valid for tilde operator", valueStr)}
+		}
+
+		// Check: lower <= override < upper
+		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
+	}
+
+	if operator == "semver_caret" {
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		lower, upper, err := computeCaretBounds(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not valid for caret operator", valueStr)}
+		}
+
+		// Check: lower <= override < upper
+		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
+	}
+
+	if operator == "semver_wildcard" {
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		lower, upper, err := computeWildcardBounds(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not valid for wildcard operator", valueStr)}
+		}
+
+		// Check: lower <= override < upper
+		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
+	}
+
 	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
 
 }
@@ -1151,6 +1269,205 @@ func parseRelativeDate(dateStr string) (time.Time, error) {
 	default:
 		return time.Time{}, errors.New("invalid interval in relative date")
 	}
+}
+
+// semverTuple represents a parsed semantic version as (major, minor, patch).
+type semverTuple struct {
+	major, minor, patch int
+}
+
+// compareTo returns -1 if s < other, 0 if s == other, 1 if s > other.
+func (s semverTuple) compareTo(other semverTuple) int {
+	if s.major != other.major {
+		if s.major < other.major {
+			return -1
+		}
+		return 1
+	}
+	if s.minor != other.minor {
+		if s.minor < other.minor {
+			return -1
+		}
+		return 1
+	}
+	if s.patch != other.patch {
+		if s.patch < other.patch {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+// parseSemver parses a version string into a semverTuple.
+// Parsing rules:
+// 1. Strip leading/trailing whitespace
+// 2. Strip v or V prefix
+// 3. Strip pre-release and build metadata suffixes (split on - or +)
+// 4. Split on . and parse first 3 components as integers
+// 5. Default missing components to 0
+// 6. Ignore extra components beyond the third
+// 7. Return error for invalid input
+func parseSemver(value string) (semverTuple, error) {
+	text := strings.TrimSpace(value)
+
+	// Strip v/V prefix
+	if len(text) > 0 && (text[0] == 'v' || text[0] == 'V') {
+		text = text[1:]
+	}
+
+	if text == "" {
+		return semverTuple{}, errors.New("invalid semver: empty string")
+	}
+
+	// Find the core version (before any - or +)
+	// We need to validate the core before stripping suffixes
+	coreEnd := len(text)
+	if idx := strings.Index(text, "-"); idx >= 0 {
+		coreEnd = idx
+	}
+	if idx := strings.Index(text, "+"); idx >= 0 && idx < coreEnd {
+		coreEnd = idx
+	}
+	core := text[:coreEnd]
+
+	if core == "" {
+		return semverTuple{}, errors.New("invalid semver: empty version before suffix")
+	}
+
+	parts := strings.Split(core, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return semverTuple{}, errors.New("invalid semver: no version components")
+	}
+
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return semverTuple{}, fmt.Errorf("invalid semver: major version '%s' is not a number", parts[0])
+	}
+
+	minor := 0
+	if len(parts) > 1 {
+		if parts[1] == "" {
+			return semverTuple{}, errors.New("invalid semver: empty minor version component")
+		}
+		minor, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return semverTuple{}, fmt.Errorf("invalid semver: minor version '%s' is not a number", parts[1])
+		}
+	}
+
+	patch := 0
+	if len(parts) > 2 {
+		if parts[2] == "" {
+			return semverTuple{}, errors.New("invalid semver: empty patch version component")
+		}
+		patch, err = strconv.Atoi(parts[2])
+		if err != nil {
+			return semverTuple{}, fmt.Errorf("invalid semver: patch version '%s' is not a number", parts[2])
+		}
+	}
+
+	return semverTuple{major: major, minor: minor, patch: patch}, nil
+}
+
+// computeTildeBounds computes the bounds for the tilde (~) operator.
+// ~X.Y.Z means >=X.Y.Z and <X.(Y+1).0
+func computeTildeBounds(value string) (lower, upper semverTuple, err error) {
+	parsed, err := parseSemver(value)
+	if err != nil {
+		return semverTuple{}, semverTuple{}, err
+	}
+	lower = parsed
+	upper = semverTuple{major: parsed.major, minor: parsed.minor + 1, patch: 0}
+	return lower, upper, nil
+}
+
+// computeCaretBounds computes the bounds for the caret (^) operator.
+// ^X.Y.Z where:
+// - X > 0: >=X.Y.Z <(X+1).0.0
+// - X == 0, Y > 0: >=0.Y.Z <0.(Y+1).0
+// - X == 0, Y == 0: >=0.0.Z <0.0.(Z+1)
+func computeCaretBounds(value string) (lower, upper semverTuple, err error) {
+	parsed, err := parseSemver(value)
+	if err != nil {
+		return semverTuple{}, semverTuple{}, err
+	}
+	lower = parsed
+
+	if parsed.major > 0 {
+		upper = semverTuple{major: parsed.major + 1, minor: 0, patch: 0}
+	} else if parsed.minor > 0 {
+		upper = semverTuple{major: 0, minor: parsed.minor + 1, patch: 0}
+	} else {
+		upper = semverTuple{major: 0, minor: 0, patch: parsed.patch + 1}
+	}
+	return lower, upper, nil
+}
+
+// computeWildcardBounds computes the bounds for the wildcard (*) operator.
+// X.* means >=X.0.0 <(X+1).0.0
+// X.Y.* means >=X.Y.0 <X.(Y+1).0
+func computeWildcardBounds(value string) (lower, upper semverTuple, err error) {
+	text := strings.TrimSpace(value)
+
+	// Strip v/V prefix
+	if len(text) > 0 && (text[0] == 'v' || text[0] == 'V') {
+		text = text[1:]
+	}
+
+	// Remove wildcards and trailing dots
+	text = strings.ReplaceAll(text, "*", "")
+	text = strings.TrimRight(text, ".")
+
+	if text == "" {
+		return semverTuple{}, semverTuple{}, errors.New("invalid wildcard pattern: empty after removing wildcards")
+	}
+
+	parts := strings.Split(text, ".")
+	// Filter out empty parts
+	var nonEmptyParts []string
+	for _, p := range parts {
+		if p != "" {
+			nonEmptyParts = append(nonEmptyParts, p)
+		}
+	}
+
+	if len(nonEmptyParts) == 0 {
+		return semverTuple{}, semverTuple{}, errors.New("invalid wildcard pattern: no version components")
+	}
+
+	major, err := strconv.Atoi(nonEmptyParts[0])
+	if err != nil {
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: major version '%s' is not a number", nonEmptyParts[0])
+	}
+
+	if len(nonEmptyParts) == 1 {
+		// X.* pattern
+		lower = semverTuple{major: major, minor: 0, patch: 0}
+		upper = semverTuple{major: major + 1, minor: 0, patch: 0}
+		return lower, upper, nil
+	}
+
+	minor, err := strconv.Atoi(nonEmptyParts[1])
+	if err != nil {
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: minor version '%s' is not a number", nonEmptyParts[1])
+	}
+
+	if len(nonEmptyParts) == 2 {
+		// X.Y.* pattern
+		lower = semverTuple{major: major, minor: minor, patch: 0}
+		upper = semverTuple{major: major, minor: minor + 1, patch: 0}
+		return lower, upper, nil
+	}
+
+	// X.Y.Z.* pattern - treat as X.Y.Z to X.Y.(Z+1)
+	patch, err := strconv.Atoi(nonEmptyParts[2])
+	if err != nil {
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: patch version '%s' is not a number", nonEmptyParts[2])
+	}
+	lower = semverTuple{major: major, minor: minor, patch: patch}
+	upper = semverTuple{major: major, minor: minor, patch: patch + 1}
+	return lower, upper, nil
 }
 
 func interfaceToFloat(val interface{}) (float64, error) {
