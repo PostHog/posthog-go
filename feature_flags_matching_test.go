@@ -666,11 +666,11 @@ func TestParseSemver(t *testing.T) {
 	t.Run("empty components rejected", func(t *testing.T) {
 		// These malformed inputs should be rejected, not silently parsed
 		invalidCases := []string{
-			"1..3",   // empty minor
-			"1.2.",   // empty patch (trailing dot)
-			"1.",     // trailing dot with no minor
-			"1.2..",  // double trailing dot
-			".1.2",   // leading dot (empty major)
+			"1..3",  // empty minor
+			"1.2.",  // empty patch (trailing dot)
+			"1.",    // trailing dot with no minor
+			"1.2..", // double trailing dot
+			".1.2",  // leading dot (empty major)
 		}
 
 		for _, input := range invalidCases {
@@ -684,9 +684,9 @@ func TestParseSemver(t *testing.T) {
 	t.Run("malformed pre-release inputs rejected", func(t *testing.T) {
 		// Inputs where the core version is malformed should be rejected
 		invalidCases := []string{
-			"-alpha",     // no version before pre-release
-			"+build",     // no version before build metadata
-			"1.-2.3",     // negative in wrong position (looks like suffix delimiter)
+			"-alpha", // no version before pre-release
+			"+build", // no version before build metadata
+			"1.-2.3", // negative in wrong position (looks like suffix delimiter)
 		}
 
 		for _, input := range invalidCases {
