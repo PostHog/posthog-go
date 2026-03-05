@@ -231,7 +231,6 @@ func ExampleCapture() {
 		Properties: Properties{
 			"application": "PostHog Go",
 			"version":     "1.0.0",
-			"platform":    "macos", // :)
 		},
 		SendFeatureFlags: SendFeatureFlags(false),
 	})
@@ -250,8 +249,8 @@ func ExampleCapture() {
 	//         "$geoip_disable": true,
 	//         "$lib": "posthog-go",
 	//         "$lib_version": "1.0.0",
+	//         "$os": "Linux",
 	//         "application": "PostHog Go",
-	//         "platform": "macos",
 	//         "version": "1.0.0"
 	//       },
 	//       "send_feature_flags": false,
@@ -367,7 +366,6 @@ func TestEnqueue(t *testing.T) {
 				Properties: Properties{
 					"application": "PostHog Go",
 					"version":     "1.0.0",
-					"platform":    "macos", // :)
 				},
 				SendFeatureFlags: SendFeatureFlags(false),
 			},
@@ -383,7 +381,6 @@ func TestEnqueue(t *testing.T) {
 				Properties: Properties{
 					"application": "PostHog Go",
 					"version":     "1.0.0",
-					"platform":    "macos", // :)
 				},
 				SendFeatureFlags: SendFeatureFlags(false),
 			},
@@ -433,7 +430,6 @@ func TestEnqueue(t *testing.T) {
 				Properties: Properties{
 					"application": "PostHog Go",
 					"version":     "1.0.0",
-					"platform":    "macos", // :)
 				},
 				SendFeatureFlags: SendFeatureFlags(false),
 			},
@@ -663,7 +659,6 @@ func TestCaptureWithInterval(t *testing.T) {
 		Properties: Properties{
 			"application": "PostHog Go",
 			"version":     "1.0.0",
-			"platform":    "macos", // :)
 		},
 		SendFeatureFlags: SendFeatureFlags(false),
 	})
@@ -700,7 +695,6 @@ func TestCaptureWithTimestamp(t *testing.T) {
 		Properties: Properties{
 			"application": "PostHog Go",
 			"version":     "1.0.0",
-			"platform":    "macos", // :)
 		},
 		SendFeatureFlags: SendFeatureFlags(false),
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
@@ -734,7 +728,6 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 		Properties: Properties{
 			"application": "PostHog Go",
 			"version":     "1.0.0",
-			"platform":    "macos", // :)
 		},
 		SendFeatureFlags: SendFeatureFlags(false),
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),

@@ -67,6 +67,7 @@ type ExceptionInApi struct {
 type ExceptionInApiProperties struct {
 	Lib                  string          `json:"$lib"`
 	LibVersion           string          `json:"$lib_version"`
+	OS                   string          `json:"$os"`
 	DistinctId           string          `json:"distinct_id"`
 	DisableGeoIP         bool            `json:"$geoip_disable,omitempty"`
 	ExceptionList        []ExceptionItem `json:"$exception_list"`
@@ -131,6 +132,7 @@ func (msg Exception) APIfy() APIMessage {
 		Properties: ExceptionInApiProperties{
 			Lib:                  SDKName,
 			LibVersion:           libVersion,
+			OS:                   getOSName(),
 			DistinctId:           msg.DistinctId,
 			DisableGeoIP:         msg.DisableGeoIP,
 			ExceptionList:        msg.ExceptionList,

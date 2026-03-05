@@ -10,8 +10,8 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
+        "$os": "Linux",
         "application": "PostHog Go",
-        "platform": "macos",
         "version": "1.0.0"
       },
       "send_feature_flags": false,

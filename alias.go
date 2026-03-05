@@ -49,6 +49,7 @@ type AliasInApiProperties struct {
 	Alias        string `json:"alias"`
 	Lib          string `json:"$lib"`
 	LibVersion   string `json:"$lib_version"`
+	OS           string `json:"$os"`
 	DisableGeoIP bool   `json:"$geoip_disable,omitempty"`
 }
 
@@ -79,6 +80,7 @@ func (msg Alias) APIfy() APIMessage {
 			Alias:        msg.Alias,
 			Lib:          SDKName,
 			LibVersion:   libraryVersion,
+			OS:           getOSName(),
 			DisableGeoIP: msg.DisableGeoIP,
 		},
 	}

@@ -126,6 +126,7 @@ func (msg Capture) APIfy() APIMessage {
 	libraryVersion := getVersion()
 
 	myProperties := Properties{}.Set("$lib", SDKName).Set("$lib_version", libraryVersion)
+	myProperties.Merge(systemContext())
 
 	if msg.Properties != nil {
 		for k, v := range msg.Properties {

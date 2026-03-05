@@ -59,6 +59,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
 		Set("$group_set", msg.Properties)
+	myProperties.Merge(systemContext())
 
 	if msg.DisableGeoIP {
 		myProperties.Set(propertyGeoipDisable, true)
