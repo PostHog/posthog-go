@@ -10,7 +10,7 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
-        "$os": "Linux",
+        "$os": "IGNORED",
         "application": "PostHog Go",
         "version": 0
       },
@@ -28,7 +28,7 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
-        "$os": "Linux",
+        "$os": "IGNORED",
         "application": "PostHog Go",
         "version": 1
       },
@@ -46,7 +46,7 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
-        "$os": "Linux",
+        "$os": "IGNORED",
         "application": "PostHog Go",
         "version": 2
       },

@@ -10,7 +10,7 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
-        "$os": "Linux",
+        "$os": "IGNORED",
         "application": "PostHog Go",
         "service": "api",
         "version": "1.0.0"

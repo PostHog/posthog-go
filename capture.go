@@ -125,14 +125,11 @@ type CaptureInApi struct {
 func (msg Capture) APIfy() APIMessage {
 	libraryVersion := getVersion()
 
-	myProperties := Properties{}.Set("$lib", SDKName).Set("$lib_version", libraryVersion)
-	myProperties.Merge(systemContext())
-
-	if msg.Properties != nil {
-		for k, v := range msg.Properties {
-			myProperties[k] = v
-		}
-	}
+	myProperties := Properties{}.
+		Merge(msg.Properties).
+		Set("$lib", SDKName).
+		Set("$lib_version", libraryVersion).
+		Merge(systemContext())
 
 	if msg.Groups != nil {
 		myProperties.Set("$groups", msg.Groups)

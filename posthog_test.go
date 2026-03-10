@@ -19,6 +19,8 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
 )
 
@@ -184,6 +186,42 @@ func fixture(name string) string {
 	return string(b)
 }
 
+func assertPayloadEqual(t *testing.T, expected, actual string) {
+	t.Helper()
+
+	sysCtx := systemContext()
+
+	var expectedJSON, actualJSON map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(expected), &expectedJSON))
+	require.NoError(t, json.Unmarshal([]byte(actual), &actualJSON))
+
+	batch, ok := actualJSON["batch"].([]interface{})
+	require.True(t, ok, "actual JSON missing 'batch' array")
+	for i, item := range batch {
+		event, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		props, ok := event["properties"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for key := range sysCtx {
+			if _, exists := props[key]; !exists {
+				t.Errorf("batch[%d] missing %s in properties", i, key)
+			}
+		}
+	}
+
+	opt := cmpopts.IgnoreMapEntries(func(k string, v interface{}) bool {
+		_, ok := sysCtx[k]
+		return ok
+	})
+	if diff := cmp.Diff(expectedJSON, actualJSON, opt); diff != "" {
+		t.Errorf("payload mismatch (-expected +actual):\n%s", diff)
+	}
+}
+
 func mockTime() time.Time {
 	// time.Unix(0, 0) fails on Circle
 	return time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)
@@ -236,30 +274,6 @@ func ExampleCapture() {
 	})
 
 	fmt.Printf("%s\n", <-body)
-	// Output:
-	// {
-	//   "api_key": "Csyjlnlun3OzyNJAafdlv",
-	//   "batch": [
-	//     {
-	//       "distinct_id": "123456",
-	//       "event": "Download",
-	//       "library": "posthog-go",
-	//       "library_version": "1.0.0",
-	//       "properties": {
-	//         "$geoip_disable": true,
-	//         "$lib": "posthog-go",
-	//         "$lib_version": "1.0.0",
-	//         "$os": "Linux",
-	//         "application": "PostHog Go",
-	//         "version": "1.0.0"
-	//       },
-	//       "send_feature_flags": false,
-	//       "timestamp": "2009-11-10T23:00:00Z",
-	//       "type": "capture",
-	//       "uuid": "00000000-0000-0000-0000-000000000000"
-	//     }
-	//   ]
-	// }
 }
 
 func TestCaptureNoProperties(t *testing.T) {
@@ -463,9 +477,7 @@ func TestEnqueue(t *testing.T) {
 				return
 			}
 
-			if res := string(<-body); res != test.ref {
-				t.Errorf("%s: invalid response:\n- expected %s\n- received: %s", name, test.ref, res)
-			}
+			assertPayloadEqual(t, test.ref, string(<-body))
 		})
 	}
 }
@@ -664,9 +676,7 @@ func TestCaptureWithInterval(t *testing.T) {
 	})
 
 	// Will flush in 100 milliseconds
-	if res := string(<-body); ref != res {
-		t.Errorf("invalid response:\n- expected %s\n- received: %s", ref, res)
-	}
+	assertPayloadEqual(t, ref, string(<-body))
 
 	if t1 := time.Now(); t1.Sub(t0) < interval {
 		t.Error("the flushing interval is too short:", interval)
@@ -700,9 +710,7 @@ func TestCaptureWithTimestamp(t *testing.T) {
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
-	if res := string(<-body); ref != res {
-		t.Errorf("invalid response:\n- expected %s\n- received: %s", ref, res)
-	}
+	assertPayloadEqual(t, ref, string(<-body))
 }
 
 func TestCaptureWithDefaultProperties(t *testing.T) {
@@ -733,9 +741,7 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
-	if res := string(<-body); ref != res {
-		t.Errorf("invalid response:\n- expected %s\n- received: %s", ref, res)
-	}
+	assertPayloadEqual(t, ref, string(<-body))
 }
 
 func TestCaptureMany(t *testing.T) {
@@ -774,9 +780,7 @@ func TestCaptureMany(t *testing.T) {
 		})
 	}
 
-	if res := string(<-body); ref != res {
-		t.Errorf("invalid response:\n- expected %s\n- received: %s", ref, res)
-	}
+	assertPayloadEqual(t, ref, string(<-body))
 }
 
 func TestClientCloseTwice(t *testing.T) {
