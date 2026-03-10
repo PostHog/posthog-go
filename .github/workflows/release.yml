@@ -120,11 +120,12 @@ jobs:
           echo "new_version=$new_version" >> $GITHUB_OUTPUT
 
       - name: Update CHANGELOG.md
+        env:
+          CURRENT_VERSION: ${{ steps.bump-version.outputs.current_version }}
+          NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
         run: |
-          current_version="${{ steps.bump-version.outputs.current_version }}"
-          new_version="${{ steps.bump-version.outputs.new_version }}"
           release_date=$(date +%Y-%m-%d)
-          echo -e "## $new_version - $release_date\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
+          echo -e "## $NEW_VERSION - $release_date\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${CURRENT_VERSION}...v${NEW_VERSION})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 
       - name: Commit version bump
         id: commit-version-bump
