@@ -98,11 +98,6 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.releaser.outputs.token }}
 
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Bump version
         id: bump-version
         run: |
@@ -125,52 +120,42 @@ jobs:
           echo "new_version=$new_version" >> $GITHUB_OUTPUT
 
       - name: Update CHANGELOG.md
+        env:
+          CURRENT_VERSION: ${{ steps.bump-version.outputs.current_version }}
+          NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
         run: |
-          current_version="${{ steps.bump-version.outputs.current_version }}"
-          new_version="${{ steps.bump-version.outputs.new_version }}"
           release_date=$(date +%Y-%m-%d)
-          echo -e "## $new_version - $release_date\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${current_version}...v${new_version})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
+          echo -e "## $NEW_VERSION - $release_date\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${CURRENT_VERSION}...v${NEW_VERSION})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 
       - name: Commit version bump
         id: commit-version-bump
-        run: |
-          git add version.go CHANGELOG.md
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-            echo "committed=false" >> "$GITHUB_OUTPUT"
-          else
-            git commit -m "chore: bump version to ${{ steps.bump-version.outputs.new_version }} [version bump]"
-            git push origin master
-            echo "committed=true" >> "$GITHUB_OUTPUT"
-          fi
+        uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
+        with:
+          commit_message: "chore: bump version to ${{ steps.bump-version.outputs.new_version }} [version bump]"
+          repo: ${{ github.repository }}
+          branch: master
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
       - name: Create and push tag
-        if: steps.commit-version-bump.outputs.committed == 'true'
-        run: |
-          git tag -a "v${{ steps.bump-version.outputs.new_version }}" -m "v${{ steps.bump-version.outputs.new_version }}"
-          git push origin "v${{ steps.bump-version.outputs.new_version }}"
-
-      - name: Create GitHub release
-        if: steps.commit-version-bump.outputs.committed == 'true'
+        if: steps.commit-version-bump.outputs.commit-hash != ''
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
+          COMMIT_HASH: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          # Extract the latest changelog entry
-          LAST_CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            /repos/PostHog/posthog-go/releases \
-            -f tag_name="v${{ steps.bump-version.outputs.new_version }}" \
-            -f target_commitish='master' \
-            -f name="v${{ steps.bump-version.outputs.new_version }}" \
-            -f body="$LAST_CHANGELOG_ENTRY" \
-            -F draft=false \
-            -F prerelease=false \
-            -F generate_release_notes=false
+          gh api "repos/${{ github.repository }}/git/refs" \
+            -f "ref=refs/tags/v${NEW_VERSION}" \
+            -f "sha=${COMMIT_HASH}"
+
+      - name: Create GitHub release
+        if: steps.commit-version-bump.outputs.commit-hash != ''
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
+        run: |
+          CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
+          gh release create "v${NEW_VERSION}" --title "v${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
       # Notify in case of a failure
       - name: Send failure event to PostHog
