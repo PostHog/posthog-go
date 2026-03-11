@@ -291,6 +291,24 @@ func dereferenceMessage(msg Message) Message {
 	return msg
 }
 
+// extractEventName returns a descriptive name for the message type for logging purposes.
+func extractEventName(msg Message) string {
+	switch m := msg.(type) {
+	case Capture:
+		return m.Event
+	case Identify:
+		return "$identify"
+	case Alias:
+		return "$alias"
+	case GroupIdentify:
+		return "$group_identify"
+	case Exception:
+		return "$exception"
+	default:
+		return ""
+	}
+}
+
 func (c *client) Enqueue(msg Message) (err error) {
 	// Fast path: check if client is closed before doing any work
 	if c.closed.Load() {
@@ -324,7 +342,17 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		data, apiMsg, serErr := prepareForSend(m)
+		originalMsg := m
+		processed, _ := c.processBeforeSend(m)
+		if processed == nil {
+			return nil
+		}
+		processedMsg, ok := processed.(Alias)
+		if !ok {
+			c.Errorf("BeforeSend hook returned unexpected message type for alias - using original message: %T", processed)
+			processedMsg = originalMsg
+		}
+		data, apiMsg, serErr := prepareForSend(processedMsg)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -337,7 +365,17 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		data, apiMsg, serErr := prepareForSend(m)
+		originalMsg := m
+		processed, _ := c.processBeforeSend(m)
+		if processed == nil {
+			return nil
+		}
+		processedMsg, ok := processed.(Identify)
+		if !ok {
+			c.Errorf("BeforeSend hook returned unexpected message type for identify - using original message: %T", processed)
+			processedMsg = originalMsg
+		}
+		data, apiMsg, serErr := prepareForSend(processedMsg)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -349,7 +387,17 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		data, apiMsg, serErr := prepareForSend(m)
+		originalMsg := m
+		processed, _ := c.processBeforeSend(m)
+		if processed == nil {
+			return nil
+		}
+		processedMsg, ok := processed.(GroupIdentify)
+		if !ok {
+			c.Errorf("BeforeSend hook returned unexpected message type for group_identify - using original message: %T", processed)
+			processedMsg = originalMsg
+		}
+		data, apiMsg, serErr := prepareForSend(processedMsg)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -403,7 +451,17 @@ func (c *client) Enqueue(msg Message) (err error) {
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
-		data, apiMsg, serErr := prepareForSend(m)
+		originalMsg := m
+		processed, _ := c.processBeforeSend(m)
+		if processed == nil {
+			return nil
+		}
+		processedMsg, ok := processed.(Capture)
+		if !ok {
+			c.Errorf("BeforeSend hook returned unexpected message type for capture - using original message: %T", processed)
+			processedMsg = originalMsg
+		}
+		data, apiMsg, serErr := prepareForSend(processedMsg)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -416,7 +474,17 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
-		data, apiMsg, serErr := prepareForSend(m)
+		originalMsg := m
+		processed, _ := c.processBeforeSend(m)
+		if processed == nil {
+			return nil
+		}
+		processedMsg, ok := processed.(Exception)
+		if !ok {
+			c.Errorf("BeforeSend hook returned unexpected message type for exception - using original message: %T", processed)
+			processedMsg = originalMsg
+		}
+		data, apiMsg, serErr := prepareForSend(processedMsg)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -428,6 +496,57 @@ func (c *client) Enqueue(msg Message) (err error) {
 		err = fmt.Errorf("messages with custom types cannot be enqueued: %T", msg)
 		return
 	}
+}
+
+// processBeforeSend calls the user's BeforeSend hook if configured.
+// It handles panics, validates the result, and returns the processed message.
+// If the hook returns nil, the message is dropped.
+// If the hook panics or returns an invalid message, the original message is used.
+func (c *client) processBeforeSend(msg Message) (Message, error) {
+	// If no BeforeSend hook configured, return message unchanged
+	if c.BeforeSend == nil {
+		return msg, nil
+	}
+
+	// Call the user's hook function with panic recovery
+	var processedMsg Message
+	var hookPanicked bool
+	var panicValue any
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				hookPanicked = true
+				panicValue = r
+			}
+		}()
+		processedMsg = c.BeforeSend(msg)
+	}()
+
+	// Handle panic: log error and return original message
+	if hookPanicked {
+		c.Errorf("panic in BeforeSend hook - using original message: %v", panicValue)
+		return msg, nil
+	}
+
+	// If hook returns nil, log warning and drop the event
+	if processedMsg == nil {
+		eventName := extractEventName(msg)
+		if eventName != "" {
+			c.Warnf("message dropped by BeforeSend hook: %s", eventName)
+		} else {
+			c.Warnf("message dropped by BeforeSend hook")
+		}
+		return nil, nil
+	}
+
+	// Validate the modified message
+	if err := processedMsg.Validate(); err != nil {
+		c.Errorf("message validation failed after BeforeSend hook - using original message: %v", err)
+		return msg, nil
+	}
+
+	return processedMsg, nil
 }
 
 func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
