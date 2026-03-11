@@ -12,7 +12,8 @@
         "$group_set": {},
         "$group_type": "organization",
         "$lib": "posthog-go",
-        "$lib_version": "1.0.0"
+        "$lib_version": "1.0.0",
+        "$os": "IGNORED"
       },
       "timestamp": "2009-11-10T23:00:00Z",
       "uuid": "00000000-0000-0000-0000-000000000003"

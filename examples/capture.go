@@ -26,7 +26,6 @@ func TestCapture(projectAPIKey, endpoint string) {
 		Properties: map[string]interface{}{
 			"application": "PostHog Go",
 			"version":     "1.0.0",
-			"platform":    "macos",
 			"file_size":   "2.5MB",
 		},
 	}); err != nil {
