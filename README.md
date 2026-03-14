@@ -98,12 +98,13 @@ func main() {
     })
 
     // Check if a feature flag is enabled
-    isMyFlagEnabled, err := client.IsFeatureEnabled(
-            FeatureFlagPayload{
-                Key:        "flag-key",
-                DistinctId: "distinct_id_of_your_user",
-            })
-
+    isMyFlagEnabled, err := client.IsFeatureEnabled(posthog.FeatureFlagPayload{
+      Key:        "flag-key",
+      DistinctId: "distinct_id_of_your_user",
+    })
+    if err != nil {
+       // Handle error (e.g. capture error and fallback to default behaviour)
+    }
     if isMyFlagEnabled == true {
         // Do something differently for this user
     }
