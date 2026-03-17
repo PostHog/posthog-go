@@ -7,6 +7,8 @@ var osNameMap = map[string]string{
 	"darwin":  "Mac OS X",
 	"linux":   "Linux",
 	"freebsd": "FreeBSD",
+	"android": "Android",
+	"ios":     "iOS",
 }
 
 func getOSName() string {
