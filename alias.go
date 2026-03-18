@@ -45,11 +45,11 @@ func (msg Alias) Validate() error {
 }
 
 type AliasInApiProperties struct {
+	sysContext
 	DistinctId   string `json:"distinct_id"`
 	Alias        string `json:"alias"`
 	Lib          string `json:"$lib"`
 	LibVersion   string `json:"$lib_version"`
-	OS           string `json:"$os"`
 	DisableGeoIP bool   `json:"$geoip_disable,omitempty"`
 }
 
@@ -76,11 +76,11 @@ func (msg Alias) APIfy() APIMessage {
 		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp,
 		Properties: AliasInApiProperties{
+			sysContext:   getSystemContext(),
 			DistinctId:   msg.DistinctId,
 			Alias:        msg.Alias,
 			Lib:          SDKName,
 			LibVersion:   libraryVersion,
-			OS:           getOSName(),
 			DisableGeoIP: msg.DisableGeoIP,
 		},
 	}

@@ -13,7 +13,10 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
-        "$os": "IGNORED"
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "$go_version": "IGNORED"
       },
       "timestamp": "2009-11-10T23:00:00Z",
       "type": "identify",

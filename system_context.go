@@ -2,24 +2,34 @@ package posthog
 
 import "runtime"
 
-var osNameMap = map[string]string{
-	"windows": "Windows",
-	"darwin":  "Mac OS X",
-	"linux":   "Linux",
-	"freebsd": "FreeBSD",
-	"android": "Android",
-	"ios":     "iOS",
+type osInfo struct {
+	Name    string `json:"$os"`
+	Version string `json:"$os_version,omitempty"`
+	Distro  string `json:"$os_distro,omitempty"`
 }
 
-func getOSName() string {
-	if name, ok := osNameMap[runtime.GOOS]; ok {
-		return name
-	}
-	return runtime.GOOS
+type sysContext struct {
+	osInfo
+	GoVersion string `json:"$go_version"`
 }
 
-func systemContext() Properties {
-	return Properties{
-		"$os": getOSName(),
+func getSystemContext() sysContext {
+	return sysContext{
+		osInfo:    getOSInfo(),
+		GoVersion: runtime.Version(),
 	}
+}
+
+func (ctx sysContext) ToProperties() Properties {
+	props := Properties{
+		"$os":         ctx.Name,
+		"$go_version": ctx.GoVersion,
+	}
+	if ctx.Version != "" {
+		props["$os_version"] = ctx.Version
+	}
+	if ctx.Distro != "" {
+		props["$os_distro"] = ctx.Distro
+	}
+	return props
 }

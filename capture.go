@@ -129,7 +129,7 @@ func (msg Capture) APIfy() APIMessage {
 		Merge(msg.Properties).
 		Set("$lib", SDKName).
 		Set("$lib_version", libraryVersion).
-		Merge(systemContext())
+		Merge(getSystemContext().ToProperties())
 
 	if msg.Groups != nil {
 		myProperties.Set("$groups", msg.Groups)

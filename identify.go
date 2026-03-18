@@ -53,7 +53,7 @@ func (msg Identify) APIfy() APIMessage {
 	myProperties := Properties{}.
 		Set("$lib", SDKName).
 		Set("$lib_version", getVersion()).
-		Merge(systemContext())
+		Merge(getSystemContext().ToProperties())
 
 	if msg.DisableGeoIP {
 		myProperties.Set(propertyGeoipDisable, true)

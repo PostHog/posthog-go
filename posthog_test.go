@@ -189,7 +189,7 @@ func fixture(name string) string {
 func assertPayloadEqual(t *testing.T, expected, actual string) {
 	t.Helper()
 
-	sysCtx := systemContext()
+	sysCtx := getSystemContext().ToProperties()
 
 	var expectedJSON, actualJSON map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(expected), &expectedJSON))
