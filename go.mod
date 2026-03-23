@@ -4,12 +4,14 @@ go 1.21
 
 require (
 	github.com/goccy/go-json v0.10.5
+	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/joho/godotenv v1.5.1
 	github.com/orian/flakyhttp v0.1.1
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli v1.22.17
+	golang.org/x/sys v0.21.0
 )
 
 require (

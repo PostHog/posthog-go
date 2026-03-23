@@ -28,6 +28,10 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "$go_version": "IGNORED",
         "distinct_id": "my-user-id"
       },
       "timestamp": "2025-08-11T20:43:37Z",

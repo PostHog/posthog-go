@@ -45,6 +45,7 @@ func (msg Alias) Validate() error {
 }
 
 type AliasInApiProperties struct {
+	sysContext
 	DistinctId   string `json:"distinct_id"`
 	Alias        string `json:"alias"`
 	Lib          string `json:"$lib"`
@@ -75,6 +76,7 @@ func (msg Alias) APIfy() APIMessage {
 		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp,
 		Properties: AliasInApiProperties{
+			sysContext:   getSystemContext(),
 			DistinctId:   msg.DistinctId,
 			Alias:        msg.Alias,
 			Lib:          SDKName,

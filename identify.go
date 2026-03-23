@@ -50,7 +50,11 @@ type IdentifyInApi struct {
 }
 
 func (msg Identify) APIfy() APIMessage {
-	myProperties := Properties{}.Set("$lib", SDKName).Set("$lib_version", getVersion())
+	myProperties := Properties{}.
+		Set("$lib", SDKName).
+		Set("$lib_version", getVersion()).
+		Merge(getSystemContext().ToProperties())
+
 	if msg.DisableGeoIP {
 		myProperties.Set(propertyGeoipDisable, true)
 	}

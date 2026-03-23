@@ -65,6 +65,7 @@ type ExceptionInApi struct {
 }
 
 type ExceptionInApiProperties struct {
+	sysContext
 	Lib                  string          `json:"$lib"`
 	LibVersion           string          `json:"$lib_version"`
 	DistinctId           string          `json:"distinct_id"`
@@ -129,6 +130,7 @@ func (msg Exception) APIfy() APIMessage {
 		LibraryVersion: libVersion,
 		Timestamp:      msg.Timestamp,
 		Properties: ExceptionInApiProperties{
+			sysContext:           getSystemContext(),
 			Lib:                  SDKName,
 			LibVersion:           libVersion,
 			DistinctId:           msg.DistinctId,
