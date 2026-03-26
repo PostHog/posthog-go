@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,10 +28,41 @@ const (
 
 var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
 
+// Common sentinel errors for matchProperty — reused to avoid allocating new
+// InconclusiveMatchError structs on every evaluation of flags with missing properties.
+var (
+	errMissingPropertyValue     = &InconclusiveMatchError{"Can't match properties without a given property value"}
+	errOperatorIsNotSet         = &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
+	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
+)
+
+// regexCache caches compiled regexps for flag property matching.
+// The set of patterns is bounded by the number of flag conditions (loaded once),
+// so this cache grows proportionally and avoids re-compiling on every evaluation.
+var regexCache sync.Map // map[string]*regexp.Regexp
+
+// getOrCompileRegex returns a cached compiled regexp for the given pattern,
+// or compiles and caches it on first use.
+func getOrCompileRegex(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := regexCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	r, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	// Store and return — concurrent stores of the same pattern are harmless
+	regexCache.Store(pattern, r)
+	return r, nil
+}
+
 // flagsState holds the feature flag data that is atomically swapped during updates.
 // This provides lock-free reads for the common path (flag evaluation).
 type flagsState struct {
 	featureFlags []FeatureFlag
+	flagsByKey   map[string]FeatureFlag // pre-built index for O(1) lookup, avoids rebuilding per evaluation
 	cohorts      map[string]PropertyGroup
 	groups       map[string]string
 	flagsEtag    string
@@ -72,6 +104,12 @@ type Filter struct {
 	Groups                    []FeatureFlagCondition     `json:"groups"`
 	Multivariate              *Variants                  `json:"multivariate"`
 	Payloads                  map[string]json.RawMessage `json:"payloads"`
+	// DecodedPayloads holds pre-decoded string versions of Payloads.
+	// Built once at flag load time to avoid per-evaluation json.Unmarshal / unquoting.
+	DecodedPayloads map[string]string `json:"-"`
+	// VariantLookupTable is pre-computed at flag load time to avoid per-evaluation
+	// slice allocation for multivariate flags.
+	VariantLookupTable []FlagVariantMeta `json:"-"`
 }
 
 type Variants struct {
@@ -103,6 +141,18 @@ type PropertyGroup struct {
 	Type string `json:"type"`
 	// []PropertyGroup or []FlagProperty
 	Values []any `json:"values"`
+	// ParsedValues holds pre-parsed typed values from Values.
+	// Built once at flag load time to avoid reconstructing FlagProperty/PropertyGroup
+	// from map[string]any on every cohort evaluation.
+	ParsedValues []parsedPropertyValue `json:"-"`
+}
+
+// parsedPropertyValue is a union holding either a nested PropertyGroup or a FlagProperty.
+// Exactly one field is set. Avoids per-evaluation type assertion and reconstruction.
+type parsedPropertyValue struct {
+	IsGroup  bool
+	Group    PropertyGroup
+	Property FlagProperty
 }
 
 type FlagVariantMeta struct {
@@ -150,6 +200,19 @@ func (e *RequiresServerEvaluationError) Error() string {
 	return e.msg
 }
 
+// isServerEvalError returns true if err is a RequiresServerEvaluationError.
+// Uses type assertion instead of errors.As to avoid pointer-variable heap escapes.
+func isServerEvalError(err error) bool {
+	_, ok := err.(*RequiresServerEvaluationError)
+	return ok
+}
+
+// isInconclusiveError returns true if err is an InconclusiveMatchError.
+func isInconclusiveError(err error) bool {
+	_, ok := err.(*InconclusiveMatchError)
+	return ok
+}
+
 // FeatureFlagResult represents the result of a feature flag evaluation,
 // containing both the flag value and its payload.
 type FeatureFlagResult struct {
@@ -168,6 +231,12 @@ type FeatureFlagResult struct {
 	// Variant is the variant key if this is a multivariate flag.
 	// Nil for boolean flags.
 	Variant *string
+
+	// payloadStore and variantStore hold the actual string values so that
+	// RawPayload/Variant can point into the same allocation as the struct itself,
+	// avoiding separate heap escapes for the *string pointers.
+	payloadStore string
+	variantStore string
 }
 
 // GetPayloadAs unmarshals the JSON payload into the provided type.
@@ -395,6 +464,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 			// Atomically swap with updated ETag
 			newState := &flagsState{
 				featureFlags: currentState.featureFlags,
+				flagsByKey:   currentState.flagsByKey,
 				cohorts:      currentState.cohorts,
 				groups:       currentState.groups,
 				flagsEtag:    newEtag,
@@ -434,6 +504,12 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	}
 	newFlags := append(make([]FeatureFlag, 0, len(featureFlagsResponse.Flags)), featureFlagsResponse.Flags...)
 
+	// Pre-decode payloads once at load time (avoids per-evaluation json unquoting)
+	preDecodePayloads(newFlags)
+
+	// Pre-build flagsByKey index for O(1) lookup during evaluation
+	flagsByKey := buildFlagsByKey(newFlags)
+
 	// Store new ETag from response (clear if server stops sending)
 	newEtag := res.Header.Get("ETag")
 
@@ -443,10 +519,14 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		groups = *featureFlagsResponse.GroupTypeMapping
 	}
 
+	// Pre-parse cohort values into typed structs (avoids per-evaluation reconstruction)
+	parsedCohorts := preParseCohortValues(featureFlagsResponse.Cohorts)
+
 	// Atomic swap of entire state
 	poller.state.Store(&flagsState{
 		featureFlags: newFlags,
-		cohorts:      featureFlagsResponse.Cohorts,
+		flagsByKey:   flagsByKey,
+		cohorts:      parsedCohorts,
 		groups:       groups,
 		flagsEtag:    newEtag,
 	})
@@ -502,9 +582,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 	if err != nil {
 		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
 	} else if variant != nil {
-		payload, ok := flag.Filters.Payloads[fmt.Sprintf("%v", variant)]
-		if ok {
-			return rawMessageToString(payload), nil
+		if decoded, ok := flag.Filters.DecodedPayloads[variantToString(variant)]; ok {
+			return decoded, nil
 		}
 	}
 
@@ -520,32 +599,111 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 	return "", errors.New("unable to compute flag locally")
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
-	var featureFlag FeatureFlag
-	featureFlags, err := poller.GetFeatureFlags()
-	if err != nil {
-		return featureFlag, err
+// flagValueAndPayload holds the result of a single flag evaluation that returns
+// both the flag value and its payload, avoiding the need for double evaluation.
+type flagValueAndPayload struct {
+	value   interface{}
+	payload string
+	err     error
+}
+
+// GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
+// and payload. This avoids the double evaluation that would happen when calling
+// GetFeatureFlag and GetFeatureFlagPayload separately.
+func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFlagPayload) flagValueAndPayload {
+	flag, err := poller.getFeatureFlag(flagConfig)
+
+	var result interface{}
+
+	if flag.Key != "" {
+		result, err = poller.computeFlagLocally(
+			flag,
+			flagConfig.DistinctId,
+			flagConfig.DeviceId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			poller.getCohorts(),
+		)
 	}
 
-	// avoid using flag for conflicts with Golang's stdlib `flag`
-	for _, storedFlag := range featureFlags {
-		if flagConfig.Key == storedFlag.Key {
-			featureFlag = storedFlag
-			break
+	if err != nil {
+		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
+	}
+
+	// Try to resolve payload from local evaluation result using pre-decoded payloads
+	var payload string
+	if err == nil && result != nil {
+		variantKey := variantToString(result)
+		if decoded, ok := flag.Filters.DecodedPayloads[variantKey]; ok {
+			payload = decoded
 		}
 	}
 
-	return featureFlag, nil
+	// Fall back to remote evaluation if local didn't produce a result
+	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
+		flagsResponse, remoteErr := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if remoteErr != nil {
+			return flagValueAndPayload{value: nil, err: remoteErr}
+		}
+		// Clear local eval error — we successfully made a remote request
+		err = nil
+		if flagsResponse != nil {
+			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
+				result = flagValue
+			} else {
+				// Flag not in remote response — treat as false (matches getFeatureFlagVariant behavior)
+				result = false
+			}
+			if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
+				payload = rawMessageToString(rawPayload)
+			}
+		} else {
+			result = false
+		}
+	}
+
+	return flagValueAndPayload{value: result, payload: payload, err: err}
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
+	// Wait for initial flag fetch to complete
+	<-poller.firstFeatureFlagRequestFinished
+
+	// Use pre-built index for O(1) lookup instead of linear scan
+	flagsByKey := poller.getFlagsByKey()
+	if flagsByKey == nil {
+		return FeatureFlag{}, errors.New("flags were not successfully fetched yet")
+	}
+
+	if f, ok := flagsByKey[flagConfig.Key]; ok {
+		return f, nil
+	}
+	return FeatureFlag{}, nil
 }
 
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
-	response := map[string]interface{}{}
 	featureFlags, err := poller.GetFeatureFlags()
 	if err != nil {
 		return nil, err
 	}
 	fallbackToDecide := false
 	cohorts := poller.getCohorts()
+
+	// Pre-size response map to avoid rehashing as flags are added
+	response := make(map[string]interface{}, len(featureFlags))
+
+	// Pre-merge distinct_id into person properties once for the entire batch,
+	// instead of copying the map per-flag inside computeFlagLocally.
+	personProps := flagConfig.PersonProperties
+	if _, ok := personProps["distinct_id"]; !ok {
+		merged := make(Properties, len(personProps)+1)
+		merged["distinct_id"] = flagConfig.DistinctId
+		for k, v := range personProps {
+			merged[k] = v
+		}
+		personProps = merged
+	}
 
 	if len(featureFlags) == 0 {
 		fallbackToDecide = true
@@ -556,7 +714,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 				flagConfig.DistinctId,
 				flagConfig.DeviceId,
 				flagConfig.Groups,
-				flagConfig.PersonProperties,
+				personProps,
 				flagConfig.GroupProperties,
 				cohorts,
 			)
@@ -607,17 +765,14 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		return false, nil
 	}
 
-	// Create evaluation cache for flag dependencies
-	evaluationCache := make(map[string]interface{})
+	// Use pre-built flagsByKey index (built once when flags are fetched, not per evaluation)
+	flagsByKey := poller.getFlagsByKey()
 
-	// Create flags by key map for dependency evaluation
-	featureFlags, err := poller.GetFeatureFlags()
-	if err != nil {
-		return nil, err
-	}
-	flagsByKey := make(map[string]FeatureFlag)
-	for _, f := range featureFlags {
-		flagsByKey[f.Key] = f
+	// evaluationCache is created lazily — only allocated when flag has dependencies.
+	// For simple flags (no dependencies), this avoids a map allocation per evaluation.
+	var evaluationCache map[string]interface{}
+	if flagHasDependencies(flag) {
+		evaluationCache = make(map[string]interface{})
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
@@ -642,17 +797,40 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache)
 	} else {
 		localPersonProperties := personProperties
-		if _, ok := localPersonProperties["distinct_id"]; !ok {
-			localPersonProperties = Properties{"distinct_id": distinctId}.Merge(localPersonProperties)
+		// Only add distinct_id if the flag has conditions that check person properties.
+		// For simple flags (no property conditions), this avoids creating a map that's never read.
+		if flagHasPersonProperties(flag) {
+			if _, ok := localPersonProperties["distinct_id"]; !ok {
+				if personProperties == nil {
+					localPersonProperties = Properties{"distinct_id": distinctId}
+				} else {
+					localPersonProperties = make(Properties, len(personProperties)+1)
+					localPersonProperties["distinct_id"] = distinctId
+					for k, v := range personProperties {
+						localPersonProperties[k] = v
+					}
+				}
+			}
 		}
 		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache)
 	}
 }
 
 func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
-	lookupTable := getVariantLookupTable(flag)
+	// Use pre-computed lookup table if available, otherwise compute on the fly
+	lookupTable := flag.Filters.VariantLookupTable
+	if lookupTable == nil {
+		// Fast path: no multivariate variants means boolean flag — skip hash computation
+		if flag.Filters.Multivariate == nil || len(flag.Filters.Multivariate.Variants) == 0 {
+			return true
+		}
+		lookupTable = getVariantLookupTable(flag)
+	}
+	if len(lookupTable) == 0 {
+		return true
+	}
 
-	hashValue := calculateHash(flag.Key+".", bucketingId, "variant")
+	hashValue := calculateHash(flag.Key, bucketingId, "variant")
 	for _, variant := range lookupTable {
 		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
 			return variant.Key
@@ -670,22 +848,18 @@ func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) strin
 }
 
 func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
-	lookupTable := []FlagVariantMeta{}
-	valueMin := 0.00
-
 	multivariates := flag.Filters.Multivariate
-
 	if multivariates == nil || multivariates.Variants == nil {
-		return lookupTable
+		return nil
 	}
 
+	lookupTable := make([]FlagVariantMeta, 0, len(multivariates.Variants))
+	valueMin := 0.00
 	for _, variant := range multivariates.Variants {
 		valueMax := valueMin + *variant.RolloutPercentage/100.
-		_flagVariantMeta := FlagVariantMeta{ValueMin: valueMin, ValueMax: valueMax, Key: variant.Key}
-		lookupTable = append(lookupTable, _flagVariantMeta)
+		lookupTable = append(lookupTable, FlagVariantMeta{ValueMin: valueMin, ValueMax: valueMax, Key: variant.Key})
 		valueMin = valueMax
 	}
-
 	return lookupTable
 }
 
@@ -705,18 +879,17 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	for _, condition := range conditions {
 		isMatch, err := poller.isConditionMatch(flag, distinctId, bucketingId, deviceId, condition, properties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
-			var serverEvalErr *RequiresServerEvaluationError
-			if errors.As(err, &serverEvalErr) {
+			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
+			// Our error types are returned directly (not wrapped), so type assertion suffices.
+			switch err.(type) {
+			case *RequiresServerEvaluationError:
 				// Static cohort or other missing server-side data - must fallback to API
 				return nil, err
-			}
-
-			var inconclusiveErr *InconclusiveMatchError
-			if errors.As(err, &inconclusiveErr) {
+			case *InconclusiveMatchError:
 				// Evaluation error (bad regex, invalid date, missing property, etc.)
 				// Track that we had an inconclusive match, but try other conditions
 				isInconclusive = true
-			} else {
+			default:
 				return nil, err
 			}
 		}
@@ -734,7 +907,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	}
 
 	if isInconclusive {
-		return false, &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+		return false, errInconclusiveMatch
 	}
 
 	return false, nil
@@ -779,12 +952,10 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 }
 
 func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string) (bool, error) {
-	cohortId := fmt.Sprint(property.Value)
+	cohortId := valueToString(property.Value)
 	propertyGroup, ok := cohorts[cohortId]
 	if !ok {
-		return false, &RequiresServerEvaluationError{
-			msg: fmt.Sprintf("cohort %s not found in local cohorts - likely a static cohort that requires server evaluation", cohortId),
-		}
+		return false, errCohortRequiresServerEval
 	}
 
 	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
@@ -792,8 +963,13 @@ func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties 
 
 func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string) (bool, error) {
 	groupType := propertyGroup.Type
-	values := propertyGroup.Values
 
+	// Use pre-parsed values if available (built at load time), otherwise fall back to raw values
+	if len(propertyGroup.ParsedValues) > 0 {
+		return poller.matchParsedPropertyGroup(groupType, propertyGroup.ParsedValues, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
+	}
+
+	values := propertyGroup.Values
 	if len(values) == 0 {
 		// empty groups are no-ops, always match
 		return true, nil
@@ -811,14 +987,9 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 					Values: getSafeProp[[]any](prop, "values"),
 				}, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
 				if err != nil {
-					var serverEvalErr *RequiresServerEvaluationError
-					if errors.As(err, &serverEvalErr) {
-						// Immediately propagate - this condition requires server-side data
+					if isServerEvalError(err) {
 						return false, err
-					}
-
-					var inconclusiveErr *InconclusiveMatchError
-					if errors.As(err, &inconclusiveErr) {
+					} else if isInconclusiveError(err) {
 						errorMatchingLocally = true
 					} else {
 						return false, err
@@ -830,7 +1001,6 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 						return false, nil
 					}
 				} else {
-					// OR group
 					if matches {
 						return true, nil
 					}
@@ -856,14 +1026,9 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 				}
 
 				if err != nil {
-					var serverEvalErr *RequiresServerEvaluationError
-					if errors.As(err, &serverEvalErr) {
-						// Immediately propagate - this condition requires server-side data
+					if isServerEvalError(err) {
 						return false, err
-					}
-
-					var inconclusiveErr *InconclusiveMatchError
-					if errors.As(err, &inconclusiveErr) {
+					} else if isInconclusiveError(err) {
 						errorMatchingLocally = true
 					} else {
 						return false, err
@@ -872,7 +1037,6 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 
 				negation := flagProperty.Negation
 				if groupType == "AND" {
-					// if negated property, do the inverse
 					if !matches && !negation {
 						return false, nil
 					}
@@ -880,7 +1044,6 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 						return false, nil
 					}
 				} else {
-					// OR group
 					if matches && !negation {
 						return true, nil
 					}
@@ -893,10 +1056,85 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 	}
 
 	if errorMatchingLocally {
-		return false, &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+		return false, errCohortPropertyValue
 	}
 
-	// if we get here, all matched in AND case, or none matched in OR case
+	return groupType == "AND", nil
+}
+
+// matchParsedPropertyGroup evaluates pre-parsed property values without per-evaluation
+// reconstruction from map[string]any. This is the fast path for cohort matching.
+func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, parsedValues []parsedPropertyValue, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string) (bool, error) {
+	errorMatchingLocally := false
+
+	for i := range parsedValues {
+		pv := &parsedValues[i]
+		if pv.IsGroup {
+			matches, err := poller.matchPropertyGroup(pv.Group, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
+			if err != nil {
+				if isServerEvalError(err) {
+					return false, err
+				} else if isInconclusiveError(err) {
+					errorMatchingLocally = true
+				} else {
+					return false, err
+				}
+			}
+
+			if groupType == "AND" {
+				if !matches {
+					return false, nil
+				}
+			} else {
+				if matches {
+					return true, nil
+				}
+			}
+		} else {
+			var matches bool
+			var err error
+			fp := &pv.Property
+			if fp.Type == "cohort" {
+				matches, err = poller.matchCohort(*fp, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
+			} else if fp.Type == "flag" {
+				matches, err = poller.evaluateFlagDependency(*fp, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts)
+			} else {
+				matches, err = matchProperty(*fp, properties)
+			}
+
+			if err != nil {
+				if isServerEvalError(err) {
+					return false, err
+				} else if isInconclusiveError(err) {
+					errorMatchingLocally = true
+				} else {
+					return false, err
+				}
+			}
+
+			negation := fp.Negation
+			if groupType == "AND" {
+				if !matches && !negation {
+					return false, nil
+				}
+				if matches && negation {
+					return false, nil
+				}
+			} else {
+				if matches && !negation {
+					return true, nil
+				}
+				if !matches && negation {
+					return true, nil
+				}
+			}
+		}
+	}
+
+	if errorMatchingLocally {
+		return false, errCohortPropertyValue
+	}
+
 	return groupType == "AND", nil
 }
 
@@ -905,11 +1143,11 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	operator := property.Operator
 	value := property.Value
 	if _, ok := properties[key]; !ok {
-		return false, &InconclusiveMatchError{"Can't match properties without a given property value"}
+		return false, errMissingPropertyValue
 	}
 
 	if operator == "is_not_set" {
-		return false, &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
+		return false, errOperatorIsNotSet
 	}
 
 	override_value := properties[key]
@@ -937,44 +1175,35 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	if operator == "icontains" {
-		return strings.Contains(strings.ToLower(fmt.Sprintf("%v", override_value)), strings.ToLower(fmt.Sprintf("%v", value))), nil
+		return strings.Contains(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
 	}
 
 	if operator == "not_icontains" {
-		return !strings.Contains(strings.ToLower(fmt.Sprintf("%v", override_value)), strings.ToLower(fmt.Sprintf("%v", value))), nil
+		return !strings.Contains(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
 	}
 
 	if operator == "regex" {
-
-		r, err := regexp.Compile(fmt.Sprintf("%v", value))
+		r, err := getOrCompileRegex(valueToString(value))
 		// invalid regex
 		if err != nil {
 			return false, nil
 		}
 
-		match := r.MatchString(fmt.Sprintf("%v", override_value))
-
-		if match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return r.MatchString(valueToString(override_value)), nil
 	}
 
 	if operator == "not_regex" {
-		var r *regexp.Regexp
-		var err error
+		var pattern string
 
 		if valueString, ok := value.(string); ok {
-			r, err = regexp.Compile(valueString)
+			pattern = valueString
 		} else if valueInt, ok := value.(int); ok {
-			valueString = strconv.Itoa(valueInt)
-			r, err = regexp.Compile(valueString)
+			pattern = strconv.Itoa(valueInt)
 		} else {
-			errMessage := "regex expression not allowed"
-			return false, errors.New(errMessage)
+			return false, errors.New("regex expression not allowed")
 		}
 
+		r, err := getOrCompileRegex(pattern)
 		// invalid regex
 		if err != nil {
 			return false, nil
@@ -984,18 +1213,12 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		if valueString, ok := override_value.(string); ok {
 			match = r.MatchString(valueString)
 		} else if valueInt, ok := override_value.(int); ok {
-			valueString = strconv.Itoa(valueInt)
-			match = r.MatchString(valueString)
+			match = r.MatchString(strconv.Itoa(valueInt))
 		} else {
-			errMessage := "value type not supported"
-			return false, errors.New(errMessage)
+			return false, errors.New("value type not supported")
 		}
 
-		if !match {
-			return true, nil
-		} else {
-			return false, nil
-		}
+		return !match, nil
 	}
 
 	if operator == "gt" {
@@ -1521,16 +1744,94 @@ func containsVariant(variantList []FlagVariant, key string) bool {
 	return false
 }
 
+// flagHasDependencies returns true if any condition in the flag references another flag
+// or cohort, requiring an evaluationCache for dependency resolution.
+func flagHasDependencies(flag FeatureFlag) bool {
+	for _, group := range flag.Filters.Groups {
+		for _, prop := range group.Properties {
+			if prop.Type == "flag" || prop.Type == "cohort" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// flagHasPersonProperties returns true if any condition in the flag checks person properties.
+// When false, the distinct_id merge into personProperties can be skipped entirely.
+func flagHasPersonProperties(flag FeatureFlag) bool {
+	for _, group := range flag.Filters.Groups {
+		if len(group.Properties) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// variantToString converts a flag variant value to its string key for payload lookup.
+// Flag variants are always bool or string, so we avoid fmt.Sprintf overhead.
+// valueToString converts an interface{} value to string without fmt.Sprint allocation
+// for common types (string, int, float64). Used for cohort ID lookup.
+func valueToString(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		if val == float64(int64(val)) {
+			return strconv.FormatInt(int64(val), 10)
+		}
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(val)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case bool:
+		return strconv.FormatBool(val)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func variantToString(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // extracted as a regular func for testing purposes
 func checkIfSimpleFlagEnabled(key, bucketingId string, rolloutPercentage float64) bool {
-	hash := calculateHash(key+".", bucketingId, "")
+	hash := calculateHash(key, bucketingId, "")
 	return hash <= rolloutPercentage/100.
 }
 
-func calculateHash(prefix, distinctId, salt string) float64 {
-	hash := sha1.New()
-	hash.Write([]byte(prefix + distinctId + salt))
-	digest := hash.Sum(nil)
+// calculateHash computes a deterministic hash value in [0, 1) for flag bucketing.
+// The input is: key + "." + distinctId + salt.
+// The "." separator is appended internally so callers don't need to concatenate.
+func calculateHash(key, distinctId, salt string) float64 {
+	// Build the input in a stack-allocated buffer to avoid heap allocations.
+	// sha1.Sum takes a complete []byte and returns a [20]byte — no heap escapes.
+	totalLen := len(key) + 1 + len(distinctId) + len(salt) // +1 for "."
+	var buf [256]byte
+	var input []byte
+	if totalLen <= len(buf) {
+		input = buf[:0]
+	} else {
+		input = make([]byte, 0, totalLen)
+	}
+	input = append(input, key...)
+	input = append(input, '.')
+	input = append(input, distinctId...)
+	input = append(input, salt...)
+
+	digest := sha1.Sum(input)
 	return float64(binary.BigEndian.Uint64(digest[:8])>>4) / LONG_SCALE
 }
 
@@ -1561,6 +1862,92 @@ func (poller *FeatureFlagsPoller) getCohorts() map[string]PropertyGroup {
 		return map[string]PropertyGroup{}
 	}
 	return state.cohorts
+}
+
+// preParseCohortValues converts raw []any values in cohort PropertyGroups into
+// typed parsedPropertyValue slices, avoiding per-evaluation reconstruction from map[string]any.
+func preParseCohortValues(cohorts map[string]PropertyGroup) map[string]PropertyGroup {
+	if cohorts == nil {
+		return cohorts
+	}
+	result := make(map[string]PropertyGroup, len(cohorts))
+	for k, pg := range cohorts {
+		result[k] = preParsePG(pg)
+	}
+	return result
+}
+
+func preParsePG(pg PropertyGroup) PropertyGroup {
+	if len(pg.Values) == 0 {
+		return pg
+	}
+	parsed := make([]parsedPropertyValue, 0, len(pg.Values))
+	for _, value := range pg.Values {
+		prop, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, hasValues := prop["values"]; hasValues {
+			// Nested PropertyGroup — recurse
+			childPG := PropertyGroup{
+				Type:   getSafeProp[string](prop, "type"),
+				Values: getSafeProp[[]any](prop, "values"),
+			}
+			childPG = preParsePG(childPG)
+			parsed = append(parsed, parsedPropertyValue{
+				IsGroup: true,
+				Group:   childPG,
+			})
+		} else {
+			// FlagProperty
+			parsed = append(parsed, parsedPropertyValue{
+				Property: FlagProperty{
+					Key:             getSafeProp[string](prop, "key"),
+					Operator:        getSafeProp[string](prop, "operator"),
+					Value:           getSafeProp[any](prop, "value"),
+					Type:            getSafeProp[string](prop, "type"),
+					Negation:        getSafeProp[bool](prop, "negation"),
+					DependencyChain: getSafeProp[[]string](prop, "dependency_chain"),
+				},
+			})
+		}
+	}
+	pg.ParsedValues = parsed
+	return pg
+}
+
+// preDecodePayloads converts json.RawMessage payloads to strings once at load time,
+// so evaluations can use the decoded strings directly without per-call allocation.
+func preDecodePayloads(flags []FeatureFlag) {
+	for i := range flags {
+		if len(flags[i].Filters.Payloads) > 0 {
+			decoded := make(map[string]string, len(flags[i].Filters.Payloads))
+			for k, raw := range flags[i].Filters.Payloads {
+				decoded[k] = rawMessageToString(raw)
+			}
+			flags[i].Filters.DecodedPayloads = decoded
+		}
+		// Pre-compute variant lookup table for multivariate flags
+		flags[i].Filters.VariantLookupTable = getVariantLookupTable(flags[i])
+	}
+}
+
+// buildFlagsByKey creates a map from flag key to FeatureFlag for O(1) lookups.
+func buildFlagsByKey(flags []FeatureFlag) map[string]FeatureFlag {
+	m := make(map[string]FeatureFlag, len(flags))
+	for _, f := range flags {
+		m[f.Key] = f
+	}
+	return m
+}
+
+// getFlagsByKey returns the pre-built flags-by-key index or nil if not initialized.
+func (poller *FeatureFlagsPoller) getFlagsByKey() map[string]FeatureFlag {
+	state := poller.state.Load()
+	if state == nil {
+		return nil
+	}
+	return state.flagsByKey
 }
 
 // getGroups returns the current groups map or an empty map if not initialized.
@@ -1653,8 +2040,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 
 		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
 		if err != nil {
-			var inconclusiveErr *InconclusiveMatchError
-			if errors.As(err, &inconclusiveErr) {
+			if isInconclusiveError(err) {
 				continue
 			}
 			return nil, err

@@ -194,6 +194,16 @@ func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
 // into a FlagsResponse struct.
 func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, groups Groups, personProperties Properties,
 	groupProperties map[string]Properties, disableGeoIP bool) (*FlagsResponse, error) {
+	// Ensure non-nil maps for JSON marshaling (nil marshals as "null", server expects "{}")
+	if groups == nil {
+		groups = Groups{}
+	}
+	if personProperties == nil {
+		personProperties = Properties{}
+	}
+	if groupProperties == nil {
+		groupProperties = map[string]Properties{}
+	}
 	requestData := FlagsRequestData{
 		ApiKey:           d.apiKey,
 		DistinctId:       distinctId,
@@ -254,14 +264,84 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 // If the raw message is a JSON string, it returns the unquoted string.
 // Otherwise, it returns the JSON representation.
 func rawMessageToString(raw json.RawMessage) string {
-	if len(raw) == 0 {
+	n := len(raw)
+	if n == 0 {
 		return ""
 	}
-	// Try to unmarshal as a string first
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
+	// Fast path for JSON strings: handle unquoting without json.Unmarshal
+	if n >= 2 && raw[0] == '"' && raw[n-1] == '"' {
+		inner := raw[1 : n-1]
+		// Check for escape sequences
+		hasEscape := false
+		for _, b := range inner {
+			if b == '\\' {
+				hasEscape = true
+				break
+			}
+		}
+		if !hasEscape {
+			// No escapes — direct conversion
+			return string(inner)
+		}
+		// Handle common JSON escape sequences without json.Unmarshal.
+		// This avoids 1-2 heap allocations from the JSON decoder.
+		return unquoteJSONString(inner)
 	}
-	// Return raw JSON for objects, arrays, numbers, booleans
+	// Handle JSON null — return empty string (matches json.Unmarshal behavior for null → string)
+	if n == 4 && raw[0] == 'n' && raw[1] == 'u' && raw[2] == 'l' && raw[3] == 'l' {
+		return ""
+	}
+	// Non-string types (objects, arrays, numbers, booleans): return raw JSON representation
 	return string(raw)
+}
+
+// unquoteJSONString processes JSON escape sequences in a byte slice.
+// Handles: \\, \", \/, \n, \r, \t, \b, \f. Falls back to json.Unmarshal for \uXXXX.
+func unquoteJSONString(data []byte) string {
+	// Check if we need json.Unmarshal for unicode escapes
+	for i := 0; i < len(data)-1; i++ {
+		if data[i] == '\\' && data[i+1] == 'u' {
+			// Unicode escape — fall back to json.Unmarshal
+			raw := make([]byte, len(data)+2)
+			raw[0] = '"'
+			copy(raw[1:], data)
+			raw[len(raw)-1] = '"'
+			var s string
+			if err := json.Unmarshal(raw, &s); err == nil {
+				return s
+			}
+			return string(data)
+		}
+	}
+
+	// Process simple escape sequences in a single pass
+	buf := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\\' && i+1 < len(data) {
+			i++
+			switch data[i] {
+			case '"':
+				buf = append(buf, '"')
+			case '\\':
+				buf = append(buf, '\\')
+			case '/':
+				buf = append(buf, '/')
+			case 'n':
+				buf = append(buf, '\n')
+			case 'r':
+				buf = append(buf, '\r')
+			case 't':
+				buf = append(buf, '\t')
+			case 'b':
+				buf = append(buf, '\b')
+			case 'f':
+				buf = append(buf, '\f')
+			default:
+				buf = append(buf, '\\', data[i])
+			}
+		} else {
+			buf = append(buf, data[i])
+		}
+	}
+	return string(buf)
 }

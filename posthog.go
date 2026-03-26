@@ -501,43 +501,49 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	}
 
 	var flagValue interface{}
-	var payload *string
-	var variant *string
 	var err error
-	var evalResult *featureFlagEvaluationResult
+	// Use stack-allocated evalResult to avoid heap pointer allocation on the hot path
+	var evalResult featureFlagEvaluationResult
+	// payloadStr and variantStr hold values that will be stored in the result struct
+	var payloadStr string
+	var variantStr string
+	var hasPayload, hasVariant bool
 
 	if c.featureFlagsPoller != nil {
-		// get feature flag from the poller, which uses the personal api key
-		// this is only available when using a PersonalApiKey
-		flagValue, err = c.featureFlagsPoller.GetFeatureFlag(flagConfig)
-		evalResult = &featureFlagEvaluationResult{
-			Value: flagValue,
-			Err:   err,
-		}
-		if err == nil {
-			payloadStr, _ := c.featureFlagsPoller.GetFeatureFlagPayload(flagConfig)
-			if payloadStr != "" {
-				payload = &payloadStr
-			}
+		// Evaluate flag once to get both value and payload (avoids double evaluation)
+		combined := c.featureFlagsPoller.GetFeatureFlagWithPayload(flagConfig)
+		flagValue = combined.value
+		err = combined.err
+		evalResult.Value = flagValue
+		evalResult.Err = err
+		if combined.payload != "" {
+			payloadStr = combined.payload
+			hasPayload = true
 		}
 		if v, ok := flagValue.(string); ok {
-			variant = &v
+			variantStr = v
+			hasVariant = true
 		}
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
-		evalResult = c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
+		remoteResult := c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
+		evalResult = *remoteResult
 		flagValue = evalResult.Value
 		err = evalResult.Err
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
 			evalResult.Value = flagValue
-			payloadStr := rawMessageToString(f.Metadata.Payload)
-			if payloadStr != "" {
-				payload = &payloadStr
+			ps := rawMessageToString(f.Metadata.Payload)
+			if ps != "" {
+				payloadStr = ps
+				hasPayload = true
 			}
-			variant = f.Variant
+			if f.Variant != nil {
+				variantStr = *f.Variant
+				hasVariant = true
+			}
 		}
 	}
 
@@ -609,12 +615,21 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		enabled = v != ""
 	}
 
-	return &FeatureFlagResult{
-		Key:        flagConfig.Key,
-		Enabled:    enabled,
-		RawPayload: payload,
-		Variant:    variant,
-	}, err
+	// Build result with embedded string storage so RawPayload/Variant pointers
+	// reference fields within the same heap allocation (no separate string escapes).
+	result := &FeatureFlagResult{
+		Key:          flagConfig.Key,
+		Enabled:      enabled,
+		payloadStore: payloadStr,
+		variantStore: variantStr,
+	}
+	if hasPayload {
+		result.RawPayload = &result.payloadStore
+	}
+	if hasVariant {
+		result.Variant = &result.variantStore
+	}
+	return result, err
 }
 
 func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {

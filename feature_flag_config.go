@@ -11,6 +11,9 @@ type FeatureFlagPayload struct {
 	SendFeatureFlagEvents *bool
 }
 
+// trueVal is a package-level constant to avoid allocating a new bool pointer on every validate() call.
+var trueVal = true
+
 func (c *FeatureFlagPayload) validate() error {
 	if len(c.Key) == 0 {
 		return ConfigError{
@@ -28,21 +31,13 @@ func (c *FeatureFlagPayload) validate() error {
 		}
 	}
 
-	if c.Groups == nil {
-		c.Groups = Groups{}
-	}
-
-	if c.PersonProperties == nil {
-		c.PersonProperties = NewProperties()
-	}
-
-	if c.GroupProperties == nil {
-		c.GroupProperties = map[string]Properties{}
-	}
+	// Groups, PersonProperties, and GroupProperties are intentionally left nil.
+	// Nil maps work correctly for local evaluation (nil map reads return zero values).
+	// The remote fallback path in makeFlagsRequest handles nil→empty conversion
+	// before JSON marshaling.
 
 	if c.SendFeatureFlagEvents == nil {
-		tempTrue := true
-		c.SendFeatureFlagEvents = &tempTrue
+		c.SendFeatureFlagEvents = &trueVal
 	}
 	return nil
 }
@@ -66,21 +61,13 @@ func (c *FeatureFlagPayloadNoKey) validate() error {
 		}
 	}
 
-	if c.Groups == nil {
-		c.Groups = Groups{}
-	}
-
-	if c.PersonProperties == nil {
-		c.PersonProperties = NewProperties()
-	}
-
-	if c.GroupProperties == nil {
-		c.GroupProperties = map[string]Properties{}
-	}
+	// Groups, PersonProperties, and GroupProperties are intentionally left nil.
+	// Nil maps work correctly for local evaluation (nil map reads return zero values).
+	// The remote fallback path in makeFlagsRequest handles nil→empty conversion
+	// before JSON marshaling.
 
 	if c.SendFeatureFlagEvents == nil {
-		tempTrue := true
-		c.SendFeatureFlagEvents = &tempTrue
+		c.SendFeatureFlagEvents = &trueVal
 	}
 	return nil
 }
