@@ -596,7 +596,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 		return result, nil
 	}
 
-	return "", errors.New("unable to compute flag locally")
+	return "", err
 }
 
 // flagValueAndPayload holds the result of a single flag evaluation that returns

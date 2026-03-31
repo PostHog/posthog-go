@@ -323,6 +323,39 @@ func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing
 	}
 }
 
+func TestGetFeatureFlagPayloadNoMatchReturnsNoError(t *testing.T) {
+	// Regression test for: GetFeatureFlagPayload with OnlyEvaluateLocally=true should
+	// return ("", nil) on no match, consistent with IsFeatureEnabled returning (false, nil).
+	// Uses a flag with 0% rollout so it evaluates locally but never matches.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	payload, err := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:                 "disabled-feature",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if err != nil {
+		t.Errorf("Expected no error on no-match with OnlyEvaluateLocally, got: %v", err)
+	}
+	if payload != "" {
+		t.Errorf("Expected empty payload on no-match, got: %v", payload)
+	}
+}
+
 func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
