@@ -1,3 +1,7 @@
+## 1.11.3 - 2026-04-14
+
+* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.2...v1.11.3)
+
 * Added `locally_evaluated` property to `$feature_flag_called` events, indicating whether the flag was evaluated locally or via the remote `/flags` endpoint.
 
 ## 1.11.2 - 2026-03-26
