@@ -548,9 +548,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.GroupProperties,
 			poller.getCohorts(),
 		)
-		if err == nil && result != nil {
-			locallyEvaluated = true
-		}
+		locallyEvaluated = err == nil && result != nil
 	}
 
 	if err != nil {
