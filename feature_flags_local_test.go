@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -710,9 +711,28 @@ func TestGetFeatureFlag(t *testing.T) {
 
 	defer server.Close()
 
+	var capturedEvent *CaptureInApi
+	var mu sync.Mutex
+	eventCaptured := make(chan struct{}, 1)
+
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
+		BatchSize:      1,
+		Callback: testCallback{
+			func(m APIMessage) {
+				if capture, ok := m.(CaptureInApi); ok {
+					mu.Lock()
+					capturedEvent = &capture
+					mu.Unlock()
+					select {
+					case eventCaptured <- struct{}{}:
+					default:
+					}
+				}
+			},
+			func(m APIMessage, e error) {},
+		},
 	})
 	defer client.Close()
 
@@ -725,6 +745,97 @@ func TestGetFeatureFlag(t *testing.T) {
 
 	if variant != "variant-1" {
 		t.Error("Should match")
+	}
+
+	select {
+	case <-eventCaptured:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for captured event")
+	}
+
+	mu.Lock()
+	lastEvent := capturedEvent
+	mu.Unlock()
+
+	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
+		t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
+	}
+
+	if lastEvent != nil {
+		if lastEvent.Properties["$feature_flag"] != "test-get-feature" {
+			t.Errorf("Expected feature flag key 'test-get-feature', got: %v", lastEvent.Properties["$feature_flag"])
+		}
+		if lastEvent.Properties["$feature_flag_response"] != "variant-1" {
+			t.Errorf("Expected feature flag response 'variant-1', got: %v", lastEvent.Properties["$feature_flag_response"])
+		}
+		if lastEvent.Properties["locally_evaluated"] != false {
+			t.Errorf("Expected locally_evaluated to be false (test-get-feature is only in /flags response), got: %v", lastEvent.Properties["locally_evaluated"])
+		}
+	}
+}
+
+func TestGetFeatureFlagLocallyEvaluated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags") {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+	defer server.Close()
+
+	var capturedEvent *CaptureInApi
+	var mu sync.Mutex
+	eventCaptured := make(chan struct{}, 1)
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+		BatchSize:      1,
+		Callback: testCallback{
+			func(m APIMessage) {
+				if capture, ok := m.(CaptureInApi); ok {
+					mu.Lock()
+					capturedEvent = &capture
+					mu.Unlock()
+					select {
+					case eventCaptured <- struct{}{}:
+					default:
+					}
+				}
+			},
+			func(m APIMessage, e error) {},
+		},
+	})
+	defer client.Close()
+
+	value, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:              "simple-flag",
+		DistinctId:       "distinct_id",
+		PersonProperties: NewProperties().Set("region", "USA"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != true {
+		t.Errorf("Expected simple-flag to evaluate to true, got: %v", value)
+	}
+
+	select {
+	case <-eventCaptured:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for captured event")
+	}
+
+	mu.Lock()
+	lastEvent := capturedEvent
+	mu.Unlock()
+
+	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
+		t.Fatalf("Expected a $feature_flag_called event, got: %v", lastEvent)
+	}
+	if lastEvent.Properties["locally_evaluated"] != true {
+		t.Errorf("Expected locally_evaluated to be true for local evaluation, got: %v", lastEvent.Properties["locally_evaluated"])
 	}
 }
 

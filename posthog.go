@@ -508,11 +508,13 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	var payloadStr string
 	var variantStr string
 	var hasPayload, hasVariant bool
+	var locallyEvaluated bool
 
 	if c.featureFlagsPoller != nil {
 		// Evaluate flag once to get both value and payload (avoids double evaluation)
 		combined := c.featureFlagsPoller.GetFeatureFlagWithPayload(flagConfig)
 		flagValue = combined.value
+		locallyEvaluated = combined.locallyEvaluated
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
@@ -527,6 +529,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	} else {
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
+		locallyEvaluated = false
 		remoteResult := c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
 			flagConfig.PersonProperties, flagConfig.GroupProperties)
 		evalResult = *remoteResult
@@ -560,7 +563,8 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	if *flagConfig.SendFeatureFlagEvents && !c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
 		var properties = NewProperties().
 			Set("$feature_flag", flagConfig.Key).
-			Set("$feature_flag_response", flagValue)
+			Set("$feature_flag_response", flagValue).
+			Set("locally_evaluated", locallyEvaluated)
 
 		if flagConfig.DeviceId != nil {
 			properties.Set("$device_id", *flagConfig.DeviceId)
