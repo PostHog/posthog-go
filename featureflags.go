@@ -532,10 +532,11 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	})
 }
 
-func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, error) {
+func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
 	flag, err := poller.getFeatureFlag(flagConfig)
 
 	var result interface{}
+	locallyEvaluated := false
 
 	if flag.Key != "" {
 		result, err = poller.computeFlagLocally(
@@ -547,6 +548,9 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.GroupProperties,
 			poller.getCohorts(),
 		)
+		if err == nil && result != nil {
+			locallyEvaluated = true
+		}
 	}
 
 	if err != nil {
@@ -556,11 +560,11 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
 		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
-			return nil, err
+			return nil, locallyEvaluated, err
 		}
 	}
 
-	return result, err
+	return result, locallyEvaluated, err
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
@@ -602,9 +606,10 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 // flagValueAndPayload holds the result of a single flag evaluation that returns
 // both the flag value and its payload, avoiding the need for double evaluation.
 type flagValueAndPayload struct {
-	value   interface{}
-	payload string
-	err     error
+	value            interface{}
+	payload          string
+	err              error
+	locallyEvaluated bool
 }
 
 // GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
@@ -640,12 +645,15 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		}
 	}
 
+	locallyEvaluated := err == nil && result != nil
+
 	// Fall back to remote evaluation if local didn't produce a result
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
 		flagsResponse, remoteErr := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if remoteErr != nil {
 			return flagValueAndPayload{value: nil, err: remoteErr}
 		}
+		locallyEvaluated = false
 		// Clear local eval error — we successfully made a remote request
 		err = nil
 		if flagsResponse != nil {
@@ -663,7 +671,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		}
 	}
 
-	return flagValueAndPayload{value: result, payload: payload, err: err}
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated}
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
