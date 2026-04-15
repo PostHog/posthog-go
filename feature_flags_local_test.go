@@ -776,10 +776,10 @@ func TestGetFeatureFlag(t *testing.T) {
 
 func TestGetFeatureFlagLocallyEvaluated(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/flags") {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		} else if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
 		}
 	}))
 	defer server.Close()
