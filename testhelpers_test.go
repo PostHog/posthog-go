@@ -187,7 +187,7 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 				w.Write([]byte(b.config.FlagsResponse))
 			}
 
-		case strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			if b.config.LocalEvalHandler != nil {
 				b.config.LocalEvalHandler(w, r)
 				return

@@ -11,7 +11,7 @@ import (
 
 func TestFlagDependenciesSimpleChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
 					{
@@ -109,7 +109,7 @@ func TestFlagDependenciesSimpleChain(t *testing.T) {
 
 func TestFlagDependenciesCircularDependency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
 					{
@@ -193,7 +193,7 @@ func TestFlagDependenciesCircularDependency(t *testing.T) {
 
 func TestFlagDependenciesMissingFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
 					{
@@ -246,7 +246,7 @@ func TestFlagDependenciesMissingFlag(t *testing.T) {
 
 func TestFlagDependenciesComplexChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
 					{
@@ -355,7 +355,7 @@ func TestFlagDependenciesComplexChain(t *testing.T) {
 
 func TestFlagDependenciesMixedConditions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
 					{
@@ -440,7 +440,7 @@ func TestFlagDependenciesMixedConditions(t *testing.T) {
 
 func TestFlagDependenciesMalformedChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
 					{
@@ -508,7 +508,7 @@ func TestFlagDependenciesMalformedChain(t *testing.T) {
 // This test is equivalent to the EvaluatesMultiLevelMultivariateDependencyChain test in the .NET SDK
 func TestMultiLevelMultivariateDependencyChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
 					{

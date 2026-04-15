@@ -121,7 +121,7 @@ var (
 
 	testTransportFeatureFlagsOK = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		var body string
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			body = fixture("feature_flag/test-simple-flag.json")
 		}
 		return &http.Response{
@@ -1274,7 +1274,7 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 				}
 				close(received)
 				w.Write([]byte(`{"featureFlags": {"test-flag": true}}`))
-			case strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
+			case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"flags":[]}`))
 			case strings.HasPrefix(r.URL.Path, "/batch"):
@@ -1907,11 +1907,11 @@ func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if apiCalls == 0 && strings.HasPrefix(r.URL.Path, "/flags") {
 			t.Fatal("expected local evaluations endpoint to be called first")
-		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			t.Fatal("expected flags endpoint to be called second")
 		}
 
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		} else {
 			w.Write([]byte(fixture("test-flags-v3.json")))
@@ -1976,7 +1976,7 @@ func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
@@ -2028,7 +2028,7 @@ func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
@@ -2080,7 +2080,7 @@ func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte("{}"))
 		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
 			t.Errorf("client called an endpoint it shouldn't have")
@@ -2370,7 +2370,7 @@ func TestFeatureFlagQuotaLimits(t *testing.T) {
 
 	t.Run("local evaluation endpoint quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				w.WriteHeader(http.StatusPaymentRequired)
 				w.Write([]byte(`{
 					"type": "quota_limited",
@@ -2436,7 +2436,7 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 		var remoteConfigCalled bool
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Handle the initial feature flag definitions request
-			if strings.Contains(r.URL.Path, "/api/feature_flag/local_evaluation") {
+			if strings.Contains(r.URL.Path, "/flags/definitions") {
 				w.Header().Set("Content-Type", "application/json")
 				w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
 				return

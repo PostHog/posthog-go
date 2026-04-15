@@ -778,7 +778,7 @@ func TestGetFeatureFlagResultGetPayloadAs(t *testing.T) {
 
 func TestGetFeatureFlagResultReturnsErrorForNonExistentFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			// Return empty flags - the requested flag won't exist
 			w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
 		}
@@ -812,7 +812,7 @@ func TestGetFeatureFlagResultReturnsErrorForNonExistentFlag(t *testing.T) {
 
 func TestGetFeatureFlagResultPropagatesLocalEvaluationErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
