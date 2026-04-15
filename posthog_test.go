@@ -1905,7 +1905,7 @@ func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing.T) {
 	apiCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if apiCalls == 0 && r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+		if apiCalls == 0 && (r.URL.Path == "/flags" || r.URL.Path == "/flags/") {
 			t.Fatal("expected local evaluations endpoint to be called first")
 		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			t.Fatal("expected flags endpoint to be called second")
