@@ -3,10 +3,10 @@ name: "CodeQL Advanced"
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
-      - master
+      - main
 
 jobs:
   analyze:
