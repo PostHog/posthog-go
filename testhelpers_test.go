@@ -177,7 +177,7 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 				w.Write([]byte(b.config.BatchResponse))
 			}
 
-		case strings.HasPrefix(r.URL.Path, "/flags"):
+		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			if b.config.FlagsHandler != nil {
 				b.config.FlagsHandler(w, r)
 				return
