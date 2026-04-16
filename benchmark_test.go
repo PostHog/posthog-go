@@ -203,7 +203,7 @@ func BenchmarkFeatureFlagLocalEvaluation(b *testing.B) {
 	// Setup server that returns actual flag definitions
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
 		case strings.HasPrefix(r.URL.Path, "/batch"):
 			io.Copy(io.Discard, r.Body)

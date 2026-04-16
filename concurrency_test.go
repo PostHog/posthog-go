@@ -133,7 +133,7 @@ func TestConcurrentFeatureFlagEvaluation(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		// Return proper format for both local evaluation and flags endpoints
-		if r.URL.Path == "/api/feature_flag/local_evaluation" {
+		if r.URL.Path == "/flags/definitions" {
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"flags": []map[string]interface{}{
 					{

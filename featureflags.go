@@ -384,7 +384,7 @@ func newFeatureFlagsPoller(
 	decider decider,
 	disableGeoIP bool,
 ) (*FeatureFlagsPoller, error) {
-	localEvaluationEndpoint := "/api/feature_flag/local_evaluation"
+	localEvaluationEndpoint := "/flags/definitions"
 	localEvalURL, err := url.Parse(endpoint + localEvaluationEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("creating local evaluation URL - %w", err)
