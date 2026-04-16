@@ -1,17 +1,16 @@
 # Releasing
 
-Releases are semi-automated via GitHub Actions. When a PR with the `release` and a version bump label is merged to `main`, the release workflow is triggered.
+Releases are semi-automated via GitHub Actions. When a PR with the `release` and a version bump label is merged to `main`, the release workflow is triggered. You can also trigger the `Release` workflow manually from GitHub Actions and choose the bump type.
 
 You'll need an approval from a PostHog engineer. If you're an employee, you can see the request in the [#approvals-client-libraries](https://app.slack.com/client/TSS5W8YQZ/C0A3UEVDDNF) channel.
 
 ## Release Process
 
-1. **Create your PR** with the changes you want to release
-2. **Add the `release` label** to the PR
-3. **Add a version bump label** that should be either `bump-patch`, `bump-minor` or `bump-major`
-4. **Merge the PR** to `main`
+1. Either:
+   - **Create your PR** with the changes you want to release, add the `release` label, add exactly one version bump label (`bump-patch`, `bump-minor`, or `bump-major`), and **merge the PR** to `main`, or
+   - open the `Release` workflow in GitHub Actions, click **Run workflow**, and choose `patch`, `minor`, or `major`
 
-Once merged, the following happens automatically:
+Once the workflow is triggered, the following happens automatically:
 
 1. A Slack notification is sent to the client libraries channel requesting approval
 2. A maintainer approves the release in the GitHub `Release` environment
