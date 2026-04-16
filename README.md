@@ -74,6 +74,19 @@ func main() {
       "Error Description",
     ))
 
+    // Capture an error with custom properties
+    client.Enqueue(posthog.Exception{
+      DistinctId: "distinct-id",
+      Timestamp:  time.Now(),
+      Properties: posthog.Properties{
+        "environment": "production",
+        "retry_count": 3,
+      },
+      ExceptionList: []posthog.ExceptionItem{
+        {Type: "Error title", Value: "Error Description"},
+      },
+    })
+
     // Create a logger which automatically captures warning logs and above
     baseLogHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
     logger := slog.New(posthog.NewSlogCaptureHandler(baseLogHandler, client,
@@ -84,6 +97,15 @@ func main() {
       }),
     })
     logger.Warn("Log that something broke", "error", fmt.Errorf("this is a dummy scenario"))
+
+    // Optionally forward all slog attributes as event properties
+    loggerWithProps := slog.New(posthog.NewSlogCaptureHandler(baseLogHandler, client,
+      posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
+        return "my-user-id"
+      }),
+      posthog.WithPropertiesFn(posthog.SlogAttrsAsProperties),
+    ))
+    loggerWithProps.Error("Payment failed", "payment_id", "pay_123", "amount", 99.99)
 
     // Capture event with calculated uuid to deduplicate repeated events.
     // The library github.com/google/uuid is used

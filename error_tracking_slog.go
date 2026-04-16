@@ -69,6 +69,7 @@ func (h *SlogCaptureHandler) Handle(ctx context.Context, r slog.Record) error {
 			},
 		},
 		ExceptionFingerprint: h.cfg.fingerprint(ctx, r),
+		Properties:           h.cfg.properties(ctx, r),
 	}
 	_ = h.client.Enqueue(ex) // ignore enqueue error to keep logging safe
 
@@ -89,6 +90,23 @@ func (h *SlogCaptureHandler) WithGroup(name string) slog.Handler {
 		client: h.client,
 		cfg:    h.cfg,
 	}
+}
+
+// SlogAttrsAsProperties is a convenience implementation of the fn passed to
+// WithPropertiesFn. It copies every slog.Record attribute into a Properties
+// map, so log fields flow onto the captured exception event verbatim.
+//
+// Usage: posthog.WithPropertiesFn(posthog.SlogAttrsAsProperties)
+//
+// Note: this ships all attrs to PostHog — make sure none contain sensitive
+// data, or write a filtering fn instead.
+func SlogAttrsAsProperties(_ context.Context, r slog.Record) Properties {
+	props := NewProperties()
+	r.Attrs(func(a slog.Attr) bool {
+		props.Set(a.Key, a.Value.Any())
+		return true
+	})
+	return props
 }
 
 // DescriptionExtractor defines the interface for extracting a human-readable

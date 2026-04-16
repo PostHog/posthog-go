@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -15,9 +16,9 @@ type Exception struct {
 
 	DistinctId   string
 	Timestamp    time.Time
+	Properties   Properties
 	DisableGeoIP bool
 
-	// Typed properties that end up in the API "properties" object:
 	ExceptionList        []ExceptionItem
 	ExceptionFingerprint *string
 }
@@ -72,6 +73,43 @@ type ExceptionInApiProperties struct {
 	DisableGeoIP         bool            `json:"$geoip_disable,omitempty"`
 	ExceptionList        []ExceptionItem `json:"$exception_list"`
 	ExceptionFingerprint *string         `json:"$exception_fingerprint,omitempty"`
+
+	// Custom is flattened into the wire "properties" on marshal.
+	// Typed fields win on collision.
+	Custom Properties `json:"-"`
+}
+
+// MarshalJSON lets users add extra keys (via Custom) to the event's
+// JSON output next to the built-in ones like $lib and distinct_id.
+// If a custom key clashes with a built-in, we keep ours and drop theirs.
+func (p ExceptionInApiProperties) MarshalJSON() ([]byte, error) {
+	type alias ExceptionInApiProperties
+	typedBytes, err := json.Marshal(alias(p))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(p.Custom) == 0 {
+		return typedBytes, nil
+	}
+
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(typedBytes, &merged); err != nil {
+		return nil, err
+	}
+
+	for k, v := range p.Custom {
+		if _, exists := merged[k]; exists {
+			continue
+		}
+		vb, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		merged[k] = vb
+	}
+
+	return json.Marshal(merged)
 }
 
 func (msg Exception) internal() { panic(unimplementedError) }
@@ -137,6 +175,7 @@ func (msg Exception) APIfy() APIMessage {
 			DisableGeoIP:         msg.DisableGeoIP,
 			ExceptionList:        msg.ExceptionList,
 			ExceptionFingerprint: msg.ExceptionFingerprint,
+			Custom:               msg.Properties,
 		},
 	}
 }
