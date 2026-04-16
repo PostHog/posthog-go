@@ -48,19 +48,24 @@ jobs:
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
+          HAS_BUMP_MAJOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-major') }}
+          HAS_BUMP_MINOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-minor') }}
+          HAS_BUMP_PATCH: ${{ contains(github.event.pull_request.labels.*.name, 'bump-patch') }}
         run: |
           # Determine bump type from workflow input or PR labels
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "bump-type=${{ inputs.bump_type }}" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "bump-type=$INPUT_BUMP_TYPE" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
-            echo "Manual release requested with bump type '${{ inputs.bump_type }}'"
-          elif ${{ contains(github.event.pull_request.labels.*.name, 'bump-major') }}; then
+            echo "Manual release requested with bump type '$INPUT_BUMP_TYPE'"
+          elif [ "$HAS_BUMP_MAJOR" = "true" ]; then
             echo "bump-type=major" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif ${{ contains(github.event.pull_request.labels.*.name, 'bump-minor') }}; then
+          elif [ "$HAS_BUMP_MINOR" = "true" ]; then
             echo "bump-type=minor" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif ${{ contains(github.event.pull_request.labels.*.name, 'bump-patch') }}; then
+          elif [ "$HAS_BUMP_PATCH" = "true" ]; then
             echo "bump-type=patch" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
           fi
@@ -157,10 +162,11 @@ jobs:
         if: steps.commit-version-bump.outputs.commit-hash != ''
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
           COMMIT_HASH: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          gh api "repos/${{ github.repository }}/git/refs" \
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
             -f "ref=refs/tags/v${NEW_VERSION}" \
             -f "sha=${COMMIT_HASH}"
 
@@ -208,8 +214,10 @@ jobs:
         id: check-rejection
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
-          RESPONSE=$(gh api /repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals)
+          RESPONSE=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals")
           REJECTED=$(echo "$RESPONSE" | jq '[.[] | select(.state == "rejected")] | length')
           if [ "$REJECTED" -gt 0 ]; then
             echo "was_rejected=true" >> "$GITHUB_OUTPUT"
