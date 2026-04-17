@@ -38,6 +38,22 @@ func TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint string) {
 				fmt.Println("error:", err)
 				return
 			}
+
+			exceptionWithProps := posthog.Exception{
+				DistinctId: "distinct-id",
+				Timestamp:  time.Now(),
+				Properties: posthog.Properties{
+					"environment": "production",
+					"retry_count": 3,
+				},
+				ExceptionList: []posthog.ExceptionItem{
+					{Type: "Enqueued error with custom props", Value: "Error Description"},
+				},
+			}
+			if err := client.Enqueue(exceptionWithProps); err != nil {
+				fmt.Println("error:", err)
+				return
+			}
 		}
 	}
 }
@@ -57,6 +73,7 @@ func TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint string) {
 			// for demo purposes, real applications should likely pull this value from the context.
 			return "my-user-id"
 		}),
+		posthog.WithPropertiesFn(posthog.SlogAttrsAsProperties),
 	))
 
 	done := time.After(3 * time.Second)
@@ -71,6 +88,8 @@ func TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint string) {
 		case <-tick:
 			log.Warn("Log that something broke",
 				"error", fmt.Errorf("this is a dummy scenario"),
+				"retry_count", 3,
+				"endpoint", "/api/v1/users",
 			)
 		}
 	}

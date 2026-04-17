@@ -36,6 +36,11 @@ type captureConfig struct {
 	// record for fields like "err" or "error" and uses the extracted
 	// error message as the description.
 	descriptionExtractor DescriptionExtractor
+
+	// properties optionally returns custom properties to attach to the
+	// captured exception event. Returning nil attaches no extra properties.
+	// User-supplied keys override the built-in ones (e.g. "$lib", "distinct_id").
+	properties func(ctx context.Context, r slog.Record) Properties
 }
 
 func defaultCaptureConfig() captureConfig {
@@ -54,6 +59,9 @@ func defaultCaptureConfig() captureConfig {
 		descriptionExtractor: ErrorExtractor{
 			ErrorKeys: []string{"err", "error"},
 			Fallback:  "<no linked error>",
+		},
+		properties: func(ctx context.Context, r slog.Record) Properties {
+			return nil
 		},
 	}
 }
@@ -86,4 +94,12 @@ func WithStackTraceExtractor(extractor StackTraceExtractor) SlogOption {
 
 func WithDescriptionExtractor(extractor DescriptionExtractor) SlogOption {
 	return func(c *captureConfig) { c.descriptionExtractor = extractor }
+}
+
+func WithPropertiesFn(fn func(ctx context.Context, r slog.Record) Properties) SlogOption {
+	return func(c *captureConfig) {
+		if fn != nil {
+			c.properties = fn
+		}
+	}
 }
