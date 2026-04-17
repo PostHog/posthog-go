@@ -1,27 +1,3 @@
-### New Features
-
-* **Custom properties on exceptions**: `Exception` now has a `Properties` field for attaching arbitrary key/value metadata to a captured exception. Custom keys are flattened into the event's `properties` object alongside the built-in ones. Reserved keys (`$lib`, `$lib_version`, `distinct_id`, `$exception_list`, `$exception_fingerprint`, `$geoip_disable`, system context) are preserved — colliding custom keys are ignored.
-* **slog custom properties**: `NewSlogCaptureHandler` accepts a new `WithPropertiesFn` option that returns custom properties per `slog.Record`. A ready-made `SlogAttrsAsProperties` helper copies every slog attribute onto the event — the common case is a one-liner.
-
-```go
-client.Enqueue(posthog.Exception{
-    DistinctId: "user-123",
-    Timestamp:  time.Now(),
-    Properties: posthog.Properties{
-        "environment": "production",
-        "retry_count": 3,
-    },
-    ExceptionList: []posthog.ExceptionItem{
-        {Type: "Payment failed", Value: "Card declined"},
-    },
-})
-
-logger := slog.New(posthog.NewSlogCaptureHandler(baseHandler, client,
-    posthog.WithPropertiesFn(posthog.SlogAttrsAsProperties),
-))
-logger.Error("Payment failed", "payment_id", "pay_123", "amount", 99.99)
-```
-
 ## 1.11.3 - 2026-04-14
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.2...v1.11.3)
