@@ -132,38 +132,9 @@ func main() {
 }
 ```
 
-## Development
+## Contributing
 
-Make sure you have Go installed (macOS: `brew install go`, Linx / Windows: https://go.dev/doc/install).
-
-To build the project:
-
-```bash
-# Install dependencies
-make dependencies
-
-# Run tests and build
-make build
-
-# Just run tests
-make test
-```
-
-## Testing Locally
-
-You can run your Go app against a local build of `posthog-go` by making the following change to your `go.mod` file for whichever your app, e.g.
-
-```Go
-module example/posthog-go-app
-
-go 1.22.5
-
-require github.com/posthog/posthog-go v0.0.0-20240327112532-87b23fe11103
-
-require github.com/google/uuid v1.3.0 // indirect
-
-replace github.com/posthog/posthog-go => /path-to-your-local/posthog-go
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, build, and test instructions.
 
 ## Examples
 
