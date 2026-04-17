@@ -4,6 +4,16 @@ on:
   pull_request:
     types: [closed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: Version bump to apply
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: read
@@ -20,8 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     # Run when PR with 'release' label is merged to main, or when manually triggered
     if: |
-      github.event.pull_request.merged == true
-       && contains(github.event.pull_request.labels.*.name, 'release')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       contains(github.event.pull_request.labels.*.name, 'release'))
     outputs:
       should-release: ${{ steps.check.outputs.should-release }}
       bump-type: ${{ steps.check.outputs.bump-type }}
@@ -36,15 +48,24 @@ jobs:
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
+          HAS_BUMP_MAJOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-major') }}
+          HAS_BUMP_MINOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-minor') }}
+          HAS_BUMP_PATCH: ${{ contains(github.event.pull_request.labels.*.name, 'bump-patch') }}
         run: |
-          # Determine bump type from PR labels
-          if ${{ contains(github.event.pull_request.labels.*.name, 'bump-major') }}; then
+          # Determine bump type from workflow input or PR labels
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "bump-type=$INPUT_BUMP_TYPE" >> "$GITHUB_OUTPUT"
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+            echo "Manual release requested with bump type '$INPUT_BUMP_TYPE'"
+          elif [ "$HAS_BUMP_MAJOR" = "true" ]; then
             echo "bump-type=major" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif ${{ contains(github.event.pull_request.labels.*.name, 'bump-minor') }}; then
+          elif [ "$HAS_BUMP_MINOR" = "true" ]; then
             echo "bump-type=minor" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif ${{ contains(github.event.pull_request.labels.*.name, 'bump-patch') }}; then
+          elif [ "$HAS_BUMP_PATCH" = "true" ]; then
             echo "bump-type=patch" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
           fi
@@ -88,7 +109,7 @@ jobs:
         id: releaser
         uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
         with:
-          app-id: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_APP_ID }}
+          client-id: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_APP_ID }}
           private-key: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_PRIVATE_KEY }} # Secrets available only inside the 'Release' environment, requires approval from a maintainer
 
       - name: Checkout repository
@@ -141,10 +162,11 @@ jobs:
         if: steps.commit-version-bump.outputs.commit-hash != ''
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
           COMMIT_HASH: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          gh api "repos/${{ github.repository }}/git/refs" \
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
             -f "ref=refs/tags/v${NEW_VERSION}" \
             -f "sha=${COMMIT_HASH}"
 
@@ -192,8 +214,10 @@ jobs:
         id: check-rejection
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
-          RESPONSE=$(gh api /repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals)
+          RESPONSE=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals")
           REJECTED=$(echo "$RESPONSE" | jq '[.[] | select(.state == "rejected")] | length')
           if [ "$REJECTED" -gt 0 ]; then
             echo "was_rejected=true" >> "$GITHUB_OUTPUT"
