@@ -15,6 +15,22 @@ func TestConfigZeroValue(t *testing.T) {
 	}
 }
 
+func TestConfigValidateTrimsWhitespaceSensitiveFields(t *testing.T) {
+	c := Config{
+		Endpoint:       " \nhttps://app.posthog.com\t ",
+		PersonalApiKey: " \ttest-personal-key\n ",
+	}
+
+	require.NoError(t, c.Validate())
+	require.Equal(t, "https://app.posthog.com", c.Endpoint)
+	require.Equal(t, "test-personal-key", c.PersonalApiKey)
+}
+
+func TestMakeConfigDefaultsWhitespaceEndpoint(t *testing.T) {
+	got := makeConfig(Config{Endpoint: " \n\t "})
+	require.Equal(t, DefaultEndpoint, got.Endpoint)
+}
+
 func TestConfigInvalidInterval(t *testing.T) {
 	c := Config{
 		Interval: -1 * time.Second,

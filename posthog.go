@@ -187,6 +187,10 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	config = makeConfig(config)
+	apiKey = strings.TrimSpace(apiKey)
+	if len(apiKey) == 0 {
+		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; check your project API key")
+	}
 	reportedCache, err := lru.New[flagUser, struct{}](CACHE_DEFAULT_SIZE)
 	if err != nil && config.Logger != nil {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)

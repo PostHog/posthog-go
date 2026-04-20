@@ -3,6 +3,7 @@ package posthog
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -177,9 +178,16 @@ const (
 	DefaultMaxEnqueuedRequests = 1000
 )
 
+func (c *Config) normalize() {
+	c.Endpoint = strings.TrimSpace(c.Endpoint)
+	c.PersonalApiKey = strings.TrimSpace(c.PersonalApiKey)
+}
+
 // Validate verifies that fields that don't have zero-values are set to valid values,
 // returns an error describing the problem if a field was invalid.
 func (c *Config) Validate() error {
+	c.normalize()
+
 	if c.Interval < 0 {
 		return ConfigError{
 			Reason: "negative time intervals are not supported",
@@ -226,6 +234,8 @@ func (c *Config) Validate() error {
 // Given a config object as argument the function will set all zero-values to
 // their defaults and return the modified object.
 func makeConfig(c Config) Config {
+	c.normalize()
+
 	if len(c.Endpoint) == 0 {
 		c.Endpoint = DefaultEndpoint
 	}
