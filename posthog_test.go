@@ -85,6 +85,96 @@ func (l testLogger) Errorf(format string, args ...interface{}) {
 	}
 }
 
+func TestNewWithConfig_LogsErrorForBlankAPIKeyAfterTrim(t *testing.T) {
+	var logged string
+
+	client, err := NewWithConfig(" \n\t ", Config{
+		Logger: testLogger{
+			logf: t.Logf,
+			errorf: func(format string, args ...interface{}) {
+				logged = fmt.Sprintf(format, args...)
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	defer client.Close()
+
+	require.Contains(t, logged, "apiKey is empty after trimming whitespace")
+}
+
+func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
+	var (
+		mu                sync.Mutex
+		batchAPIKey       string
+		remoteConfigToken string
+		remoteConfigAuth  string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/flags/definitions"):
+			if got := r.Header.Get("Authorization"); got != "Bearer test-personal-key" {
+				t.Errorf("Expected Authorization header 'Bearer test-personal-key', got %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
+		case r.URL.Path == "/batch/":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("Failed to read batch body: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			var payload struct {
+				ApiKey string `json:"api_key"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Errorf("Failed to parse batch body: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			mu.Lock()
+			batchAPIKey = payload.ApiKey
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case strings.Contains(r.URL.Path, "/remote_config"):
+			mu.Lock()
+			remoteConfigToken = r.URL.Query().Get("token")
+			remoteConfigAuth = r.Header.Get("Authorization")
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`"ok"`))
+		default:
+			t.Errorf("Unexpected request to %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig(" \n test-api-key\t ", Config{
+		PersonalApiKey: " \ttest-personal-key\n ",
+		Endpoint:       " \n" + server.URL + "\t ",
+		BatchSize:      1,
+	})
+	require.NoError(t, err)
+
+	payload, err := client.GetRemoteConfigPayload("test-flag")
+	require.NoError(t, err)
+	require.Equal(t, "ok", payload)
+
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}))
+	require.NoError(t, client.Close())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, "test-api-key", batchAPIKey)
+	require.Equal(t, "test-api-key", remoteConfigToken)
+	require.Equal(t, "Bearer test-personal-key", remoteConfigAuth)
+}
+
 var _ Message = (*testErrorMessage)(nil)
 
 // Instances of this type are used to force message validation errors in unit

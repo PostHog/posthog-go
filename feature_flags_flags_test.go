@@ -882,3 +882,60 @@ func TestGetFeatureFlagResultPropagatesRemoteAPIErrors(t *testing.T) {
 		t.Errorf("Expected result to be nil, got: %v", result)
 	}
 }
+
+func TestWhitespacePersonalAPIKeySkipsPollerAndUsesRemoteFlags(t *testing.T) {
+	var mu sync.Mutex
+	definitionsCalls := 0
+	flagsCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/flags/definitions":
+			mu.Lock()
+			definitionsCalls++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
+		case "/flags", "/flags/":
+			mu.Lock()
+			flagsCalls++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"featureFlags": {"any-flag": true}, "featureFlagPayloads": {}}`))
+		default:
+			t.Errorf("Unexpected request to %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig("test-api-key", Config{
+		Endpoint:       server.URL,
+		PersonalApiKey: " \n\t ",
+	})
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	defer client.Close()
+
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+		Key:                   "any-flag",
+		DistinctId:            "some-distinct-id",
+		SendFeatureFlagEvents: Ptr(false),
+	})
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	if result == nil || !result.Enabled {
+		t.Fatalf("Expected enabled flag result, got: %#v", result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if definitionsCalls != 0 {
+		t.Fatalf("Expected poller to be skipped, got %d /flags/definitions call(s)", definitionsCalls)
+	}
+	if flagsCalls != 1 {
+		t.Fatalf("Expected one /flags call, got %d", flagsCalls)
+	}
+}
