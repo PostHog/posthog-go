@@ -82,7 +82,7 @@ func TestFlags(t *testing.T) {
 	for _, test := range tests {
 		test := test // Capture loop variable for Go 1.21 compatibility
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/flags") {
+			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				w.Write([]byte(fixture(test.fixture)))
 			}
 		}))
@@ -211,7 +211,7 @@ func TestFlags(t *testing.T) {
 
 func TestFeatureFlagCalledIncludesDeviceId(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/flags") {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v4.json")))
 		}
 	}))
@@ -366,7 +366,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 
 	t.Run("API error sets $feature_flag_error with status code", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/flags") {
+			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(`{"error": "Internal Server Error"}`))
 			}
@@ -432,7 +432,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 
 func TestFlagsV4(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/flags") {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v4.json")))
 		}
 	}))
@@ -553,7 +553,7 @@ func TestGetFeatureFlagResult(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/flags") {
+			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				w.Write([]byte(fixture(test.fixture)))
 			}
 		}))
@@ -729,7 +729,7 @@ func TestGetFeatureFlagResult(t *testing.T) {
 
 func TestGetFeatureFlagResultGetPayloadAs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/flags") {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v4.json")))
 		}
 	}))
@@ -778,7 +778,7 @@ func TestGetFeatureFlagResultGetPayloadAs(t *testing.T) {
 
 func TestGetFeatureFlagResultReturnsErrorForNonExistentFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			// Return empty flags - the requested flag won't exist
 			w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
 		}
@@ -812,7 +812,7 @@ func TestGetFeatureFlagResultReturnsErrorForNonExistentFlag(t *testing.T) {
 
 func TestGetFeatureFlagResultPropagatesLocalEvaluationErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation") {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
@@ -851,7 +851,7 @@ func TestGetFeatureFlagResultPropagatesLocalEvaluationErrors(t *testing.T) {
 
 func TestGetFeatureFlagResultPropagatesRemoteAPIErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/flags") {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"error": "Internal Server Error"}`))
 		}
