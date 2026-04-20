@@ -146,7 +146,7 @@ jobs:
           NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
         run: |
           release_date=$(date +%Y-%m-%d)
-          echo -e "## $NEW_VERSION - $release_date\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${CURRENT_VERSION}...v${NEW_VERSION})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
+          echo -e "## $NEW_VERSION - $release_date\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/${CURRENT_VERSION}...${NEW_VERSION})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 
       - name: Commit version bump
         id: commit-version-bump
@@ -167,7 +167,7 @@ jobs:
           COMMIT_HASH: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f "ref=refs/tags/v${NEW_VERSION}" \
+            -f "ref=refs/tags/${NEW_VERSION}" \
             -f "sha=${COMMIT_HASH}"
 
       - name: Create GitHub release
@@ -177,7 +177,7 @@ jobs:
           NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
         run: |
           CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
-          gh release create "v${NEW_VERSION}" --title "v${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
+          gh release create "${NEW_VERSION}" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
       # Notify in case of a failure
       - name: Send failure event to PostHog
@@ -191,7 +191,7 @@ jobs:
               "commitSha": "${{ github.sha }}",
               "jobStatus": "${{ job.status }}",
               "ref": "${{ github.ref }}",
-              "version": "v${{ steps.bump-version.outputs.new_version }}"
+              "version": "${{ steps.bump-version.outputs.new_version }}"
             }
 
       - name: Notify Slack - Failed
@@ -201,7 +201,7 @@ jobs:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
           thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to release `posthog-go@v${{ steps.bump-version.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+          message: "❌ Failed to release `posthog-go@${{ steps.bump-version.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
           emoji_reaction: "x"
 
   notify-rejected:
