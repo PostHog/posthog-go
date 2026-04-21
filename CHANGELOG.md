@@ -1,3 +1,7 @@
+## 1.12.3 - 2026-04-21
+
+* [Full Changelog](https://github.com/PostHog/posthog-go/compare/1.12.2...1.12.3)
+
 ## 1.12.2 - 2026-04-20
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/1.12.1...1.12.2)
