@@ -148,7 +148,7 @@ const (
 
 	// DefaultEndpoint constant sets the default endpoint to which client instances send
 	// messages if none was explicitly set.
-	DefaultEndpoint = "https://app.posthog.com"
+	DefaultEndpoint = "https://us.i.posthog.com"
 
 	// DefaultInterval constant sets the default flush interval used by client instances if
 	// none was explicitly set.
