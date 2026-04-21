@@ -162,7 +162,7 @@ go run *.go
 # Set your PostHog API keys and endpoint (optional)
 export POSTHOG_PROJECT_API_KEY="your-project-api-key"
 export POSTHOG_PERSONAL_API_KEY="your-personal-api-key"
-export POSTHOG_ENDPOINT="https://app.posthog.com"  # Optional, defaults to http://localhost:8000
+export POSTHOG_ENDPOINT="https://us.i.posthog.com"  # Optional, defaults to http://localhost:8000
 
 # Run all examples
 go run examples/*.go

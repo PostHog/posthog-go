@@ -63,7 +63,7 @@ The examples will automatically load configuration from a `.env` file if it exis
 # PostHog API Configuration
 POSTHOG_PROJECT_API_KEY=phc_your_project_api_key_here
 POSTHOG_PERSONAL_API_KEY=phx_your_personal_api_key_here
-POSTHOG_ENDPOINT=https://app.posthog.com
+POSTHOG_ENDPOINT=https://us.i.posthog.com
 ```
 
 **Note**: Environment variables take precedence over .env file values, so you can override specific settings when needed.
