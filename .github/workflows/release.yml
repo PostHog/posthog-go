@@ -1,8 +1,7 @@
 name: "Release"
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -18,22 +17,93 @@ on:
 permissions:
   contents: read
 
-# Concurrency control: only one release process can run at a time
-# This prevents race conditions if multiple PRs with 'release' label merge simultaneously
-concurrency:
-  group: release
-  cancel-in-progress: false
-
 jobs:
+  resolve-release-context:
+    name: Resolve release context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should-release: ${{ steps.resolve.outputs.should-release }}
+      bump-type: ${{ steps.resolve.outputs.bump-type }}
+    steps:
+      - name: Resolve release request
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: main
+          PUSH_SHA: ${{ github.sha }}
+          PUSH_HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
+        run: |
+          set -euo pipefail
+
+          SHOULD_RELEASE=false
+          BUMP_TYPE=""
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$CURRENT_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+              echo "::notice::Skipping release because workflow_dispatch must be run on $DEFAULT_BRANCH, got $CURRENT_REF."
+            else
+              BUMP_TYPE="$INPUT_BUMP_TYPE"
+              if [ -n "$BUMP_TYPE" ]; then
+                SHOULD_RELEASE=true
+                echo "✓ Manual release requested on $DEFAULT_BRANCH with bump type $BUMP_TYPE"
+              else
+                echo "::notice::Skipping manual release because no bump type was provided."
+              fi
+            fi
+
+            echo "should-release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+            echo "bump-type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "${PUSH_HEAD_COMMIT_MESSAGE:-}" == *"[version bump]"* || "${PUSH_HEAD_COMMIT_MESSAGE:-}" == "Bump version to "* || "${PUSH_HEAD_COMMIT_MESSAGE:-}" == "chore: Release v"* || "${PUSH_HEAD_COMMIT_MESSAGE:-}" == "chore: release "* ]]; then
+            echo "::notice::Skipping release for the automated version bump commit."
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
+            echo "bump-type=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PRS_JSON=$(gh api "repos/${{ github.repository }}/commits/$PUSH_SHA/pulls")
+          MATCHING_PR_JSON=$(echo "$PRS_JSON" | jq -c --arg branch "$DEFAULT_BRANCH" '[.[] | select(.merged_at != null and .base.ref == $branch and (.labels | map(.name) | index("release")))] | first // {}')
+          if [ "$MATCHING_PR_JSON" != "{}" ]; then
+            if echo "$MATCHING_PR_JSON" | jq -e '(.labels | map(.name) | index("bump-major")) != null' >/dev/null; then
+              BUMP_TYPE=major
+            elif echo "$MATCHING_PR_JSON" | jq -e '(.labels | map(.name) | index("bump-minor")) != null' >/dev/null; then
+              BUMP_TYPE=minor
+            elif echo "$MATCHING_PR_JSON" | jq -e '(.labels | map(.name) | index("bump-patch")) != null' >/dev/null; then
+              BUMP_TYPE=patch
+            fi
+          fi
+
+          if [ -z "$BUMP_TYPE" ]; then
+            ASSOCIATED_PRS=$(echo "$PRS_JSON" | jq -r '[.[].number | tostring] | join(", ")')
+            if [ -n "$ASSOCIATED_PRS" ]; then
+              echo "::notice::Skipping release because push $PUSH_SHA is associated with PR(s) [$ASSOCIATED_PRS], but none currently have the release label with a bump label."
+            else
+              echo "::notice::Skipping release because push $PUSH_SHA is not associated with a merged PR to $DEFAULT_BRANCH that has the release label and a bump label."
+            fi
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
+            echo "bump-type=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          RELEASE_PR=$(echo "$MATCHING_PR_JSON" | jq -r '"#\(.number)"')
+          echo "✓ Release requested by push $PUSH_SHA via $RELEASE_PR with bump type $BUMP_TYPE"
+          echo "should-release=true" >> "$GITHUB_OUTPUT"
+          echo "bump-type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
+
   check-release-label:
     name: Check for release label
+    needs: resolve-release-context
     runs-on: ubuntu-latest
     # Run when PR with 'release' label is merged to main, or when manually triggered
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.merged == true &&
-       contains(github.event.pull_request.labels.*.name, 'release'))
+    if: needs.resolve-release-context.outputs.should-release == 'true'
     outputs:
       should-release: ${{ steps.check.outputs.should-release }}
       bump-type: ${{ steps.check.outputs.bump-type }}
@@ -47,29 +117,15 @@ jobs:
       - name: Check release conditions
         id: check
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
-          HAS_BUMP_MAJOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-major') }}
-          HAS_BUMP_MINOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-minor') }}
-          HAS_BUMP_PATCH: ${{ contains(github.event.pull_request.labels.*.name, 'bump-patch') }}
+          BUMP_TYPE: ${{ needs.resolve-release-context.outputs.bump-type }}
         run: |
-          # Determine bump type from workflow input or PR labels
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "bump-type=$INPUT_BUMP_TYPE" >> "$GITHUB_OUTPUT"
+          if [ -n "$BUMP_TYPE" ]; then
+            echo "bump-type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
             echo "should-release=true" >> "$GITHUB_OUTPUT"
-            echo "Manual release requested with bump type '$INPUT_BUMP_TYPE'"
-          elif [ "$HAS_BUMP_MAJOR" = "true" ]; then
-            echo "bump-type=major" >> "$GITHUB_OUTPUT"
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif [ "$HAS_BUMP_MINOR" = "true" ]; then
-            echo "bump-type=minor" >> "$GITHUB_OUTPUT"
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif [ "$HAS_BUMP_PATCH" = "true" ]; then
-            echo "bump-type=patch" >> "$GITHUB_OUTPUT"
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
+            echo "Release requested with bump type $BUMP_TYPE"
+          else
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
           fi
-
   notify-approval-needed:
     name: Notify Slack - Approval Needed
     needs: check-release-label
@@ -84,11 +140,11 @@ jobs:
 
   release:
     name: Bump versions and release
-    needs: [check-release-label, notify-approval-needed]
+    needs: [resolve-release-context, check-release-label, notify-approval-needed]
     runs-on: ubuntu-latest
     # Use `always()` to ensure the job runs even if the check-release-label job fails
     # but still depend on it to be able to use `needs.notify-approval-needed.outputs.slack_ts`
-    if: always() && needs.check-release-label.outputs.should-release == 'true'
+    if: always() && needs.resolve-release-context.outputs.should-release == 'true' && needs.check-release-label.outputs.should-release == 'true'
     environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
     permissions:
       contents: write
