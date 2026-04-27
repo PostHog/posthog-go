@@ -124,6 +124,17 @@ type CaptureRequest struct {
 	Timestamp  *string                `json:"timestamp,omitempty"`
 }
 
+// FeatureFlagRequest represents /get_feature_flag endpoint request
+type FeatureFlagRequest struct {
+	Key              string                            `json:"key"`
+	DistinctID       string                            `json:"distinct_id"`
+	PersonProperties map[string]interface{}            `json:"person_properties,omitempty"`
+	Groups           map[string]interface{}            `json:"groups,omitempty"`
+	GroupProperties  map[string]map[string]interface{} `json:"group_properties,omitempty"`
+	DisableGeoIP     *bool                             `json:"disable_geoip,omitempty"`
+	ForceRemote      *bool                             `json:"force_remote,omitempty"`
+}
+
 // StateResponse represents /state endpoint response
 type StateResponse struct {
 	PendingEvents       int           `json:"pending_events"`
@@ -305,6 +316,91 @@ func stateHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, response)
 }
 
+func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
+	var req FeatureFlagRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if req.Key == "" {
+		jsonError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	if req.DistinctID == "" {
+		jsonError(w, http.StatusBadRequest, "distinct_id is required")
+		return
+	}
+
+	state.mu.Lock()
+	client := state.client
+	state.mu.Unlock()
+
+	if client == nil {
+		jsonError(w, http.StatusBadRequest, "SDK not initialized")
+		return
+	}
+
+	// force_remote defaults to true
+	forceRemote := true
+	if req.ForceRemote != nil {
+		forceRemote = *req.ForceRemote
+	}
+
+	// Note: posthog-go's DisableGeoIP is a client-level config (Config.DisableGeoIP),
+	// not a per-call option on FeatureFlagPayload. We accept the field on the request
+	// for compatibility with the harness contract but do not honor it per-call. The
+	// SDK default (when DisableGeoIP is nil) is to disable geoip on flag requests,
+	// which matches the test harness's expected `geoip_disable: true` assertion.
+	_ = req.DisableGeoIP
+
+	// Convert groups/properties to SDK types
+	var groups posthog.Groups
+	if req.Groups != nil {
+		groups = posthog.Groups(req.Groups)
+	}
+
+	var personProperties posthog.Properties
+	if req.PersonProperties != nil {
+		personProperties = posthog.Properties(req.PersonProperties)
+	}
+
+	var groupProperties map[string]posthog.Properties
+	if req.GroupProperties != nil {
+		groupProperties = make(map[string]posthog.Properties, len(req.GroupProperties))
+		for k, v := range req.GroupProperties {
+			groupProperties[k] = posthog.Properties(v)
+		}
+	}
+
+	value, err := client.GetFeatureFlag(posthog.FeatureFlagPayload{
+		Key:                 req.Key,
+		DistinctId:          req.DistinctID,
+		Groups:              groups,
+		PersonProperties:    personProperties,
+		GroupProperties:     groupProperties,
+		OnlyEvaluateLocally: !forceRemote,
+	})
+	if err != nil {
+		log.Printf("Error evaluating feature flag %s for %s: %v", req.Key, req.DistinctID, err)
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	log.Printf("Feature flag %s for %s: %v", req.Key, req.DistinctID, value)
+
+	jsonResponse(w, map[string]interface{}{
+		"success": true,
+		"value":   value,
+	})
+}
+
+func jsonError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 func resetHandler(w http.ResponseWriter, r *http.Request) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -336,6 +432,7 @@ func main() {
 	http.HandleFunc("/flush", flushHandler)
 	http.HandleFunc("/state", stateHandler)
 	http.HandleFunc("/reset", resetHandler)
+	http.HandleFunc("/get_feature_flag", featureFlagHandler)
 
 	log.Printf("Starting PostHog Go SDK adapter on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
