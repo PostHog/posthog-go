@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -383,7 +384,9 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		// Avoid logging user-controlled fields (req.Key, req.DistinctID) to prevent log injection.
-		log.Printf("Error evaluating feature flag: %v", err)
+		// The error message itself can wrap upstream user-controlled input (e.g. flag keys
+		// quoted in error strings), so strip CR/LF before logging to defang log injection.
+		log.Printf("Error evaluating feature flag: %s", sanitizeForLog(err.Error()))
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -395,6 +398,13 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"value":   value,
 	})
+}
+
+// sanitizeForLog strips CR/LF characters from a string before logging, so
+// user-controlled input (e.g. error strings that quote upstream-supplied flag
+// keys) cannot inject forged log entries via newline characters.
+func sanitizeForLog(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", " ")
 }
 
 func jsonError(w http.ResponseWriter, status int, msg string) {
