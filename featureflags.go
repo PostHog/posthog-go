@@ -2020,7 +2020,7 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 // This makes a request to the flags endpoint and returns the response.
 // This is used in fallback scenarios where we can't compute the flag locally.
 func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
-	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP)
+	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP, nil)
 }
 
 // getFeatureFlagVariantsLocalOnly evaluates all feature flags using only local evaluation
