@@ -204,6 +204,27 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	if groupProperties == nil {
 		groupProperties = map[string]Properties{}
 	}
+
+	// Auto-add distinct_id into person_properties (matches behavior of other PostHog
+	// server SDKs, e.g. posthog-python). Caller-supplied distinct_id in
+	// person_properties wins so existing overrides are preserved.
+	if _, ok := personProperties["distinct_id"]; !ok {
+		personProperties["distinct_id"] = distinctId
+	}
+
+	// Auto-add $group_key into each group's properties for groups that are present
+	// (matches posthog-python's _add_local_person_and_group_properties behavior).
+	for groupName, groupKey := range groups {
+		gp, exists := groupProperties[groupName]
+		if !exists || gp == nil {
+			gp = Properties{}
+		}
+		if _, ok := gp["$group_key"]; !ok {
+			gp["$group_key"] = groupKey
+		}
+		groupProperties[groupName] = gp
+	}
+
 	requestData := FlagsRequestData{
 		ApiKey:           d.apiKey,
 		DistinctId:       distinctId,

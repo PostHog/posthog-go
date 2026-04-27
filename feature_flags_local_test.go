@@ -88,14 +88,16 @@ func TestFlagGroup(t *testing.T) {
 				t.Errorf("Expected apiKey to be Csyjlnlun3OzyNJAafdlv, got %s", reqBody.ApiKey)
 			}
 
-			personPropertiesEquality := reflect.DeepEqual(reqBody.PersonProperties, Properties{"region": "Canada"})
+			// distinct_id is auto-merged into person_properties to match other PostHog SDKs.
+			personPropertiesEquality := reflect.DeepEqual(reqBody.PersonProperties, Properties{"region": "Canada", "distinct_id": "-"})
 			if !personPropertiesEquality {
-				t.Errorf("Expected personProperties to be map[region:Canada], got %s", reqBody.PersonProperties)
+				t.Errorf("Expected personProperties to be map[region:Canada distinct_id:-], got %s", reqBody.PersonProperties)
 			}
 
-			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": {"name": "Project Name 1"}})
+			// $group_key is auto-merged into each group's group_properties to match other PostHog SDKs.
+			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": {"name": "Project Name 1", "$group_key": "abc"}})
 			if !groupPropertiesEquality {
-				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1]], got %s", reqBody.GroupProperties)
+				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1 $group_key:abc]], got %s", reqBody.GroupProperties)
 			}
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
