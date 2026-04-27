@@ -382,12 +382,14 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		OnlyEvaluateLocally: !forceRemote,
 	})
 	if err != nil {
-		log.Printf("Error evaluating feature flag %s for %s: %v", req.Key, req.DistinctID, err)
+		// Avoid logging user-controlled fields (req.Key, req.DistinctID) to prevent log injection.
+		log.Printf("Error evaluating feature flag: %v", err)
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	log.Printf("Feature flag %s for %s: %v", req.Key, req.DistinctID, value)
+	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
+	log.Printf("Evaluated feature flag")
 
 	jsonResponse(w, map[string]interface{}{
 		"success": true,
