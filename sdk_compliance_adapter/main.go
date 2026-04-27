@@ -100,9 +100,10 @@ var state = &AdapterState{
 
 // HealthResponse represents /health endpoint response
 type HealthResponse struct {
-	SDKName        string `json:"sdk_name"`
-	SDKVersion     string `json:"sdk_version"`
-	AdapterVersion string `json:"adapter_version"`
+	SDKName        string   `json:"sdk_name"`
+	SDKVersion     string   `json:"sdk_version"`
+	AdapterVersion string   `json:"adapter_version"`
+	Capabilities   []string `json:"capabilities"`
 }
 
 // InitRequest represents /init endpoint request
@@ -143,6 +144,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		SDKName:        "posthog-go",
 		SDKVersion:     posthog.Version,
 		AdapterVersion: VERSION,
+		Capabilities:   []string{"capture_v0", "encoding_gzip"},
 	}
 	jsonResponse(w, response)
 }
