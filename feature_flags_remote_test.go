@@ -413,6 +413,59 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 			t.Errorf("Expected request body to NOT contain device_id when nil, got: %v", requestData.DeviceId)
 		}
 	})
+
+	t.Run("includes flag_keys_to_evaluate when fetching a single flag", func(t *testing.T) {
+		var rawBody []byte
+		var requestData FlagsRequestData
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rawBody, _ = io.ReadAll(r.Body)
+			if err := json.Unmarshal(rawBody, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
+			w.Write([]byte(`{"flags": {}, "requestId": "req-flag-keys"}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		c.getFeatureFlagFromRemote("signup-aa-test", "user-123", nil, nil, nil, nil)
+
+		if len(requestData.FlagKeysToEvaluate) != 1 || requestData.FlagKeysToEvaluate[0] != "signup-aa-test" {
+			t.Errorf("Expected flag_keys_to_evaluate to be [signup-aa-test], got: %v", requestData.FlagKeysToEvaluate)
+		}
+	})
+
+	t.Run("omits flag_keys_to_evaluate when fetching all flags", func(t *testing.T) {
+		var rawBody []byte
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rawBody, _ = io.ReadAll(r.Body)
+			w.Write([]byte(`{"flags": {}, "requestId": "req-all-flags"}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		_, _ = c.getAllFeatureFlagsFromRemote("user-123", nil, nil, nil, nil)
+
+		// flag_keys_to_evaluate should be omitted from the request body when not set,
+		// matching posthog-python's behavior of only populating it when callers ask
+		// for specific keys.
+		var raw map[string]interface{}
+		if err := json.Unmarshal(rawBody, &raw); err != nil {
+			t.Fatalf("Failed to parse raw request body: %v", err)
+		}
+		if _, present := raw["flag_keys_to_evaluate"]; present {
+			t.Errorf("Expected flag_keys_to_evaluate to be absent from request, got: %v", raw["flag_keys_to_evaluate"])
+		}
+	})
 }
 
 // mockNetError implements net.Error for testing

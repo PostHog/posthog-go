@@ -13,13 +13,14 @@ import (
 )
 
 type FlagsRequestData struct {
-	ApiKey           string                `json:"api_key"`
-	DistinctId       string                `json:"distinct_id"`
-	DeviceId         *string               `json:"device_id,omitempty"`
-	Groups           Groups                `json:"groups"`
-	PersonProperties Properties            `json:"person_properties"`
-	GroupProperties  map[string]Properties `json:"group_properties"`
-	DisableGeoIP     bool                  `json:"geoip_disable,omitempty"`
+	ApiKey             string                `json:"api_key"`
+	DistinctId         string                `json:"distinct_id"`
+	DeviceId           *string               `json:"device_id,omitempty"`
+	Groups             Groups                `json:"groups"`
+	PersonProperties   Properties            `json:"person_properties"`
+	GroupProperties    map[string]Properties `json:"group_properties"`
+	DisableGeoIP       bool                  `json:"geoip_disable,omitempty"`
+	FlagKeysToEvaluate []string              `json:"flag_keys_to_evaluate,omitempty"`
 }
 
 // FlagDetail represents a feature flag in v4 format
@@ -158,7 +159,7 @@ func (r *FlagsResponse) UnmarshalJSON(data []byte) error {
 // decider defines the interface for making flags requests
 type decider interface {
 	makeFlagsRequest(distinctId string, deviceId *string, groups Groups, personProperties Properties,
-		groupProperties map[string]Properties, disableGeoIP bool) (*FlagsResponse, error)
+		groupProperties map[string]Properties, disableGeoIP bool, flagKeysToEvaluate []string) (*FlagsResponse, error)
 }
 
 // flagsClient implements the decider interface
@@ -191,9 +192,11 @@ func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
 }
 
 // makeFlagsRequest makes a request to the flags endpoint and deserializes the response
-// into a FlagsResponse struct.
+// into a FlagsResponse struct. When flagKeysToEvaluate is non-empty, the request body
+// includes a flag_keys_to_evaluate field instructing the server to only evaluate those
+// flags; pass nil/empty to fetch all flags (matches posthog-python's behavior).
 func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, groups Groups, personProperties Properties,
-	groupProperties map[string]Properties, disableGeoIP bool) (*FlagsResponse, error) {
+	groupProperties map[string]Properties, disableGeoIP bool, flagKeysToEvaluate []string) (*FlagsResponse, error) {
 	// Ensure non-nil maps for JSON marshaling (nil marshals as "null", server expects "{}")
 	if groups == nil {
 		groups = Groups{}
@@ -226,13 +229,14 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	}
 
 	requestData := FlagsRequestData{
-		ApiKey:           d.apiKey,
-		DistinctId:       distinctId,
-		DeviceId:         deviceId,
-		Groups:           groups,
-		PersonProperties: personProperties,
-		GroupProperties:  groupProperties,
-		DisableGeoIP:     disableGeoIP,
+		ApiKey:             d.apiKey,
+		DistinctId:         distinctId,
+		DeviceId:           deviceId,
+		Groups:             groups,
+		PersonProperties:   personProperties,
+		GroupProperties:    groupProperties,
+		DisableGeoIP:       disableGeoIP,
+		FlagKeysToEvaluate: flagKeysToEvaluate,
 	}
 
 	requestDataBytes, err := json.Marshal(requestData)

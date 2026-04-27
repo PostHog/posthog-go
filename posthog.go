@@ -1165,7 +1165,8 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, deviceId, groups, personProperties, groupProperties)
 	}
 
-	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+	// getFeatureVariants returns all flags — leave flag_keys_to_evaluate unset.
+	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1239,7 +1240,9 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceI
 		Value: nil,
 	}
 
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
+	// Restrict the remote evaluation to the requested flag key — matches posthog-python's
+	// behavior of populating flag_keys_to_evaluate when a single flag is requested.
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP(), []string{key})
 
 	if err != nil {
 		result.Err = err
@@ -1277,7 +1280,8 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceI
 }
 
 func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
+	// No flag_keys_to_evaluate — fetch all flags.
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP(), nil)
 	if err != nil {
 		return nil, err
 	}

@@ -647,7 +647,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 
 	// Fall back to remote evaluation if local didn't produce a result
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		flagsResponse, remoteErr := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagsResponse, remoteErr := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties, []string{flagConfig.Key})
 		if remoteErr != nil {
 			return flagValueAndPayload{value: nil, err: remoteErr}
 		}
@@ -734,12 +734,14 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	}
 
 	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
+		// GetAllFlags fetches all flags — leave flag_keys_to_evaluate unset.
 		flagsResponse, err := poller.getFeatureFlagVariants(
 			flagConfig.DistinctId,
 			flagConfig.DeviceId,
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
+			nil,
 		)
 
 		if err != nil {
@@ -2019,8 +2021,10 @@ func (poller *FeatureFlagsPoller) shutdownPoller() {
 // a given distinctId, groups, personProperties, and groupProperties.
 // This makes a request to the flags endpoint and returns the response.
 // This is used in fallback scenarios where we can't compute the flag locally.
-func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
-	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP)
+// When flagKeysToEvaluate is non-empty, the server is asked to only evaluate those
+// keys; pass nil to fetch all flags.
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, flagKeysToEvaluate []string) (*FlagsResponse, error) {
+	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP, flagKeysToEvaluate)
 }
 
 // getFeatureFlagVariantsLocalOnly evaluates all feature flags using only local evaluation
@@ -2064,7 +2068,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
 	var result interface{} = false
 
-	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties, []string{key})
 
 	if variantErr != nil {
 		return false, variantErr
@@ -2079,7 +2083,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId s
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties, []string{key})
 	if err != nil {
 		return "", err
 	}
