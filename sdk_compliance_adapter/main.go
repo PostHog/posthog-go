@@ -333,6 +333,13 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sanitize user-controlled fields before they enter the SDK. The SDK
+	// logs flag keys downstream (e.g. featureflags.go's local-eval Warnf),
+	// which CodeQL flags as go/log-injection. Stripping CR/LF here breaks
+	// the data flow at the adapter boundary.
+	req.Key = sanitizeForLog(req.Key)
+	req.DistinctID = sanitizeForLog(req.DistinctID)
+
 	state.mu.Lock()
 	client := state.client
 	state.mu.Unlock()
