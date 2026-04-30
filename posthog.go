@@ -190,6 +190,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if len(apiKey) == 0 {
 		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; check your project API key")
+		return newNoopClient(config), nil
 	}
 	reportedCache, err := lru.New[flagUser, struct{}](CACHE_DEFAULT_SIZE)
 	if err != nil && config.Logger != nil {

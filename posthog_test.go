@@ -103,6 +103,57 @@ func TestNewWithConfig_LogsErrorForBlankAPIKeyAfterTrim(t *testing.T) {
 	require.Contains(t, logged, "apiKey is empty after trimming whitespace")
 }
 
+func TestNew_BlankAPIKeyReturnsNoopClient(t *testing.T) {
+	client := New(" \n\t ")
+	require.NotNil(t, client)
+
+	_, ok := client.(*noopClient)
+	require.True(t, ok)
+	require.NoError(t, client.Close())
+}
+
+func TestNewWithConfig_BlankAPIKeyReturnsNoopClientWithoutRequests(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	var successes atomic.Int64
+	var failures atomic.Int64
+	client, err := NewWithConfig(" \n\t ", Config{
+		Endpoint:       server.URL,
+		PersonalApiKey: "personal-api-key",
+		BatchSize:      1,
+		Interval:       time.Millisecond,
+		Callback: testCallback{
+			success: func(APIMessage) { successes.Add(1) },
+			failure: func(APIMessage, error) { failures.Add(1) },
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	_, ok := client.(*noopClient)
+	require.True(t, ok)
+
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}))
+	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
+	require.NoError(t, err)
+	require.Equal(t, false, isEnabled)
+	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "test-user"})
+	require.NoError(t, err)
+	require.Empty(t, allFlags)
+	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
+	require.NoError(t, err)
+	require.Empty(t, remoteConfigPayload)
+	require.NoError(t, client.Close())
+
+	require.Zero(t, requests.Load())
+	require.Zero(t, successes.Load())
+	require.Zero(t, failures.Load())
+}
+
 func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 	var (
 		mu                sync.Mutex
