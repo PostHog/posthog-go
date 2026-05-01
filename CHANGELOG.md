@@ -1,3 +1,15 @@
+## Unreleased
+
+### New Features
+
+* **`EvaluateFlags`**: New method on `Client` that returns a `FeatureFlagEvaluations` snapshot for a user using a single `/flags` request. The snapshot powers any number of `IsEnabled` / `GetFlag` / `GetFlagPayload` checks, fires deduped `$feature_flag_called` events with full v4 metadata (id, version, reason, request_id), and can be attached to a `Capture` event via the new `Capture.Flags` field to populate `$feature/<key>` and `$active_feature_flags` without another network call.
+* **`Capture.Flags`**: New optional field on `Capture` that accepts a `*FeatureFlagEvaluations` snapshot. Takes precedence over `SendFeatureFlags`, avoids a hidden `/flags` request per event, and lets caller-supplied `Properties` override the auto-generated `$feature/<key>` values on conflict.
+
+### Internal
+
+* Refactored the `$feature_flag_called` dedup logic into a shared helper so the existing single-flag path and the new snapshot path use identical semantics against the same per-distinct_id LRU cache.
+* `$feature_flag_called` events from the snapshot path combine response-level errors (`errors_while_computing_flags`, `quota_limited`) with per-flag errors (`flag_missing`) comma-joined in `$feature_flag_error`, matching the granularity of the legacy single-flag path.
+
 ## 1.12.4 - 2026-04-30
 
 * [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.12.3...v1.12.4)
