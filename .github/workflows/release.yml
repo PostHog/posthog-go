@@ -1,42 +1,27 @@
 name: "Release"
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
+    paths:
+      - '.changeset/*.md'
   workflow_dispatch:
-    inputs:
-      bump_type:
-        description: Version bump to apply
-        required: true
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
 
 permissions:
   contents: read
 
 # Concurrency control: only one release process can run at a time
-# This prevents race conditions if multiple PRs with 'release' label merge simultaneously
+# This prevents race conditions if multiple releasable changesets merge simultaneously
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  check-release-label:
-    name: Check for release label
+  check-changesets:
+    name: Check for changesets
     runs-on: ubuntu-latest
-    # Run when PR with 'release' label is merged to main, or when manually triggered
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.merged == true &&
-       contains(github.event.pull_request.labels.*.name, 'release'))
     outputs:
-      should-release: ${{ steps.check.outputs.should-release }}
-      bump-type: ${{ steps.check.outputs.bump-type }}
+      has-changesets: ${{ steps.check.outputs.has-changesets }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -44,36 +29,22 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Check release conditions
+      - name: Check for changesets
         id: check
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
-          HAS_BUMP_MAJOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-major') }}
-          HAS_BUMP_MINOR: ${{ contains(github.event.pull_request.labels.*.name, 'bump-minor') }}
-          HAS_BUMP_PATCH: ${{ contains(github.event.pull_request.labels.*.name, 'bump-patch') }}
         run: |
-          # Determine bump type from workflow input or PR labels
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "bump-type=$INPUT_BUMP_TYPE" >> "$GITHUB_OUTPUT"
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
-            echo "Manual release requested with bump type '$INPUT_BUMP_TYPE'"
-          elif [ "$HAS_BUMP_MAJOR" = "true" ]; then
-            echo "bump-type=major" >> "$GITHUB_OUTPUT"
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif [ "$HAS_BUMP_MINOR" = "true" ]; then
-            echo "bump-type=minor" >> "$GITHUB_OUTPUT"
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
-          elif [ "$HAS_BUMP_PATCH" = "true" ]; then
-            echo "bump-type=patch" >> "$GITHUB_OUTPUT"
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
+          changeset_count=$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | wc -l)
+          if [ "$changeset_count" -gt 0 ]; then
+            echo "has-changesets=true" >> "$GITHUB_OUTPUT"
+            echo "Found $changeset_count changeset(s), ready to release"
+          else
+            echo "has-changesets=false" >> "$GITHUB_OUTPUT"
+            echo "No changesets to release"
           fi
 
   notify-approval-needed:
     name: Notify Slack - Approval Needed
-    needs: check-release-label
-    if: needs.check-release-label.outputs.should-release == 'true'
+    needs: check-changesets
+    if: needs.check-changesets.outputs.has-changesets == 'true'
     uses: posthog/.github/.github/workflows/notify-approval-needed.yml@main
     with:
       slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
@@ -83,13 +54,11 @@ jobs:
       posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
 
   release:
-    name: Bump versions and release
-    needs: [check-release-label, notify-approval-needed]
+    name: Bump version and release
+    needs: [check-changesets, notify-approval-needed]
     runs-on: ubuntu-latest
-    # Use `always()` to ensure the job runs even if the check-release-label job fails
-    # but still depend on it to be able to use `needs.notify-approval-needed.outputs.slack_ts`
-    if: always() && needs.check-release-label.outputs.should-release == 'true'
-    environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
+    if: always() && needs.check-changesets.outputs.has-changesets == 'true'
+    environment: "Release"
     permissions:
       contents: write
       actions: write
@@ -104,13 +73,12 @@ jobs:
           thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
           message: "✅ Release approved! Version bump in progress..."
           emoji_reaction: "white_check_mark"
-
       - name: Get GitHub App token
         id: releaser
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_APP_ID }}
-          private-key: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_PRIVATE_KEY }} # Secrets available only inside the 'Release' environment, requires approval from a maintainer
+          private-key: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_PRIVATE_KEY }}
 
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -119,71 +87,59 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.releaser.outputs.token }}
 
-      - name: Bump version
-        id: bump-version
+      - name: Configure Git
         run: |
-          current_version=$(grep -oP 'const Version = "\K[^"]+' version.go)
-          IFS='.' read -ra version_parts <<< "$current_version"
-          major=${version_parts[0]}
-          minor=${version_parts[1]}
-          patch=${version_parts[2]}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ "${{ needs.check-release-label.outputs.bump-type }}" == "major" ]; then
-            new_version="$((major + 1)).0.0"
-          elif [ "${{ needs.check-release-label.outputs.bump-type }}" == "minor" ]; then
-            new_version="$major.$((minor + 1)).0"
-          else
-            new_version="$major.$minor.$((patch + 1))"
-          fi
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4
 
-          sed -i "s/const Version = \"$current_version\"/const Version = \"$new_version\"/" version.go
-          echo "current_version=$current_version" >> $GITHUB_OUTPUT
-          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
 
-      - name: Update CHANGELOG.md
-        env:
-          CURRENT_VERSION: ${{ steps.bump-version.outputs.current_version }}
-          NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply changesets and update version
+        id: apply-changesets
         run: |
-          release_date=$(date +%Y-%m-%d)
-          echo -e "## $NEW_VERSION - $release_date\n\n* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v${CURRENT_VERSION}...v${NEW_VERSION})\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
+          pnpm changeset version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          CURRENT_VERSION=$(grep -oP 'const Version = "\K[^"]+' version.go)
+          sed -i "s/const Version = \"${CURRENT_VERSION}\"/const Version = \"${NEW_VERSION}\"/" version.go
+          echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "New version: $NEW_VERSION"
 
       - name: Commit version bump
         id: commit-version-bump
-        uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
-        with:
-          commit_message: "chore: bump version to ${{ steps.bump-version.outputs.new_version }} [version bump]"
-          repo: ${{ github.repository }}
-          branch: main
         env:
-          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
-
-      - name: Create and push tag
-        if: steps.commit-version-bump.outputs.commit-hash != ''
-        env:
-          GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
-          COMMIT_HASH: ${{ steps.commit-version-bump.outputs.commit-hash }}
+          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
         run: |
-          # Go modules require semantic version tags to use a v prefix (for example, v1.2.3):
-          # https://go.dev/ref/mod#versions
-          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f "ref=refs/tags/v${NEW_VERSION}" \
-            -f "sha=${COMMIT_HASH}"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore: release v$NEW_VERSION [version bump] [skip ci]"
+            git push origin main
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create GitHub release
-        if: steps.commit-version-bump.outputs.commit-hash != ''
+        if: steps.commit-version-bump.outputs.committed == 'true'
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          NEW_VERSION: ${{ steps.bump-version.outputs.new_version }}
+          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
         run: |
           CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
-          gh release create "v${NEW_VERSION}" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
+          gh release create "v${NEW_VERSION}" --target main --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
-      # Notify in case of a failure
       - name: Send failure event to PostHog
-        if: ${{ failure() }}
+        if: failure()
         uses: PostHog/posthog-github-action@v1
         with:
           posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
@@ -193,17 +149,17 @@ jobs:
               "commitSha": "${{ github.sha }}",
               "jobStatus": "${{ job.status }}",
               "ref": "${{ github.ref }}",
-              "version": "${{ steps.bump-version.outputs.new_version }}"
+              "version": "${{ steps.apply-changesets.outputs.new-version }}"
             }
 
       - name: Notify Slack - Failed
-        if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
+        if: failure() && needs.notify-approval-needed.outputs.slack_ts != ''
         uses: posthog/.github/.github/actions/slack-thread-reply@main
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
           thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to release `posthog-go@${{ steps.bump-version.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+          message: "❌ Failed to release `posthog-go@${{ steps.apply-changesets.outputs.new-version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
           emoji_reaction: "x"
 
   notify-rejected:
@@ -240,7 +196,7 @@ jobs:
       - name: Notify Slack - Rejected
         if: steps.check-rejection.outputs.was_rejected == 'true'
         continue-on-error: true
-        uses: PostHog/.github/.github/actions/slack-thread-reply@main
+        uses: posthog/.github/.github/actions/slack-thread-reply@main
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}

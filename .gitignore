@@ -38,3 +38,4 @@ examples/.env
 
 # Macos
 .DS_Store
+node_modules/

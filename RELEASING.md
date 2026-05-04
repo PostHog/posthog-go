@@ -1,24 +1,45 @@
 # Releasing
 
-Releases are semi-automated via GitHub Actions. When a PR with the `release` and a version bump label is merged to `main`, the release workflow is triggered. You can also trigger the `Release` workflow manually from GitHub Actions and choose the bump type.
+This repository uses [Changesets](https://github.com/changesets/changesets) for version management and an automated GitHub Actions workflow for releases.
 
-You'll need an approval from a PostHog engineer. If you're an employee, you can see the request in the [#approvals-client-libraries](https://app.slack.com/client/TSS5W8YQZ/C0A3UEVDDNF) channel.
+## How to Release
 
-## Release Process
+### 1. Add a Changeset
 
-1. Either:
-   - **Create your PR** with the changes you want to release, add the `release` label, add exactly one version bump label (`bump-patch`, `bump-minor`, or `bump-major`), and **merge the PR** to `main`, or
-   - open the `Release` workflow in GitHub Actions, click **Run workflow**, and choose `patch`, `minor`, or `major`
+When making a change that should be released, add a changeset:
 
-Once the workflow is triggered, the following happens automatically:
+```bash
+pnpm changeset
+```
 
-1. A Slack notification is sent to the client libraries channel requesting approval
-2. A maintainer approves the release in the GitHub `Release` environment
-3. The version is bumped in `version.go` based on the version label (`patch`, `minor`, or `major`, extracted from the label)
-4. The `CHANGELOG.md` is updated with a link to the full changelog
-5. Changes are committed and pushed to `main`
-6. A git tag is created (e.g., `v1.8.0`)
-7. A GitHub release is created with the changelog content
-8. Slack is notified of the successful release
+This prompts you to select the version bump (`patch`, `minor`, or `major`) and write a short release summary. Commit the generated file in `.changeset/` with your pull request.
 
-Releases are installed directly from GitHub.
+### 2. Merge the Pull Request
+
+After review, merge the PR to `main`. No GitHub release label is required.
+
+A push to `main` that includes `.changeset/*.md` changes automatically starts the release workflow. The workflow then:
+
+1. Checks for pending changesets
+2. Notifies the client libraries team in Slack for approval
+3. Waits for approval from a maintainer via the GitHub `Release` environment
+4. The workflow applies Changesets, syncs `version.go`, creates a `vX.Y.Z` Git tag, and creates a GitHub Release.
+5. Notifies Slack when the release completes or fails
+
+### Manual Trigger
+
+You can also manually trigger the release workflow from the Actions tab with `workflow_dispatch`. Manual runs still require pending changesets.
+
+## Version Bumping
+
+Changesets determines the next version from the committed changeset files:
+
+- **patch**: bug fixes, documentation updates, and internal changes
+- **minor**: backwards-compatible features
+- **major**: breaking changes
+
+## Troubleshooting
+
+### No changesets found
+
+If the release workflow reports that no changesets were found, make sure your PR includes at least one releasable `.changeset/*.md` file.
