@@ -123,9 +123,10 @@ type FlagVariant struct {
 }
 
 type FeatureFlagCondition struct {
-	Properties        []FlagProperty `json:"properties"`
-	RolloutPercentage *float64       `json:"rollout_percentage"`
-	Variant           *string        `json:"variant"`
+	Properties                []FlagProperty `json:"properties"`
+	RolloutPercentage         *float64       `json:"rollout_percentage"`
+	Variant                   *string        `json:"variant"`
+	AggregationGroupTypeIndex *uint8         `json:"aggregation_group_type_index"`
 }
 
 type FlagProperty struct {
@@ -319,7 +320,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			evaluationCache[depFlagKey] = false
 		} else {
 			// Recursively evaluate the dependency
-			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache)
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil)
 			if err != nil {
 				// If we can't evaluate a dependency, store nil and propagate the error
 				evaluationCache[depFlagKey] = nil
@@ -535,6 +536,10 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
 	flag, err := poller.getFeatureFlag(flagConfig)
 
+	// Make sure person_properties contains distinct_id so /flags request payloads
+	// have it under person_properties (matches the batch path and what server expects).
+	personProps := mergeDistinctIDIntoProperties(flagConfig.PersonProperties, flagConfig.DistinctId)
+
 	var result interface{}
 	locallyEvaluated := false
 
@@ -544,7 +549,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.DistinctId,
 			flagConfig.DeviceId,
 			flagConfig.Groups,
-			flagConfig.PersonProperties,
+			personProps,
 			flagConfig.GroupProperties,
 			poller.getCohorts(),
 		)
@@ -556,13 +561,28 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, personProps, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, locallyEvaluated, err
 		}
 	}
 
 	return result, locallyEvaluated, err
+}
+
+// mergeDistinctIDIntoProperties returns a copy of properties with distinct_id added
+// (if not already present). Used so /flags request payloads always carry distinct_id
+// inside person_properties as well as at the top level.
+func mergeDistinctIDIntoProperties(properties Properties, distinctID string) Properties {
+	if _, ok := properties["distinct_id"]; ok {
+		return properties
+	}
+	merged := make(Properties, len(properties)+1)
+	merged["distinct_id"] = distinctID
+	for k, v := range properties {
+		merged[k] = v
+	}
+	return merged
 }
 
 func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
@@ -701,15 +721,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 
 	// Pre-merge distinct_id into person properties once for the entire batch,
 	// instead of copying the map per-flag inside computeFlagLocally.
-	personProps := flagConfig.PersonProperties
-	if _, ok := personProps["distinct_id"]; !ok {
-		merged := make(Properties, len(personProps)+1)
-		merged["distinct_id"] = flagConfig.DistinctId
-		for k, v := range personProps {
-			merged[k] = v
-		}
-		personProps = merged
-	}
+	personProps := mergeDistinctIDIntoProperties(flagConfig.PersonProperties, flagConfig.DistinctId)
 
 	if len(featureFlags) == 0 {
 		fallbackToDecide = true
@@ -800,7 +812,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache)
+		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties)
 	} else {
 		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
@@ -818,7 +830,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 				}
 			}
 		}
-		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache)
+		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties)
 	}
 }
 
@@ -877,13 +889,58 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
+	groups Groups,
+	groupProperties map[string]Properties,
 ) (interface{}, error) {
 	conditions := flag.Filters.Groups
 	bucketingId := getBucketingID(flag, distinctId, deviceId)
+	flagAggregation := flag.Filters.AggregationGroupTypeIndex
+	groupTypeMapping := poller.getGroups()
 	isInconclusive := false
 
 	for _, condition := range conditions {
-		isMatch, err := poller.isConditionMatch(flag, distinctId, bucketingId, deviceId, condition, properties, cohorts, flagsByKey, evaluationCache)
+		// Per-condition aggregation overrides only when the condition explicitly
+		// sets its own AggregationGroupTypeIndex that differs from the flag level
+		// (mixed targeting). When absent, fall back to the flag-level aggregation
+		// so existing pure person and pure group flags keep their original behavior.
+		conditionAggregation := condition.AggregationGroupTypeIndex
+		if conditionAggregation == nil {
+			conditionAggregation = flagAggregation
+		}
+
+		effectiveProperties := properties
+		effectiveBucketingId := bucketingId
+
+		// Mixed-override path: condition-level aggregation differs from flag-level.
+		// This assumes flag-level aggregation is nil for mixed flags.
+		if !uint8PtrEqual(conditionAggregation, flagAggregation) {
+			if conditionAggregation != nil {
+				groupType, exists := groupTypeMapping[fmt.Sprintf("%d", *conditionAggregation)]
+				if !exists {
+					continue
+				}
+				groupKey, hasGroup := groups[groupType]
+				if !hasGroup {
+					continue
+				}
+				focusedGroupProperties, hasProps := groupProperties[groupType]
+				if !hasProps {
+					isInconclusive = true
+					continue
+				}
+				groupKeyStr, ok := groupKey.(string)
+				if !ok {
+					continue
+				}
+				if _, exists := focusedGroupProperties["$group_key"]; !exists {
+					focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
+				}
+				effectiveProperties = focusedGroupProperties
+				effectiveBucketingId = groupKeyStr
+			}
+		}
+
+		isMatch, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
@@ -907,7 +964,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil && containsVariant(multivariates.Variants, *variantOverride) {
 				return *variantOverride, nil
 			} else {
-				return getMatchingVariant(flag, bucketingId), nil
+				return getMatchingVariant(flag, effectiveBucketingId), nil
 			}
 		}
 	}
@@ -917,6 +974,13 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	}
 
 	return false, nil
+}
+
+func uint8PtrEqual(a, b *uint8) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func (poller *FeatureFlagsPoller) isConditionMatch(
