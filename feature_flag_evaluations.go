@@ -206,6 +206,10 @@ func (e *FeatureFlagEvaluations) eventProperties() Properties {
 // snapshot bound to an empty distinct_id is silently dropped — those events
 // would be useless and would pollute analytics with empty distinct_ids.
 func (e *FeatureFlagEvaluations) recordAccess(key string) {
+	if e.distinctId == "" {
+		return
+	}
+
 	e.mu.Lock()
 	if e.accessed == nil {
 		e.accessed = make(map[string]struct{})
@@ -214,9 +218,6 @@ func (e *FeatureFlagEvaluations) recordAccess(key string) {
 	e.accessed[key] = struct{}{}
 	e.mu.Unlock()
 
-	if e.distinctId == "" {
-		return
-	}
 	if e.host.captureFlagCalledIfNeeded == nil {
 		return
 	}

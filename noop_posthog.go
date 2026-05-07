@@ -6,6 +6,14 @@ type noopClient struct {
 	Config
 }
 
+var (
+	emptyFlagValues            = map[string]interface{}{}
+	emptyFeatureFlags          = []FeatureFlag{}
+	emptyEvaluatedFlagRecords  = map[string]evaluatedFlagRecord{}
+	noopFeatureFlagResult      = &FeatureFlagResult{Enabled: false}
+	noopFeatureFlagEvaluations = &FeatureFlagEvaluations{flags: emptyEvaluatedFlagRecords}
+)
+
 func newNoopClient(config Config) Client {
 	return &noopClient{Config: config}
 }
@@ -22,8 +30,8 @@ func (c *noopClient) GetFeatureFlag(FeatureFlagPayload) (interface{}, error) {
 	return false, nil
 }
 
-func (c *noopClient) GetFeatureFlagResult(flagConfig FeatureFlagPayload) (*FeatureFlagResult, error) {
-	return &FeatureFlagResult{Key: flagConfig.Key, Enabled: false}, nil
+func (c *noopClient) GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error) {
+	return noopFeatureFlagResult, nil
 }
 
 func (c *noopClient) GetFeatureFlagPayload(FeatureFlagPayload) (string, error) {
@@ -35,17 +43,11 @@ func (c *noopClient) GetRemoteConfigPayload(string) (string, error) {
 }
 
 func (c *noopClient) GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+	return emptyFlagValues, nil
 }
 
-func (c *noopClient) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
-	return &FeatureFlagEvaluations{
-		distinctId: payload.DistinctId,
-		deviceId:   payload.DeviceId,
-		groups:     payload.Groups,
-		flags:      map[string]evaluatedFlagRecord{},
-		accessed:   map[string]struct{}{},
-	}, nil
+func (c *noopClient) EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
+	return noopFeatureFlagEvaluations, nil
 }
 
 func (c *noopClient) ReloadFeatureFlags() error {
@@ -53,7 +55,7 @@ func (c *noopClient) ReloadFeatureFlags() error {
 }
 
 func (c *noopClient) GetFeatureFlags() ([]FeatureFlag, error) {
-	return []FeatureFlag{}, nil
+	return emptyFeatureFlags, nil
 }
 
 func (c *noopClient) Close() error {

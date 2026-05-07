@@ -527,7 +527,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	}
 	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyNoop("GetFeatureFlagResult")
-		return &FeatureFlagResult{Key: flagConfig.Key, Enabled: false}, nil
+		return noopFeatureFlagResult, nil
 	}
 
 	var flagValue interface{}
@@ -689,7 +689,7 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	if c.featureFlagsPoller == nil {
 		c.warnPersonalAPIKeyNoop("GetFeatureFlags")
-		return []FeatureFlag{}, nil
+		return emptyFeatureFlags, nil
 	}
 	return c.featureFlagsPoller.GetFeatureFlags()
 }
@@ -716,7 +716,7 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 	}
 	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyNoop("GetAllFlags")
-		return map[string]interface{}{}, nil
+		return emptyFlagValues, nil
 	}
 
 	var flagsValue map[string]interface{}
@@ -765,12 +765,7 @@ func (c *client) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvalua
 
 	if payload.DistinctId == "" {
 		c.Warnf("EvaluateFlags called without a DistinctId — returning an empty snapshot")
-		return &FeatureFlagEvaluations{
-			host:       host,
-			distinctId: "",
-			flags:      map[string]evaluatedFlagRecord{},
-			accessed:   map[string]struct{}{},
-		}, nil
+		return noopFeatureFlagEvaluations, nil
 	}
 
 	if payload.Groups == nil {
@@ -796,14 +791,7 @@ func (c *client) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvalua
 		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, payload)
 	} else if payload.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyNoop("EvaluateFlags")
-		return &FeatureFlagEvaluations{
-			host:       host,
-			distinctId: payload.DistinctId,
-			deviceId:   payload.DeviceId,
-			groups:     payload.Groups,
-			flags:      records,
-			accessed:   map[string]struct{}{},
-		}, nil
+		return noopFeatureFlagEvaluations, nil
 	}
 
 	var requestId string
@@ -1430,7 +1418,7 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups, personProp
 func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties, options *SendFeatureFlagsOptions) (map[string]interface{}, error) {
 	if c.featureFlagsPoller == nil {
 		c.warnPersonalAPIKeyNoop("Capture.SendFeatureFlags")
-		return map[string]interface{}{}, nil
+		return emptyFlagValues, nil
 	}
 
 	var deviceId *string
@@ -1566,7 +1554,7 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 	}
 
 	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return map[string]interface{}{}, nil
+		return emptyFlagValues, nil
 	}
 
 	return flagsResponse.FeatureFlags, nil
