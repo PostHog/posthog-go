@@ -83,6 +83,13 @@ type Capture struct {
 	Properties       Properties
 	Groups           Groups
 	SendFeatureFlags SendFeatureFlagsValue
+	// Flags, when set, attaches $feature/<key> and $active_feature_flags
+	// properties from a snapshot returned by Client.EvaluateFlags. It is
+	// preferred over SendFeatureFlags: the snapshot guarantees the event
+	// carries the exact values the application branched on and avoids a
+	// hidden /flags request on every capture. Flags takes precedence when
+	// both are set.
+	Flags *FeatureFlagEvaluations
 }
 
 func (msg Capture) internal() {

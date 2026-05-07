@@ -16,7 +16,6 @@
 
 ### If releasing new changes
 
-- [ ] Added the `release` label to the PR
-- [ ] Added a version bump label: `bump-patch`, `bump-minor`, or `bump-major`
+- [ ] Ran `pnpm changeset` to generate a changeset file
 
 <!-- For more details check RELEASING.md -->

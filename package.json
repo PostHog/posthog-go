@@ -1,0 +1,13 @@
+{
+  "name": "posthog-go",
+  "version": "1.12.3",
+  "private": true,
+  "description": "Release metadata and changesets for the PostHog Go SDK",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "changeset": "changeset"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.30.0"
+  }
+}
