@@ -1284,25 +1284,33 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; EvaluateFlags requires a PersonalApiKey.")
 }
 
-func TestFeatureFlagPublicMethodsReturnErrNoDistinctID(t *testing.T) {
+func TestFeatureFlagPublicMethodsKeepDistinctIDConfigError(t *testing.T) {
 	client, err := NewWithConfig("test-api-key", Config{})
 	require.NoError(t, err)
 	defer client.Close()
 
 	_, err = client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag"})
-	require.ErrorIs(t, err, ErrNoDistinctID)
+	assertDistinctIDConfigError(t, err)
 
 	_, err = client.GetFeatureFlag(FeatureFlagPayload{Key: "test-flag"})
-	require.ErrorIs(t, err, ErrNoDistinctID)
+	assertDistinctIDConfigError(t, err)
 
 	_, err = client.GetFeatureFlagResult(FeatureFlagPayload{Key: "test-flag"})
-	require.ErrorIs(t, err, ErrNoDistinctID)
+	assertDistinctIDConfigError(t, err)
 
 	_, err = client.GetFeatureFlagPayload(FeatureFlagPayload{Key: "test-flag"})
-	require.ErrorIs(t, err, ErrNoDistinctID)
+	assertDistinctIDConfigError(t, err)
 
 	_, err = client.GetAllFlags(FeatureFlagPayloadNoKey{})
-	require.ErrorIs(t, err, ErrNoDistinctID)
+	assertDistinctIDConfigError(t, err)
+}
+
+func assertDistinctIDConfigError(t *testing.T, err error) {
+	t.Helper()
+	var configErr ConfigError
+	require.ErrorAs(t, err, &configErr)
+	require.Equal(t, "DistinctId required", configErr.Reason)
+	require.Equal(t, "Distinct Id", configErr.Field)
 }
 
 func TestIsFeatureEnabled(t *testing.T) {

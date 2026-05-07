@@ -462,6 +462,10 @@ func (c *client) Enqueue(msg Message) (err error) {
 }
 
 func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
+	if err := flagConfig.validate(); err != nil {
+		return false, err
+	}
+
 	result, err := c.GetFeatureFlag(flagConfig)
 	if err != nil {
 		return nil, err
@@ -522,9 +526,6 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		return nil, err
 	}
 
-	if flagConfig.DistinctId == "" {
-		return nil, ErrNoDistinctID
-	}
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
 	}
@@ -714,9 +715,6 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 		return nil, err
 	}
 
-	if flagConfig.DistinctId == "" {
-		return nil, ErrNoDistinctID
-	}
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
 	}
