@@ -1,60 +1,66 @@
 ## Unreleased
 
+## 1.12.4
+
+### Patch Changes
+
+- e9436fa: Return ErrSDKDisabled from no-op clients when the project API key is missing, return ErrNoPersonalAPIKey before making requests for Personal API key dependent methods when no Personal API key is configured, and return ErrNoDistinctID from EvaluateFlags when distinct_id is missing.
+
 ### New Features
 
-* **`EvaluateFlags`**: New method on `Client` that returns a `FeatureFlagEvaluations` snapshot for a user using a single `/flags` request. The snapshot powers any number of `IsEnabled` / `GetFlag` / `GetFlagPayload` checks, fires deduped `$feature_flag_called` events with full v4 metadata (id, version, reason, request_id), and can be attached to a `Capture` event via the new `Capture.Flags` field to populate `$feature/<key>` and `$active_feature_flags` without another network call.
-* **`Capture.Flags`**: New optional field on `Capture` that accepts a `*FeatureFlagEvaluations` snapshot. Takes precedence over `SendFeatureFlags`, avoids a hidden `/flags` request per event, and lets caller-supplied `Properties` override the auto-generated `$feature/<key>` values on conflict.
+- **`EvaluateFlags`**: New method on `Client` that returns a `FeatureFlagEvaluations` snapshot for a user using a single `/flags` request. The snapshot powers any number of `IsEnabled` / `GetFlag` / `GetFlagPayload` checks, fires deduped `$feature_flag_called` events with full v4 metadata (id, version, reason, request_id), and can be attached to a `Capture` event via the new `Capture.Flags` field to populate `$feature/<key>` and `$active_feature_flags` without another network call.
+- **`Capture.Flags`**: New optional field on `Capture` that accepts a `*FeatureFlagEvaluations` snapshot. Takes precedence over `SendFeatureFlags`, avoids a hidden `/flags` request per event, and lets caller-supplied `Properties` override the auto-generated `$feature/<key>` values on conflict.
 
 ### Internal
 
-* Refactored the `$feature_flag_called` dedup logic into a shared helper so the existing single-flag path and the new snapshot path use identical semantics against the same per-distinct_id LRU cache.
-* `$feature_flag_called` events from the snapshot path combine response-level errors (`errors_while_computing_flags`, `quota_limited`) with per-flag errors (`flag_missing`) comma-joined in `$feature_flag_error`, matching the granularity of the legacy single-flag path.
+- Refactored the `$feature_flag_called` dedup logic into a shared helper so the existing single-flag path and the new snapshot path use identical semantics against the same per-distinct_id LRU cache.
+- `$feature_flag_called` events from the snapshot path combine response-level errors (`errors_while_computing_flags`, `quota_limited`) with per-flag errors (`flag_missing`) comma-joined in `$feature_flag_error`, matching the granularity of the legacy single-flag path.
 
 ## 1.12.4 - 2026-04-30
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.12.3...v1.12.4)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.12.3...v1.12.4)
 
 ## 1.12.3 - 2026-04-21
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/1.12.2...1.12.3)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/1.12.2...1.12.3)
 
 ## 1.12.2 - 2026-04-20
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/1.12.1...1.12.2)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/1.12.1...1.12.2)
 
 ## 1.12.1 - 2026-04-20
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.12.0...v1.12.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.12.0...v1.12.1)
 
 ## 1.12.0 - 2026-04-20
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.3...v1.12.0)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.3...v1.12.0)
 
 ## 1.11.3 - 2026-04-14
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.2...v1.11.3)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.2...v1.11.3)
 
-* Added `locally_evaluated` property to `$feature_flag_called` events, indicating whether the flag was evaluated locally or via the remote `/flags` endpoint.
+- Added `locally_evaluated` property to `$feature_flag_called` events, indicating whether the flag was evaluated locally or via the remote `/flags` endpoint.
 
 ## 1.11.2 - 2026-03-26
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.1...v1.11.2)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.1...v1.11.2)
 
 ## 1.11.1 - 2026-03-11
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.0...v1.11.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.11.0...v1.11.1)
 
 ## 1.10.0 - 2026-02-04
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.9.1...v1.10.0)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.9.1...v1.10.0)
 
 ### New Features
 
-* **`GetFeatureFlagResult`**: New method that returns both the flag value and payload in a single call, while properly tracking feature flag usage via `$feature_flag_called` events.
+- **`GetFeatureFlagResult`**: New method that returns both the flag value and payload in a single call, while properly tracking feature flag usage via `$feature_flag_called` events.
 
 ### Deprecations
 
-* **`GetFeatureFlagPayload`**: Deprecated in favor of `GetFeatureFlagResult`. The new method provides better tracking and a more convenient API.
+- **`GetFeatureFlagPayload`**: Deprecated in favor of `GetFeatureFlagResult`. The new method provides better tracking and a more convenient API.
 
 ### Migration Guide
 
@@ -91,284 +97,284 @@ if result.Enabled {
 
 ## 1.9.1 - 2026-01-21
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.9.0...v1.9.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.9.0...v1.9.1)
 
 ## 1.9.0 - 2026-01-13
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.8.2...v1.9.0)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.8.2...v1.9.0)
 
 ## 1.8.2
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.8.1...v1.8.2)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.8.1...v1.8.2)
 
 ## 1.8.1
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.8.0...v1.8.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.8.0...v1.8.1)
 
 ## 1.8.0
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.7.0...v1.8.0)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.7.0...v1.8.0)
 
 # 1.7.0
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.13...v1.7.0)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.13...v1.7.0)
 
 ## 1.6.13
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.12...v1.6.13)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.12...v1.6.13)
 
 ## 1.6.12
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.11...v1.6.12)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.11...v1.6.12)
 
 ## 1.6.11
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.10...v1.6.11)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.10...v1.6.11)
 
 ## 1.6.10
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.9...v1.6.10)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.9...v1.6.10)
 
 ## 1.6.9
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.8...v1.6.9)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.8...v1.6.9)
 
 ## 1.6.8
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.7...v1.6.8)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.7...v1.6.8)
 
 ## 1.6.7
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.6...v1.6.7)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.6...v1.6.7)
 
 ## 1.6.6
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.5...v1.6.6)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.5...v1.6.6)
 
 ## 1.6.5
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.4...v1.6.5)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.4...v1.6.5)
 
 ## 1.6.4
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.3...v1.6.4)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.3...v1.6.4)
 
 ## 1.6.3
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.2...v1.6.3)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.2...v1.6.3)
 
 ## 1.6.2
 
-* Fix: Pass project API key in remote_config requests
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.1...v1.6.2)
+- Fix: Pass project API key in remote_config requests
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.1...v1.6.2)
 
 ## 1.6.1
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.0...v1.6.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.6.0...v1.6.1)
 
 ## 1.5.15
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.14...v1.5.15)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.14...v1.5.15)
 
 ## 1.5.14
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.13...v1.5.14)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.13...v1.5.14)
 
 ## 1.5.13
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.12...v1.5.13)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.12...v1.5.13)
 
 ## 1.5.12
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.11...v1.5.12)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.11...v1.5.12)
 
 ## 1.5.11
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.10...v1.5.11)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.10...v1.5.11)
 
 ## 1.5.10
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.9...v1.5.10)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.9...v1.5.10)
 
 ## 1.5.9
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.8...v1.5.9)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.8...v1.5.9)
 
 ## 1.5.8
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.7...v1.5.8)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.7...v1.5.8)
 
 ## 1.5.7
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.6...v1.5.7)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.6...v1.5.7)
 
 ## 1.5.6
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.5...v1.5.6)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.5...v1.5.6)
 
 ## 1.5.5
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.4...v1.5.5)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.4...v1.5.5)
 
 ## 1.5.4
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.3...v1.5.4)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.3...v1.5.4)
 
 ## 1.5.3
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.2...v1.5.3)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.2...v1.5.3)
 
 ## 1.5.2
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.1...v1.5.2)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.1...v1.5.2)
 
 ## 1.5.1
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.0...v1.5.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.5.0...v1.5.1)
 
 ## 1.4.10
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.9...v1.4.10)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.9...v1.4.10)
 
 ## 1.4.9
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.8...v1.4.9)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.8...v1.4.9)
 
 ## 1.4.8
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.7...v1.4.8)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.7...v1.4.8)
 
 ## 1.4.7
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.6...v1.4.7)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.6...v1.4.7)
 
 ## 1.4.6
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.5...v1.4.6)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.5...v1.4.6)
 
 ## 1.4.5
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.4...v1.4.5)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.4...v1.4.5)
 
 ## 1.4.4
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.3...v1.4.4)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.3...v1.4.4)
 
 ## 1.4.3
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.2...v1.4.3)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.2...v1.4.3)
 
 ## 1.4.2
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.1...v1.4.2)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.1...v1.4.2)
 
 ## 1.4.1
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.0...v1.4.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.4.0...v1.4.1)
 
 ## 1.4.0
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.3...v1.4.0)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.3...v1.4.0)
 
 ## 1.3.3
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.2...v1.3.3)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.2...v1.3.3)
 
 ## 1.3.2
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.1...v1.3.2)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.1...v1.3.2)
 
 ## 1.3.1
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.0...v1.3.1)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.3.0...v1.3.1)
 
 ## 1.2.24
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.23...v1.2.24)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.23...v1.2.24)
 
 ## 1.2.23
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.22...v1.2.23)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.22...v1.2.23)
 
 ## 1.2.22
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.21...v1.2.22)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.21...v1.2.22)
 
 ## 1.2.21
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.20...v1.2.21)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.20...v1.2.21)
 
 ## 1.2.20
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.19...v1.2.20)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.19...v1.2.20)
 
 ## 1.2.19
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.18...v1.2.19)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.18...v1.2.19)
 
 ## 1.2.18
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.17...v1.2.18)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.17...v1.2.18)
 
 ## 1.2.17
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.16...v1.2.17)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.16...v1.2.17)
 
 ## 1.2.16
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.15...v1.2.16)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.15...v1.2.16)
 
 ## 1.2.15
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.14...v1.2.15)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.14...v1.2.15)
 
 ## 1.2.14
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.13...v1.2.14)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.13...v1.2.14)
 
 ## 1.2.13
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.12...v1.2.13)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v1.2.12...v1.2.13)
 
 ## 1.2.12
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.12)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.12)
 
 ## 1.2.11
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.11)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.11)
 
 ## 1.2.10
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.10)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.10)
 
 ## 1.2.9
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.9)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.9)
 
 ## 1.2.8
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.8)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.8)
 
 ## 1.2.7
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.7)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.7)
 
 ## 1.2.6
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.6)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.6)
 
 ## 1.2.5
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.5)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.5)
 
 ## 1.2.4
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.4)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.4)
 
 ## 1.2.3
 
-* [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.3)
+- [Full Changelog](https://github.com/PostHog/posthog-go/compare/v...v1.2.3)
 
 # Changelog
 
@@ -379,7 +385,7 @@ if result.Enabled {
 
 ## 1.2.1 - 2024-08-07
 
-1. The client will fall back to the `/decide` endpoint when evaluating feature flags if the user does not wish to provide a PersonalApiKey.  This fixes an issue where users were unable to use this SDK without providing a PersonalApiKey.  This fallback will make feature flag usage less performant, but will save users money by not making them pay for public API access.
+1. The client will fall back to the `/decide` endpoint when evaluating feature flags if the user does not wish to provide a PersonalApiKey. This fixes an issue where users were unable to use this SDK without providing a PersonalApiKey. This fallback will make feature flag usage less performant, but will save users money by not making them pay for public API access.
 
 ## 1.2.0 - 2022-08-15
 
@@ -388,5 +394,5 @@ Breaking changes:
 1. Minimum PostHog version requirement: 1.38
 2. Local Evaluation added to IsFeatureEnabled and GetFeatureFlag. These functions now accept person and group properties arguments. The arguments will be used to locally evaluate relevant feature flags.
 3. Feature flag functions take a payload called `FeatureFlagPayload` when a key is require and `FeatureFlagPayloadNoKey` when a key is not required. The payload will handle defaults for all unspecified arguments automatically.
-3. Feature Flag defaults have been removed. If the flag fails for any reason, nil will be returned.
-4. GetAllFlags argument added. This function returns all flags related to the id.
+4. Feature Flag defaults have been removed. If the flag fails for any reason, nil will be returned.
+5. GetAllFlags argument added. This function returns all flags related to the id.
