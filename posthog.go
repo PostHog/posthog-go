@@ -67,8 +67,9 @@ type Client interface {
 
 	// GetFeatureFlagResult returns the flag value and payload together.
 	// Use this instead of calling GetFeatureFlag and GetFeatureFlagPayload separately.
-	// Returns an error if the flag cannot be evaluated (e.g., flag missing or cannot be computed
-	// when using OnlyEvaluateLocally).
+	// Returns an error if the flag cannot be evaluated (e.g., flag missing or cannot be computed).
+	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, this is a no-op and
+	// returns a disabled result without an error.
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
 	// GetFeatureFlagPayload returns feature flag's payload value matching key for user (supports multivariate flags).
@@ -77,9 +78,12 @@ type Client interface {
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
 	// GetRemoteConfigPayload returns decrypted feature flag payload value for remote config flags.
+	// If no PersonalApiKey is configured, this is a no-op and returns an empty payload without an error.
 	GetRemoteConfigPayload(string) (string, error)
 
-	// GetAllFlags returns all flags for a user
+	// GetAllFlags returns all flags for a user.
+	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, this is a no-op and
+	// returns an empty map without an error.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
@@ -93,14 +97,16 @@ type Client interface {
 	// locally, EvaluateFlags returns a non-nil snapshot containing the
 	// locally-evaluated flags alongside the error so the caller can still
 	// branch on what was resolved.
+	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, this is a no-op and
+	// returns an empty snapshot without an error.
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
-	// ReloadFeatureFlags forces a reload of feature flags
-	// NB: This is only available when using a PersonalApiKey
+	// ReloadFeatureFlags forces a reload of feature flags.
+	// If no PersonalApiKey is configured, this is a no-op and returns nil.
 	ReloadFeatureFlags() error
 
 	// GetFeatureFlags gets all feature flags, for testing only.
-	// NB: This is only available when using a PersonalApiKey
+	// If no PersonalApiKey is configured, this is a no-op and returns an empty slice without an error.
 	GetFeatureFlags() ([]FeatureFlag, error)
 
 	// CloseWithContext gracefully shuts down the client with the provided context.
@@ -683,9 +689,9 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 	return c.makeRemoteConfigRequest(flagKey)
 }
 
-// GetFeatureFlags returns all feature flag definitions used for local evaluation
-// This is only available when using a PersonalApiKey. Not to be confused with
-// GetAllFlags, which returns all flags and their values for a given user.
+// GetFeatureFlags returns all feature flag definitions used for local evaluation.
+// If no PersonalApiKey is configured, this is a no-op and returns an empty slice without an error.
+// Not to be confused with GetAllFlags, which returns all flags and their values for a given user.
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	if c.featureFlagsPoller == nil {
 		c.warnPersonalAPIKeyNoop("GetFeatureFlags")
@@ -724,7 +730,6 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 
 	if c.featureFlagsPoller != nil {
 		// get feature flags from the poller, which uses the personal api key
-		// this is only available when using a PersonalApiKey
 		flagsValue, err = c.featureFlagsPoller.GetAllFlags(flagConfig)
 	} else {
 		// if there's no poller, get the feature flags from the flags endpoint
