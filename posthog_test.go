@@ -1243,13 +1243,13 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, client.ReloadFeatureFlags())
+	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrNoPersonalAPIKey)
 	featureFlags, err := client.GetFeatureFlags()
-	require.NoError(t, err)
-	require.Empty(t, featureFlags)
+	require.ErrorIs(t, err, ErrNoPersonalAPIKey)
+	require.Nil(t, featureFlags)
 
 	payload, err := client.GetRemoteConfigPayload("test-flag")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoPersonalAPIKey)
 	require.Empty(t, payload)
 
 	localFlag, err := client.GetFeatureFlag(FeatureFlagPayload{
@@ -1257,31 +1257,31 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 		DistinctId:          "test-user",
 		OnlyEvaluateLocally: true,
 	})
-	require.NoError(t, err)
-	require.Equal(t, false, localFlag)
+	require.ErrorIs(t, err, ErrNoPersonalAPIKey)
+	require.Nil(t, localFlag)
 
 	localFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId:          "test-user",
 		OnlyEvaluateLocally: true,
 	})
-	require.NoError(t, err)
-	require.Empty(t, localFlags)
+	require.ErrorIs(t, err, ErrNoPersonalAPIKey)
+	require.Nil(t, localFlags)
 
 	localEvaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{
 		DistinctId:          "test-user",
 		OnlyEvaluateLocally: true,
 	})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoPersonalAPIKey)
 	require.NotNil(t, localEvaluations)
 	require.Empty(t, localEvaluations.Keys())
 
 	joinedLogs := strings.Join(logged, "\n")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; ReloadFeatureFlags is a no-op.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlags is a no-op.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetRemoteConfigPayload is a no-op.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlagResult is a no-op.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetAllFlags is a no-op.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; EvaluateFlags is a no-op.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; ReloadFeatureFlags requires a PersonalApiKey.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlags requires a PersonalApiKey.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetRemoteConfigPayload requires a PersonalApiKey.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlagResult requires a PersonalApiKey.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetAllFlags requires a PersonalApiKey.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; EvaluateFlags requires a PersonalApiKey.")
 }
 
 func TestIsFeatureEnabled(t *testing.T) {
