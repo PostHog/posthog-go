@@ -61,4 +61,8 @@ var (
 	// ErrNoPersonalAPIKey is returned when PersonalApiKey is required for the
 	// requested operation but was not configured.
 	ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
+
+	// ErrNoDistinctID is returned when distinct_id is required for the requested
+	// operation but was not provided.
+	ErrNoDistinctID = errors.New("no distinct_id provided")
 )

@@ -85,9 +85,10 @@ type Client interface {
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
-	// given distinct_id using at most one /flags request. Pass the returned
-	// snapshot to a Capture event via Capture.Flags to attach $feature/<key>
-	// properties without another network call. Calls to IsEnabled and GetFlag
+	// given distinct_id using at most one /flags request. Returns ErrNoDistinctID
+	// if DistinctId is empty. Pass the returned snapshot to a Capture event via
+	// Capture.Flags to attach $feature/<key> properties without another network call.
+	// Calls to IsEnabled and GetFlag
 	// on the snapshot fire deduped $feature_flag_called events; GetFlagPayload
 	// does not.
 	//
@@ -461,10 +462,6 @@ func (c *client) Enqueue(msg Message) (err error) {
 }
 
 func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, error) {
-	if err := flagConfig.validate(); err != nil {
-		return false, err
-	}
-
 	result, err := c.GetFeatureFlag(flagConfig)
 	if err != nil {
 		return nil, err
@@ -525,6 +522,9 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		return nil, err
 	}
 
+	if flagConfig.DistinctId == "" {
+		return nil, ErrNoDistinctID
+	}
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
 	}
@@ -714,6 +714,9 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 		return nil, err
 	}
 
+	if flagConfig.DistinctId == "" {
+		return nil, ErrNoDistinctID
+	}
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
 	}
@@ -766,8 +769,8 @@ func (c *client) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvalua
 	host := c.featureFlagEvaluationsHost()
 
 	if payload.DistinctId == "" {
-		c.Warnf("EvaluateFlags called without a DistinctId — returning an empty snapshot")
-		return noopFeatureFlagEvaluations, nil
+		c.Warnf("EvaluateFlags called without a DistinctId")
+		return noopFeatureFlagEvaluations, ErrNoDistinctID
 	}
 
 	if payload.Groups == nil {
