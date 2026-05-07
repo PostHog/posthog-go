@@ -67,8 +67,8 @@ type Client interface {
 
 	// GetFeatureFlagResult returns the flag value and payload together.
 	// Use this instead of calling GetFeatureFlag and GetFeatureFlagPayload separately.
-	// Returns an error if the flag cannot be evaluated (e.g., flag missing or cannot be computed
-	// when using OnlyEvaluateLocally).
+	// Returns an error if the flag cannot be evaluated (e.g., flag missing or cannot be computed).
+	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
 	// GetFeatureFlagPayload returns feature flag's payload value matching key for user (supports multivariate flags).
@@ -77,15 +77,18 @@ type Client interface {
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
 	// GetRemoteConfigPayload returns decrypted feature flag payload value for remote config flags.
+	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
 	GetRemoteConfigPayload(string) (string, error)
 
-	// GetAllFlags returns all flags for a user
+	// GetAllFlags returns all flags for a user.
+	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
-	// given distinct_id using at most one /flags request. Pass the returned
-	// snapshot to a Capture event via Capture.Flags to attach $feature/<key>
-	// properties without another network call. Calls to IsEnabled and GetFlag
+	// given distinct_id using at most one /flags request. Returns ErrNoDistinctID
+	// if DistinctId is empty. Pass the returned snapshot to a Capture event via
+	// Capture.Flags to attach $feature/<key> properties without another network call.
+	// Calls to IsEnabled and GetFlag
 	// on the snapshot fire deduped $feature_flag_called events; GetFlagPayload
 	// does not.
 	//
@@ -93,14 +96,15 @@ type Client interface {
 	// locally, EvaluateFlags returns a non-nil snapshot containing the
 	// locally-evaluated flags alongside the error so the caller can still
 	// branch on what was resolved.
+	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
-	// ReloadFeatureFlags forces a reload of feature flags
-	// NB: This is only available when using a PersonalApiKey
+	// ReloadFeatureFlags forces a reload of feature flags.
+	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
 	ReloadFeatureFlags() error
 
 	// GetFeatureFlags gets all feature flags, for testing only.
-	// NB: This is only available when using a PersonalApiKey
+	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
 	GetFeatureFlags() ([]FeatureFlag, error)
 
 	// CloseWithContext gracefully shuts down the client with the provided context.
@@ -183,6 +187,8 @@ type flagUser struct {
 // Instantiate a new client that uses the write key passed as first argument to
 // send messages to the backend.
 // The client is created with the default configuration.
+// If the SDK is disabled because the API key is empty, this returns a no-op client
+// whose methods return default values and ErrSDKDisabled.
 func New(apiKey string) Client {
 	// Here we can ignore the error because the default config is always valid.
 	c, _ := NewWithConfig(apiKey, Config{})
@@ -202,7 +208,8 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	config = makeConfig(config)
 	apiKey = strings.TrimSpace(apiKey)
 	if len(apiKey) == 0 {
-		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; check your project API key")
+		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; %s", ErrSDKDisabled)
+		return newNoopClient(config), nil
 	}
 	reportedCache, err := lru.New[flagUser, struct{}](CACHE_DEFAULT_SIZE)
 	if err != nil && config.Logger != nil {
@@ -471,9 +478,8 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, e
 
 func (c *client) ReloadFeatureFlags() error {
 	if c.featureFlagsPoller == nil {
-		err := fmt.Errorf("cannot use feature flags: %w", ErrNoPersonalAPIKey)
-		c.debugf(err.Error())
-		return err
+		c.warnPersonalAPIKeyMissing("ReloadFeatureFlags")
+		return ErrNoPersonalAPIKey
 	}
 	c.featureFlagsPoller.ForceReload()
 	return nil
@@ -524,6 +530,10 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
+	}
+	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyMissing("GetFeatureFlagResult")
+		return nil, ErrNoPersonalAPIKey
 	}
 
 	var flagValue interface{}
@@ -679,14 +689,13 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 	return c.makeRemoteConfigRequest(flagKey)
 }
 
-// GetFeatureFlags returns all feature flag definitions used for local evaluation
-// This is only available when using a PersonalApiKey. Not to be confused with
-// GetAllFlags, which returns all flags and their values for a given user.
+// GetFeatureFlags returns all feature flag definitions used for local evaluation.
+// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+// Not to be confused with GetAllFlags, which returns all flags and their values for a given user.
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	if c.featureFlagsPoller == nil {
-		err := fmt.Errorf("cannot use feature flags: %w", ErrNoPersonalAPIKey)
-		c.Logger.Debugf(err.Error())
-		return nil, err
+		c.warnPersonalAPIKeyMissing("GetFeatureFlags")
+		return nil, ErrNoPersonalAPIKey
 	}
 	return c.featureFlagsPoller.GetFeatureFlags()
 }
@@ -711,13 +720,16 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
 	}
+	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyMissing("GetAllFlags")
+		return nil, ErrNoPersonalAPIKey
+	}
 
 	var flagsValue map[string]interface{}
 	var err error
 
 	if c.featureFlagsPoller != nil {
 		// get feature flags from the poller, which uses the personal api key
-		// this is only available when using a PersonalApiKey
 		flagsValue, err = c.featureFlagsPoller.GetAllFlags(flagConfig)
 	} else {
 		// if there's no poller, get the feature flags from the flags endpoint
@@ -757,13 +769,8 @@ func (c *client) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvalua
 	host := c.featureFlagEvaluationsHost()
 
 	if payload.DistinctId == "" {
-		c.Warnf("EvaluateFlags called without a DistinctId — returning an empty snapshot")
-		return &FeatureFlagEvaluations{
-			host:       host,
-			distinctId: "",
-			flags:      map[string]evaluatedFlagRecord{},
-			accessed:   map[string]struct{}{},
-		}, nil
+		c.Warnf("EvaluateFlags called without a DistinctId")
+		return noopFeatureFlagEvaluations, ErrNoDistinctID
 	}
 
 	if payload.Groups == nil {
@@ -787,6 +794,9 @@ func (c *client) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvalua
 
 	if c.featureFlagsPoller != nil {
 		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, payload)
+	} else if payload.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyMissing("EvaluateFlags")
+		return noopFeatureFlagEvaluations, ErrNoPersonalAPIKey
 	}
 
 	var requestId string
@@ -1378,6 +1388,10 @@ func (c *client) debugf(format string, args ...interface{}) {
 	c.Logger.Debugf(format, args...)
 }
 
+func (c *client) warnPersonalAPIKeyMissing(method string) {
+	c.Warnf("PostHog personal_api_key is not configured; %s requires a PersonalApiKey.", method)
+}
+
 func (c *client) Errorf(format string, args ...interface{}) {
 	c.Logger.Errorf(format, args...)
 }
@@ -1408,9 +1422,8 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups, personProp
 
 func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties, options *SendFeatureFlagsOptions) (map[string]interface{}, error) {
 	if c.featureFlagsPoller == nil {
-		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
-		c.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
+		c.warnPersonalAPIKeyMissing("Capture.SendFeatureFlags")
+		return nil, ErrNoPersonalAPIKey
 	}
 
 	var deviceId *string
@@ -1439,6 +1452,11 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("parsing URL: %v", err)
+	}
+
+	if c.PersonalApiKey == "" {
+		c.warnPersonalAPIKeyMissing("GetRemoteConfigPayload")
+		return "", ErrNoPersonalAPIKey
 	}
 
 	q := parsedURL.Query()
@@ -1541,7 +1559,7 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 	}
 
 	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return map[string]interface{}{}, nil
+		return emptyFlagValues, nil
 	}
 
 	return flagsResponse.FeatureFlags, nil

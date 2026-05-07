@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -502,8 +503,8 @@ func TestEvaluateFlags_EmptyDistinctId_NoEvents(t *testing.T) {
 	client, capture, _ := newEvalClient(t, server)
 
 	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: ""})
-	if err != nil {
-		t.Fatalf("EvaluateFlags error: %v", err)
+	if !errors.Is(err, ErrNoDistinctID) {
+		t.Fatalf("expected ErrNoDistinctID, got %v", err)
 	}
 	if snap == nil {
 		t.Fatal("expected non-nil snapshot")
