@@ -65,4 +65,7 @@ var (
 	// ErrNoDistinctID is returned when distinct_id is required for the requested
 	// operation but was not provided.
 	ErrNoDistinctID = errors.New("no distinct_id provided")
+
+	// ErrSDKDisabled is returned when the SDK is disabled because the project API key is missing.
+	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
 )

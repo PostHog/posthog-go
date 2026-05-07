@@ -187,6 +187,8 @@ type flagUser struct {
 // Instantiate a new client that uses the write key passed as first argument to
 // send messages to the backend.
 // The client is created with the default configuration.
+// If the SDK is disabled because the API key is empty, this returns a no-op client
+// whose methods return default values and ErrSDKDisabled.
 func New(apiKey string) Client {
 	// Here we can ignore the error because the default config is always valid.
 	c, _ := NewWithConfig(apiKey, Config{})
@@ -206,7 +208,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	config = makeConfig(config)
 	apiKey = strings.TrimSpace(apiKey)
 	if len(apiKey) == 0 {
-		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; check your project API key")
+		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; %s", ErrSDKDisabled)
 		return newNoopClient(config), nil
 	}
 	reportedCache, err := lru.New[flagUser, struct{}](CACHE_DEFAULT_SIZE)

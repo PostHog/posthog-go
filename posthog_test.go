@@ -101,6 +101,7 @@ func TestNewWithConfig_LogsErrorForBlankAPIKeyAfterTrim(t *testing.T) {
 	defer client.Close()
 
 	require.Contains(t, logged, "apiKey is empty after trimming whitespace")
+	require.Contains(t, logged, ErrSDKDisabled.Error())
 }
 
 func TestNew_BlankAPIKeyReturnsNoopClient(t *testing.T) {
@@ -109,40 +110,40 @@ func TestNew_BlankAPIKeyReturnsNoopClient(t *testing.T) {
 
 	_, ok := client.(*noopClient)
 	require.True(t, ok)
-	require.NoError(t, client.Enqueue(Capture{}))
+	require.ErrorIs(t, client.Enqueue(Capture{}), ErrSDKDisabled)
 
 	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Equal(t, false, isEnabled)
 
 	flag, err := client.GetFeatureFlag(FeatureFlagPayload{})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Equal(t, false, flag)
 
 	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.NotNil(t, result)
 	require.False(t, result.Enabled)
 
 	payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, payload)
 
 	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, allFlags)
 
 	evaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.NotNil(t, evaluations)
 	require.Empty(t, evaluations.Keys())
 
-	require.NoError(t, client.ReloadFeatureFlags())
+	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrSDKDisabled)
 	featureFlags, err := client.GetFeatureFlags()
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, featureFlags)
-	require.NoError(t, client.Close())
-	require.NoError(t, client.Close())
+	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
+	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 }
 
 func TestNewWithConfig_BlankAPIKeyReturnsNoopClientWithoutRequests(t *testing.T) {
@@ -170,17 +171,17 @@ func TestNewWithConfig_BlankAPIKeyReturnsNoopClientWithoutRequests(t *testing.T)
 	_, ok := client.(*noopClient)
 	require.True(t, ok)
 
-	require.NoError(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}))
+	require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}), ErrSDKDisabled)
 	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Equal(t, false, isEnabled)
 	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "test-user"})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, allFlags)
 	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, remoteConfigPayload)
-	require.NoError(t, client.Close())
+	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 
 	require.Zero(t, requests.Load())
 	require.Zero(t, successes.Load())
@@ -206,14 +207,14 @@ func TestNewWithConfig_BlankAPIKeyWithPersonalAPIKeyReturnsNoopClient(t *testing
 	_, ok := client.(*noopClient)
 	require.True(t, ok)
 
-	require.NoError(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}))
+	require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}), ErrSDKDisabled)
 	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Equal(t, false, isEnabled)
 	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, remoteConfigPayload)
-	require.NoError(t, client.Close())
+	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 
 	require.Zero(t, requests.Load())
 }

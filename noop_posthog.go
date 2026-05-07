@@ -19,49 +19,49 @@ func newNoopClient(config Config) Client {
 }
 
 func (c *noopClient) Enqueue(Message) error {
-	return nil
+	return ErrSDKDisabled
 }
 
 func (c *noopClient) IsFeatureEnabled(FeatureFlagPayload) (interface{}, error) {
-	return false, nil
+	return false, ErrSDKDisabled
 }
 
 func (c *noopClient) GetFeatureFlag(FeatureFlagPayload) (interface{}, error) {
-	return false, nil
+	return false, ErrSDKDisabled
 }
 
 func (c *noopClient) GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error) {
-	return noopFeatureFlagResult, nil
+	return noopFeatureFlagResult, ErrSDKDisabled
 }
 
 func (c *noopClient) GetFeatureFlagPayload(FeatureFlagPayload) (string, error) {
-	return "", nil
+	return "", ErrSDKDisabled
 }
 
 func (c *noopClient) GetRemoteConfigPayload(string) (string, error) {
-	return "", nil
+	return "", ErrSDKDisabled
 }
 
 func (c *noopClient) GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
-	return emptyFlagValues, nil
+	return emptyFlagValues, ErrSDKDisabled
 }
 
 func (c *noopClient) EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
-	return noopFeatureFlagEvaluations, nil
+	return noopFeatureFlagEvaluations, ErrSDKDisabled
 }
 
 func (c *noopClient) ReloadFeatureFlags() error {
-	return nil
+	return ErrSDKDisabled
 }
 
 func (c *noopClient) GetFeatureFlags() ([]FeatureFlag, error) {
-	return emptyFeatureFlags, nil
+	return emptyFeatureFlags, ErrSDKDisabled
 }
 
 func (c *noopClient) Close() error {
-	return nil
+	return ErrSDKDisabled
 }
 
 func (c *noopClient) CloseWithContext(context.Context) error {
-	return nil
+	return ErrSDKDisabled
 }
