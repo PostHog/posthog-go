@@ -472,9 +472,8 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, e
 
 func (c *client) ReloadFeatureFlags() error {
 	if c.featureFlagsPoller == nil {
-		err := fmt.Errorf("cannot use feature flags: %w", ErrNoPersonalAPIKey)
-		c.debugf(err.Error())
-		return err
+		c.debugf("cannot reload feature flags: %s", ErrNoPersonalAPIKey)
+		return nil
 	}
 	c.featureFlagsPoller.ForceReload()
 	return nil
@@ -525,6 +524,9 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
+	}
+	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		return &FeatureFlagResult{Key: flagConfig.Key, Enabled: false}, nil
 	}
 
 	var flagValue interface{}
@@ -685,9 +687,8 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 // GetAllFlags, which returns all flags and their values for a given user.
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	if c.featureFlagsPoller == nil {
-		err := fmt.Errorf("cannot use feature flags: %w", ErrNoPersonalAPIKey)
-		c.Logger.Debugf(err.Error())
-		return nil, err
+		c.Logger.Debugf("cannot get feature flags: %s", ErrNoPersonalAPIKey)
+		return []FeatureFlag{}, nil
 	}
 	return c.featureFlagsPoller.GetFeatureFlags()
 }
@@ -711,6 +712,9 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 
 	if err := flagConfig.validate(); err != nil {
 		return nil, err
+	}
+	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		return map[string]interface{}{}, nil
 	}
 
 	var flagsValue map[string]interface{}
@@ -1409,9 +1413,8 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups, personProp
 
 func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties, options *SendFeatureFlagsOptions) (map[string]interface{}, error) {
 	if c.featureFlagsPoller == nil {
-		errorMessage := "specifying a PersonalApiKey is required for using feature flags"
-		c.Errorf(errorMessage)
-		return nil, errors.New(errorMessage)
+		c.debugf("cannot locally evaluate feature flags: %s", ErrNoPersonalAPIKey)
+		return map[string]interface{}{}, nil
 	}
 
 	var deviceId *string
@@ -1440,6 +1443,11 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("parsing URL: %v", err)
+	}
+
+	if c.PersonalApiKey == "" {
+		c.debugf("cannot get remote config payload: %s", ErrNoPersonalAPIKey)
+		return "", nil
 	}
 
 	q := parsedURL.Query()
