@@ -472,7 +472,7 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, e
 
 func (c *client) ReloadFeatureFlags() error {
 	if c.featureFlagsPoller == nil {
-		c.debugf("cannot reload feature flags: %s", ErrNoPersonalAPIKey)
+		c.warnPersonalAPIKeyNoop("ReloadFeatureFlags")
 		return nil
 	}
 	c.featureFlagsPoller.ForceReload()
@@ -526,6 +526,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		return nil, err
 	}
 	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyNoop("GetFeatureFlagResult")
 		return &FeatureFlagResult{Key: flagConfig.Key, Enabled: false}, nil
 	}
 
@@ -687,7 +688,7 @@ func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 // GetAllFlags, which returns all flags and their values for a given user.
 func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
 	if c.featureFlagsPoller == nil {
-		c.Logger.Debugf("cannot get feature flags: %s", ErrNoPersonalAPIKey)
+		c.warnPersonalAPIKeyNoop("GetFeatureFlags")
 		return []FeatureFlag{}, nil
 	}
 	return c.featureFlagsPoller.GetFeatureFlags()
@@ -714,6 +715,7 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 		return nil, err
 	}
 	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyNoop("GetAllFlags")
 		return map[string]interface{}{}, nil
 	}
 
@@ -792,6 +794,16 @@ func (c *client) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvalua
 
 	if c.featureFlagsPoller != nil {
 		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, payload)
+	} else if payload.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyNoop("EvaluateFlags")
+		return &FeatureFlagEvaluations{
+			host:       host,
+			distinctId: payload.DistinctId,
+			deviceId:   payload.DeviceId,
+			groups:     payload.Groups,
+			flags:      records,
+			accessed:   map[string]struct{}{},
+		}, nil
 	}
 
 	var requestId string
@@ -1383,6 +1395,10 @@ func (c *client) debugf(format string, args ...interface{}) {
 	c.Logger.Debugf(format, args...)
 }
 
+func (c *client) warnPersonalAPIKeyNoop(method string) {
+	c.Warnf("PostHog personal_api_key is not configured; %s is a no-op.", method)
+}
+
 func (c *client) Errorf(format string, args ...interface{}) {
 	c.Logger.Errorf(format, args...)
 }
@@ -1413,7 +1429,7 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups, personProp
 
 func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties, options *SendFeatureFlagsOptions) (map[string]interface{}, error) {
 	if c.featureFlagsPoller == nil {
-		c.debugf("cannot locally evaluate feature flags: %s", ErrNoPersonalAPIKey)
+		c.warnPersonalAPIKeyNoop("Capture.SendFeatureFlags")
 		return map[string]interface{}{}, nil
 	}
 
@@ -1446,7 +1462,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	}
 
 	if c.PersonalApiKey == "" {
-		c.debugf("cannot get remote config payload: %s", ErrNoPersonalAPIKey)
+		c.warnPersonalAPIKeyNoop("GetRemoteConfigPayload")
 		return "", nil
 	}
 

@@ -1227,8 +1227,15 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	errchan := make(chan error, 1)
 	defer close(errchan)
 
+	var logged []string
 	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		Logger: testLogger{t.Logf, t.Logf},
+		PersonalApiKey: " \n\t ",
+		Logger: testLogger{
+			logf: func(format string, args ...interface{}) {
+				logged = append(logged, fmt.Sprintf(format, args...))
+			},
+			errorf: t.Logf,
+		},
 		Callback: testCallback{
 			func(m APIMessage) {},
 			func(m APIMessage, e error) { errchan <- e },
@@ -1259,6 +1266,22 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, localFlags)
+
+	localEvaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{
+		DistinctId:          "test-user",
+		OnlyEvaluateLocally: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, localEvaluations)
+	require.Empty(t, localEvaluations.Keys())
+
+	joinedLogs := strings.Join(logged, "\n")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; ReloadFeatureFlags is a no-op.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlags is a no-op.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetRemoteConfigPayload is a no-op.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlagResult is a no-op.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetAllFlags is a no-op.")
+	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; EvaluateFlags is a no-op.")
 }
 
 func TestIsFeatureEnabled(t *testing.T) {
