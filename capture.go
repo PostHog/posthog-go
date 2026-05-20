@@ -97,12 +97,8 @@ func (msg Capture) internal() {
 }
 
 func (msg Capture) Validate() error {
-	if len(msg.Event) == 0 {
-		return FieldError{
-			Type:  "posthog.Capture",
-			Name:  "Event",
-			Value: msg.Event,
-		}
+	if err := validateCaptureEvent(msg); err != nil {
+		return err
 	}
 
 	if len(msg.DistinctId) == 0 {
@@ -110,6 +106,18 @@ func (msg Capture) Validate() error {
 			Type:  "posthog.Capture",
 			Name:  "DistinctId",
 			Value: msg.DistinctId,
+		}
+	}
+
+	return nil
+}
+
+func validateCaptureEvent(msg Capture) error {
+	if len(msg.Event) == 0 {
+		return FieldError{
+			Type:  "posthog.Capture",
+			Name:  "Event",
+			Value: msg.Event,
 		}
 	}
 

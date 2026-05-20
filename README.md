@@ -132,6 +132,30 @@ func main() {
 }
 ```
 
+## Server-side request context
+
+For `net/http` apps, wrap handlers with request context middleware and use request-scoped helpers with `r.Context()`:
+
+```go
+handler := posthog.NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    flags, _ := posthog.EvaluateFlagsWithContext(r.Context(), client, posthog.EvaluateFlagsPayload{})
+    posthog.EnqueueWithContext(r.Context(), client, posthog.Capture{Event: "checkout started", Flags: flags})
+}))
+```
+
+The middleware adds `$current_url`, `$request_method`, `$request_path`, `$user_agent`, and `$ip`. By default it also uses `X-PostHog-Distinct-Id` and `X-PostHog-Session-Id` tracing headers; explicit `DistinctId` and `$session_id` values on the event override request context. When request context is attached but no identity is available, capture and exception events are sent personlessly with `$process_person_profile: false`. Plain `Enqueue` calls without request context still require `DistinctId`.
+
+Tracing headers are client-controlled analytics context, not authentication or authorization. For security-sensitive server-side decisions, pass an authenticated `DistinctId` explicitly instead of relying on request headers.
+
+Disable tracing header capture while keeping request metadata:
+
+```go
+handler := posthog.NewRequestContextMiddleware(
+    next,
+    posthog.WithCaptureTracingHeaders(false),
+)
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, build, and test instructions.

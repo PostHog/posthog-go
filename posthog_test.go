@@ -419,8 +419,14 @@ func assertPayloadEqual(t *testing.T, expected, actual string) {
 		}
 	}
 
+	knownSysCtxKeys := map[string]struct{}{
+		"$os":         {},
+		"$os_version": {},
+		"$os_distro":  {},
+		"$go_version": {},
+	}
 	opt := cmpopts.IgnoreMapEntries(func(k string, v interface{}) bool {
-		_, ok := sysCtx[k]
+		_, ok := knownSysCtxKeys[k]
 		return ok
 	})
 	if diff := cmp.Diff(expectedJSON, actualJSON, opt); diff != "" {

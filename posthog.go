@@ -315,16 +315,21 @@ func dereferenceMessage(msg Message) Message {
 	return msg
 }
 
-func (c *client) Enqueue(msg Message) (err error) {
+func (c *client) Enqueue(msg Message) error {
+	return c.EnqueueWithContext(context.Background(), msg)
+}
+
+func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// Fast path: check if client is closed before doing any work
 	if c.closed.Load() {
 		return ErrClosed
 	}
 
 	msg = dereferenceMessage(msg)
-	if err = msg.Validate(); err != nil {
-		return
-	}
 
 	var ts = c.now()
 
@@ -344,6 +349,9 @@ func (c *client) Enqueue(msg Message) (err error) {
 
 	switch m := msg.(type) {
 	case Alias:
+		if err = m.Validate(); err != nil {
+			return
+		}
 		m.Type = "alias"
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
@@ -357,6 +365,9 @@ func (c *client) Enqueue(msg Message) (err error) {
 		return
 
 	case Identify:
+		if err = m.Validate(); err != nil {
+			return
+		}
 		m.Type = "identify"
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
@@ -370,6 +381,9 @@ func (c *client) Enqueue(msg Message) (err error) {
 		return
 
 	case GroupIdentify:
+		if err = m.Validate(); err != nil {
+			return
+		}
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
@@ -382,9 +396,19 @@ func (c *client) Enqueue(msg Message) (err error) {
 		return
 
 	case Capture:
+		if err = validateCaptureEvent(m); err != nil {
+			return
+		}
 		m.Type = "capture"
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, "posthog.Capture")
+		if captureContextErr != nil {
+			err = captureContextErr
+			return
+		}
+		m.DistinctId = captureContext.distinctID
+		m.Properties = captureContext.properties
 		if m.Flags != nil {
 			if m.shouldSendFeatureFlags() {
 				c.Warnf("[FEATURE FLAGS] Both Flags and SendFeatureFlags were set on Capture; using Flags and ignoring SendFeatureFlags.")
@@ -394,8 +418,9 @@ func (c *client) Enqueue(msg Message) (err error) {
 			// merge order so callers can manually overwrite $feature/<key>
 			// or $active_feature_flags if they need to.
 			m.Properties = m.Flags.eventProperties().Merge(m.Properties)
-		} else if m.shouldSendFeatureFlags() {
-			// Add all feature variants to event
+		} else if m.shouldSendFeatureFlags() && !captureContext.generatedPersonlessDistinctID {
+			// Add all feature variants to event. Skip for generated personless IDs so
+			// feature flag evaluation always uses a stable caller- or context-supplied ID.
 			personProperties := NewProperties()
 			groupProperties := map[string]Properties{}
 			opts := m.getFeatureFlagsOptions()
@@ -436,6 +461,9 @@ func (c *client) Enqueue(msg Message) (err error) {
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
+		if captureContext.personlessProcessProfileGuard {
+			m.Properties[propertyProcessPersonProfile] = false
+		}
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -449,6 +477,16 @@ func (c *client) Enqueue(msg Message) (err error) {
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
+		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, "posthog.Exception")
+		if captureContextErr != nil {
+			err = captureContextErr
+			return
+		}
+		m.DistinctId = captureContext.distinctID
+		m.Properties = captureContext.properties
+		if err = m.Validate(); err != nil {
+			return
+		}
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -458,6 +496,9 @@ func (c *client) Enqueue(msg Message) (err error) {
 		return
 
 	default:
+		if err = msg.Validate(); err != nil {
+			return
+		}
 		err = fmt.Errorf("messages with custom types cannot be enqueued: %T", msg)
 		return
 	}
@@ -667,6 +708,10 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 // per-flag evaluation path and the FeatureFlagEvaluations snapshot path so
 // both dedupe identically against the same per-distinct_id LRU cache.
 func (c *client) captureFlagCalledIfNeeded(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
+	c.captureFlagCalledIfNeededWithContext(context.Background(), distinctId, key, deviceId, properties, groups)
+}
+
+func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, distinctId, key string, deviceId *string, properties Properties, groups Groups) {
 	deviceIDStr := ""
 	if deviceId != nil {
 		deviceIDStr = *deviceId
@@ -675,7 +720,7 @@ func (c *client) captureFlagCalledIfNeeded(distinctId, key string, deviceId *str
 	if c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
 		return
 	}
-	if err := c.Enqueue(Capture{
+	if err := c.EnqueueWithContext(ctx, Capture{
 		DistinctId: distinctId,
 		Event:      "$feature_flag_called",
 		Properties: properties,
@@ -766,7 +811,24 @@ type EvaluateFlagsPayload struct {
 }
 
 func (c *client) EvaluateFlags(payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
-	host := c.featureFlagEvaluationsHost()
+	return c.evaluateFlagsWithContext(context.Background(), payload)
+}
+
+func (c *client) EvaluateFlagsWithContext(ctx context.Context, payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
+	return c.evaluateFlagsWithContext(ctx, payload)
+}
+
+func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if payload.DistinctId == "" {
+		if requestContext, ok := RequestContextFromContext(ctx); ok {
+			payload.DistinctId = requestContext.DistinctId
+		}
+	}
+
+	host := c.featureFlagEvaluationsHostWithContext(ctx)
 
 	if payload.DistinctId == "" {
 		c.Warnf("EvaluateFlags called without a DistinctId")
@@ -961,9 +1023,15 @@ func ptrString(s string) *string { return &s }
 
 // featureFlagEvaluationsHost wires the snapshot's callbacks to this client.
 func (c *client) featureFlagEvaluationsHost() featureFlagEvaluationsHost {
+	return c.featureFlagEvaluationsHostWithContext(context.Background())
+}
+
+func (c *client) featureFlagEvaluationsHostWithContext(ctx context.Context) featureFlagEvaluationsHost {
 	return featureFlagEvaluationsHost{
-		captureFlagCalledIfNeeded: c.captureFlagCalledIfNeeded,
-		logger:                    c.Logger,
+		captureFlagCalledIfNeeded: func(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
+			c.captureFlagCalledIfNeededWithContext(ctx, distinctId, key, deviceId, properties, groups)
+		},
+		logger: c.Logger,
 	}
 }
 

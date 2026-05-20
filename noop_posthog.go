@@ -22,6 +22,10 @@ func (c *noopClient) Enqueue(Message) error {
 	return ErrSDKDisabled
 }
 
+func (c *noopClient) EnqueueWithContext(context.Context, Message) error {
+	return ErrSDKDisabled
+}
+
 func (c *noopClient) IsFeatureEnabled(FeatureFlagPayload) (interface{}, error) {
 	return false, ErrSDKDisabled
 }
@@ -47,6 +51,10 @@ func (c *noopClient) GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{
 }
 
 func (c *noopClient) EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
+	return noopFeatureFlagEvaluations, ErrSDKDisabled
+}
+
+func (c *noopClient) EvaluateFlagsWithContext(context.Context, EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
 	return noopFeatureFlagEvaluations, ErrSDKDisabled
 }
 
