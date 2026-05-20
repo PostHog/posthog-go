@@ -1592,6 +1592,18 @@ func (s semverTuple) compareTo(other semverTuple) int {
 	return 0
 }
 
+// parseSemverNumeric parses a single numeric identifier, rejecting leading
+// zeros per semver 2.0.0 §2 (numeric identifiers MUST NOT include them).
+func parseSemverNumeric(part string) (int, error) {
+	if part == "" {
+		return 0, errors.New("empty numeric identifier")
+	}
+	if len(part) > 1 && part[0] == '0' {
+		return 0, fmt.Errorf("numeric identifier has leading zero: '%s'", part)
+	}
+	return strconv.Atoi(part)
+}
+
 // parseSemver parses a version string into a semverTuple.
 // Parsing rules:
 // 1. Strip leading/trailing whitespace
@@ -1600,7 +1612,7 @@ func (s semverTuple) compareTo(other semverTuple) int {
 // 4. Split on . and parse first 3 components as integers
 // 5. Default missing components to 0
 // 6. Ignore extra components beyond the third
-// 7. Return error for invalid input
+// 7. Return error for invalid input (including numeric identifiers with leading zeros)
 func parseSemver(value string) (semverTuple, error) {
 	text := strings.TrimSpace(value)
 
@@ -1633,9 +1645,9 @@ func parseSemver(value string) (semverTuple, error) {
 		return semverTuple{}, errors.New("invalid semver: no version components")
 	}
 
-	major, err := strconv.Atoi(parts[0])
+	major, err := parseSemverNumeric(parts[0])
 	if err != nil {
-		return semverTuple{}, fmt.Errorf("invalid semver: major version '%s' is not a number", parts[0])
+		return semverTuple{}, fmt.Errorf("invalid semver: major version '%s': %w", parts[0], err)
 	}
 
 	minor := 0
@@ -1643,9 +1655,9 @@ func parseSemver(value string) (semverTuple, error) {
 		if parts[1] == "" {
 			return semverTuple{}, errors.New("invalid semver: empty minor version component")
 		}
-		minor, err = strconv.Atoi(parts[1])
+		minor, err = parseSemverNumeric(parts[1])
 		if err != nil {
-			return semverTuple{}, fmt.Errorf("invalid semver: minor version '%s' is not a number", parts[1])
+			return semverTuple{}, fmt.Errorf("invalid semver: minor version '%s': %w", parts[1], err)
 		}
 	}
 
@@ -1654,9 +1666,9 @@ func parseSemver(value string) (semverTuple, error) {
 		if parts[2] == "" {
 			return semverTuple{}, errors.New("invalid semver: empty patch version component")
 		}
-		patch, err = strconv.Atoi(parts[2])
+		patch, err = parseSemverNumeric(parts[2])
 		if err != nil {
-			return semverTuple{}, fmt.Errorf("invalid semver: patch version '%s' is not a number", parts[2])
+			return semverTuple{}, fmt.Errorf("invalid semver: patch version '%s': %w", parts[2], err)
 		}
 	}
 
@@ -1729,9 +1741,9 @@ func computeWildcardBounds(value string) (lower, upper semverTuple, err error) {
 		return semverTuple{}, semverTuple{}, errors.New("invalid wildcard pattern: no version components")
 	}
 
-	major, err := strconv.Atoi(nonEmptyParts[0])
+	major, err := parseSemverNumeric(nonEmptyParts[0])
 	if err != nil {
-		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: major version '%s' is not a number", nonEmptyParts[0])
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: major version '%s': %w", nonEmptyParts[0], err)
 	}
 
 	if len(nonEmptyParts) == 1 {
@@ -1741,9 +1753,9 @@ func computeWildcardBounds(value string) (lower, upper semverTuple, err error) {
 		return lower, upper, nil
 	}
 
-	minor, err := strconv.Atoi(nonEmptyParts[1])
+	minor, err := parseSemverNumeric(nonEmptyParts[1])
 	if err != nil {
-		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: minor version '%s' is not a number", nonEmptyParts[1])
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: minor version '%s': %w", nonEmptyParts[1], err)
 	}
 
 	if len(nonEmptyParts) == 2 {
@@ -1754,9 +1766,9 @@ func computeWildcardBounds(value string) (lower, upper semverTuple, err error) {
 	}
 
 	// X.Y.Z.* pattern - treat as X.Y.Z to X.Y.(Z+1)
-	patch, err := strconv.Atoi(nonEmptyParts[2])
+	patch, err := parseSemverNumeric(nonEmptyParts[2])
 	if err != nil {
-		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: patch version '%s' is not a number", nonEmptyParts[2])
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: patch version '%s': %w", nonEmptyParts[2], err)
 	}
 	lower = semverTuple{major: major, minor: minor, patch: patch}
 	upper = semverTuple{major: major, minor: minor, patch: patch + 1}
