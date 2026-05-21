@@ -638,10 +638,30 @@ func TestParseSemver(t *testing.T) {
 		require.Equal(t, semverTuple{1, 2, 3}, result)
 	})
 
-	t.Run("leading zeros parsed as decimal", func(t *testing.T) {
-		result, err := parseSemver("01.02.03")
-		require.NoError(t, err)
-		require.Equal(t, semverTuple{1, 2, 3}, result)
+	t.Run("leading zeros rejected per semver 2.0.0 §2", func(t *testing.T) {
+		invalidCases := []string{
+			"01.2.3",
+			"1.02.3",
+			"1.2.03",
+			"01.02.03",
+			"1.07.3",
+			"001.2.3",
+		}
+		for _, input := range invalidCases {
+			t.Run(input, func(t *testing.T) {
+				_, err := parseSemver(input)
+				require.Error(t, err, "expected error for input: %s", input)
+			})
+		}
+
+		// A literal "0" component is fine
+		validCases := []string{"0.1.0", "1.0.0", "0.0.0"}
+		for _, input := range validCases {
+			t.Run(input, func(t *testing.T) {
+				_, err := parseSemver(input)
+				require.NoError(t, err, "expected no error for valid input: %s", input)
+			})
+		}
 	})
 
 	t.Run("invalid values", func(t *testing.T) {
@@ -1203,6 +1223,52 @@ func TestMatchPropertySemverErrorHandling(t *testing.T) {
 		isMatch, err := matchProperty(property, NewProperties().Set("version", "1.2.3"))
 		require.Error(t, err)
 		require.False(t, isMatch)
+	})
+
+	t.Run("leading-zero property value rejected", func(t *testing.T) {
+		property := FlagProperty{
+			Key:      "version",
+			Value:    "1.2.3",
+			Operator: "semver_eq",
+		}
+
+		for _, badValue := range []string{"01.2.3", "1.02.3", "1.2.03", "1.07.3", "001.2.3"} {
+			t.Run(badValue, func(t *testing.T) {
+				isMatch, err := matchProperty(property, NewProperties().Set("version", badValue))
+				require.Error(t, err)
+				require.False(t, isMatch)
+
+				var inconclusiveErr *InconclusiveMatchError
+				require.True(t, errors.As(err, &inconclusiveErr))
+			})
+		}
+	})
+
+	t.Run("leading-zero flag value rejected for caret/tilde/wildcard", func(t *testing.T) {
+		cases := []struct {
+			operator string
+			value    string
+		}{
+			{"semver_caret", "1.07.0"},
+			{"semver_tilde", "1.07.0"},
+			{"semver_wildcard", "01.*"},
+			{"semver_gt", "01.2.3"},
+		}
+		for _, c := range cases {
+			t.Run(c.operator+"/"+c.value, func(t *testing.T) {
+				property := FlagProperty{
+					Key:      "version",
+					Value:    c.value,
+					Operator: c.operator,
+				}
+				isMatch, err := matchProperty(property, NewProperties().Set("version", "2.0.0"))
+				require.Error(t, err)
+				require.False(t, isMatch)
+
+				var inconclusiveErr *InconclusiveMatchError
+				require.True(t, errors.As(err, &inconclusiveErr))
+			})
+		}
 	})
 }
 
