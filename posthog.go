@@ -409,6 +409,9 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		}
 		m.DistinctId = captureContext.distinctID
 		m.Properties = captureContext.properties
+		if err = m.Validate(); err != nil {
+			return
+		}
 		if m.Flags != nil {
 			if m.shouldSendFeatureFlags() {
 				c.Warnf("[FEATURE FLAGS] Both Flags and SendFeatureFlags were set on Capture; using Flags and ignoring SendFeatureFlags.")
