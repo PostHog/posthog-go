@@ -156,6 +156,15 @@ handler := posthog.NewRequestContextMiddleware(
 )
 ```
 
+Optionally capture panics as PostHog exception events and re-panic with the original value:
+
+```go
+handler := posthog.NewRequestContextMiddleware(
+    next,
+    posthog.WithCapturePanics(client),
+)
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, build, and test instructions.

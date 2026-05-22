@@ -1,10 +1,15 @@
 package posthog
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"runtime"
+	"runtime/debug"
+	"strconv"
 	"strings"
 )
 
@@ -19,6 +24,8 @@ const (
 	propertyRequestPath          = "$request_path"
 	propertyUserAgent            = "$user_agent"
 	propertyIP                   = "$ip"
+	propertyResponseStatusCode   = "$response_status_code"
+	propertyExceptionSource      = "$exception_source"
 
 	maxRequestContextValueLength = 1000
 )
@@ -108,6 +115,13 @@ type RequestContextOptions struct {
 	// are read into request-scoped analytics context. It defaults to true in NewRequestContextMiddleware.
 	// When disabled, the middleware still attaches request metadata to the request context.
 	CaptureTracingHeaders bool
+
+	// CapturePanics controls whether NewRequestContextMiddleware captures downstream panics as
+	// PostHog exception events before re-panicking. It defaults to false.
+	CapturePanics bool
+
+	// PanicCaptureClient receives panic exception events when CapturePanics is enabled.
+	PanicCaptureClient EnqueueClient
 }
 
 // RequestContextOption customizes request context middleware.
@@ -117,6 +131,15 @@ type RequestContextOption func(*RequestContextOptions)
 func WithCaptureTracingHeaders(enabled bool) RequestContextOption {
 	return func(options *RequestContextOptions) {
 		options.CaptureTracingHeaders = enabled
+	}
+}
+
+// WithCapturePanics configures request context middleware to capture downstream panics as
+// PostHog exception events using client, then re-panic with the original value.
+func WithCapturePanics(client EnqueueClient) RequestContextOption {
+	return func(options *RequestContextOptions) {
+		options.CapturePanics = client != nil
+		options.PanicCaptureClient = client
 	}
 }
 
@@ -149,7 +172,29 @@ func NewRequestContextMiddleware(next http.Handler, opts ...RequestContextOption
 		ctx := WithFreshRequestContext(r.Context(), requestContext)
 		req := r.WithContext(ctx)
 
-		next.ServeHTTP(w, req)
+		if !options.CapturePanics {
+			next.ServeHTTP(w, req)
+			return
+		}
+
+		statusWriter := newResponseStatusWriter(w)
+		completed := false
+		defer func() {
+			if completed {
+				return
+			}
+
+			panicStack := debug.Stack()
+			panicValue := recover()
+			if panicValue == nil {
+				return
+			}
+			capturePanic(ctx, options.PanicCaptureClient, panicValue, statusWriter.statusCode, panicStack)
+			panic(panicValue)
+		}()
+
+		next.ServeHTTP(wrapResponseStatusWriter(statusWriter), req)
+		completed = true
 	})
 }
 
@@ -389,4 +434,329 @@ func enqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) 
 		return contextClient.EnqueueWithContext(ctx, msg)
 	}
 	return client.Enqueue(msg)
+}
+
+func capturePanic(ctx context.Context, client EnqueueClient, panicValue interface{}, statusCode int, panicStack []byte) {
+	defer func() {
+		// Panic capture runs while the host application is already panicking. Any SDK,
+		// callback, or client panic here must not replace the original application panic.
+		_ = recover()
+	}()
+
+	if client == nil {
+		return
+	}
+	if statusCode < http.StatusBadRequest {
+		statusCode = http.StatusInternalServerError
+	}
+
+	exception := Exception{
+		Properties: NewProperties().
+			Set(propertyResponseStatusCode, statusCode).
+			Set(propertyExceptionSource, "panic"),
+		ExceptionList: []ExceptionItem{{
+			Type:       "panic",
+			Value:      fmt.Sprint(panicValue),
+			Stacktrace: stackTraceFromDebugStack(panicStack),
+		}},
+	}
+
+	_ = enqueueWithContext(ctx, client, exception)
+}
+
+func stackTraceFromDebugStack(stack []byte) *ExceptionStacktrace {
+	frames := parseDebugStackFrames(stack)
+	if len(frames) == 0 {
+		return DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}.GetStackTrace(4)
+	}
+
+	return &ExceptionStacktrace{
+		Type:   "raw",
+		Frames: frames,
+	}
+}
+
+func parseDebugStackFrames(stack []byte) []StackFrame {
+	lines := strings.Split(string(stack), "\n")
+	frames := make([]StackFrame, 0, len(lines)/2)
+	include := false
+
+	for i := 1; i+1 < len(lines); i += 2 {
+		function := strings.TrimSpace(lines[i])
+		if function == "" {
+			continue
+		}
+		if strings.HasPrefix(function, "panic(") {
+			include = true
+			continue
+		}
+		if !include {
+			continue
+		}
+
+		filename, lineNo, ok := parseDebugStackFileLine(lines[i+1])
+		if !ok {
+			continue
+		}
+
+		frames = append(frames, StackFrame{
+			Filename:  filename,
+			LineNo:    lineNo,
+			Function:  function,
+			InApp:     SimpleInAppDecider(runtime.Frame{File: filename, Function: function}),
+			Synthetic: false,
+			Platform:  "go",
+		})
+	}
+
+	return frames
+}
+
+func parseDebugStackFileLine(line string) (string, int, bool) {
+	fileLine := strings.TrimSpace(line)
+	if fileLine == "" {
+		return "", 0, false
+	}
+	if idx := strings.Index(fileLine, " +"); idx >= 0 {
+		fileLine = fileLine[:idx]
+	}
+	colon := strings.LastIndex(fileLine, ":")
+	if colon <= 0 || colon == len(fileLine)-1 {
+		return "", 0, false
+	}
+	lineNo, err := strconv.Atoi(fileLine[colon+1:])
+	if err != nil {
+		return "", 0, false
+	}
+	return fileLine[:colon], lineNo, true
+}
+
+type responseStatusWriter struct {
+	http.ResponseWriter
+	statusCode  int
+	wroteHeader bool
+	flusher     http.Flusher
+	hijacker    http.Hijacker
+	pusher      http.Pusher
+	readerFrom  io.ReaderFrom
+}
+
+func newResponseStatusWriter(w http.ResponseWriter) *responseStatusWriter {
+	statusWriter := &responseStatusWriter{ResponseWriter: w, statusCode: http.StatusOK}
+	if flusher, ok := w.(http.Flusher); ok {
+		statusWriter.flusher = flusher
+	}
+	if hijacker, ok := w.(http.Hijacker); ok {
+		statusWriter.hijacker = hijacker
+	}
+	if pusher, ok := w.(http.Pusher); ok {
+		statusWriter.pusher = pusher
+	}
+	if readerFrom, ok := w.(io.ReaderFrom); ok {
+		statusWriter.readerFrom = readerFrom
+	}
+	return statusWriter
+}
+
+func (w *responseStatusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *responseStatusWriter) WriteHeader(statusCode int) {
+	if !w.wroteHeader {
+		w.statusCode = statusCode
+		w.wroteHeader = true
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *responseStatusWriter) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.statusCode = http.StatusOK
+		w.wroteHeader = true
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+const (
+	responseStatusFlusherFlag = 1 << iota
+	responseStatusHijackerFlag
+	responseStatusPusherFlag
+	responseStatusReaderFromFlag
+)
+
+func wrapResponseStatusWriter(w *responseStatusWriter) http.ResponseWriter {
+	flags := 0
+	if w.flusher != nil {
+		flags |= responseStatusFlusherFlag
+	}
+	if w.hijacker != nil {
+		flags |= responseStatusHijackerFlag
+	}
+	if w.pusher != nil {
+		flags |= responseStatusPusherFlag
+	}
+	if w.readerFrom != nil {
+		flags |= responseStatusReaderFromFlag
+	}
+
+	switch flags {
+	case responseStatusFlusherFlag:
+		return &responseStatusWriterFlusher{w}
+	case responseStatusHijackerFlag:
+		return &responseStatusWriterHijacker{w}
+	case responseStatusPusherFlag:
+		return &responseStatusWriterPusher{w}
+	case responseStatusReaderFromFlag:
+		return &responseStatusWriterReaderFrom{w}
+	case responseStatusFlusherFlag | responseStatusHijackerFlag:
+		return &responseStatusWriterFlusherHijacker{w}
+	case responseStatusFlusherFlag | responseStatusPusherFlag:
+		return &responseStatusWriterFlusherPusher{w}
+	case responseStatusFlusherFlag | responseStatusReaderFromFlag:
+		return &responseStatusWriterFlusherReaderFrom{w}
+	case responseStatusHijackerFlag | responseStatusPusherFlag:
+		return &responseStatusWriterHijackerPusher{w}
+	case responseStatusHijackerFlag | responseStatusReaderFromFlag:
+		return &responseStatusWriterHijackerReaderFrom{w}
+	case responseStatusPusherFlag | responseStatusReaderFromFlag:
+		return &responseStatusWriterPusherReaderFrom{w}
+	case responseStatusFlusherFlag | responseStatusHijackerFlag | responseStatusPusherFlag:
+		return &responseStatusWriterFlusherHijackerPusher{w}
+	case responseStatusFlusherFlag | responseStatusHijackerFlag | responseStatusReaderFromFlag:
+		return &responseStatusWriterFlusherHijackerReaderFrom{w}
+	case responseStatusFlusherFlag | responseStatusPusherFlag | responseStatusReaderFromFlag:
+		return &responseStatusWriterFlusherPusherReaderFrom{w}
+	case responseStatusHijackerFlag | responseStatusPusherFlag | responseStatusReaderFromFlag:
+		return &responseStatusWriterHijackerPusherReaderFrom{w}
+	case responseStatusFlusherFlag | responseStatusHijackerFlag | responseStatusPusherFlag | responseStatusReaderFromFlag:
+		return &responseStatusWriterFlusherHijackerPusherReaderFrom{w}
+	default:
+		return w
+	}
+}
+
+type responseStatusWriterFlusher struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusher) Flush() { w.flusher.Flush() }
+
+type responseStatusWriterHijacker struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+
+type responseStatusWriterPusher struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterPusher) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+
+type responseStatusWriterReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
+}
+
+type responseStatusWriterFlusherHijacker struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusherHijacker) Flush() { w.flusher.Flush() }
+func (w *responseStatusWriterFlusherHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+
+type responseStatusWriterFlusherPusher struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusherPusher) Flush() { w.flusher.Flush() }
+func (w *responseStatusWriterFlusherPusher) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+
+type responseStatusWriterFlusherReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusherReaderFrom) Flush() { w.flusher.Flush() }
+func (w *responseStatusWriterFlusherReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
+}
+
+type responseStatusWriterHijackerPusher struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterHijackerPusher) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+func (w *responseStatusWriterHijackerPusher) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+
+type responseStatusWriterHijackerReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterHijackerReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+func (w *responseStatusWriterHijackerReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
+}
+
+type responseStatusWriterPusherReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterPusherReaderFrom) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+func (w *responseStatusWriterPusherReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
+}
+
+type responseStatusWriterFlusherHijackerPusher struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusherHijackerPusher) Flush() { w.flusher.Flush() }
+func (w *responseStatusWriterFlusherHijackerPusher) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+func (w *responseStatusWriterFlusherHijackerPusher) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+
+type responseStatusWriterFlusherHijackerReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusherHijackerReaderFrom) Flush() { w.flusher.Flush() }
+func (w *responseStatusWriterFlusherHijackerReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+func (w *responseStatusWriterFlusherHijackerReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
+}
+
+type responseStatusWriterFlusherPusherReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusherPusherReaderFrom) Flush() { w.flusher.Flush() }
+func (w *responseStatusWriterFlusherPusherReaderFrom) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+func (w *responseStatusWriterFlusherPusherReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
+}
+
+type responseStatusWriterHijackerPusherReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterHijackerPusherReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+func (w *responseStatusWriterHijackerPusherReaderFrom) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+func (w *responseStatusWriterHijackerPusherReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
+}
+
+type responseStatusWriterFlusherHijackerPusherReaderFrom struct{ *responseStatusWriter }
+
+func (w *responseStatusWriterFlusherHijackerPusherReaderFrom) Flush() { w.flusher.Flush() }
+func (w *responseStatusWriterFlusherHijackerPusherReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijacker.Hijack()
+}
+func (w *responseStatusWriterFlusherHijackerPusherReaderFrom) Push(target string, opts *http.PushOptions) error {
+	return w.pusher.Push(target, opts)
+}
+func (w *responseStatusWriterFlusherHijackerPusherReaderFrom) ReadFrom(reader io.Reader) (int64, error) {
+	return w.readerFrom.ReadFrom(reader)
 }
