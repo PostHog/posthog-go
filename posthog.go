@@ -1021,11 +1021,7 @@ func recordFromFlagDetail(detail FlagDetail) evaluatedFlagRecord {
 
 func ptrString(s string) *string { return &s }
 
-// featureFlagEvaluationsHost wires the snapshot's callbacks to this client.
-func (c *client) featureFlagEvaluationsHost() featureFlagEvaluationsHost {
-	return c.featureFlagEvaluationsHostWithContext(context.Background())
-}
-
+// featureFlagEvaluationsHostWithContext wires the snapshot's callbacks to this client.
 func (c *client) featureFlagEvaluationsHostWithContext(ctx context.Context) featureFlagEvaluationsHost {
 	return featureFlagEvaluationsHost{
 		captureFlagCalledIfNeeded: func(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
