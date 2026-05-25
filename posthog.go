@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,6 +183,12 @@ type flagUser struct {
 	distinctID string
 	flagKey    string
 	deviceID   string
+	// canonical JSON of the groups map (keys sorted) — empty when no groups
+	// were passed. Lets the same `(user, flag)` fire a separate
+	// `$feature_flag_called` event for each distinct group context, so
+	// group-scoped flags don't undercount exposures when a user is evaluated
+	// under multiple groups in the same process.
+	groupsRepr string
 }
 
 // Instantiate a new client that uses the write key passed as first argument to
@@ -661,17 +668,24 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 }
 
 // captureFlagCalledIfNeeded fires a $feature_flag_called event if the
-// (distinctId, key, deviceId) triple has not already been reported on this
-// client. The caller is responsible for building the full properties dict;
-// this helper only handles dedup and enqueue. It is shared by the legacy
-// per-flag evaluation path and the FeatureFlagEvaluations snapshot path so
-// both dedupe identically against the same per-distinct_id LRU cache.
+// (distinctId, key, deviceId, groups) tuple has not already been reported on
+// this client. Group context is included so group-scoped flags fire a
+// separate event for each group a user is evaluated under. The caller is
+// responsible for building the full properties dict; this helper only handles
+// dedup and enqueue. It is shared by the legacy per-flag evaluation path and
+// the FeatureFlagEvaluations snapshot path so both dedupe identically against
+// the same per-distinct_id LRU cache.
 func (c *client) captureFlagCalledIfNeeded(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
 	deviceIDStr := ""
 	if deviceId != nil {
 		deviceIDStr = *deviceId
 	}
-	cacheKey := flagUser{distinctID: distinctId, flagKey: key, deviceID: deviceIDStr}
+	cacheKey := flagUser{
+		distinctID: distinctId,
+		flagKey:    key,
+		deviceID:   deviceIDStr,
+		groupsRepr: canonicalGroupsRepr(groups),
+	}
 	if c.distinctIdsFeatureFlagsReported.Contains(cacheKey) {
 		return
 	}
@@ -683,6 +697,40 @@ func (c *client) captureFlagCalledIfNeeded(distinctId, key string, deviceId *str
 	}); err == nil {
 		c.distinctIdsFeatureFlagsReported.Add(cacheKey, struct{}{})
 	}
+}
+
+// canonicalGroupsRepr returns a JSON string of the sorted key/value pairs of
+// the groups map. Two equal maps that were built with keys inserted in a
+// different order produce the same string, so they dedupe to one cache entry.
+// Empty / nil groups produce an empty string.
+func canonicalGroupsRepr(groups Groups) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([][2]interface{}, len(keys))
+	for i, k := range keys {
+		pairs[i] = [2]interface{}{k, groups[k]}
+	}
+	b, err := json.Marshal(pairs)
+	if err != nil {
+		// Fallback to a stable string concat — the JSON encode failure path
+		// shouldn't realistically trigger for a map[string]interface{}, but
+		// staying deterministic keeps the dedup behavior consistent.
+		var sb strings.Builder
+		for _, k := range keys {
+			sb.WriteString(k)
+			sb.WriteString("=")
+			sb.WriteString(fmt.Sprintf("%v", groups[k]))
+			sb.WriteString(";")
+		}
+		return sb.String()
+	}
+	return string(b)
 }
 
 func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
