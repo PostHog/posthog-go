@@ -20,7 +20,7 @@ func TestEnqueue_InvalidMessageTypes(t *testing.T) {
 	})
 	defer client.Close()
 
-	t.Run("capture_missing_distinct_id", func(t *testing.T) {
+	t.Run("capture_missing_distinct_id_without_request_context", func(t *testing.T) {
 		err := client.Enqueue(Capture{
 			Event: "test_event",
 		})

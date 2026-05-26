@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -174,6 +175,80 @@ func TestEvaluateFlags_ReturnsSnapshotWithSingleRequest(t *testing.T) {
 	keys := snap.Keys()
 	if len(keys) == 0 {
 		t.Fatal("expected at least one flag key")
+	}
+}
+
+func TestEvaluateFlagsWithContext_UsesRequestContextDistinctId(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+	defer fs.close()
+
+	client, capture, _ := newEvalClient(t, fs.server)
+	ctx := WithFreshRequestContext(context.Background(), RequestContext{
+		DistinctId: "context-user",
+		SessionId:  "context-session",
+		Properties: NewProperties().Set("request", "metadata"),
+	})
+
+	snap, err := EvaluateFlagsWithContext(ctx, client, EvaluateFlagsPayload{})
+	if err != nil {
+		t.Fatalf("EvaluateFlagsWithContext returned error: %v", err)
+	}
+	call, _ := fs.lastCall()
+	if call.DistinctId != "context-user" {
+		t.Fatalf("expected /flags distinct_id from request context, got %q", call.DistinctId)
+	}
+
+	if !snap.IsEnabled("enabled-flag") {
+		t.Fatal("expected enabled-flag to be enabled")
+	}
+	events := waitForEventCount(capture, 1, 5*time.Second)
+	event := findEvent(events, "$feature_flag_called", "enabled-flag")
+	if event == nil {
+		t.Fatalf("expected $feature_flag_called event, got %+v", events)
+	}
+	if event.DistinctId != "context-user" {
+		t.Fatalf("expected feature flag event distinct_id from request context, got %q", event.DistinctId)
+	}
+	if event.Properties[propertySessionID] != "context-session" {
+		t.Fatalf("expected feature flag event session_id from request context, got %#v", event.Properties[propertySessionID])
+	}
+	if event.Properties["request"] != "metadata" {
+		t.Fatalf("expected feature flag event request metadata from request context, got %#v", event.Properties["request"])
+	}
+}
+
+func TestEvaluateFlagsWithContext_ExplicitDistinctIdOverridesRequestContext(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+	defer fs.close()
+
+	client, _, _ := newEvalClient(t, fs.server)
+	ctx := WithFreshRequestContext(context.Background(), RequestContext{DistinctId: "context-user"})
+
+	_, err := EvaluateFlagsWithContext(ctx, client, EvaluateFlagsPayload{DistinctId: "explicit-user"})
+	if err != nil {
+		t.Fatalf("EvaluateFlagsWithContext returned error: %v", err)
+	}
+	call, _ := fs.lastCall()
+	if call.DistinctId != "explicit-user" {
+		t.Fatalf("expected explicit distinct_id to override request context, got %q", call.DistinctId)
+	}
+}
+
+func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+	defer fs.close()
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	_, err := EvaluateFlagsWithContext(context.Background(), client, EvaluateFlagsPayload{})
+	if !errors.Is(err, ErrNoDistinctID) {
+		t.Fatalf("expected ErrNoDistinctID, got %v", err)
+	}
+	if fs.callCount() != 0 {
+		t.Fatalf("expected no /flags request without distinct_id, got %d", fs.callCount())
 	}
 }
 
