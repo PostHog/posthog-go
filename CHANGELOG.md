@@ -1,5 +1,12 @@
 ## Unreleased
 
+## 1.13.0
+
+### Minor Changes
+
+- dec8ade: Add opt-in panic capture for request context middleware.
+- dec8ade: Add server-side request context helpers for net/http capture and exception events, plus `EvaluateFlagsWithContext` for using request-scoped distinct IDs during flag evaluation. Request-context flag evaluation does not generate personless IDs.
+
 ## 1.12.6
 
 ### Patch Changes
