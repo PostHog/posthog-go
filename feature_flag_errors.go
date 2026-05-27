@@ -46,15 +46,18 @@ const (
 // APIError represents an HTTP API error with a status code.
 // This allows classifyError to generate api_error_{status} strings.
 type APIError struct {
+	// StatusCode is the HTTP status code returned by the PostHog API.
 	StatusCode int
-	Message    string
+	// Message is the error message returned by or derived from the API response.
+	Message string
 }
 
+// Error returns the API error message.
 func (e *APIError) Error() string {
 	return e.Message
 }
 
-// NewAPIError creates a new APIError with the given status code.
+// NewAPIError creates an APIError with the given HTTP status code and message.
 func NewAPIError(statusCode int, message string) *APIError {
 	return &APIError{
 		StatusCode: statusCode,

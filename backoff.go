@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Backoff calculates exponential retry delays with optional jitter and a maximum cap.
 type Backoff struct {
 	base   time.Duration
 	factor uint8
@@ -13,12 +14,13 @@ type Backoff struct {
 	cap    time.Duration
 }
 
-// Creates a backo instance with the given parameters
+// NewBackoff creates a Backoff with the provided base duration, exponential
+// factor, jitter ratio, and maximum cap duration.
 func NewBackoff(base time.Duration, factor uint8, jitter float64, cap time.Duration) *Backoff {
 	return &Backoff{base, factor, jitter, cap}
 }
 
-// Creates a backoff instance with the following defaults:
+// DefaultBackoff creates a Backoff with the SDK's default retry policy:
 //
 //	base: 100 milliseconds
 //	factor: 2
@@ -52,11 +54,14 @@ func (b *Backoff) Sleep(attempt int) {
 	time.Sleep(duration)
 }
 
+// Ticker delivers ticks using successive durations from a Backoff.
 type Ticker struct {
 	done chan struct{}
-	C    <-chan time.Time
+	// C receives the time for each backoff tick and is closed after Stop.
+	C <-chan time.Time
 }
 
+// NewTicker starts a ticker that waits Duration(0), Duration(1), and so on between ticks.
 func (b *Backoff) NewTicker() *Ticker {
 	c := make(chan time.Time, 1)
 	ticker := &Ticker{
@@ -81,6 +86,7 @@ func (b *Backoff) NewTicker() *Ticker {
 	return ticker
 }
 
+// Stop stops the ticker goroutine and closes C. Stop should be called at most once.
 func (t *Ticker) Stop() {
 	t.done <- struct{}{}
 }

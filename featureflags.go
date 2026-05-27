@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	// LONG_SCALE is the denominator used to normalize feature flag hash values.
 	LONG_SCALE                = 0xfffffffffffffff
 	bucketingIdentifierDevice = "device_id"
 )
@@ -68,6 +69,8 @@ type flagsState struct {
 	flagsEtag    string
 }
 
+// FeatureFlagsPoller periodically loads feature flag definitions for local evaluation.
+// Applications normally interact with it through Client methods rather than constructing it directly.
 type FeatureFlagsPoller struct {
 	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
 	// After the request the channel get closed.
@@ -81,29 +84,43 @@ type FeatureFlagsPoller struct {
 	personalApiKey string
 	projectApiKey  string
 	localEvalUrl   *url.URL
-	Logger         Logger
-	Endpoint       string
-	http           http.Client
-	nextPollTick   func() time.Duration
-	flagTimeout    time.Duration
-	decider        decider
-	disableGeoIP   bool
+	// Logger receives poller warnings and errors.
+	Logger Logger
+	// Endpoint is the PostHog API host used by the poller.
+	Endpoint     string
+	http         http.Client
+	nextPollTick func() time.Duration
+	flagTimeout  time.Duration
+	decider      decider
+	disableGeoIP bool
 }
 
+// FeatureFlag is a feature flag definition returned by the local evaluation endpoint.
 type FeatureFlag struct {
-	Key                        string   `json:"key"`
-	RolloutPercentage          *float64 `json:"rollout_percentage"`
-	Active                     bool     `json:"active"`
-	Filters                    Filter   `json:"filters"`
-	EnsureExperienceContinuity *bool    `json:"ensure_experience_continuity"`
-	BucketingIdentifier        *string  `json:"bucketing_identifier"`
+	// Key is the feature flag key.
+	Key string `json:"key"`
+	// RolloutPercentage is the top-level rollout percentage, when configured.
+	RolloutPercentage *float64 `json:"rollout_percentage"`
+	// Active reports whether the flag is active.
+	Active bool `json:"active"`
+	// Filters contains matching conditions, variants, and payloads.
+	Filters Filter `json:"filters"`
+	// EnsureExperienceContinuity indicates that the flag requires server-side continuity checks.
+	EnsureExperienceContinuity *bool `json:"ensure_experience_continuity"`
+	// BucketingIdentifier optionally selects the property used for hash bucketing.
+	BucketingIdentifier *string `json:"bucketing_identifier"`
 }
 
+// Filter contains the targeting rules, variants, and payloads for a FeatureFlag.
 type Filter struct {
-	AggregationGroupTypeIndex *uint8                     `json:"aggregation_group_type_index"`
-	Groups                    []FeatureFlagCondition     `json:"groups"`
-	Multivariate              *Variants                  `json:"multivariate"`
-	Payloads                  map[string]json.RawMessage `json:"payloads"`
+	// AggregationGroupTypeIndex identifies the group type for group-targeted flags.
+	AggregationGroupTypeIndex *uint8 `json:"aggregation_group_type_index"`
+	// Groups contains the ordered condition groups to evaluate.
+	Groups []FeatureFlagCondition `json:"groups"`
+	// Multivariate contains variant definitions for multivariate flags.
+	Multivariate *Variants `json:"multivariate"`
+	// Payloads maps flag values or variant keys to raw JSON payloads.
+	Payloads map[string]json.RawMessage `json:"payloads"`
 	// DecodedPayloads holds pre-decoded string versions of Payloads.
 	// Built once at flag load time to avoid per-evaluation json.Unmarshal / unquoting.
 	DecodedPayloads map[string]string `json:"-"`
@@ -112,35 +129,55 @@ type Filter struct {
 	VariantLookupTable []FlagVariantMeta `json:"-"`
 }
 
+// Variants contains all variants configured for a multivariate feature flag.
 type Variants struct {
+	// Variants is the ordered list of possible flag variants.
 	Variants []FlagVariant `json:"variants"`
 }
 
+// FlagVariant describes one multivariate feature flag variant.
 type FlagVariant struct {
-	Key               string   `json:"key"`
-	Name              string   `json:"name"`
+	// Key is the stable variant key returned by flag evaluation.
+	Key string `json:"key"`
+	// Name is the display name for the variant.
+	Name string `json:"name"`
+	// RolloutPercentage is the percentage allocated to this variant.
 	RolloutPercentage *float64 `json:"rollout_percentage"`
 }
 
+// FeatureFlagCondition describes one condition group for a feature flag.
 type FeatureFlagCondition struct {
-	Properties                []FlagProperty `json:"properties"`
-	RolloutPercentage         *float64       `json:"rollout_percentage"`
-	Variant                   *string        `json:"variant"`
-	AggregationGroupTypeIndex *uint8         `json:"aggregation_group_type_index"`
+	// Properties are the targeting rules in this condition group.
+	Properties []FlagProperty `json:"properties"`
+	// RolloutPercentage is the rollout percentage for this condition group.
+	RolloutPercentage *float64 `json:"rollout_percentage"`
+	// Variant is the variant key forced by this condition group, when any.
+	Variant *string `json:"variant"`
+	// AggregationGroupTypeIndex identifies the group type for this condition group.
+	AggregationGroupTypeIndex *uint8 `json:"aggregation_group_type_index"`
 }
 
+// FlagProperty describes one property matcher in a feature flag or cohort condition.
 type FlagProperty struct {
-	Key             string      `json:"key"`
-	Operator        string      `json:"operator"`
-	Value           interface{} `json:"value"`
-	Type            string      `json:"type"` // Supported types: "person", "group", "cohort", "flag"
-	Negation        bool        `json:"negation"`
-	DependencyChain []string    `json:"dependency_chain"` // For flag dependencies
+	// Key is the property key to read.
+	Key string `json:"key"`
+	// Operator is the comparison operator, such as exact, is_not, or regex.
+	Operator string `json:"operator"`
+	// Value is the comparison value for Operator.
+	Value interface{} `json:"value"`
+	// Type is the property source. Supported values include "person", "group", "cohort", and "flag".
+	Type string `json:"type"`
+	// Negation inverts the property match when true.
+	Negation bool `json:"negation"`
+	// DependencyChain tracks feature flag dependencies while evaluating nested flag properties.
+	DependencyChain []string `json:"dependency_chain"`
 }
 
+// PropertyGroup describes a nested property group used by cohorts and flag conditions.
 type PropertyGroup struct {
+	// Type is the boolean operator joining Values, such as AND or OR.
 	Type string `json:"type"`
-	// []PropertyGroup or []FlagProperty
+	// Values contains nested PropertyGroup values or FlagProperty values.
 	Values []any `json:"values"`
 	// ParsedValues holds pre-parsed typed values from Values.
 	// Built once at flag load time to avoid reconstructing FlagProperty/PropertyGroup
@@ -156,35 +193,54 @@ type parsedPropertyValue struct {
 	Property FlagProperty
 }
 
+// FlagVariantMeta is a precomputed hash range for a feature flag variant.
 type FlagVariantMeta struct {
+	// ValueMin is the inclusive lower bound of the normalized hash range.
 	ValueMin float64
+	// ValueMax is the exclusive upper bound of the normalized hash range.
 	ValueMax float64
-	Key      string
+	// Key is the variant key for this hash range.
+	Key string
 }
 
+// FeatureFlagsResponse is the wire-format response from the local evaluation endpoint.
 type FeatureFlagsResponse struct {
-	Flags            []FeatureFlag            `json:"flags"`
-	GroupTypeMapping *map[string]string       `json:"group_type_mapping"`
-	Cohorts          map[string]PropertyGroup `json:"cohorts"`
+	// Flags contains feature flag definitions for local evaluation.
+	Flags []FeatureFlag `json:"flags"`
+	// GroupTypeMapping maps group type indexes to group type names.
+	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
+	// Cohorts contains cohort definitions referenced by local feature flags.
+	Cohorts map[string]PropertyGroup `json:"cohorts"`
 }
 
+// DecideRequestData is the legacy wire-format request body for flag decide calls.
 type DecideRequestData struct {
-	ApiKey           string                `json:"api_key"`
-	DistinctId       string                `json:"distinct_id"`
-	Groups           Groups                `json:"groups"`
-	PersonProperties Properties            `json:"person_properties"`
-	GroupProperties  map[string]Properties `json:"group_properties"`
+	// ApiKey is the PostHog project API key.
+	ApiKey string `json:"api_key"`
+	// DistinctId is the user distinct ID to evaluate flags for.
+	DistinctId string `json:"distinct_id"`
+	// Groups contains group identifiers for group-targeted flags.
+	Groups Groups `json:"groups"`
+	// PersonProperties overrides person properties for this evaluation.
+	PersonProperties Properties `json:"person_properties"`
+	// GroupProperties overrides group properties for this evaluation, keyed by group type.
+	GroupProperties map[string]Properties `json:"group_properties"`
 }
 
+// DecideResponse is the legacy wire-format response body for flag decide calls.
 type DecideResponse struct {
-	FeatureFlags        map[string]interface{}     `json:"featureFlags"`
+	// FeatureFlags contains evaluated flag values keyed by flag key.
+	FeatureFlags map[string]interface{} `json:"featureFlags"`
+	// FeatureFlagPayloads contains raw payloads keyed by flag key.
 	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 
+// InconclusiveMatchError indicates that local evaluation could not conclusively match a condition.
 type InconclusiveMatchError struct {
 	msg string
 }
 
+// Error returns the inconclusive match message.
 func (e *InconclusiveMatchError) Error() string {
 	return e.msg
 }
@@ -197,6 +253,7 @@ type RequiresServerEvaluationError struct {
 	msg string
 }
 
+// Error returns the reason server-side evaluation is required.
 func (e *RequiresServerEvaluationError) Error() string {
 	return e.msg
 }
@@ -533,6 +590,9 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 	})
 }
 
+// GetFeatureFlag evaluates one flag using locally loaded definitions when possible.
+// It returns the flag value, whether that value was locally evaluated, and an error.
+// If local evaluation is inconclusive and OnlyEvaluateLocally is false, it falls back to /flags.
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
 	flag, err := poller.getFeatureFlag(flagConfig)
 
@@ -585,6 +645,8 @@ func mergeDistinctIDIntoProperties(properties Properties, distinctID string) Pro
 	return merged
 }
 
+// GetFeatureFlagPayload returns the payload for the evaluated flag value.
+// It tries local payloads first and falls back to the remote API unless OnlyEvaluateLocally is true.
 func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
 	flag, err := poller.getFeatureFlag(flagConfig)
 
@@ -708,6 +770,8 @@ func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) 
 	return FeatureFlag{}, nil
 }
 
+// GetAllFlags evaluates every available flag for the configured user.
+// Values are bools for boolean flags or strings for multivariate variants.
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
 	featureFlags, err := poller.GetFeatureFlags()
 	if err != nil {
@@ -1917,6 +1981,8 @@ func calculateHash(key, distinctId, salt string) float64 {
 	return float64(binary.BigEndian.Uint64(digest[:8])>>4) / LONG_SCALE
 }
 
+// GetFeatureFlags returns the locally loaded feature flag definitions.
+// It waits for the initial poll to complete and returns an error if flags were not loaded.
 func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 	// When channel is open this will block. When channel is closed it will immediately exit.
 	<-poller.firstFeatureFlagRequestFinished
@@ -2083,6 +2149,7 @@ func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestD
 	return res, cancel, err
 }
 
+// ForceReload requests an immediate reload of local feature flag definitions.
 func (poller *FeatureFlagsPoller) ForceReload() {
 	poller.forceReload <- true
 }

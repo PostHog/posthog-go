@@ -5,15 +5,25 @@ import (
 	"time"
 )
 
+// GroupIdentify represents a group analytics call that sets properties on a group.
+// Enqueue validates Type and Key, fills Uuid, Timestamp, and DisableGeoIP, then
+// sends the message as a $groupidentify event.
 type GroupIdentify struct {
+	// Type is the group type, such as "company" or "organization".
 	Type string
-	Key  string
-	// Uuid is optional. If not provided, a random UUID will be generated.
+	// Key is the group key or ID within the group type.
+	Key string
+	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	Uuid string
 
-	DistinctId   string
-	Timestamp    time.Time
-	Properties   Properties
+	// DistinctId is accepted for compatibility but the wire payload uses a generated group distinct ID.
+	DistinctId string
+	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	Timestamp time.Time
+	// Properties are sent as the $group_set properties for the group.
+	Properties Properties
+	// DisableGeoIP controls whether this group-identify event disables GeoIP lookup.
+	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool
 }
 
@@ -21,6 +31,7 @@ func (msg GroupIdentify) internal() {
 	panic(unimplementedError)
 }
 
+// Validate checks that the group identify message has Type and Key set.
 func (msg GroupIdentify) Validate() error {
 	if len(msg.Type) == 0 {
 		return FieldError{
@@ -41,17 +52,26 @@ func (msg GroupIdentify) Validate() error {
 	return nil
 }
 
+// GroupIdentifyInApi is the wire-format payload produced from a GroupIdentify message.
 type GroupIdentifyInApi struct {
-	Uuid           string    `json:"uuid"`
-	Library        string    `json:"library"`
-	LibraryVersion string    `json:"library_version"`
-	Timestamp      time.Time `json:"timestamp"`
+	// Uuid is the event UUID sent to the batch API.
+	Uuid string `json:"uuid"`
+	// Library is the SDK name sent to the batch API.
+	Library string `json:"library"`
+	// LibraryVersion is the SDK version sent to the batch API.
+	LibraryVersion string `json:"library_version"`
+	// Timestamp is the event timestamp sent to the batch API.
+	Timestamp time.Time `json:"timestamp"`
 
-	Event      string     `json:"event"`
-	DistinctId string     `json:"distinct_id"`
+	// Event is always $groupidentify for GroupIdentify messages.
+	Event string `json:"event"`
+	// DistinctId is the generated group distinct ID sent to PostHog.
+	DistinctId string `json:"distinct_id"`
+	// Properties contains SDK metadata, group identifiers, and $group_set properties.
 	Properties Properties `json:"properties"`
 }
 
+// APIfy converts a GroupIdentify message into the PostHog batch API representation.
 func (msg GroupIdentify) APIfy() APIMessage {
 	myProperties := Properties{}.
 		Set("$lib", SDKName).

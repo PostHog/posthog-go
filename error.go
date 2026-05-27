@@ -5,8 +5,7 @@ import (
 	"fmt"
 )
 
-// Returned by the `NewWithConfig` function when the one of the configuration
-// fields was set to an impossible value (like a negative duration).
+// ConfigError is returned by NewWithConfig when a Config field has an invalid value.
 type ConfigError struct {
 
 	// A human-readable message explaining why the configuration field's value
@@ -20,13 +19,12 @@ type ConfigError struct {
 	Value interface{}
 }
 
+// Error returns a human-readable configuration error message.
 func (e ConfigError) Error() string {
 	return fmt.Sprintf("posthog.NewWithConfig: %s (posthog.Config.%s: %#v)", e.Reason, e.Field, e.Value)
 }
 
-// Instances of this type are used to represent errors returned when a field was
-// no initialize properly in a structure passed as argument to one of the
-// functions of this package.
+// FieldError describes an invalid required field in a message passed to the SDK.
 type FieldError struct {
 
 	// The human-readable representation of the type of structure that wasn't
@@ -40,6 +38,7 @@ type FieldError struct {
 	Value interface{}
 }
 
+// Error returns a human-readable field validation error message.
 func (e FieldError) Error() string {
 	return fmt.Sprintf("%s.%s: invalid field value: %#v", e.Type, e.Name, e.Value)
 }

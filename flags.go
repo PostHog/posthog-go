@@ -12,43 +12,65 @@ import (
 	json "github.com/goccy/go-json"
 )
 
+// FlagsRequestData is the wire-format request body sent to the /flags endpoint.
 type FlagsRequestData struct {
-	ApiKey             string                `json:"api_key"`
-	DistinctId         string                `json:"distinct_id"`
-	DeviceId           *string               `json:"device_id,omitempty"`
-	Groups             Groups                `json:"groups"`
-	PersonProperties   Properties            `json:"person_properties"`
-	GroupProperties    map[string]Properties `json:"group_properties"`
-	DisableGeoIP       bool                  `json:"geoip_disable,omitempty"`
-	FlagKeysToEvaluate []string              `json:"flag_keys_to_evaluate,omitempty"`
+	// ApiKey is the PostHog project API key.
+	ApiKey string `json:"api_key"`
+	// DistinctId is the user distinct ID to evaluate flags for.
+	DistinctId string `json:"distinct_id"`
+	// DeviceId optionally identifies the device for device-aware flag evaluation.
+	DeviceId *string `json:"device_id,omitempty"`
+	// Groups contains group identifiers for group-targeted flags.
+	Groups Groups `json:"groups"`
+	// PersonProperties overrides person properties for this evaluation.
+	PersonProperties Properties `json:"person_properties"`
+	// GroupProperties overrides group properties for this evaluation, keyed by group type.
+	GroupProperties map[string]Properties `json:"group_properties"`
+	// DisableGeoIP disables GeoIP enrichment for this flags request.
+	DisableGeoIP bool `json:"geoip_disable,omitempty"`
+	// FlagKeysToEvaluate asks the server to evaluate only these flag keys when non-empty.
+	FlagKeysToEvaluate []string `json:"flag_keys_to_evaluate,omitempty"`
 }
 
-// FlagDetail represents a feature flag in v4 format
+// FlagDetail represents one evaluated feature flag in the v4 /flags response format.
 type FlagDetail struct {
-	Key      string       `json:"key"`
-	Enabled  bool         `json:"enabled"`
-	Variant  *string      `json:"variant"`
-	Reason   *FlagReason  `json:"reason"`
+	// Key is the feature flag key.
+	Key string `json:"key"`
+	// Enabled reports whether the flag is enabled for the evaluated user.
+	Enabled bool `json:"enabled"`
+	// Variant is the matched variant key for multivariate flags, or nil for boolean flags.
+	Variant *string `json:"variant"`
+	// Reason explains why the flag matched or did not match, when provided by the API.
+	Reason *FlagReason `json:"reason"`
+	// Metadata contains IDs, version, payload, and optional flag description.
 	Metadata FlagMetadata `json:"metadata"`
-	Failed   *bool        `json:"failed,omitempty"`
+	// Failed is true when the API could not evaluate this flag due to a transient failure.
+	Failed *bool `json:"failed,omitempty"`
 }
 
-// FlagReason represents why a flag was enabled/disabled
+// FlagReason represents why a flag was enabled or disabled.
 type FlagReason struct {
-	Code           string `json:"code"`
-	Description    string `json:"description"`
-	ConditionIndex *int   `json:"condition_index"`
+	// Code is the machine-readable reason code returned by the API.
+	Code string `json:"code"`
+	// Description is the human-readable reason returned by the API.
+	Description string `json:"description"`
+	// ConditionIndex is the matched condition index, when available.
+	ConditionIndex *int `json:"condition_index"`
 }
 
-// FlagMetadata contains additional information about a flag
+// FlagMetadata contains additional information about a flag evaluation.
 type FlagMetadata struct {
-	ID          int             `json:"id"`
-	Version     int             `json:"version"`
-	Payload     json.RawMessage `json:"payload"`
-	Description *string         `json:"description,omitempty"`
+	// ID is the numeric feature flag ID in PostHog.
+	ID int `json:"id"`
+	// Version is the feature flag version evaluated by the API.
+	Version int `json:"version"`
+	// Payload is the raw JSON payload associated with the matched flag value.
+	Payload json.RawMessage `json:"payload"`
+	// Description is the feature flag description, when returned by the API.
+	Description *string `json:"description,omitempty"`
 }
 
-// GetValue returns the variant if it exists, otherwise returns the enabled status
+// GetValue returns the variant string when Variant is set; otherwise it returns Enabled.
 func (f FlagDetail) GetValue() interface{} {
 	if f.Variant != nil {
 		return *f.Variant
@@ -56,7 +78,9 @@ func (f FlagDetail) GetValue() interface{} {
 	return f.Enabled
 }
 
-// NewFlagDetail creates a new FlagDetail from a key, value, and optional payload
+// NewFlagDetail creates a FlagDetail from a flag key, a bool or string value,
+// and an optional raw JSON payload. String values are treated as enabled variants;
+// bool values are treated as boolean flag results.
 func NewFlagDetail(key string, value interface{}, payload json.RawMessage) FlagDetail {
 	var variant *string
 	var enabled bool
@@ -82,25 +106,31 @@ func NewFlagDetail(key string, value interface{}, payload json.RawMessage) FlagD
 	}
 }
 
-// FlagsResponse represents the response from the flags endpoint v1 or v2.
-// It is a normalized super set of the v1 and v2 formats.
+// FlagsResponse represents a normalized /flags response.
+// It accepts both legacy v3 and current v4 response shapes.
 type FlagsResponse struct {
+	// CommonResponseFields contains response metadata shared across formats.
 	CommonResponseFields
 
-	// v4 flags format
+	// Flags contains v4-format flag details keyed by flag key.
 	Flags map[string]FlagDetail `json:"flags,omitempty"`
 
-	// v3 legacy fields
-	FeatureFlags        map[string]interface{}     `json:"featureFlags"`
+	// FeatureFlags contains legacy v3 flag values keyed by flag key.
+	FeatureFlags map[string]interface{} `json:"featureFlags"`
+	// FeatureFlagPayloads contains legacy v3 raw payloads keyed by flag key.
 	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 
-// CommonResponseFields contains fields common to all flags response versions
+// CommonResponseFields contains fields common to all flags response versions.
 type CommonResponseFields struct {
-	QuotaLimited              []string `json:"quota_limited"`
-	RequestId                 string   `json:"requestId"`
-	EvaluatedAt               *int64   `json:"evaluatedAt"`
-	ErrorsWhileComputingFlags bool     `json:"errorsWhileComputingFlags"`
+	// QuotaLimited lists quota-limited resources returned by the API.
+	QuotaLimited []string `json:"quota_limited"`
+	// RequestId is the API request identifier for tracing flag evaluation.
+	RequestId string `json:"requestId"`
+	// EvaluatedAt is the server evaluation timestamp, when returned.
+	EvaluatedAt *int64 `json:"evaluatedAt"`
+	// ErrorsWhileComputingFlags reports whether the server had errors computing any flags.
+	ErrorsWhileComputingFlags bool `json:"errorsWhileComputingFlags"`
 }
 
 // UnmarshalJSON implements custom unmarshaling to handle both v3 and v4 formats

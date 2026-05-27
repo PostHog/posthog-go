@@ -6,17 +6,23 @@ import (
 
 var _ Message = (*Alias)(nil)
 
-// This type represents object sent in a alias call
+// Alias represents an alias call that links another distinct ID to an existing user.
+// Enqueue validates that DistinctId and Alias are both set, fills Type, Uuid,
+// Timestamp, and DisableGeoIP, then sends the message as a $create_alias event.
 type Alias struct {
-	// This field is exported for serialization purposes and shouldn't be set by
-	// the application, its value is always overwritten by the library.
+	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	Type string
-	// Uuid is optional. If not provided, a random UUID will be generated.
+	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	Uuid string
 
-	Alias        string
-	DistinctId   string
-	Timestamp    time.Time
+	// Alias is the alternate distinct ID to attach to DistinctId.
+	Alias string
+	// DistinctId is the existing user distinct ID that Alias should resolve to.
+	DistinctId string
+	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	Timestamp time.Time
+	// DisableGeoIP controls whether this alias event disables GeoIP lookup.
+	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool
 }
 
@@ -24,6 +30,7 @@ func (msg Alias) internal() {
 	panic(unimplementedError)
 }
 
+// Validate checks that the alias message has both DistinctId and Alias set.
 func (msg Alias) Validate() error {
 	if len(msg.DistinctId) == 0 {
 		return FieldError{
@@ -44,27 +51,42 @@ func (msg Alias) Validate() error {
 	return nil
 }
 
+// AliasInApiProperties is the wire-format properties object for an Alias message.
 type AliasInApiProperties struct {
 	sysContext
-	DistinctId   string `json:"distinct_id"`
-	Alias        string `json:"alias"`
-	Lib          string `json:"$lib"`
-	LibVersion   string `json:"$lib_version"`
-	DisableGeoIP bool   `json:"$geoip_disable,omitempty"`
+	// DistinctId is the canonical user distinct ID.
+	DistinctId string `json:"distinct_id"`
+	// Alias is the alternate distinct ID being linked to DistinctId.
+	Alias string `json:"alias"`
+	// Lib is the SDK name sent as $lib.
+	Lib string `json:"$lib"`
+	// LibVersion is the SDK version sent as $lib_version.
+	LibVersion string `json:"$lib_version"`
+	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
+	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
 }
 
+// AliasInApi is the wire-format payload produced from an Alias message.
 type AliasInApi struct {
-	Type           string    `json:"type"`
-	Uuid           string    `json:"uuid"`
-	Library        string    `json:"library"`
-	LibraryVersion string    `json:"library_version"`
-	Timestamp      time.Time `json:"timestamp"`
+	// Type is the message type sent to the batch API.
+	Type string `json:"type"`
+	// Uuid is the event UUID sent to the batch API.
+	Uuid string `json:"uuid"`
+	// Library is the SDK name sent to the batch API.
+	Library string `json:"library"`
+	// LibraryVersion is the SDK version sent to the batch API.
+	LibraryVersion string `json:"library_version"`
+	// Timestamp is the event timestamp sent to the batch API.
+	Timestamp time.Time `json:"timestamp"`
 
+	// Properties contains alias-specific event properties.
 	Properties AliasInApiProperties `json:"properties"`
 
+	// Event is always $create_alias for Alias messages.
 	Event string `json:"event"`
 }
 
+// APIfy converts an Alias message into the PostHog batch API representation.
 func (msg Alias) APIfy() APIMessage {
 	libraryVersion := getVersion()
 

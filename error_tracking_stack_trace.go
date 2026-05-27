@@ -13,8 +13,8 @@ import (
 // signal to visually emphasize frames that are likely actionable.
 type InAppDecider func(frame runtime.Frame) bool
 
-// SimpleInAppDecider a naive implementation of InAppDecider which checks the file paths.
-// It's good enough for 90% of the cases.
+// SimpleInAppDecider is a basic InAppDecider that classifies frames by file path.
+// It excludes vendored modules, module cache paths, and Go toolchain paths.
 func SimpleInAppDecider(frame runtime.Frame) bool {
 	f := frame.File
 	sep := string(filepath.Separator)
@@ -44,9 +44,13 @@ type StackTraceExtractor interface {
 // of a StackTraceExtractor. It should be enough for most use cases, however, you're free to
 // create your own implementation if you require more flexibility.
 type DefaultStackTraceExtractor struct {
+	// InAppDecider decides whether each runtime frame is application code.
+	// Set it to SimpleInAppDecider or another non-nil function before use.
 	InAppDecider InAppDecider
 }
 
+// GetStackTrace captures the current goroutine stack and converts it to an ExceptionStacktrace.
+// The skip parameter omits leading runtime.Callers frames before conversion.
 func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace {
 	pcs := make([]uintptr, 64)
 	stackCallCount := runtime.Callers(skip, pcs)

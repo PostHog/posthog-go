@@ -6,18 +6,21 @@ package posthog
 // common fields.
 // Here's a quick example of how this type is meant to be used:
 //
-//	posthog.Page{
+//	posthog.Capture{
 //		DistinctId: "0123456789",
+//		Event:      "order completed",
 //		Properties: posthog.NewProperties()
 //			.Set("revenue", 10.0)
 //			.Set("currency", "USD"),
 //	}
 type Properties map[string]interface{}
 
+// NewProperties creates an empty Properties map for fluent construction.
 func NewProperties() Properties {
 	return make(Properties, 10)
 }
 
+// Set assigns a property value and returns the receiver.
 func (p Properties) Set(name string, value interface{}) Properties {
 	p[name] = value
 	return p

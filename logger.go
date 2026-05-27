@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-// Logger defines an interface for a logger used by the PostHog clientś.
+// Logger defines the logging interface used by PostHog clients.
 type Logger interface {
 	// Debugf is called by PostHog client to log debug messages about the
 	// operations they perform. Messages logged by this method are usually
@@ -29,8 +29,8 @@ type Logger interface {
 	Errorf(format string, args ...interface{})
 }
 
-// This function instantiate an object that statisfies the posthog.Logger
-// interface and send logs to standard logger passed as argument.
+// StdLogger wraps a standard log.Logger as a PostHog Logger.
+// The verbose parameter controls whether Debugf messages are emitted.
 func StdLogger(logger *log.Logger, verbose bool) Logger {
 	return stdLogger{
 		logger:  logger,

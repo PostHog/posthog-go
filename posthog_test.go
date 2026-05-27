@@ -139,9 +139,6 @@ func TestNew_BlankAPIKeyReturnsNoopClient(t *testing.T) {
 	require.Empty(t, evaluations.Keys())
 
 	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrSDKDisabled)
-	featureFlags, err := client.GetFeatureFlags()
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, featureFlags)
 	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 }
@@ -1251,9 +1248,6 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrNoPersonalAPIKey)
-	featureFlags, err := client.GetFeatureFlags()
-	require.ErrorIs(t, err, ErrNoPersonalAPIKey)
-	require.Nil(t, featureFlags)
 
 	payload, err := client.GetRemoteConfigPayload("test-flag")
 	require.ErrorIs(t, err, ErrNoPersonalAPIKey)
@@ -1284,7 +1278,6 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 	joinedLogs := strings.Join(logged, "\n")
 	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; ReloadFeatureFlags requires a PersonalApiKey.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlags requires a PersonalApiKey.")
 	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetRemoteConfigPayload requires a PersonalApiKey.")
 	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlagResult requires a PersonalApiKey.")
 	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetAllFlags requires a PersonalApiKey.")

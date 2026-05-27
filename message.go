@@ -7,40 +7,38 @@ import (
 	"github.com/google/uuid"
 )
 
-// Values implementing this interface are used by posthog clients to notify
-// the application when a message send succeeded or failed.
+// Callback is implemented by applications that want delivery notifications.
 //
-// Callback methods are called by a client's internal goroutines, there are no
-// guarantees on which goroutine will trigger the callbacks, the calls can be
-// made sequentially or in parallel, the order doesn't depend on the order of
-// messages were queued to the client.
+// Callback methods are called by a client's internal goroutines. There are no
+// guarantees about which goroutine triggers the callbacks, whether calls are
+// made sequentially or in parallel, or whether callback order matches enqueue order.
 //
-// Callback methods must return quickly and not cause long blocking operations
-// to avoid interferring with the client's internal work flow.
+// Callback methods must return quickly and avoid long blocking operations so
+// they do not interfere with the client's internal workflow.
 type Callback interface {
 
-	// This method is called for every message that was successfully sent to
-	// the API.
+	// Success is called for every message that was successfully sent to the API.
 	Success(APIMessage)
 
-	// This method is called for every message that failed to be sent to the
-	// API and will be discarded by the client.
+	// Failure is called for every message that failed to be sent to the API and
+	// will be discarded by the client. The error describes the send or serialization failure.
 	Failure(APIMessage, error)
 }
 
-// This interface is used to represent posthog objects that can be sent via
-// a client.
+// Message represents a PostHog object that can be queued with Client.Enqueue.
 //
-// Types like posthog.Capture, posthog.Alias, etc... implement this interface
-// and therefore can be passed to the posthog.Client.Send method.
+// Built-in message types such as Capture, Identify, Alias, GroupIdentify, and
+// Exception implement this interface. The unexported internal method prevents
+// external packages from defining arbitrary message implementations.
 type Message interface {
 
-	// Validate validates the internal structure of the message, the method must return
-	// nil if the message is valid, or an error describing what went wrong.
+	// Validate checks the internal structure of the message. It returns nil when
+	// the message is valid or an error describing the invalid field.
 	Validate() error
+	// APIfy converts the message into its PostHog batch API representation.
 	APIfy() APIMessage
 
-	// internal is an unexposed interface function to ensure only types defined within this package can satisfy the Message interface. Invoking this method will panic.
+	// internal prevents external packages from satisfying Message. Calling it panics.
 	internal()
 }
 
@@ -71,6 +69,7 @@ type batch struct {
 	Messages            []json.RawMessage `json:"batch"`
 }
 
+// APIMessage is a wire-format message produced by Message.APIfy and passed to callbacks.
 type APIMessage interface{}
 
 // prepareForSend creates the API message and serializes it to JSON.
