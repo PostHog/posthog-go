@@ -116,10 +116,6 @@ type Client interface {
 	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
 	ReloadFeatureFlags() error
 
-	// GetFeatureFlags gets all feature flags, for testing only.
-	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
-	GetFeatureFlags() ([]FeatureFlag, error)
-
 	// CloseWithContext gracefully shuts down the client with the provided context.
 	// The context can be used to control the shutdown deadline.
 	CloseWithContext(context.Context) error
@@ -748,17 +744,6 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 
 func (c *client) GetRemoteConfigPayload(flagKey string) (string, error) {
 	return c.makeRemoteConfigRequest(flagKey)
-}
-
-// GetFeatureFlags returns all feature flag definitions used for local evaluation.
-// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
-// Not to be confused with GetAllFlags, which returns all flags and their values for a given user.
-func (c *client) GetFeatureFlags() ([]FeatureFlag, error) {
-	if c.featureFlagsPoller == nil {
-		c.warnPersonalAPIKeyMissing("GetFeatureFlags")
-		return nil, ErrNoPersonalAPIKey
-	}
-	return c.featureFlagsPoller.GetFeatureFlags()
 }
 
 // GetAllFlags returns all flags and their values for a given user

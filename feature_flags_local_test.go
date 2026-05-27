@@ -4451,20 +4451,20 @@ func TestFetchFlagsFails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+	cli, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
 		PersonalApiKey: "some very secret key",
 		Endpoint:       server.URL,
 	})
-	defer client.Close()
+	defer cli.Close()
 
-	_, err := client.GetFeatureFlags()
+	_, err := cli.(*client).featureFlagsPoller.GetFeatureFlags()
 	if err != nil {
 		t.Error("Should not fail", err)
 	}
-	client.ReloadFeatureFlags()
-	client.ReloadFeatureFlags()
+	cli.ReloadFeatureFlags()
+	cli.ReloadFeatureFlags()
 
-	_, err = client.GetAllFlags(FeatureFlagPayloadNoKey{
+	_, err = cli.GetAllFlags(FeatureFlagPayloadNoKey{
 		DistinctId: "my-id",
 	})
 	if err != nil {

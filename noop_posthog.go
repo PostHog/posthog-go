@@ -8,7 +8,6 @@ type noopClient struct {
 
 var (
 	emptyFlagValues            = map[string]interface{}{}
-	emptyFeatureFlags          = []FeatureFlag{}
 	emptyEvaluatedFlagRecords  = map[string]evaluatedFlagRecord{}
 	noopFeatureFlagResult      = &FeatureFlagResult{Enabled: false}
 	noopFeatureFlagEvaluations = &FeatureFlagEvaluations{flags: emptyEvaluatedFlagRecords}
@@ -60,10 +59,6 @@ func (c *noopClient) EvaluateFlagsWithContext(context.Context, EvaluateFlagsPayl
 
 func (c *noopClient) ReloadFeatureFlags() error {
 	return ErrSDKDisabled
-}
-
-func (c *noopClient) GetFeatureFlags() ([]FeatureFlag, error) {
-	return emptyFeatureFlags, ErrSDKDisabled
 }
 
 func (c *noopClient) Close() error {

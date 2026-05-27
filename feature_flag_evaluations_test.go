@@ -826,21 +826,21 @@ func TestEvaluateFlags_RemoteErrorReturnsPartialLocalSnapshot(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _, _ := newEvalClient(t, server, func(c *Config) {
+	cli, _, _ := newEvalClient(t, server, func(c *Config) {
 		c.PersonalApiKey = "personal-key"
 	})
 
 	// Wait for the poller's first definitions fetch.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		flags, _ := client.GetFeatureFlags()
+		flags, _ := cli.(*client).featureFlagsPoller.GetFeatureFlags()
 		if len(flags) > 0 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	snap, err := cli.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
 	if err == nil {
 		t.Fatal("expected non-nil error from failing /flags request")
 	}
