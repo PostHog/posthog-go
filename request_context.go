@@ -14,8 +14,10 @@ import (
 )
 
 const (
+	// HeaderPostHogDistinctID is the HTTP header used to propagate a PostHog distinct ID.
 	HeaderPostHogDistinctID = "X-PostHog-Distinct-Id"
-	HeaderPostHogSessionID  = "X-PostHog-Session-Id"
+	// HeaderPostHogSessionID is the HTTP header used to propagate a PostHog session ID.
+	HeaderPostHogSessionID = "X-PostHog-Session-Id"
 
 	propertyProcessPersonProfile = "$process_person_profile"
 	propertySessionID            = "$session_id"
@@ -38,8 +40,11 @@ type requestContextKey struct{}
 // DistinctId and SessionId usually come from PostHog tracing headers. Properties usually contain safe
 // request metadata such as $current_url, $request_method, $request_path, $user_agent, and $ip.
 type RequestContext struct {
+	// DistinctId is the request-scoped user distinct ID.
 	DistinctId string
-	SessionId  string
+	// SessionId is the request-scoped PostHog session ID.
+	SessionId string
+	// Properties are request-scoped properties merged into capture and exception events.
 	Properties Properties
 }
 

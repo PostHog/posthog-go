@@ -1,13 +1,25 @@
 package posthog
 
+// FeatureFlagPayload configures a single legacy feature flag evaluation.
+// It is used by Client.GetFeatureFlag, Client.IsFeatureEnabled,
+// Client.GetFeatureFlagResult, and Client.GetFeatureFlagPayload.
 type FeatureFlagPayload struct {
-	Key                   string
-	DistinctId            string
-	DeviceId              *string
-	Groups                Groups
-	PersonProperties      Properties
-	GroupProperties       map[string]Properties
-	OnlyEvaluateLocally   bool
+	// Key is the feature flag key to evaluate. It is required.
+	Key string
+	// DistinctId is the user distinct ID to evaluate the flag for. It is required.
+	DistinctId string
+	// DeviceId optionally provides a device_id for remote /flags requests and event deduplication.
+	DeviceId *string
+	// Groups supplies group identifiers for group-targeted flags.
+	Groups Groups
+	// PersonProperties overrides person properties used during flag evaluation.
+	PersonProperties Properties
+	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
+	GroupProperties map[string]Properties
+	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
+	OnlyEvaluateLocally bool
+	// SendFeatureFlagEvents controls whether $feature_flag_called is captured.
+	// Nil defaults to true during validation.
 	SendFeatureFlagEvents *bool
 }
 
@@ -42,13 +54,23 @@ func (c *FeatureFlagPayload) validate() error {
 	return nil
 }
 
+// FeatureFlagPayloadNoKey configures legacy evaluation of all flags for one user.
+// It is used by Client.GetAllFlags.
 type FeatureFlagPayloadNoKey struct {
-	DistinctId            string
-	DeviceId              *string
-	Groups                Groups
-	PersonProperties      Properties
-	GroupProperties       map[string]Properties
-	OnlyEvaluateLocally   bool
+	// DistinctId is the user distinct ID to evaluate flags for. It is required.
+	DistinctId string
+	// DeviceId optionally provides a device_id for remote /flags requests and event deduplication.
+	DeviceId *string
+	// Groups supplies group identifiers for group-targeted flags.
+	Groups Groups
+	// PersonProperties overrides person properties used during flag evaluation.
+	PersonProperties Properties
+	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
+	GroupProperties map[string]Properties
+	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
+	OnlyEvaluateLocally bool
+	// SendFeatureFlagEvents is reserved for parity with single-flag payloads.
+	// Nil defaults to true during validation; GetAllFlags does not currently emit per-flag access events.
 	SendFeatureFlagEvents *bool
 }
 

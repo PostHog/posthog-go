@@ -7,39 +7,57 @@ import (
 
 var _ Message = (*Exception)(nil)
 
+// Exception represents an error tracking exception event.
+// Enqueue validates DistinctId and ExceptionList (or obtains DistinctId from request context),
+// fills Type, Uuid, Timestamp, and DisableGeoIP, then sends the message as a $exception event.
 type Exception struct {
-	// This field is exported for serialization purposes and shouldn't be set by
-	// the application, its value is always overwritten by the library.
+	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	Type string
-	// Uuid is optional. If not provided, a random UUID will be generated.
+	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	Uuid string
 
-	DistinctId   string
-	Timestamp    time.Time
-	Properties   Properties
+	// DistinctId identifies the user or entity associated with the exception.
+	// When using EnqueueWithContext, this can be inherited from RequestContext.
+	DistinctId string
+	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	Timestamp time.Time
+	// Properties are custom event properties flattened into the exception event.
+	Properties Properties
+	// DisableGeoIP controls whether this exception event disables GeoIP lookup.
+	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool
 
-	ExceptionList        []ExceptionItem
+	// ExceptionList is the list of exception items sent as $exception_list. It must be non-empty.
+	ExceptionList []ExceptionItem
+	// ExceptionFingerprint optionally overrides PostHog's default exception grouping fingerprint.
 	ExceptionFingerprint *string
 }
 
+// ExceptionItem describes one exception in an Exception event.
 type ExceptionItem struct {
-	// Type will be rendered as title in the UI
+	// Type is rendered as the exception title in the PostHog UI.
 	Type string `json:"type"`
-	// Value will be rendered as description in the UI
-	Value     string              `json:"value"`
+	// Value is rendered as the exception description in the PostHog UI.
+	Value string `json:"value"`
+	// Mechanism describes how the exception was produced or handled.
 	Mechanism *ExceptionMechanism `json:"mechanism,omitempty"`
-	// Stacktrace can conveniently be generated through the use of StackTraceExtractor
+	// Stacktrace contains stack frames for the exception. Use StackTraceExtractor to generate it.
 	Stacktrace *ExceptionStacktrace `json:"stacktrace,omitempty"`
 }
 
+// ExceptionMechanism describes whether an exception was handled or synthesized.
 type ExceptionMechanism struct {
-	Handled   *bool `json:"handled,omitempty"`
+	// Handled reports whether the exception was handled by application code.
+	Handled *bool `json:"handled,omitempty"`
+	// Synthetic reports whether the exception was synthesized by instrumentation.
 	Synthetic *bool `json:"synthetic,omitempty"`
 }
 
+// ExceptionStacktrace is a PostHog-compatible stack trace.
 type ExceptionStacktrace struct {
-	Type   string       `json:"type"`
+	// Type is the stack trace representation type. The default extractor uses "raw".
+	Type string `json:"type"`
+	// Frames is the ordered list of stack frames.
 	Frames []StackFrame `json:"frames"`
 }
 
@@ -47,32 +65,53 @@ type ExceptionStacktrace struct {
 // Documentation about the available fields can be found here:
 // https://github.com/PostHog/posthog/blob/39b9326320c23acbdc6e96a8beb41b30d3c99099/rust/cymbal/src/langs/go.rs#L7
 type StackFrame struct {
-	Filename  string `json:"filename"`
-	LineNo    int    `json:"lineno"`
-	Function  string `json:"function"`
-	InApp     bool   `json:"in_app"`
-	Synthetic bool   `json:"synthetic"`
-	Platform  string `json:"platform"`
+	// Filename is the source file path for the frame.
+	Filename string `json:"filename"`
+	// LineNo is the one-based source line number.
+	LineNo int `json:"lineno"`
+	// Function is the fully qualified function name.
+	Function string `json:"function"`
+	// InApp reports whether the frame is considered application code.
+	InApp bool `json:"in_app"`
+	// Synthetic reports whether the frame was synthesized by instrumentation.
+	Synthetic bool `json:"synthetic"`
+	// Platform identifies the runtime platform; Go frames use "go".
+	Platform string `json:"platform"`
 }
 
+// ExceptionInApi is the wire-format payload produced from an Exception message.
 type ExceptionInApi struct {
-	Type           string                   `json:"type"`
-	Uuid           string                   `json:"uuid"`
-	Library        string                   `json:"library"`
-	LibraryVersion string                   `json:"library_version"`
-	Timestamp      time.Time                `json:"timestamp"`
-	Event          string                   `json:"event"`
-	Properties     ExceptionInApiProperties `json:"properties"`
+	// Type is the message type sent to the batch API.
+	Type string `json:"type"`
+	// Uuid is the event UUID sent to the batch API.
+	Uuid string `json:"uuid"`
+	// Library is the SDK name sent to the batch API.
+	Library string `json:"library"`
+	// LibraryVersion is the SDK version sent to the batch API.
+	LibraryVersion string `json:"library_version"`
+	// Timestamp is the event timestamp sent to the batch API.
+	Timestamp time.Time `json:"timestamp"`
+	// Event is always $exception for Exception messages.
+	Event string `json:"event"`
+	// Properties contains built-in and custom exception properties.
+	Properties ExceptionInApiProperties `json:"properties"`
 }
 
+// ExceptionInApiProperties is the wire-format properties object for an Exception message.
 type ExceptionInApiProperties struct {
 	sysContext
-	Lib                  string          `json:"$lib"`
-	LibVersion           string          `json:"$lib_version"`
-	DistinctId           string          `json:"distinct_id"`
-	DisableGeoIP         bool            `json:"$geoip_disable,omitempty"`
-	ExceptionList        []ExceptionItem `json:"$exception_list"`
-	ExceptionFingerprint *string         `json:"$exception_fingerprint,omitempty"`
+	// Lib is the SDK name sent as $lib.
+	Lib string `json:"$lib"`
+	// LibVersion is the SDK version sent as $lib_version.
+	LibVersion string `json:"$lib_version"`
+	// DistinctId is the user distinct ID associated with the exception.
+	DistinctId string `json:"distinct_id"`
+	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
+	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
+	// ExceptionList is sent as $exception_list.
+	ExceptionList []ExceptionItem `json:"$exception_list"`
+	// ExceptionFingerprint is sent as $exception_fingerprint when provided.
+	ExceptionFingerprint *string `json:"$exception_fingerprint,omitempty"`
 
 	// Custom is flattened into the wire "properties" on marshal.
 	// Typed fields win on collision.
@@ -114,6 +153,7 @@ func (p ExceptionInApiProperties) MarshalJSON() ([]byte, error) {
 
 func (msg Exception) internal() { panic(unimplementedError) }
 
+// Validate checks that the exception has a DistinctId and at least one valid ExceptionItem.
 func (msg Exception) Validate() error {
 	if len(msg.DistinctId) == 0 {
 		return FieldError{
@@ -138,6 +178,7 @@ func (msg Exception) Validate() error {
 	return nil
 }
 
+// Validate checks that the exception item has Type and Value set.
 func (msg ExceptionItem) Validate() error {
 	if msg.Type == "" {
 		return FieldError{
@@ -157,6 +198,7 @@ func (msg ExceptionItem) Validate() error {
 	return nil
 }
 
+// APIfy converts an Exception message into the PostHog batch API representation.
 func (msg Exception) APIfy() APIMessage {
 	libVersion := getVersion()
 
@@ -180,8 +222,13 @@ func (msg Exception) APIfy() APIMessage {
 	}
 }
 
-// NewDefaultException is a convenience function to build an Exception object (usable for `client.Enqueue`)
-// with sane defaults. If you want more control, please manually build the Exception object.
+// NewDefaultException builds an Exception with a default stack trace.
+//
+// The timestamp parameter becomes Exception.Timestamp, distinctID becomes
+// Exception.DistinctId, title becomes the first ExceptionItem.Type, and
+// description becomes the first ExceptionItem.Value. The returned Exception is
+// ready to pass to Client.Enqueue. Build Exception manually if you need custom
+// properties, fingerprints, mechanisms, or stack frames.
 func NewDefaultException(
 	timestamp time.Time,
 	distinctID, title, description string,

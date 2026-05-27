@@ -21,6 +21,7 @@ import (
 
 const (
 	unimplementedError = "not implemented"
+	// CACHE_DEFAULT_SIZE is the number of feature flag calls tracked for local deduplication.
 	CACHE_DEFAULT_SIZE = 300_000
 
 	propertyGeoipDisable = "$geoip_disable"
@@ -33,6 +34,7 @@ const (
 	DefaultIdleConnsPerHost = 10
 )
 
+// EnqueueClient is the minimal interface implemented by clients that can queue PostHog messages.
 type EnqueueClient interface {
 	// Enqueue queues a message to be sent by the client when the conditions for a batch
 	// upload are met.
@@ -45,9 +47,8 @@ type EnqueueClient interface {
 	//	...
 	//	client.Close()
 	//
-	// The method returns an error if the message queue could not be queued, which
-	// happens if the client was already closed at the time the method was
-	// called or if the message was malformed.
+	// Enqueue returns an error if the message could not be queued, which happens
+	// when the client is closed or the message is invalid.
 	Enqueue(Message) error
 }
 
@@ -55,33 +56,45 @@ type EnqueueClient interface {
 // Values that satisfy this interface are returned by the client constructors
 // provided by the package and provide a way to send messages via the HTTP API.
 type Client interface {
-	io.Closer
 	EnqueueClient
 
-	// IsFeatureEnabled returns if a feature flag is on for a given user based on their distinct ID
+	// Close gracefully shuts down the client and flushes pending messages.
+	// If Config.ShutdownTimeout is positive, Close uses it as the shutdown deadline;
+	// otherwise it waits indefinitely. Repeated calls return ErrClosed.
+	Close() error
+
+	// IsFeatureEnabled evaluates one feature flag for a user and returns the same
+	// value as GetFeatureFlag: a variant string for multivariate flags or a bool
+	// for boolean flags. The FeatureFlagPayload parameter supplies the flag key,
+	// distinct ID, optional groups/properties, and evaluation options.
+	// Deprecated: Prefer EvaluateFlags for new code.
 	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
 
-	// GetFeatureFlag returns variant value if multivariant flag or otherwise a boolean indicating
-	// if the given flag is on or off for the user
+	// GetFeatureFlag evaluates one feature flag for a user. It returns a variant
+	// string for multivariate flags, true or false for boolean flags, false with
+	// nil error when the flag is missing/disabled, and an error for evaluation failures.
+	// Deprecated: Prefer EvaluateFlags for new code.
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 
-	// GetFeatureFlagResult returns the flag value and payload together.
+	// GetFeatureFlagResult evaluates one feature flag and returns its value and payload together.
 	// Use this instead of calling GetFeatureFlag and GetFeatureFlagPayload separately.
-	// Returns an error if the flag cannot be evaluated (e.g., flag missing or cannot be computed).
-	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+	// It returns ErrFlagNotFound when the flag cannot be found or evaluated and
+	// ErrNoPersonalAPIKey when OnlyEvaluateLocally is true without PersonalApiKey.
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
-	// GetFeatureFlagPayload returns feature flag's payload value matching key for user (supports multivariate flags).
-	// Deprecated: Use GetFeatureFlagResult instead, which returns both
-	// the flag value and payload while properly tracking feature flag usage.
+	// GetFeatureFlagPayload returns the payload for the matching flag value, or an
+	// empty string when no payload is configured or the flag is missing/disabled.
+	// Deprecated: Use GetFeatureFlagResult instead, which returns both the flag value
+	// and payload while properly tracking feature flag usage.
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
-	// GetRemoteConfigPayload returns decrypted feature flag payload value for remote config flags.
-	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+	// GetRemoteConfigPayload returns the decrypted payload for a remote config flag key.
+	// It requires Config.PersonalApiKey and returns ErrNoPersonalAPIKey when missing.
 	GetRemoteConfigPayload(string) (string, error)
 
-	// GetAllFlags returns all flags for a user.
-	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+	// GetAllFlags evaluates all flags for a user. Returned values are booleans for
+	// boolean flags and strings for multivariate variants. It returns ErrNoPersonalAPIKey
+	// when OnlyEvaluateLocally is true without PersonalApiKey.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
@@ -184,22 +197,22 @@ type flagUser struct {
 	deviceID   string
 }
 
-// Instantiate a new client that uses the write key passed as first argument to
-// send messages to the backend.
-// The client is created with the default configuration.
-// If the SDK is disabled because the API key is empty, this returns a no-op client
-// whose methods return default values and ErrSDKDisabled.
+// New creates a Client with the default Config and the provided PostHog project API key.
+//
+// The apiKey parameter is trimmed before use. If it is empty, New returns a
+// no-op client whose methods return default values and ErrSDKDisabled where applicable.
 func New(apiKey string) Client {
 	// Here we can ignore the error because the default config is always valid.
 	c, _ := NewWithConfig(apiKey, Config{})
 	return c
 }
 
-// NewWithConfig instantiate a new client that uses the write key and configuration passed
-// as arguments to send messages to the backend.
-// The function will return an error if the configuration contained impossible
-// values (like a negative flush interval for example).
-// When the function returns an error the returned client will always be nil.
+// NewWithConfig creates a Client with the provided PostHog project API key and Config.
+//
+// The apiKey, Config.Endpoint, and Config.PersonalApiKey values are trimmed before use.
+// It returns a ConfigError when config contains invalid values such as negative
+// intervals or out-of-range retry settings; in that case the returned Client is nil.
+// If apiKey is empty after trimming, NewWithConfig returns a no-op client and nil error.
 func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	if err = config.Validate(); err != nil {
 		return
@@ -796,11 +809,18 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 
 // EvaluateFlagsPayload is the input to Client.EvaluateFlags.
 type EvaluateFlagsPayload struct {
-	DistinctId          string
-	DeviceId            *string
-	Groups              Groups
-	PersonProperties    Properties
-	GroupProperties     map[string]Properties
+	// DistinctId is the user distinct ID to evaluate flags for. It is required
+	// unless EvaluateFlagsWithContext can read one from RequestContext.
+	DistinctId string
+	// DeviceId optionally provides a device_id for remote /flags requests and event deduplication.
+	DeviceId *string
+	// Groups supplies group identifiers for group-targeted flags.
+	Groups Groups
+	// PersonProperties overrides person properties used during flag evaluation.
+	PersonProperties Properties
+	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
+	GroupProperties map[string]Properties
+	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
 	OnlyEvaluateLocally bool
 	// DisableGeoIP, when non-nil, overrides the client-level DisableGeoIP for
 	// this evaluation only.

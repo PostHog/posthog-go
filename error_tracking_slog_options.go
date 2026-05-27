@@ -39,7 +39,7 @@ type captureConfig struct {
 
 	// properties optionally returns custom properties to attach to the
 	// captured exception event. Returning nil attaches no extra properties.
-	// User-supplied keys override the built-in ones (e.g. "$lib", "distinct_id").
+	// Built-in exception keys (e.g. "$lib", "distinct_id") win on collision.
 	properties func(ctx context.Context, r slog.Record) Properties
 }
 
@@ -66,20 +66,29 @@ func defaultCaptureConfig() captureConfig {
 	}
 }
 
+// SlogOption customizes NewSlogCaptureHandler.
 type SlogOption func(*captureConfig)
 
+// WithMinCaptureLevel sets the minimum slog level captured as a PostHog exception.
+// Records below this level are still passed to the wrapped handler.
 func WithMinCaptureLevel(l slog.Level) SlogOption {
 	return func(c *captureConfig) { c.minCaptureLevel = l }
 }
 
+// WithDistinctIDFn sets the function used to resolve the exception DistinctId.
+// The fn parameter must be non-nil. If fn returns an empty string, the slog record is not captured.
 func WithDistinctIDFn(fn func(ctx context.Context, r slog.Record) string) SlogOption {
 	return func(c *captureConfig) { c.distinctID = fn }
 }
 
+// WithFingerprintFn sets the function used to compute an optional exception fingerprint.
+// The fn parameter must be non-nil.
 func WithFingerprintFn(fn func(ctx context.Context, r slog.Record) *string) SlogOption {
 	return func(c *captureConfig) { c.fingerprint = fn }
 }
 
+// WithSkip sets how many stack frames the stack trace extractor should skip.
+// Values less than or equal to zero are ignored.
 func WithSkip(n int) SlogOption {
 	return func(c *captureConfig) {
 		if n > 0 {
@@ -88,14 +97,20 @@ func WithSkip(n int) SlogOption {
 	}
 }
 
+// WithStackTraceExtractor sets the StackTraceExtractor used for captured exceptions.
+// The extractor parameter must be non-nil.
 func WithStackTraceExtractor(extractor StackTraceExtractor) SlogOption {
 	return func(c *captureConfig) { c.stackTraceExtractor = extractor }
 }
 
+// WithDescriptionExtractor sets the DescriptionExtractor used for captured exceptions.
+// The extractor parameter must be non-nil.
 func WithDescriptionExtractor(extractor DescriptionExtractor) SlogOption {
 	return func(c *captureConfig) { c.descriptionExtractor = extractor }
 }
 
+// WithPropertiesFn sets a function that returns custom properties for captured exceptions.
+// Built-in exception properties take precedence if keys collide.
 func WithPropertiesFn(fn func(ctx context.Context, r slog.Record) Properties) SlogOption {
 	return func(c *captureConfig) {
 		if fn != nil {
