@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.13.1
+
+### Patch Changes
+
+- 541b82f: Include group context in the `$feature_flag_called` LRU dedupe key so group-scoped flags fire a separate event for each group a user is evaluated under, instead of being dedup-ed against the first group context the same `(distinct_id, flag, device_id)` was seen under.
+
 ## 1.13.0
 
 ### Minor Changes
