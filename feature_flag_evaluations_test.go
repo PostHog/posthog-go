@@ -690,73 +690,62 @@ func TestCaptureFlagCalled_FiresPerGroupContext(t *testing.T) {
 	}
 }
 
-func TestCaptureFlagCalled_DedupesAcrossRepeatedCallsUnderSameGroup(t *testing.T) {
+func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 	t.Parallel()
-	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
-	client, capture, _ := newEvalClient(t, fs.server)
-
-	for i := 0; i < 3; i++ {
-		if _, err := client.IsFeatureEnabled(FeatureFlagPayload{
-			Key:        "enabled-flag",
-			DistinctId: "user-1",
-			Groups:     Groups{"company": "org-a"},
-		}); err != nil {
-			t.Fatalf("IsFeatureEnabled error: %v", err)
-		}
+	cases := []struct {
+		name  string
+		calls []Groups
+	}{
+		{
+			name: "repeated calls under same group",
+			calls: []Groups{
+				{"company": "org-a"},
+				{"company": "org-a"},
+				{"company": "org-a"},
+			},
+		},
+		{
+			name: "different group key insertion order",
+			calls: []Groups{
+				{"company": "org-a", "team": "red"},
+				{"team": "red", "company": "org-a"},
+			},
+		},
 	}
 
-	// Three calls but only the first should produce an event.
-	time.Sleep(150 * time.Millisecond)
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	count := 0
-	for _, ev := range capture.events {
-		if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("expected exactly 1 deduped $feature_flag_called event, got %d", count)
-	}
-}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := newFlagsServer(t, "test-flags-v4.json")
+			defer fs.close()
 
-func TestCaptureFlagCalled_DedupesAcrossGroupKeyOrder(t *testing.T) {
-	t.Parallel()
-	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
+			client, capture, _ := newEvalClient(t, fs.server)
 
-	client, capture, _ := newEvalClient(t, fs.server)
+			for i, groups := range tc.calls {
+				if _, err := client.IsFeatureEnabled(FeatureFlagPayload{
+					Key:        "enabled-flag",
+					DistinctId: "user-1",
+					Groups:     groups,
+				}); err != nil {
+					t.Fatalf("IsFeatureEnabled error (call %d): %v", i, err)
+				}
+			}
 
-	// Same groups, two different Go map insertion orders. Both must produce
-	// the same canonical dedup key.
-	if _, err := client.IsFeatureEnabled(FeatureFlagPayload{
-		Key:        "enabled-flag",
-		DistinctId: "user-1",
-		Groups:     Groups{"company": "org-a", "team": "red"},
-	}); err != nil {
-		t.Fatalf("first IsFeatureEnabled error: %v", err)
-	}
-	if _, err := client.IsFeatureEnabled(FeatureFlagPayload{
-		Key:        "enabled-flag",
-		DistinctId: "user-1",
-		Groups:     Groups{"team": "red", "company": "org-a"},
-	}); err != nil {
-		t.Fatalf("second IsFeatureEnabled error: %v", err)
-	}
-
-	time.Sleep(150 * time.Millisecond)
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	count := 0
-	for _, ev := range capture.events {
-		if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("expected exactly 1 deduped $feature_flag_called event, got %d", count)
+			time.Sleep(150 * time.Millisecond)
+			capture.mu.Lock()
+			defer capture.mu.Unlock()
+			count := 0
+			for _, ev := range capture.events {
+				if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Errorf("expected exactly 1 deduped $feature_flag_called event, got %d", count)
+			}
+		})
 	}
 }
 
