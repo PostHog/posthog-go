@@ -733,6 +733,9 @@ func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 				}
 			}
 
+			// Wait for the first (and only) event to arrive, then briefly
+			// pause to catch any stragglers that would indicate broken dedup.
+			waitForEventCount(capture, 1, 5*time.Second)
 			time.Sleep(150 * time.Millisecond)
 			capture.mu.Lock()
 			defer capture.mu.Unlock()
