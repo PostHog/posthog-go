@@ -719,6 +719,114 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	}
 }
 
+func TestCaptureFlagCalled_FiresPerGroupContext(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+	defer fs.close()
+
+	client, capture, _ := newEvalClient(t, fs.server)
+
+	// Same user, same flag, but two different group contexts.
+	if _, err := client.IsFeatureEnabled(FeatureFlagPayload{
+		Key:        "enabled-flag",
+		DistinctId: "user-1",
+		Groups:     Groups{"company": "org-a"},
+	}); err != nil {
+		t.Fatalf("IsFeatureEnabled error (org-a): %v", err)
+	}
+	if _, err := client.IsFeatureEnabled(FeatureFlagPayload{
+		Key:        "enabled-flag",
+		DistinctId: "user-1",
+		Groups:     Groups{"company": "org-b"},
+	}); err != nil {
+		t.Fatalf("IsFeatureEnabled error (org-b): %v", err)
+	}
+
+	events := waitForEventCount(capture, 2, 5*time.Second)
+	seen := map[string]bool{}
+	count := 0
+	for _, ev := range events {
+		if ev.Event != "$feature_flag_called" || ev.Properties["$feature_flag"] != "enabled-flag" {
+			continue
+		}
+		count++
+		groups, _ := ev.Properties["$groups"].(Groups)
+		if v, ok := groups["company"]; ok {
+			if s, ok := v.(string); ok {
+				seen[s] = true
+			}
+		}
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 $feature_flag_called events (one per group), got %d", count)
+	}
+	if !seen["org-a"] || !seen["org-b"] {
+		t.Errorf("expected both org-a and org-b in fired events, got %v", seen)
+	}
+}
+
+func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		calls []Groups
+	}{
+		{
+			name: "repeated calls under same group",
+			calls: []Groups{
+				{"company": "org-a"},
+				{"company": "org-a"},
+				{"company": "org-a"},
+			},
+		},
+		{
+			name: "different group key insertion order",
+			calls: []Groups{
+				{"company": "org-a", "team": "red"},
+				{"team": "red", "company": "org-a"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := newFlagsServer(t, "test-flags-v4.json")
+			defer fs.close()
+
+			client, capture, _ := newEvalClient(t, fs.server)
+
+			for i, groups := range tc.calls {
+				if _, err := client.IsFeatureEnabled(FeatureFlagPayload{
+					Key:        "enabled-flag",
+					DistinctId: "user-1",
+					Groups:     groups,
+				}); err != nil {
+					t.Fatalf("IsFeatureEnabled error (call %d): %v", i, err)
+				}
+			}
+
+			// Wait for the first (and only) event to arrive, then briefly
+			// pause to catch any stragglers that would indicate broken dedup.
+			waitForEventCount(capture, 1, 5*time.Second)
+			time.Sleep(150 * time.Millisecond)
+			capture.mu.Lock()
+			defer capture.mu.Unlock()
+			count := 0
+			for _, ev := range capture.events {
+				if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Errorf("expected exactly 1 deduped $feature_flag_called event, got %d", count)
+			}
+		})
+	}
+}
+
 func TestErrorsWhileComputingFlags_PropagatesToEvent(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
