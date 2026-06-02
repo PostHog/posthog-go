@@ -2171,19 +2171,30 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, devi
 // flags that cannot be computed locally (or when no local definitions are loaded).
 //
 // When onlyEvaluateLocally is true it stays strictly local: flags that cannot be evaluated
-// locally are simply omitted and no remote request is made. The returned map includes flags
-// that resolved to false; the caller attaches a $feature/<key> property for each entry and
-// excludes false-valued flags from $active_feature_flags, matching the other SDKs.
+// locally are simply omitted and no remote request is made, blocking on the initial
+// definitions fetch since it has no remote path to fall back to. The default path never
+// blocks on that fetch: if definitions aren't loaded yet it treats this as "no definitions"
+// and goes straight to the remote /flags fallback, so the first capture isn't stalled.
+//
+// The returned map includes flags that resolved to false; the caller attaches a
+// $feature/<key> property for each entry and excludes false-valued flags from
+// $active_feature_flags, matching the other SDKs.
 func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (map[string]interface{}, error) {
-	flags, err := poller.GetFeatureFlags()
-	if err != nil {
-		// Local definitions are unavailable. The default path still falls back to the
-		// remote /flags request (the prior default behavior); only OnlyEvaluateLocally
-		// surfaces the error, since it must not contact the server.
-		if onlyEvaluateLocally {
+	var flags []FeatureFlag
+	if onlyEvaluateLocally {
+		// Strictly local: wait for the initial fetch and surface its error, since there
+		// is no remote path to fall back to.
+		loaded, err := poller.GetFeatureFlags()
+		if err != nil {
 			return nil, err
 		}
-		flags = nil
+		flags = loaded
+	} else if state := poller.getState(); state != nil {
+		// Default path: non-blocking read of already-loaded definitions. A nil state
+		// (initial fetch not finished, or it failed) is treated as "no definitions" and
+		// falls through to the remote /flags request below, preserving prior default
+		// behavior without stalling the first capture on the local-eval fetch.
+		flags = state.featureFlags
 	}
 
 	cohorts := poller.getCohorts()

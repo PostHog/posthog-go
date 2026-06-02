@@ -3,6 +3,7 @@ package posthog
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,9 +16,8 @@ import (
 // was made. A definitionsFixture of "" makes the definitions endpoint fail,
 // simulating definitions that never load.
 type captureLocalEvalServer struct {
-	server          *httptest.Server
-	definitionLoads atomic.Int32
-	decideCalls     atomic.Int32
+	server      *httptest.Server
+	decideCalls atomic.Int32
 }
 
 func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse string) *captureLocalEvalServer {
@@ -26,7 +26,6 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
-			s.definitionLoads.Add(1)
 			if definitionsFixture == "" {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
@@ -46,18 +45,16 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 	return s
 }
 
-// waitForDefinitionFetch blocks until the poller has attempted to load local flag
-// definitions at least once, so a subsequent capture evaluates deterministically.
-func (s *captureLocalEvalServer) waitForDefinitionFetch(t *testing.T) {
+// waitForFlagDefinitions blocks until the poller's initial definitions fetch
+// completes (success or failure), so a subsequent capture evaluates against
+// settled poller state rather than racing the background fetch. The default
+// capture path reads poller state non-blockingly, so without this a capture
+// could run before definitions land and fall back to the remote /flags request.
+func waitForFlagDefinitions(t *testing.T, c Client) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if s.definitionLoads.Load() > 0 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("local evaluation poller never fetched /flags/definitions")
+	// GetFeatureFlags blocks on the initial fetch; the error (e.g. definitions
+	// that fail to load) is intentionally ignored — we only need the fetch to settle.
+	_, _ = c.(*client).featureFlagsPoller.GetFeatureFlags()
 }
 
 // TestCaptureSendFeatureFlagsLocalEvaluation verifies that capture enrichment
@@ -158,7 +155,7 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 			client, capture, _ := newEvalClient(t, server.server, func(c *Config) {
 				c.PersonalApiKey = "personal-key"
 			})
-			server.waitForDefinitionFetch(t)
+			waitForFlagDefinitions(t, client)
 
 			if err := client.Enqueue(Capture{
 				Event:            "test_event",
@@ -191,17 +188,10 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 				if !ok {
 					t.Fatalf("expected $active_feature_flags to be []string, got %T", event.Properties["$active_feature_flags"])
 				}
-				got := make(map[string]bool, len(active))
-				for _, k := range active {
-					got[k] = true
-				}
-				if len(got) != len(tt.wantActiveFlags) {
+				// wantActiveFlags is kept sorted; $active_feature_flags is sorted for
+				// deterministic output, so assert exact ordered equality.
+				if !reflect.DeepEqual(active, tt.wantActiveFlags) {
 					t.Errorf("$active_feature_flags = %v, want %v", active, tt.wantActiveFlags)
-				}
-				for _, k := range tt.wantActiveFlags {
-					if !got[k] {
-						t.Errorf("$active_feature_flags = %v, missing %s", active, k)
-					}
 				}
 			}
 		})
@@ -215,11 +205,10 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 // dropping enrichment for the whole event.
 func TestCaptureSendFeatureFlagsFallsBackForStaticCohort(t *testing.T) {
 	t.Parallel()
-	var definitionLoads, decideCalls atomic.Int32
+	var decideCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
-			definitionLoads.Add(1)
 			// Flag gated on cohort 999 with no cohort definitions, so it's a static
 			// cohort that requires server evaluation.
 			w.Write([]byte(`{
@@ -257,11 +246,7 @@ func TestCaptureSendFeatureFlagsFallsBackForStaticCohort(t *testing.T) {
 	client, capture, _ := newEvalClient(t, server, func(c *Config) {
 		c.PersonalApiKey = "personal-key"
 	})
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && definitionLoads.Load() == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForFlagDefinitions(t, client)
 
 	if err := client.Enqueue(Capture{
 		Event:            "test_event",
@@ -289,11 +274,10 @@ func TestCaptureSendFeatureFlagsFallsBackForStaticCohort(t *testing.T) {
 // defers to the remote /flags request rather than dropping enrichment for the event.
 func TestCaptureSendFeatureFlagsFallsBackForGroupFlagWithoutGroups(t *testing.T) {
 	t.Parallel()
-	var definitionLoads, decideCalls atomic.Int32
+	var decideCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
-			definitionLoads.Add(1)
 			// Flag aggregated on the "company" group. The capture below passes no
 			// groups, so it can't be computed locally.
 			w.Write([]byte(`{
@@ -328,11 +312,7 @@ func TestCaptureSendFeatureFlagsFallsBackForGroupFlagWithoutGroups(t *testing.T)
 	client, capture, _ := newEvalClient(t, server, func(c *Config) {
 		c.PersonalApiKey = "personal-key"
 	})
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && definitionLoads.Load() == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForFlagDefinitions(t, client)
 
 	if err := client.Enqueue(Capture{
 		Event:            "test_event",

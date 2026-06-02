@@ -472,6 +472,8 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 					activeFeatureFlags = append(activeFeatureFlags, feature)
 				}
 			}
+			// Sort for deterministic output, matching the snapshot Flags.eventProperties() path.
+			sort.Strings(activeFeatureFlags)
 			m.Properties["$active_feature_flags"] = activeFeatureFlags
 		}
 		if m.Properties == nil {
