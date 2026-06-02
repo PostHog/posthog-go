@@ -9,6 +9,7 @@
         "$geoip_disable": true,
         "$lib": "posthog-go",
         "$lib_version": "1.0.0",
+        "$is_server": true,
         "$os": "IGNORED",
         "$os_distro": "IGNORED",
         "$os_version": "IGNORED",
