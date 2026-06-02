@@ -2166,18 +2166,34 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, devi
 	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP, nil)
 }
 
-// getFeatureFlagVariantsLocalOnly evaluates all feature flags using only local evaluation
-func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
+// getFeatureFlagVariantsWithFallback evaluates all feature flags for capture enrichment,
+// preferring local evaluation and only contacting the remote /flags endpoint to fill in
+// flags that cannot be computed locally (or when no local definitions are loaded).
+//
+// When onlyEvaluateLocally is true it stays strictly local: flags that cannot be evaluated
+// locally are simply omitted and no remote request is made. The returned map includes flags
+// that resolved to false; the caller attaches a $feature/<key> property for each entry and
+// excludes false-valued flags from $active_feature_flags, matching the other SDKs.
+func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (map[string]interface{}, error) {
 	flags, err := poller.GetFeatureFlags()
 	if err != nil {
-		return nil, err
+		// Local definitions are unavailable. The default path still falls back to the
+		// remote /flags request (the prior default behavior); only OnlyEvaluateLocally
+		// surfaces the error, since it must not contact the server.
+		if onlyEvaluateLocally {
+			return nil, err
+		}
+		flags = nil
 	}
 
-	result := make(map[string]interface{})
 	cohorts := poller.getCohorts()
+	result := make(map[string]interface{}, len(flags))
 
+	// Fall back to the remote request when no definitions are loaded or any flag
+	// can't be computed locally.
+	fallbackToDecide := len(flags) == 0
 	for _, flag := range flags {
-		flagValue, err := poller.computeFlagLocally(
+		flagValue, computeErr := poller.computeFlagLocally(
 			flag,
 			distinctId,
 			deviceId,
@@ -2186,18 +2202,28 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsLocalOnly(distinctId str
 			groupProperties,
 			cohorts,
 		)
-
-		// Skip flags that can't be evaluated locally (e.g., experience continuity flags)
-		if err != nil {
-			if isInconclusiveError(err) {
-				continue
-			}
-			return nil, err
+		if computeErr != nil {
+			// Any flag we can't evaluate locally — experience continuity, missing
+			// properties, a static cohort, or missing group context — is deferred
+			// to the remote /flags request, which is authoritative. This mirrors
+			// GetAllFlags and the single-flag fallback. Under OnlyEvaluateLocally
+			// there is no remote call, so such flags are simply omitted.
+			fallbackToDecide = true
+			continue
 		}
+		result[flag.Key] = flagValue
+	}
 
-		// Only include flags that are not false
-		if flagValue != false {
-			result[flag.Key] = flagValue
+	if fallbackToDecide && !onlyEvaluateLocally {
+		flagsResponse, remoteErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+		if remoteErr != nil {
+			return nil, remoteErr
+		}
+		if flagsResponse != nil {
+			// Remote evaluation is authoritative for the flags it returns.
+			for key, value := range flagsResponse.FeatureFlags {
+				result[key] = value
+			}
 		}
 	}
 
