@@ -62,6 +62,8 @@ type AliasInApiProperties struct {
 	Lib string `json:"$lib"`
 	// LibVersion is the SDK version sent as $lib_version.
 	LibVersion string `json:"$lib_version"`
+	// IsServer marks the event as originating from a server-side SDK.
+	IsServer bool `json:"$is_server"`
 	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
 	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
 }
@@ -103,6 +105,7 @@ func (msg Alias) APIfy() APIMessage {
 			Alias:        msg.Alias,
 			Lib:          SDKName,
 			LibVersion:   libraryVersion,
+			IsServer:     true,
 			DisableGeoIP: msg.DisableGeoIP,
 		},
 	}

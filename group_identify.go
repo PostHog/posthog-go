@@ -76,6 +76,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	myProperties := Properties{}.
 		Set("$lib", SDKName).
 		Set("$lib_version", getVersion()).
+		Set("$is_server", true).
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
 		Set("$group_set", msg.Properties).

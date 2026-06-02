@@ -104,6 +104,8 @@ type ExceptionInApiProperties struct {
 	Lib string `json:"$lib"`
 	// LibVersion is the SDK version sent as $lib_version.
 	LibVersion string `json:"$lib_version"`
+	// IsServer marks the event as originating from a server-side SDK.
+	IsServer bool `json:"$is_server"`
 	// DistinctId is the user distinct ID associated with the exception.
 	DistinctId string `json:"distinct_id"`
 	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
@@ -213,6 +215,7 @@ func (msg Exception) APIfy() APIMessage {
 			sysContext:           getSystemContext(),
 			Lib:                  SDKName,
 			LibVersion:           libVersion,
+			IsServer:             true,
 			DistinctId:           msg.DistinctId,
 			DisableGeoIP:         msg.DisableGeoIP,
 			ExceptionList:        msg.ExceptionList,
