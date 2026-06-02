@@ -463,18 +463,18 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 				m.Properties = NewProperties()
 			}
 
+			activeFeatureFlags := make([]string, 0, len(featureVariants))
 			for feature, variant := range featureVariants {
 				propKey := fmt.Sprintf("$feature/%s", feature)
 				m.Properties[propKey] = variant
+				// $active_feature_flags lists only flags that resolved to a non-false value.
+				if variant != false {
+					activeFeatureFlags = append(activeFeatureFlags, feature)
+				}
 			}
-			// Add all feature flag keys to $active_feature_flags key
-			featureKeys := make([]string, len(featureVariants))
-			i := 0
-			for k := range featureVariants {
-				featureKeys[i] = k
-				i++
-			}
-			m.Properties["$active_feature_flags"] = featureKeys
+			// Sort for deterministic output, matching the snapshot Flags.eventProperties() path.
+			sort.Strings(activeFeatureFlags)
+			m.Properties["$active_feature_flags"] = activeFeatureFlags
 		}
 		if m.Properties == nil {
 			m.Properties = NewProperties()
@@ -1547,20 +1547,15 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 	}
 
 	var deviceId *string
-	if options != nil && options.DeviceId != nil {
+	onlyEvaluateLocally := false
+	if options != nil {
 		deviceId = options.DeviceId
+		onlyEvaluateLocally = options.OnlyEvaluateLocally
 	}
 
-	// If OnlyEvaluateLocally is set, only use local evaluation
-	if options != nil && options.OnlyEvaluateLocally {
-		return c.featureFlagsPoller.getFeatureFlagVariantsLocalOnly(distinctId, deviceId, groups, personProperties, groupProperties)
-	}
-
-	featureVariants, err := c.featureFlagsPoller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
-	if err != nil {
-		return nil, err
-	}
-	return featureVariants.FeatureFlags, nil
+	// Prefer local evaluation and only fall back to a remote /flags request for flags
+	// that can't be computed locally. OnlyEvaluateLocally keeps this strictly local.
+	return c.featureFlagsPoller.getFeatureFlagVariantsWithFallback(distinctId, deviceId, groups, personProperties, groupProperties, onlyEvaluateLocally)
 }
 
 func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
