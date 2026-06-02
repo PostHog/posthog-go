@@ -54,8 +54,9 @@ func TestGroupIdentifyValidWithTypeAndKey(t *testing.T) {
 
 func TestGroupIdentifyAPIfyIncludesIsServerProperty(t *testing.T) {
 	groupIdentify := GroupIdentify{
-		Type: "organization",
-		Key:  "id:5",
+		Type:     "organization",
+		Key:      "id:5",
+		IsServer: true,
 	}
 
 	apiMsg, ok := groupIdentify.APIfy().(GroupIdentifyInApi)
@@ -86,5 +87,22 @@ func TestGroupIdentifyAPIfyIncludesIsServerProperty(t *testing.T) {
 		if got := props[k]; got != want {
 			t.Errorf("property %q: expected %v (%T), got %v (%T)", k, want, want, got, got)
 		}
+	}
+}
+
+func TestGroupIdentifyAPIfyOmitsIsServerWhenFalse(t *testing.T) {
+	groupIdentify := GroupIdentify{
+		Type:     "organization",
+		Key:      "id:5",
+		IsServer: false,
+	}
+
+	apiMsg, ok := groupIdentify.APIfy().(GroupIdentifyInApi)
+	if !ok {
+		t.Fatalf("expected GroupIdentifyInApi, got %T", groupIdentify.APIfy())
+	}
+
+	if _, present := apiMsg.Properties["$is_server"]; present {
+		t.Errorf("$is_server should be absent when IsServer is false, got %v", apiMsg.Properties["$is_server"])
 	}
 }

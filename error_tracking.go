@@ -26,6 +26,9 @@ type Exception struct {
 	// DisableGeoIP controls whether this exception event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool
+	// IsServer controls whether the event includes the $is_server property.
+	// Enqueue overwrites it from Config.GetIsServer.
+	IsServer bool
 
 	// ExceptionList is the list of exception items sent as $exception_list. It must be non-empty.
 	ExceptionList []ExceptionItem
@@ -105,7 +108,8 @@ type ExceptionInApiProperties struct {
 	// LibVersion is the SDK version sent as $lib_version.
 	LibVersion string `json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
-	IsServer bool `json:"$is_server"`
+	// Omitted entirely when nil (Config.IsServer resolved to false).
+	IsServer *bool `json:"$is_server,omitempty"`
 	// DistinctId is the user distinct ID associated with the exception.
 	DistinctId string `json:"distinct_id"`
 	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
@@ -204,6 +208,11 @@ func (msg ExceptionItem) Validate() error {
 func (msg Exception) APIfy() APIMessage {
 	libVersion := getVersion()
 
+	var isServer *bool
+	if msg.IsServer {
+		isServer = Ptr(true)
+	}
+
 	return ExceptionInApi{
 		Type:           msg.Type, // set to "exception" by Enqueue switch
 		Uuid:           msg.Uuid,
@@ -215,7 +224,7 @@ func (msg Exception) APIfy() APIMessage {
 			sysContext:           getSystemContext(),
 			Lib:                  SDKName,
 			LibVersion:           libVersion,
-			IsServer:             true,
+			IsServer:             isServer,
 			DistinctId:           msg.DistinctId,
 			DisableGeoIP:         msg.DisableGeoIP,
 			ExceptionList:        msg.ExceptionList,

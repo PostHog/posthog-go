@@ -24,6 +24,9 @@ type Identify struct {
 	// DisableGeoIP controls whether this identify event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool
+	// IsServer controls whether the event includes the $is_server property.
+	// Enqueue overwrites it from Config.GetIsServer.
+	IsServer bool
 }
 
 func (msg Identify) internal() {
@@ -71,8 +74,11 @@ func (msg Identify) APIfy() APIMessage {
 	myProperties := Properties{}.
 		Set("$lib", SDKName).
 		Set("$lib_version", getVersion()).
-		Set("$is_server", true).
 		Merge(getSystemContext().ToProperties())
+
+	if msg.IsServer {
+		myProperties.Set("$is_server", true)
+	}
 
 	if msg.DisableGeoIP {
 		myProperties.Set(propertyGeoipDisable, true)

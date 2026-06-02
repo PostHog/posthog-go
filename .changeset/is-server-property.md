@@ -2,4 +2,4 @@
 "posthog-go": patch
 ---
 
-Emit `$is_server` on identify and group-identify events too (was only on capture); server-side events are now consistently identifiable.
+Add a configurable `$is_server` event property (default `true`) so PostHog can identify server-side events. Set `IsServer: false` when using posthog-go as a client/CLI so the device OS is attributed normally.

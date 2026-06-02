@@ -372,6 +372,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
+		m.IsServer = c.GetIsServer()
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -388,6 +389,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
+		m.IsServer = c.GetIsServer()
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -403,6 +405,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
+		m.IsServer = c.GetIsServer()
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -418,6 +421,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Type = "capture"
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
+		m.IsServer = c.GetIsServer()
 		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, "posthog.Capture")
 		if captureContextErr != nil {
 			err = captureContextErr
@@ -496,6 +500,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
+		m.IsServer = c.GetIsServer()
 		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, "posthog.Exception")
 		if captureContextErr != nil {
 			err = captureContextErr

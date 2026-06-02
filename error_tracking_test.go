@@ -269,3 +269,44 @@ func TestException_JSONSerialization(t *testing.T) {
 		t.Errorf("$exception_list: expected non-empty list, got empty")
 	}
 }
+
+func exceptionWireProps(t *testing.T, exception Exception) map[string]interface{} {
+	t.Helper()
+	jsonBytes, err := json.Marshal(exception.APIfy())
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var wire map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &wire); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	props, ok := wire["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("properties field missing or wrong type")
+	}
+	return props
+}
+
+func TestException_APIfy_IncludesIsServerProperty(t *testing.T) {
+	exception := Exception{
+		DistinctId:    "user-123",
+		IsServer:      true,
+		ExceptionList: []ExceptionItem{{Type: "RuntimeError", Value: "boom"}},
+	}
+	props := exceptionWireProps(t, exception)
+	if got := props["$is_server"]; got != true {
+		t.Errorf("$is_server: expected true, got %v", got)
+	}
+}
+
+func TestException_APIfy_OmitsIsServerWhenFalse(t *testing.T) {
+	exception := Exception{
+		DistinctId:    "user-123",
+		IsServer:      false,
+		ExceptionList: []ExceptionItem{{Type: "RuntimeError", Value: "boom"}},
+	}
+	props := exceptionWireProps(t, exception)
+	if _, present := props["$is_server"]; present {
+		t.Errorf("$is_server should be absent when IsServer is false, got %v", props["$is_server"])
+	}
+}

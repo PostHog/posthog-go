@@ -60,6 +60,7 @@ func TestCaptureAPIfyIncludesIsServerProperty(t *testing.T) {
 	capture := Capture{
 		Event:      "test-event",
 		DistinctId: "user-123",
+		IsServer:   true,
 	}
 
 	apiMsg, ok := capture.APIfy().(CaptureInApi)
@@ -90,5 +91,22 @@ func TestCaptureAPIfyIncludesIsServerProperty(t *testing.T) {
 		if got := props[k]; got != want {
 			t.Errorf("property %q: expected %v (%T), got %v (%T)", k, want, want, got, got)
 		}
+	}
+}
+
+func TestCaptureAPIfyOmitsIsServerWhenFalse(t *testing.T) {
+	capture := Capture{
+		Event:      "test-event",
+		DistinctId: "user-123",
+		IsServer:   false,
+	}
+
+	apiMsg, ok := capture.APIfy().(CaptureInApi)
+	if !ok {
+		t.Fatalf("expected CaptureInApi, got %T", capture.APIfy())
+	}
+
+	if _, present := apiMsg.Properties["$is_server"]; present {
+		t.Errorf("$is_server should be absent when IsServer is false, got %v", apiMsg.Properties["$is_server"])
 	}
 }

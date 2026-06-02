@@ -36,6 +36,7 @@ func TestIdentifyValidWithDistinctId(t *testing.T) {
 func TestIdentifyAPIfyIncludesIsServerProperty(t *testing.T) {
 	identify := Identify{
 		DistinctId: "user-123",
+		IsServer:   true,
 	}
 
 	apiMsg, ok := identify.APIfy().(IdentifyInApi)
@@ -66,5 +67,21 @@ func TestIdentifyAPIfyIncludesIsServerProperty(t *testing.T) {
 		if got := props[k]; got != want {
 			t.Errorf("property %q: expected %v (%T), got %v (%T)", k, want, want, got, got)
 		}
+	}
+}
+
+func TestIdentifyAPIfyOmitsIsServerWhenFalse(t *testing.T) {
+	identify := Identify{
+		DistinctId: "user-123",
+		IsServer:   false,
+	}
+
+	apiMsg, ok := identify.APIfy().(IdentifyInApi)
+	if !ok {
+		t.Fatalf("expected IdentifyInApi, got %T", identify.APIfy())
+	}
+
+	if _, present := apiMsg.Properties["$is_server"]; present {
+		t.Errorf("$is_server should be absent when IsServer is false, got %v", apiMsg.Properties["$is_server"])
 	}
 }
