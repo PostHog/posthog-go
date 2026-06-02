@@ -1,7 +1,6 @@
 package posthog
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -68,27 +67,12 @@ func TestCaptureAPIfyIncludesIsServerProperty(t *testing.T) {
 		t.Fatalf("expected CaptureInApi, got %T", capture.APIfy())
 	}
 
-	jsonBytes, err := json.Marshal(apiMsg)
-	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
-	}
-
-	var wire map[string]interface{}
-	if err := json.Unmarshal(jsonBytes, &wire); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
-	}
-
-	props, ok := wire["properties"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("properties field missing or wrong type")
-	}
-
 	expectKeys := map[string]interface{}{
 		"$lib":       SDKName,
 		"$is_server": true,
 	}
 	for k, want := range expectKeys {
-		if got := props[k]; got != want {
+		if got := apiMsg.Properties[k]; got != want {
 			t.Errorf("property %q: expected %v (%T), got %v (%T)", k, want, want, got, got)
 		}
 	}
