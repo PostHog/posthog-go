@@ -2200,6 +2200,11 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 	cohorts := poller.getCohorts()
 	result := make(map[string]interface{}, len(flags))
 
+	// Merge distinct_id into person_properties so both local evaluation and the
+	// remote /flags fallback match on distinct_id as a person property, matching
+	// GetFeatureFlag and the GetAllFlags batch path.
+	personProperties = mergeDistinctIDIntoProperties(personProperties, distinctId)
+
 	// Fall back to the remote request when no definitions are loaded or any flag
 	// can't be computed locally.
 	fallbackToDecide := len(flags) == 0
