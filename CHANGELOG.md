@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.14.0
+
+### Minor Changes
+
+- 554c99a: Add a configurable `$is_server` event property (default `true`) so PostHog can identify server-side events. Set `IsServer: false` when using posthog-go as a client/CLI so the device OS is attributed normally.
+
 ## 1.13.2
 
 ### Patch Changes
