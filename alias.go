@@ -24,6 +24,9 @@ type Alias struct {
 	// DisableGeoIP controls whether this alias event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool
+	// IsServer controls whether the event includes the $is_server property.
+	// Enqueue overwrites it from Config.GetIsServer.
+	IsServer bool
 }
 
 func (msg Alias) internal() {
@@ -62,6 +65,9 @@ type AliasInApiProperties struct {
 	Lib string `json:"$lib"`
 	// LibVersion is the SDK version sent as $lib_version.
 	LibVersion string `json:"$lib_version"`
+	// IsServer marks the event as originating from a server-side SDK.
+	// Omitted entirely when nil (Config.IsServer resolved to false).
+	IsServer *bool `json:"$is_server,omitempty"`
 	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
 	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
 }
@@ -90,6 +96,11 @@ type AliasInApi struct {
 func (msg Alias) APIfy() APIMessage {
 	libraryVersion := getVersion()
 
+	var isServer *bool
+	if msg.IsServer {
+		isServer = Ptr(true)
+	}
+
 	apified := AliasInApi{
 		Type:           msg.Type,
 		Uuid:           msg.Uuid,
@@ -103,6 +114,7 @@ func (msg Alias) APIfy() APIMessage {
 			Alias:        msg.Alias,
 			Lib:          SDKName,
 			LibVersion:   libraryVersion,
+			IsServer:     isServer,
 			DisableGeoIP: msg.DisableGeoIP,
 		},
 	}

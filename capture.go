@@ -110,6 +110,9 @@ type Capture struct {
 	// hidden /flags request on every capture. Flags takes precedence when
 	// both are set.
 	Flags *FeatureFlagEvaluations
+	// IsServer controls whether the event includes the $is_server property.
+	// Enqueue overwrites it from Config.GetIsServer.
+	IsServer bool
 }
 
 func (msg Capture) internal() {
@@ -177,6 +180,10 @@ func (msg Capture) APIfy() APIMessage {
 		Set("$lib", SDKName).
 		Set("$lib_version", libraryVersion).
 		Merge(getSystemContext().ToProperties())
+
+	if msg.IsServer {
+		myProperties.Set("$is_server", true)
+	}
 
 	if msg.Groups != nil {
 		myProperties.Set("$groups", msg.Groups)

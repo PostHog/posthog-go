@@ -100,6 +100,19 @@ func TestConfigGetDisableGeoIP(t *testing.T) {
 	require.False(t, c.GetDisableGeoIP())
 }
 
+func TestConfigGetIsServer(t *testing.T) {
+	var (
+		c  Config
+		tv = true
+		fv = false
+	)
+	require.True(t, c.GetIsServer())
+	c.IsServer = &tv
+	require.True(t, c.GetIsServer())
+	c.IsServer = &fv
+	require.False(t, c.GetIsServer())
+}
+
 func TestConfigCompression(t *testing.T) {
 	// CompressionNone (0) should be valid
 	c := Config{Compression: CompressionNone}

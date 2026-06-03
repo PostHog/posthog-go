@@ -1,6 +1,9 @@
 package posthog
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestAliasMissingDistinctId(t *testing.T) {
 	alias := Alias{
@@ -50,5 +53,36 @@ func TestAliasValid(t *testing.T) {
 
 	if err := alias.Validate(); err != nil {
 		t.Error("validating a valid alias object failed:", alias, err)
+	}
+}
+
+func aliasWireProps(t *testing.T, alias Alias) map[string]interface{} {
+	t.Helper()
+	jsonBytes, err := json.Marshal(alias.APIfy())
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var wire map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &wire); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	props, ok := wire["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("properties field missing or wrong type")
+	}
+	return props
+}
+
+func TestAliasAPIfyIncludesIsServerProperty(t *testing.T) {
+	props := aliasWireProps(t, Alias{Alias: "1", DistinctId: "2", IsServer: true})
+	if got := props["$is_server"]; got != true {
+		t.Errorf("$is_server: expected true, got %v", got)
+	}
+}
+
+func TestAliasAPIfyOmitsIsServerWhenFalse(t *testing.T) {
+	props := aliasWireProps(t, Alias{Alias: "1", DistinctId: "2", IsServer: false})
+	if _, present := props["$is_server"]; present {
+		t.Errorf("$is_server should be absent when IsServer is false, got %v", props["$is_server"])
 	}
 }

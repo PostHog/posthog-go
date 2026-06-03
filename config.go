@@ -38,6 +38,19 @@ type Config struct {
 	// runs server-side; set Ptr(false) to allow GeoIP lookup.
 	DisableGeoIP *bool
 
+	// IsServer controls whether events include the $is_server property.
+	//
+	// Defaults to true: nil is treated as true because posthog-go usually runs
+	// server-side, and $is_server lets PostHog identify server-side events.
+	//
+	// Set Ptr(false) when using posthog-go as a CLI or client so the event is
+	// not flagged as server-side and the device OS is attributed normally. When
+	// resolved to false, $is_server is omitted from every event entirely.
+	//
+	//	// CLI/client usage
+	//	config := posthog.Config{IsServer: posthog.Ptr(false)}
+	IsServer *bool
+
 	// Interval is the flush interval for queued messages. Messages are sent when
 	// BatchSize is reached or when this timer fires. If zero, it defaults to
 	// DefaultInterval.
@@ -132,6 +145,13 @@ type Config struct {
 // It is on by default as Go is mainly used on server side and to be compatible with posthog-python.
 func (c Config) GetDisableGeoIP() bool {
 	return c.DisableGeoIP == nil || *c.DisableGeoIP
+}
+
+// GetIsServer reports whether events should include the $is_server property.
+// It is on by default because posthog-go is mainly used server-side; set
+// Config.IsServer to Ptr(false) for CLI/client usage to omit $is_server.
+func (c Config) GetIsServer() bool {
+	return c.IsServer == nil || *c.IsServer
 }
 
 const (

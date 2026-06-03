@@ -25,6 +25,9 @@ type GroupIdentify struct {
 	// DisableGeoIP controls whether this group-identify event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool
+	// IsServer controls whether the event includes the $is_server property.
+	// Enqueue overwrites it from Config.GetIsServer.
+	IsServer bool
 }
 
 func (msg GroupIdentify) internal() {
@@ -80,6 +83,10 @@ func (msg GroupIdentify) APIfy() APIMessage {
 		Set("$group_key", msg.Key).
 		Set("$group_set", msg.Properties).
 		Merge(getSystemContext().ToProperties())
+
+	if msg.IsServer {
+		myProperties.Set("$is_server", true)
+	}
 
 	if msg.DisableGeoIP {
 		myProperties.Set(propertyGeoipDisable, true)
