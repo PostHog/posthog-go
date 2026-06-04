@@ -17,13 +17,21 @@ type Properties map[string]interface{}
 
 // NewProperties creates an empty Properties map for fluent construction.
 func NewProperties() Properties {
-	return make(Properties, 10)
+	return newStringInterfaceMap[Properties]()
+}
+
+func newStringInterfaceMap[M ~map[string]interface{}]() M {
+	return make(M, 10)
 }
 
 // Set assigns a property value and returns the receiver.
 func (p Properties) Set(name string, value interface{}) Properties {
-	p[name] = value
-	return p
+	return setStringInterfaceMapValue(p, name, value)
+}
+
+func setStringInterfaceMapValue[M ~map[string]interface{}](m M, name string, value interface{}) M {
+	m[name] = value
+	return m
 }
 
 // Merge adds the properties from the provided `props` into the receiver `p`.

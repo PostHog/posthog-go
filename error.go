@@ -43,6 +43,24 @@ func (e FieldError) Error() string {
 	return fmt.Sprintf("%s.%s: invalid field value: %#v", e.Type, e.Name, e.Value)
 }
 
+type requiredStringField struct {
+	name  string
+	value string
+}
+
+func validateRequiredStringFields(typeName string, fields ...requiredStringField) error {
+	for _, field := range fields {
+		if field.value == "" {
+			return FieldError{
+				Type:  typeName,
+				Name:  field.name,
+				Value: field.value,
+			}
+		}
+	}
+	return nil
+}
+
 var (
 	// This error is returned by methods of the `Client` interface when they are
 	// called after the client was already closed.

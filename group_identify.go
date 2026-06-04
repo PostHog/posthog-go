@@ -36,23 +36,7 @@ func (msg GroupIdentify) internal() {
 
 // Validate checks that the group identify message has Type and Key set.
 func (msg GroupIdentify) Validate() error {
-	if len(msg.Type) == 0 {
-		return FieldError{
-			Type:  "posthog.GroupIdentify",
-			Name:  "Type",
-			Value: msg.Type,
-		}
-	}
-
-	if len(msg.Key) == 0 {
-		return FieldError{
-			Type:  "posthog.GroupIdentify",
-			Name:  "Key",
-			Value: msg.Key,
-		}
-	}
-
-	return nil
+	return validateRequiredStringFields("posthog.GroupIdentify", requiredStringField{name: "Type", value: msg.Type}, requiredStringField{name: "Key", value: msg.Key})
 }
 
 // GroupIdentifyInApi is the wire-format payload produced from a GroupIdentify message.

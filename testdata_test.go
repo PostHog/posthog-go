@@ -142,23 +142,16 @@ type templateData struct {
 }
 
 // cloneProperties creates a shallow copy of a Properties map
-func cloneProperties(src Properties) Properties {
-	if src == nil {
-		return nil
-	}
-	dst := make(Properties, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
+func cloneProperties(src Properties) Properties { return cloneStringInterfaceMap(src) }
 
 // cloneGroups creates a shallow copy of a Groups map
-func cloneGroups(src Groups) Groups {
+func cloneGroups(src Groups) Groups { return cloneStringInterfaceMap(src) }
+
+func cloneStringInterfaceMap[M ~map[string]interface{}](src M) M {
 	if src == nil {
 		return nil
 	}
-	dst := make(Groups, len(src))
+	dst := make(M, len(src))
 	for k, v := range src {
 		dst[k] = v
 	}

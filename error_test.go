@@ -2,26 +2,37 @@ package posthog
 
 import "testing"
 
-func TestConfigError(t *testing.T) {
-	e := ConfigError{
-		Reason: "testing",
-		Field:  "Answer",
-		Value:  42,
+func TestErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "config",
+			err: ConfigError{
+				Reason: "testing",
+				Field:  "Answer",
+				Value:  42,
+			},
+			want: "posthog.NewWithConfig: testing (posthog.Config.Answer: 42)",
+		},
+		{
+			name: "field",
+			err: FieldError{
+				Type:  "testing.T",
+				Name:  "Answer",
+				Value: 42,
+			},
+			want: "testing.T.Answer: invalid field value: 42",
+		},
 	}
 
-	if s := e.Error(); s != "posthog.NewWithConfig: testing (posthog.Config.Answer: 42)" {
-		t.Error("invalid error message returned by config error:", s)
-	}
-}
-
-func TestFieldError(t *testing.T) {
-	e := FieldError{
-		Type:  "testing.T",
-		Name:  "Answer",
-		Value: 42,
-	}
-
-	if s := e.Error(); s != "testing.T.Answer: invalid field value: 42" {
-		t.Error("invalid error message returned by field error:", s)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.err.Error(); got != tt.want {
+				t.Error("invalid error message returned:", got)
+			}
+		})
 	}
 }

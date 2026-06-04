@@ -35,15 +35,9 @@ func (msg Identify) internal() {
 
 // Validate checks that the identify message has a DistinctId.
 func (msg Identify) Validate() error {
-	if len(msg.DistinctId) == 0 {
-		return FieldError{
-			Type:  "posthog.Identify",
-			Name:  "DistinctId",
-			Value: msg.DistinctId,
-		}
-	}
-
-	return nil
+	return validateRequiredStringFields("posthog.Identify",
+		requiredStringField{name: "DistinctId", value: msg.DistinctId},
+	)
 }
 
 // IdentifyInApi is the wire-format payload produced from an Identify message.

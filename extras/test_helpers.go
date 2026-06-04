@@ -58,8 +58,11 @@ func (c *testCallback) Failure(msg posthog.APIMessage, err error) {
 	c.failureChan <- err
 }
 
-func (c *testCallback) GetCounts() (success, failure int) {
+func (c *testCallback) GetCounts() (success, failure int) { return c.counts() }
+
+func (c *testCallback) counts() (success, failure int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.successCount, c.failureCount
+	success, failure = c.successCount, c.failureCount
+	c.mu.Unlock()
+	return success, failure
 }

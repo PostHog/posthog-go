@@ -14,13 +14,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBatching_SmallEventsBatchTogether verifies that small events are batched together
-func TestBatching_SmallEventsBatchTogether(t *testing.T) {
-	t.Parallel()
+func newSlowBatchServer(t *testing.T, delay time.Duration) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var received atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(delay)
+		var b batch
+		json.NewDecoder(r.Body).Decode(&b)
+		received.Add(int64(len(b.Messages)))
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(server.Close)
+	return server, &received
+}
 
+func enqueueTestCaptures(t *testing.T, client Client, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		err := client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"})
+		require.NoError(t, err)
+	}
+}
+
+func newBatchCounterServer(t *testing.T) (*httptest.Server, *atomic.Int64, *atomic.Int64) {
+	t.Helper()
 	var batchCount atomic.Int64
 	var totalMessages atomic.Int64
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var b batch
 		json.NewDecoder(r.Body).Decode(&b)
@@ -28,7 +47,15 @@ func TestBatching_SmallEventsBatchTogether(t *testing.T) {
 		totalMessages.Add(int64(len(b.Messages)))
 		w.WriteHeader(200)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
+	return server, &batchCount, &totalMessages
+}
+
+// TestBatching_SmallEventsBatchTogether verifies that small events are batched together
+func TestBatching_SmallEventsBatchTogether(t *testing.T) {
+	t.Parallel()
+
+	server, batchCount, totalMessages := newBatchCounterServer(t)
 
 	// Small events (~100 props, ~5KB each)
 	// With 500KB batch limit, should fit ~100 events per batch
@@ -145,17 +172,7 @@ func TestBatching_OversizedEventRejected(t *testing.T) {
 func TestBatching_MixedCardinalityBatching(t *testing.T) {
 	t.Parallel()
 
-	var batchCount atomic.Int64
-	var totalMessages atomic.Int64
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		batchCount.Add(1)
-		totalMessages.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
+	server, batchCount, totalMessages := newBatchCounterServer(t)
 
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:  server.URL,
@@ -381,17 +398,7 @@ func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
 func TestShutdownTimeout_DefaultWaitsForCompletion(t *testing.T) {
 	t.Parallel()
 
-	var received atomic.Int64
-
-	// Create a slow server (200ms per request)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(200 * time.Millisecond)
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
+	server, received := newSlowBatchServer(t, 200*time.Millisecond)
 
 	// Default config - ShutdownTimeout is zero (wait indefinitely)
 	client, err := NewWithConfig("test-key", Config{
@@ -402,14 +409,7 @@ func TestShutdownTimeout_DefaultWaitsForCompletion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Send events
-	for i := 0; i < 10; i++ {
-		err := client.Enqueue(Capture{
-			DistinctId: "test-user",
-			Event:      "test-event",
-		})
-		require.NoError(t, err)
-	}
+	enqueueTestCaptures(t, client, 10)
 
 	// Close should wait for all events to be delivered despite slow server
 	start := time.Now()
@@ -427,19 +427,9 @@ func TestShutdownTimeout_DefaultWaitsForCompletion(t *testing.T) {
 func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
 	t.Parallel()
 
-	var received atomic.Int64
+	server, received := newSlowBatchServer(t, 2*time.Second)
 	var mu sync.Mutex
 	var failureCount int
-
-	// Create a very slow server (2s per request) - will exceed our timeout
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
 
 	callback := &testCallbackCounter{
 		onFailure: func() {
@@ -459,14 +449,7 @@ func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Send events
-	for i := 0; i < 10; i++ {
-		err := client.Enqueue(Capture{
-			DistinctId: "test-user",
-			Event:      "test-event",
-		})
-		require.NoError(t, err)
-	}
+	enqueueTestCaptures(t, client, 10)
 
 	// Close should abort after timeout
 	start := time.Now()
@@ -492,17 +475,7 @@ func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
 func TestCloseWithContext_RespectsDeadline(t *testing.T) {
 	t.Parallel()
 
-	var received atomic.Int64
-
-	// Create a slow server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
+	server, _ := newSlowBatchServer(t, 2*time.Second)
 
 	// No ShutdownTimeout configured - will use context deadline instead
 	client, err := NewWithConfig("test-key", Config{
@@ -512,14 +485,7 @@ func TestCloseWithContext_RespectsDeadline(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Send events
-	for i := 0; i < 10; i++ {
-		err := client.Enqueue(Capture{
-			DistinctId: "test-user",
-			Event:      "test-event",
-		})
-		require.NoError(t, err)
-	}
+	enqueueTestCaptures(t, client, 10)
 
 	// Use CloseWithContext with a short deadline
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

@@ -35,23 +35,7 @@ func (msg Alias) internal() {
 
 // Validate checks that the alias message has both DistinctId and Alias set.
 func (msg Alias) Validate() error {
-	if len(msg.DistinctId) == 0 {
-		return FieldError{
-			Type:  "posthog.Alias",
-			Name:  "DistinctId",
-			Value: msg.DistinctId,
-		}
-	}
-
-	if len(msg.Alias) == 0 {
-		return FieldError{
-			Type:  "posthog.Alias",
-			Name:  "Alias",
-			Value: msg.Alias,
-		}
-	}
-
-	return nil
+	return validateRequiredStringFields("posthog.Alias", requiredStringField{name: "DistinctId", value: msg.DistinctId}, requiredStringField{name: "Alias", value: msg.Alias})
 }
 
 // AliasInApiProperties is the wire-format properties object for an Alias message.

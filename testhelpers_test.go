@@ -68,13 +68,17 @@ func (c *UnifiedCallback) Failure(msg APIMessage, err error) {
 	}
 }
 
-func (c *UnifiedCallback) GetCounts() (success, failure int) {
+func (c *UnifiedCallback) GetCounts() (success, failure int) { return c.counts() }
+
+func (c *UnifiedCallback) counts() (success, failure int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.successCount, c.failureCount
 }
 
-func (c *UnifiedCallback) GetLastError() error {
+func (c *UnifiedCallback) GetLastError() error { return c.lastErr() }
+
+func (c *UnifiedCallback) lastErr() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastError
@@ -119,20 +123,20 @@ func NewMockServerBuilder() *MockServerBuilder {
 }
 
 func (b *MockServerBuilder) WithBatchResponse(response string, statusCode int) *MockServerBuilder {
-	b.config.BatchResponse = response
-	b.config.BatchStatusCode = statusCode
-	return b
+	return b.withResponse(response, statusCode, &b.config.BatchResponse, &b.config.BatchStatusCode)
 }
 
 func (b *MockServerBuilder) WithFlagsResponse(response string, statusCode int) *MockServerBuilder {
-	b.config.FlagsResponse = response
-	b.config.FlagsStatusCode = statusCode
-	return b
+	return b.withResponse(response, statusCode, &b.config.FlagsResponse, &b.config.FlagsStatusCode)
 }
 
 func (b *MockServerBuilder) WithLocalEvalResponse(response string, statusCode int) *MockServerBuilder {
-	b.config.LocalEvalResponse = response
-	b.config.LocalEvalStatus = statusCode
+	return b.withResponse(response, statusCode, &b.config.LocalEvalResponse, &b.config.LocalEvalStatus)
+}
+
+func (b *MockServerBuilder) withResponse(response string, statusCode int, responseField *string, statusField *int) *MockServerBuilder {
+	*responseField = response
+	*statusField = statusCode
 	return b
 }
 
@@ -146,10 +150,13 @@ func (b *MockServerBuilder) WithFailAfterN(n int) *MockServerBuilder {
 	return b
 }
 
-func (b *MockServerBuilder) GetRequestCount() int {
+func (b *MockServerBuilder) GetRequestCount() int { return b.requestCountLocked() }
+
+func (b *MockServerBuilder) requestCountLocked() int {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.requestCount
+	count := b.requestCount
+	b.mu.Unlock()
+	return count
 }
 
 func (b *MockServerBuilder) Build() *httptest.Server {

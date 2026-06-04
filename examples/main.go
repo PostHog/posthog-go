@@ -96,45 +96,39 @@ func showMenu() {
 }
 
 func runBasicCaptureExamples() {
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("BASIC CAPTURE EXAMPLES")
-	fmt.Println(strings.Repeat("=", 60))
+	printExampleSection("BASIC CAPTURE EXAMPLES")
 	TestCapture(projectAPIKey, endpoint)
 }
 
 func runCaptureWithFeatureFlagsExamples() {
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("CAPTURE WITH FEATURE FLAGS EXAMPLES")
-	fmt.Println(strings.Repeat("=", 60))
+	printExampleSection("CAPTURE WITH FEATURE FLAGS EXAMPLES")
 	TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint)
 }
 
 func runFeatureFlagEvaluationExamples() {
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("FEATURE FLAG EVALUATION EXAMPLES")
-	fmt.Println(strings.Repeat("=", 60))
+	printExampleSection("FEATURE FLAG EVALUATION EXAMPLES")
 	TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint)
 }
 
 func runAdvancedFeatureFlagsExamples() {
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("ADVANCED FEATURE FLAGS (SendFeatureFlagsOptions) EXAMPLES")
-	fmt.Println(strings.Repeat("=", 60))
+	printExampleSection("ADVANCED FEATURE FLAGS (SendFeatureFlagsOptions) EXAMPLES")
 	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint)
 }
 
 func runFlagDependenciesExamples() {
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("FLAG DEPENDENCIES EXAMPLES")
-	fmt.Println(strings.Repeat("=", 60))
+	printExampleSection("FLAG DEPENDENCIES EXAMPLES")
 	TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint)
 }
 
 func runETagPollingExample() {
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("ETAG POLLING TEST")
-	fmt.Println(strings.Repeat("=", 60))
+	printExampleSection("ETAG POLLING TEST")
 	TestETagPolling(projectAPIKey, personalAPIKey, endpoint)
+}
+
+func printExampleSection(title string) {
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println(title)
+	fmt.Println(strings.Repeat("=", 60))
 }
 
 func runAllExamples() {

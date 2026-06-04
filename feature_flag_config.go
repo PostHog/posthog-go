@@ -35,11 +35,15 @@ func (c *FeatureFlagPayload) validate() error {
 		}
 	}
 
-	if len(c.DistinctId) == 0 {
+	return validateFeatureFlagBase(c.DistinctId, &c.SendFeatureFlagEvents)
+}
+
+func validateFeatureFlagBase(distinctId string, sendFeatureFlagEvents **bool) error {
+	if len(distinctId) == 0 {
 		return ConfigError{
 			Reason: "DistinctId required",
 			Field:  "Distinct Id",
-			Value:  c.DistinctId,
+			Value:  distinctId,
 		}
 	}
 
@@ -48,8 +52,8 @@ func (c *FeatureFlagPayload) validate() error {
 	// The remote fallback path in makeFlagsRequest handles nil→empty conversion
 	// before JSON marshaling.
 
-	if c.SendFeatureFlagEvents == nil {
-		c.SendFeatureFlagEvents = &trueVal
+	if *sendFeatureFlagEvents == nil {
+		*sendFeatureFlagEvents = &trueVal
 	}
 	return nil
 }
@@ -75,21 +79,5 @@ type FeatureFlagPayloadNoKey struct {
 }
 
 func (c *FeatureFlagPayloadNoKey) validate() error {
-	if len(c.DistinctId) == 0 {
-		return ConfigError{
-			Reason: "DistinctId required",
-			Field:  "Distinct Id",
-			Value:  c.DistinctId,
-		}
-	}
-
-	// Groups, PersonProperties, and GroupProperties are intentionally left nil.
-	// Nil maps work correctly for local evaluation (nil map reads return zero values).
-	// The remote fallback path in makeFlagsRequest handles nil→empty conversion
-	// before JSON marshaling.
-
-	if c.SendFeatureFlagEvents == nil {
-		c.SendFeatureFlagEvents = &trueVal
-	}
-	return nil
+	return validateFeatureFlagBase(c.DistinctId, &c.SendFeatureFlagEvents)
 }
