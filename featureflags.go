@@ -1040,8 +1040,10 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			// The property filters matched (or there were none) but the rollout
 			// excluded the user. When early_exit is enabled, mirror the server
 			// engine by returning a definitive disabled result instead of
-			// falling through to later condition groups.
-			if flag.Filters.EarlyExit {
+			// falling through to later condition groups. An inconclusive prior
+			// group takes priority: we can't decide locally, so we must fall
+			// back to the server.
+			if flag.Filters.EarlyExit && !isInconclusive {
 				return false, nil
 			}
 		case conditionNoMatch:
