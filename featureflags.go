@@ -117,6 +117,11 @@ type Filter struct {
 	AggregationGroupTypeIndex *uint8 `json:"aggregation_group_type_index"`
 	// Groups contains the ordered condition groups to evaluate.
 	Groups []FeatureFlagCondition `json:"groups"`
+	// EarlyExit, when true, stops local condition evaluation and returns a
+	// definitive disabled result as soon as a condition group matches its
+	// property filters (or has none) but the rollout percentage excludes the
+	// user, instead of falling through to later condition groups.
+	EarlyExit bool `json:"early_exit"`
 	// Multivariate contains variant definitions for multivariate flags.
 	Multivariate *Variants `json:"multivariate"`
 	// Payloads maps flag values or variant keys to raw JSON payloads.
@@ -1004,7 +1009,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			}
 		}
 
-		isMatch, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache)
+		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache)
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
@@ -1021,7 +1026,8 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			}
 		}
 
-		if isMatch {
+		switch matchResult {
+		case conditionMatch:
 			variantOverride := condition.Variant
 			multivariates := flag.Filters.Multivariate
 
@@ -1030,6 +1036,17 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			} else {
 				return getMatchingVariant(flag, effectiveBucketingId), nil
 			}
+		case conditionOutOfRolloutBound:
+			// The property filters matched (or there were none) but the rollout
+			// excluded the user. When early_exit is enabled, mirror the server
+			// engine by returning a definitive disabled result instead of
+			// falling through to later condition groups.
+			if flag.Filters.EarlyExit {
+				return false, nil
+			}
+		case conditionNoMatch:
+			// A property filter did not match: always fall through to the next
+			// condition group, even when early_exit is enabled.
 		}
 	}
 
@@ -1047,6 +1064,23 @@ func uint8PtrEqual(a, b *uint8) bool {
 	return *a == *b
 }
 
+// conditionMatchResult is the tri-state outcome of evaluating a single
+// condition group, mirroring the server-side (Rust) evaluation engine.
+type conditionMatchResult int
+
+const (
+	// conditionMatch means the property filters matched and the rollout
+	// included the user: the flag matches.
+	conditionMatch conditionMatchResult = iota
+	// conditionNoMatch means a property filter did not match: evaluation
+	// always falls through to the next condition group.
+	conditionNoMatch
+	// conditionOutOfRolloutBound means the property filters matched (or the
+	// group had none) but the rollout percentage excluded the user. With
+	// early_exit enabled this short-circuits the flag to disabled.
+	conditionOutOfRolloutBound
+)
+
 func (poller *FeatureFlagsPoller) isConditionMatch(
 	flag FeatureFlag,
 	distinctId string,
@@ -1057,7 +1091,7 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
-) (bool, error) {
+) (conditionMatchResult, error) {
 	if len(condition.Properties) > 0 {
 		var (
 			isMatch bool
@@ -1072,17 +1106,25 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 				isMatch, err = matchProperty(prop, properties)
 			}
 
-			if err != nil || !isMatch {
-				return false, err
+			if err != nil {
+				return conditionNoMatch, err
+			}
+			if !isMatch {
+				return conditionNoMatch, nil
 			}
 		}
 	}
 
 	if condition.RolloutPercentage != nil {
-		return checkIfSimpleFlagEnabled(flag.Key, bucketingId, *condition.RolloutPercentage), nil
+		if checkIfSimpleFlagEnabled(flag.Key, bucketingId, *condition.RolloutPercentage) {
+			return conditionMatch, nil
+		}
+		// Property filters matched (or there were none) but the rollout
+		// percentage excluded the user.
+		return conditionOutOfRolloutBound, nil
 	}
 
-	return true, nil
+	return conditionMatch, nil
 }
 
 func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string) (bool, error) {
