@@ -37,6 +37,9 @@ func (e *eventCapture) getLastEvent() *CaptureInApi {
 }
 
 func (e *eventCapture) waitForEvent(timeout time.Duration) *CaptureInApi {
+	if timeout < 5*time.Second {
+		timeout = 5 * time.Second
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if event := e.getLastEvent(); event != nil {

@@ -140,6 +140,24 @@ func waitForEventCount(capture *eventCapture, want int, timeout time.Duration) [
 	return out
 }
 
+func snapshotCapturedEvents(capture *eventCapture) []CaptureInApi {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	out := make([]CaptureInApi, len(capture.events))
+	copy(out, capture.events)
+	return out
+}
+
+func countFlagCalledEvents(events []CaptureInApi, flagKey string) int {
+	count := 0
+	for _, ev := range events {
+		if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == flagKey {
+			count++
+		}
+	}
+	return count
+}
+
 func findEvent(events []CaptureInApi, eventName, flagKey string) *CaptureInApi {
 	for i := range events {
 		if events[i].Event != eventName {
@@ -704,16 +722,11 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	snap, _ := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
 	snap.IsEnabled("enabled-flag")
 
+	_ = waitForEventCount(capture, 1, 5*time.Second)
 	time.Sleep(150 * time.Millisecond)
+	events := snapshotCapturedEvents(capture)
 
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	count := 0
-	for _, ev := range capture.events {
-		if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
-			count++
-		}
-	}
+	count := countFlagCalledEvents(events, "enabled-flag")
 	if count != 1 {
 		t.Errorf("expected exactly 1 deduped $feature_flag_called event, got %d", count)
 	}
