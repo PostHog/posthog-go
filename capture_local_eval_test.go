@@ -236,7 +236,7 @@ func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, 
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	client, capture, _ := newEvalClient(t, server, func(c *Config) { c.PersonalApiKey = "personal-key" })
 	waitForFlagDefinitions(t, client)
