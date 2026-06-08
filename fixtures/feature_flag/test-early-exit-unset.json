@@ -1,0 +1,28 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 802,
+            "name": "Early Exit Unset Flag",
+            "key": "early-exit-flag",
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [{"key": "region", "type": "person", "value": "USA", "operator": "exact"}],
+                        "rollout_percentage": 0
+                    },
+                    {
+                        "properties": [{"key": "region", "type": "person", "value": "USA", "operator": "exact"}],
+                        "rollout_percentage": 100
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ]
+}

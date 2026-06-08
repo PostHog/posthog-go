@@ -700,6 +700,100 @@ func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
 	}
 }
 
+func TestFeatureFlagEarlyExit(t *testing.T) {
+	// Each fixture defines two condition groups that both match on region=USA:
+	// the first with rollout_percentage 0 (always out of rollout bound) and the
+	// second with rollout_percentage 100 (always in rollout). The behaviour
+	// depends solely on the filters.early_exit flag.
+	tests := []struct {
+		name             string
+		fixture          string
+		personProperties Properties
+		expected         interface{}
+	}{
+		{
+			// early_exit enabled: the first group is out of rollout bound, so
+			// evaluation short-circuits to false without considering the
+			// second (matching) group.
+			name:             "early_exit enabled returns false and skips later matching group",
+			fixture:          "feature_flag/test-early-exit.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         false,
+		},
+		{
+			// early_exit unset: existing behaviour, falls through to the second
+			// matching group and returns true.
+			name:             "early_exit unset falls through to later matching group",
+			fixture:          "feature_flag/test-early-exit-unset.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         true,
+		},
+		{
+			// early_exit explicitly false: same as unset, falls through.
+			name:             "early_exit explicitly false falls through to later matching group",
+			fixture:          "feature_flag/test-early-exit-false.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         true,
+		},
+		{
+			// early_exit enabled but the first group fails on a PROPERTY filter
+			// (region != Canada), which is NO_MATCH and must always fall
+			// through to the second matching group rather than early-exit.
+			name:             "property mismatch does not early-exit even when enabled",
+			fixture:          "feature_flag/test-early-exit-property-mismatch.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         true,
+		},
+		{
+			// early_exit enabled, but a prior condition group is inconclusive
+			// (missing property). The early-exit OutOfRolloutBound group must
+			// not continue to the third (matching) group — it must propagate the
+			// inconclusive error so the poller falls back to the server. The
+			// server mock has no record of this flag so the result is false,
+			// not the spurious true that the third group would produce locally.
+			name:             "inconclusive prior group forces server fallback on early-exit",
+			fixture:          "feature_flag/test-early-exit-inconclusive-prior.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixtureFile := tt.fixture
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+					w.Write([]byte(fixture("test-flags-v3.json")))
+				} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+					w.Write([]byte(fixture(fixtureFile)))
+				}
+			}))
+			defer server.Close()
+
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				PersonalApiKey: "some very secret key",
+				Endpoint:       server.URL,
+			})
+			defer client.Close()
+
+			key := "early-exit-flag"
+			if strings.Contains(fixtureFile, "property-mismatch") {
+				key = "early-exit-property-mismatch-flag"
+			} else if strings.Contains(fixtureFile, "inconclusive-prior") {
+				key = "early-exit-inconclusive-prior-flag"
+			}
+
+			result, err := client.GetFeatureFlag(FeatureFlagPayload{
+				Key:              key,
+				DistinctId:       "some-distinct-id",
+				PersonProperties: tt.personProperties,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestGetFeatureFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {

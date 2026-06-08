@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Minor Changes
+
+- Support the `early_exit` option on feature flag filters during local evaluation. When a flag has `filters.early_exit` set to `true` and a condition group matches its property filters (or has none) but the rollout percentage excludes the user, local evaluation now returns a definitive disabled result immediately instead of falling through to later condition groups, mirroring the server-side evaluation engine. Property-filter mismatches continue to fall through as before, and behaviour is unchanged when `early_exit` is absent or `false`.
+
 ## 1.14.0
 
 ### Minor Changes

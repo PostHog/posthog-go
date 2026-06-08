@@ -1,0 +1,29 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 801,
+            "name": "Early Exit Property Mismatch Flag",
+            "key": "early-exit-property-mismatch-flag",
+            "filters": {
+                "early_exit": true,
+                "groups": [
+                    {
+                        "properties": [{"key": "region", "type": "person", "value": "Canada", "operator": "exact"}],
+                        "rollout_percentage": 0
+                    },
+                    {
+                        "properties": [{"key": "region", "type": "person", "value": "USA", "operator": "exact"}],
+                        "rollout_percentage": 100
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ]
+}
