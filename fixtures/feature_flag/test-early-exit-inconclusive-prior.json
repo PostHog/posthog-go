@@ -1,0 +1,33 @@
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "flags": [
+        {
+            "id": 801,
+            "name": "Early Exit Flag With Inconclusive Prior Group",
+            "key": "early-exit-inconclusive-prior-flag",
+            "filters": {
+                "early_exit": true,
+                "groups": [
+                    {
+                        "properties": [{"key": "email", "type": "person", "value": "missing@example.com", "operator": "exact"}],
+                        "rollout_percentage": 100
+                    },
+                    {
+                        "properties": [{"key": "region", "type": "person", "value": "USA", "operator": "exact"}],
+                        "rollout_percentage": 0
+                    },
+                    {
+                        "properties": [{"key": "region", "type": "person", "value": "USA", "operator": "exact"}],
+                        "rollout_percentage": 100
+                    }
+                ]
+            },
+            "deleted": false,
+            "active": true,
+            "is_simple_flag": false,
+            "rollout_percentage": null
+        }
+    ]
+}

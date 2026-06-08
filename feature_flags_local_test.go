@@ -744,6 +744,18 @@ func TestFeatureFlagEarlyExit(t *testing.T) {
 			personProperties: NewProperties().Set("region", "USA"),
 			expected:         true,
 		},
+		{
+			// early_exit enabled, but a prior condition group is inconclusive
+			// (missing property). The early-exit OutOfRolloutBound group must
+			// not continue to the third (matching) group — it must propagate the
+			// inconclusive error so the poller falls back to the server. The
+			// server mock has no record of this flag so the result is false,
+			// not the spurious true that the third group would produce locally.
+			name:             "inconclusive prior group forces server fallback on early-exit",
+			fixture:          "feature_flag/test-early-exit-inconclusive-prior.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -767,6 +779,8 @@ func TestFeatureFlagEarlyExit(t *testing.T) {
 			key := "early-exit-flag"
 			if strings.Contains(fixtureFile, "property-mismatch") {
 				key = "early-exit-property-mismatch-flag"
+			} else if strings.Contains(fixtureFile, "inconclusive-prior") {
+				key = "early-exit-inconclusive-prior-flag"
 			}
 
 			result, err := client.GetFeatureFlag(FeatureFlagPayload{
