@@ -796,118 +796,27 @@ func TestMatchPropertySemverNeq(t *testing.T) {
 	require.True(t, isMatch)
 }
 
-func TestMatchPropertySemverGt(t *testing.T) {
-	property := FlagProperty{
-		Key:      "version",
-		Value:    "1.2.3",
-		Operator: "semver_gt",
-	}
-
-	testCases := []struct {
-		version  string
-		expected bool
+func TestMatchPropertySemverOrdering(t *testing.T) {
+	tests := []struct {
+		operator string
+		cases    map[string]bool
 	}{
-		{"1.2.4", true},
-		{"1.3.0", true},
-		{"2.0.0", true},
-		{"1.2.3", false},
-		{"1.2.2", false},
-		{"1.1.9", false},
-		{"0.9.9", false},
+		{"semver_gt", map[string]bool{"1.2.4": true, "1.3.0": true, "2.0.0": true, "1.2.3": false, "1.2.2": false, "1.1.9": false, "0.9.9": false}},
+		{"semver_gte", map[string]bool{"1.2.4": true, "1.3.0": true, "2.0.0": true, "1.2.3": true, "1.2.2": false, "1.1.9": false, "0.9.9": false}},
+		{"semver_lt", map[string]bool{"1.2.2": true, "1.1.9": true, "0.9.9": true, "1.2.3": false, "1.2.4": false, "1.3.0": false, "2.0.0": false}},
+		{"semver_lte", map[string]bool{"1.2.2": true, "1.1.9": true, "0.9.9": true, "1.2.3": true, "1.2.4": false, "1.3.0": false, "2.0.0": false}},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.version, func(t *testing.T) {
-			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
-			require.NoError(t, err)
-			require.Equal(t, tc.expected, isMatch)
-		})
-	}
-}
-
-func TestMatchPropertySemverGte(t *testing.T) {
-	property := FlagProperty{
-		Key:      "version",
-		Value:    "1.2.3",
-		Operator: "semver_gte",
-	}
-
-	testCases := []struct {
-		version  string
-		expected bool
-	}{
-		{"1.2.4", true},
-		{"1.3.0", true},
-		{"2.0.0", true},
-		{"1.2.3", true}, // Equal
-		{"1.2.2", false},
-		{"1.1.9", false},
-		{"0.9.9", false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.version, func(t *testing.T) {
-			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
-			require.NoError(t, err)
-			require.Equal(t, tc.expected, isMatch)
-		})
-	}
-}
-
-func TestMatchPropertySemverLt(t *testing.T) {
-	property := FlagProperty{
-		Key:      "version",
-		Value:    "1.2.3",
-		Operator: "semver_lt",
-	}
-
-	testCases := []struct {
-		version  string
-		expected bool
-	}{
-		{"1.2.2", true},
-		{"1.1.9", true},
-		{"0.9.9", true},
-		{"1.2.3", false}, // Equal
-		{"1.2.4", false},
-		{"1.3.0", false},
-		{"2.0.0", false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.version, func(t *testing.T) {
-			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
-			require.NoError(t, err)
-			require.Equal(t, tc.expected, isMatch)
-		})
-	}
-}
-
-func TestMatchPropertySemverLte(t *testing.T) {
-	property := FlagProperty{
-		Key:      "version",
-		Value:    "1.2.3",
-		Operator: "semver_lte",
-	}
-
-	testCases := []struct {
-		version  string
-		expected bool
-	}{
-		{"1.2.2", true},
-		{"1.1.9", true},
-		{"0.9.9", true},
-		{"1.2.3", true}, // Equal
-		{"1.2.4", false},
-		{"1.3.0", false},
-		{"2.0.0", false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.version, func(t *testing.T) {
-			isMatch, err := matchProperty(property, NewProperties().Set("version", tc.version))
-			require.NoError(t, err)
-			require.Equal(t, tc.expected, isMatch)
+	for _, tt := range tests {
+		t.Run(tt.operator, func(t *testing.T) {
+			property := FlagProperty{Key: "version", Value: "1.2.3", Operator: tt.operator}
+			for version, expected := range tt.cases {
+				t.Run(version, func(t *testing.T) {
+					isMatch, err := matchProperty(property, NewProperties().Set("version", version))
+					require.NoError(t, err)
+					require.Equal(t, expected, isMatch)
+				})
+			}
 		})
 	}
 }

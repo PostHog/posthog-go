@@ -20,6 +20,39 @@ import (
 
 // Note: Property matching tests (TestMatchProperty*) have been moved to feature_flags_matching_test.go
 
+func newFeatureFlagsFixtureClient(t *testing.T, fixtureName string) Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture(fixtureName)))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{PersonalApiKey: "some very secret key", Endpoint: server.URL})
+	require.NoError(t, err)
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+func newFeatureFlagsLocalClient(t *testing.T, definitionsFixture string) Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture(definitionsFixture)))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
 func TestFlagPersonProperty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
@@ -434,21 +467,7 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenFlagsErrorsOut(t *testing.T) {
 }
 
 func TestExperienceContinuityOverride(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
+	client := newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag.json")
 
 	featureVariant, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
@@ -528,29 +547,7 @@ func TestGetAllFlagsEmptyLocal(t *testing.T) {
 }
 
 func TestGetAllFlagsNoRemoteFallback(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-multiple-flags-valid.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
-		DistinctId: "distinct-id",
-	})
-
-	if featureVariants["beta-feature"] != true || featureVariants["disabled-feature"] != false {
-		t.Error("Should match")
-	}
+	assertAllFlags(t, newFeatureFlagsLocalClient(t, "feature_flag/test-multiple-flags-valid.json"), FeatureFlagPayloadNoKey{DistinctId: "distinct-id"}, map[string]interface{}{"beta-feature": true, "disabled-feature": false})
 }
 
 func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
@@ -581,53 +578,9 @@ func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 }
 
 func TestComputeInactiveFlagsLocally(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
-		DistinctId: "distinct-id",
-	})
-
-	if featureVariants["beta-feature"] != true || featureVariants["disabled-feature"] != false {
-		t.Error("Should match")
-	}
-
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-compute-inactive-flags-locally-2.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ = NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	featureVariants, _ = client.GetAllFlags(FeatureFlagPayloadNoKey{
-		DistinctId: "distinct-id",
-	})
-
-	if featureVariants["beta-feature"] != false || featureVariants["disabled-feature"] != true {
-		t.Error("Should match")
-	}
+	payload := FeatureFlagPayloadNoKey{DistinctId: "distinct-id"}
+	assertAllFlags(t, newFeatureFlagsLocalClient(t, "feature_flag/test-compute-inactive-flags-locally.json"), payload, map[string]interface{}{"beta-feature": true, "disabled-feature": false})
+	assertAllFlags(t, newFeatureFlagsLocalClient(t, "feature_flag/test-compute-inactive-flags-locally-2.json"), payload, map[string]interface{}{"beta-feature": false, "disabled-feature": true})
 }
 
 func TestFeatureFlagWithDependencies(t *testing.T) {
@@ -678,26 +631,7 @@ func TestFeatureFlagWithDependencies(t *testing.T) {
 }
 
 func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(fixture("feature_flag/test-simple-flag-without-rollout.json")))
-	}))
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	isMatch, _ := client.IsFeatureEnabled(
-		FeatureFlagPayload{
-			Key:        "simple-flag",
-			DistinctId: "distinct-id",
-		},
-	)
-	if isMatch != true {
-		t.Error("Should be enabled")
-	}
+	assertFeatureEnabled(t, newFeatureFlagsFixtureClient(t, "feature_flag/test-simple-flag-without-rollout.json"), FeatureFlagPayload{Key: "simple-flag", DistinctId: "distinct-id"}, true)
 }
 
 func TestFeatureFlagEarlyExit(t *testing.T) {
@@ -934,32 +868,7 @@ func TestGetFeatureFlagLocallyEvaluated(t *testing.T) {
 }
 
 func TestGetFeatureFlagPayload(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	variant, _ := client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:        "test-get-feature",
-			DistinctId: "distinct_id",
-		},
-	)
-
-	if variant != "this is a string" {
-		t.Error("Should match")
-	}
+	assertFeatureFlagPayload(t, newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag-person-prop.json"), FeatureFlagPayload{Key: "test-get-feature", DistinctId: "distinct_id"}, "this is a string")
 }
 
 func TestGetRemoteConfigPayload(t *testing.T) {
@@ -988,198 +897,71 @@ func TestGetRemoteConfigPayload(t *testing.T) {
 	}
 }
 
-func TestFlagWithVariantOverrides(t *testing.T) {
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-variant-override.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	variant, _ := client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if variant != "second-variant" {
-		t.Error("Should match", variant, "second-variant")
+func TestFlagVariantOverrides(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+		checks  []variantPayloadCheck
+	}{
+		{"valid", "feature_flag/test-variant-override.json", []variantPayloadCheck{{"test_id", "test@posthog.com", "second-variant", "{\"test\": 2}"}, {"example_id", "", "first-variant", "{\"test\": 1}"}}},
+		{"clashing", "feature_flag/test-variant-override-clashing.json", []variantPayloadCheck{{"test_id", "test@posthog.com", "second-variant", "{\"test\": 2}"}, {"example_id", "test@posthog.com", "second-variant", "{\"test\": 2}"}}},
+		{"invalid", "feature_flag/test-variant-override-invalid.json", []variantPayloadCheck{{"test_id", "test@posthog.com", "third-variant", "{\"test\": 3}"}, {"example_id", "", "second-variant", "{\"test\": 2}"}}},
 	}
 
-	payload, _ := client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if payload != "{\"test\": 2}" {
-		t.Error("Should match", payload, "{\"test\": 2}")
-	}
-
-	variant, _ = client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "example_id",
-		},
-	)
-
-	if variant != "first-variant" {
-		t.Error("Should match", variant, "first-variant")
-	}
-
-	payload, _ = client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "example_id",
-		},
-	)
-
-	if payload != "{\"test\": 1}" {
-		t.Error("Should match", payload, "{\"test\": 1}")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newFeatureFlagsLocalClient(t, tt.fixture)
+			for _, check := range tt.checks {
+				assertFlagVariantAndPayload(t, client, featureFlagPayloadFor(check.distinctID, check.email), check.variant, check.payload)
+			}
+		})
 	}
 }
 
-func TestFlagWithClashingVariantOverrides(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-variant-override-clashing.json")))
+type variantPayloadCheck struct {
+	distinctID string
+	email      string
+	variant    interface{}
+	payload    string
+}
+
+func featureFlagPayloadFor(distinctID, email string) FeatureFlagPayload {
+	payload := FeatureFlagPayload{Key: "beta-feature", DistinctId: distinctID}
+	if email != "" {
+		payload.PersonProperties = NewProperties().Set("email", email)
+	}
+	return payload
+}
+
+func assertFlagVariantAndPayload(t *testing.T, client Client, request FeatureFlagPayload, wantVariant interface{}, wantPayload string) {
+	t.Helper()
+	assertFeatureFlag(t, client, request, wantVariant)
+	assertFeatureFlagPayload(t, client, request, wantPayload)
+}
+
+func assertAllFlags(t *testing.T, client Client, request FeatureFlagPayloadNoKey, want map[string]interface{}) {
+	t.Helper()
+	featureVariants, _ := client.GetAllFlags(request)
+	for key, value := range want {
+		if featureVariants[key] != value {
+			t.Error("Should match")
 		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	variant, _ := client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if variant != "second-variant" {
-		t.Error("Should match", variant, "second-variant")
-	}
-
-	payload, _ := client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if payload != "{\"test\": 2}" {
-		t.Error("Should match", payload, "{\"test\": 2}")
-	}
-
-	variant, _ = client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "example_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if variant != "second-variant" {
-		t.Error("Should match", variant, "second-variant")
-	}
-
-	payload, _ = client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "example_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if payload != "{\"test\": 2}" {
-		t.Error("Should match", payload, "{\"test\": 2}")
 	}
 }
 
-func TestFlagWithInvalidVariantOverrides(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-variant-override-invalid.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	variant, _ := client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if variant != "third-variant" {
-		t.Error("Should match", variant, "third-variant")
+func assertFeatureFlag(t *testing.T, client Client, request FeatureFlagPayload, want interface{}) {
+	t.Helper()
+	variant, _ := client.GetFeatureFlag(request)
+	if variant != want {
+		t.Error("Should match", variant, want)
 	}
+}
 
-	payload, _ := client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:              "beta-feature",
-			DistinctId:       "test_id",
-			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
-		},
-	)
-
-	if payload != "{\"test\": 3}" {
-		t.Error("Should match", payload, "{\"test\": 3}")
-	}
-
-	variant, _ = client.GetFeatureFlag(
-		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "example_id",
-		},
-	)
-
-	if variant != "second-variant" {
-		t.Error("Should match", variant, "second-variant")
-	}
-
-	payload, _ = client.GetFeatureFlagPayload(
-		FeatureFlagPayload{
-			Key:        "beta-feature",
-			DistinctId: "example_id",
-		},
-	)
-
-	if payload != "{\"test\": 2}" {
-		t.Error("Should match", payload, "{\"test\": 2}")
+func assertFeatureFlagPayload(t *testing.T, client Client, request FeatureFlagPayload, want string) {
+	t.Helper()
+	payload, _ := client.GetFeatureFlagPayload(request)
+	if payload != want {
+		t.Error("Should match", payload, want)
 	}
 }
 
@@ -1255,34 +1037,7 @@ func TestConditionsEvaluatedInOrder(t *testing.T) {
 }
 
 func TestCaptureIsCalled(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
-		}
-	}))
-
-	defer server.Close()
-
-	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-	})
-	defer client.Close()
-
-	variant, _ := client.GetFeatureFlag(
-
-		FeatureFlagPayload{
-			Key:        "test-get-feature",
-			DistinctId: "distinct_id",
-		},
-	)
-
-	if variant != "variant-1" {
-		t.Error("Should match")
-	}
-
+	assertFeatureFlag(t, newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag-person-prop.json"), FeatureFlagPayload{Key: "test-get-feature", DistinctId: "distinct_id"}, "variant-1")
 }
 
 func TestSimpleFlagConsistency(t *testing.T) {

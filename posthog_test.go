@@ -61,27 +61,14 @@ type testLogger struct {
 	errorf func(string, ...interface{})
 }
 
-func (l testLogger) Debugf(format string, args ...interface{}) {
-	if l.logf != nil {
-		l.logf(format, args...)
-	}
-}
+func (l testLogger) Debugf(format string, args ...interface{}) { l.writeLog(l.logf, format, args...) }
+func (l testLogger) Logf(format string, args ...interface{})   { l.writeLog(l.logf, format, args...) }
+func (l testLogger) Warnf(format string, args ...interface{})  { l.writeLog(l.logf, format, args...) }
+func (l testLogger) Errorf(format string, args ...interface{}) { l.writeLog(l.errorf, format, args...) }
 
-func (l testLogger) Logf(format string, args ...interface{}) {
-	if l.logf != nil {
-		l.logf(format, args...)
-	}
-}
-
-func (l testLogger) Warnf(format string, args ...interface{}) {
-	if l.logf != nil {
-		l.logf(format, args...)
-	}
-}
-
-func (l testLogger) Errorf(format string, args ...interface{}) {
-	if l.errorf != nil {
-		l.errorf(format, args...)
+func (l testLogger) writeLog(fn func(string, ...interface{}), format string, args ...interface{}) {
+	if fn != nil {
+		fn(format, args...)
 	}
 }
 

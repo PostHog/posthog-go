@@ -2052,11 +2052,7 @@ func (poller *FeatureFlagsPoller) getState() *flagsState {
 
 // getCohorts returns the current cohorts map or an empty map if not initialized.
 func (poller *FeatureFlagsPoller) getCohorts() map[string]PropertyGroup {
-	state := poller.state.Load()
-	if state == nil || state.cohorts == nil {
-		return map[string]PropertyGroup{}
-	}
-	return state.cohorts
+	return stateMapOrEmpty(poller.getState(), func(state *flagsState) map[string]PropertyGroup { return state.cohorts })
 }
 
 // preParseCohortValues converts raw []any values in cohort PropertyGroups into
@@ -2147,11 +2143,18 @@ func (poller *FeatureFlagsPoller) getFlagsByKey() map[string]FeatureFlag {
 
 // getGroups returns the current groups map or an empty map if not initialized.
 func (poller *FeatureFlagsPoller) getGroups() map[string]string {
-	state := poller.state.Load()
-	if state == nil || state.groups == nil {
-		return map[string]string{}
+	return stateMapOrEmpty(poller.getState(), func(state *flagsState) map[string]string { return state.groups })
+}
+
+func stateMapOrEmpty[K comparable, V any](state *flagsState, getMap func(*flagsState) map[K]V) map[K]V {
+	if state == nil {
+		return map[K]V{}
 	}
-	return state.groups
+	m := getMap(state)
+	if m == nil {
+		return map[K]V{}
+	}
+	return m
 }
 
 func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header, etag string) (*http.Response, context.CancelFunc, error) {

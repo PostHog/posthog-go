@@ -87,30 +87,33 @@ func TestConfigInvalidBatchSize(t *testing.T) {
 	}
 }
 
-func TestConfigGetDisableGeoIP(t *testing.T) {
-	var (
-		c  Config
-		tv = true
-		fv = false
-	)
-	require.True(t, c.GetDisableGeoIP())
-	c.DisableGeoIP = &tv
-	require.True(t, c.GetDisableGeoIP())
-	c.DisableGeoIP = &fv
-	require.False(t, c.GetDisableGeoIP())
+func TestConfigBoolDefaults(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*Config, *bool)
+		get  func(Config) bool
+	}{
+		{"DisableGeoIP", func(c *Config, value *bool) { c.DisableGeoIP = value }, func(c Config) bool { return c.GetDisableGeoIP() }},
+		{"IsServer", func(c *Config, value *bool) { c.IsServer = value }, func(c Config) bool { return c.GetIsServer() }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertConfigBoolDefaultTrue(t, tt.set, tt.get)
+		})
+	}
 }
 
-func TestConfigGetIsServer(t *testing.T) {
-	var (
-		c  Config
-		tv = true
-		fv = false
-	)
-	require.True(t, c.GetIsServer())
-	c.IsServer = &tv
-	require.True(t, c.GetIsServer())
-	c.IsServer = &fv
-	require.False(t, c.GetIsServer())
+func assertConfigBoolDefaultTrue(t *testing.T, set func(*Config, *bool), get func(Config) bool) {
+	t.Helper()
+	var c Config
+	tv := true
+	fv := false
+	require.True(t, get(c))
+	set(&c, &tv)
+	require.True(t, get(c))
+	set(&c, &fv)
+	require.False(t, get(c))
 }
 
 func TestConfigCompression(t *testing.T) {

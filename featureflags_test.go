@@ -27,3 +27,29 @@ func TestCalculateHash(t *testing.T) {
 		})
 	}
 }
+
+func TestFeatureFlagsPollerStateMapGetters(t *testing.T) {
+	poller := &FeatureFlagsPoller{}
+	if got := poller.getCohorts(); len(got) != 0 {
+		t.Fatalf("empty poller getCohorts() = %#v, want empty map", got)
+	}
+	if got := poller.getGroups(); len(got) != 0 {
+		t.Fatalf("empty poller getGroups() = %#v, want empty map", got)
+	}
+
+	cohorts := map[string]PropertyGroup{"1": {Type: "AND"}}
+	groups := map[string]string{"0": "company"}
+	poller.state.Store(&flagsState{cohorts: cohorts, groups: groups})
+
+	gotCohorts := poller.getCohorts()
+	gotGroups := poller.getGroups()
+	gotCohorts["2"] = PropertyGroup{Type: "OR"}
+	gotGroups["1"] = "team"
+
+	if cohorts["2"].Type != "OR" {
+		t.Fatalf("getCohorts() did not return the stored map")
+	}
+	if groups["1"] != "team" {
+		t.Fatalf("getGroups() did not return the stored map")
+	}
+}

@@ -235,65 +235,17 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 
 // TestStress_HighConcurrencyLowVolume tests many goroutines with few events each
 func TestStress_HighConcurrencyLowVolume(t *testing.T) {
-	goroutines := 1000
-	eventsPerGoroutine := 5
-	totalEvents := goroutines * eventsPerGoroutine
-
-	pool := NewEventPool(totalEvents)
-
-	var received atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
-
-	client, err := NewWithConfig("test-key", Config{
-		Endpoint: server.URL,
-		// Uses production defaults for BatchSize, MaxEnqueuedRequests
-	})
-	require.NoError(t, err)
-
-	start := time.Now()
-
-	var wg sync.WaitGroup
-	var errorCount atomic.Int64
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func(goroutineID int) {
-			defer wg.Done()
-			for i := 0; i < eventsPerGoroutine; i++ {
-				idx := goroutineID*eventsPerGoroutine + i
-				if err := client.Enqueue(pool.Get(idx)); err != nil {
-					errorCount.Add(1)
-				}
-			}
-		}(g)
-	}
-
-	wg.Wait()
-	client.Close()
-
-	elapsed := time.Since(start)
-	throughput := float64(totalEvents) / elapsed.Seconds()
-
-	t.Logf("High concurrency: %d goroutines, %d events, %.2f events/sec, %v total",
-		goroutines, totalEvents, throughput, elapsed)
-	require.Equal(t, int64(0), errorCount.Load(),
-		"No enqueue errors should occur")
-
-	require.Equal(t, int64(totalEvents), received.Load(),
-		"All events should be delivered")
+	runStressConcurrencyVolume(t, "High concurrency", 1000, 5)
 }
 
 // TestStress_LowConcurrencyHighVolume tests few goroutines with many events each
 func TestStress_LowConcurrencyHighVolume(t *testing.T) {
-	goroutines := 4
-	eventsPerGoroutine := 125
-	totalEvents := goroutines * eventsPerGoroutine
+	runStressConcurrencyVolume(t, "Low concurrency", 4, 125)
+}
 
+func runStressConcurrencyVolume(t *testing.T, name string, goroutines, eventsPerGoroutine int) {
+	t.Helper()
+	totalEvents := goroutines * eventsPerGoroutine
 	pool := NewEventPool(totalEvents)
 
 	var received atomic.Int64
@@ -305,14 +257,21 @@ func TestStress_LowConcurrencyHighVolume(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewWithConfig("test-key", Config{
-		Endpoint: server.URL,
-		// Uses production defaults for BatchSize, MaxEnqueuedRequests
-	})
+	client, err := NewWithConfig("test-key", Config{Endpoint: server.URL})
 	require.NoError(t, err)
 
 	start := time.Now()
+	errorCount := enqueueConcurrently(client, pool, goroutines, eventsPerGoroutine)
+	client.Close()
 
+	elapsed := time.Since(start)
+	throughput := float64(totalEvents) / elapsed.Seconds()
+	t.Logf("%s: %d goroutines, %d events, %.2f events/sec, %v total", name, goroutines, totalEvents, throughput, elapsed)
+	require.Equal(t, int64(0), errorCount, "No enqueue errors should occur")
+	require.Equal(t, int64(totalEvents), received.Load(), "All events should be delivered")
+}
+
+func enqueueConcurrently(client Client, pool *EventPool, goroutines, eventsPerGoroutine int) int64 {
 	var wg sync.WaitGroup
 	var errorCount atomic.Int64
 	for g := 0; g < goroutines; g++ {
@@ -327,20 +286,8 @@ func TestStress_LowConcurrencyHighVolume(t *testing.T) {
 			}
 		}(g)
 	}
-
 	wg.Wait()
-	client.Close()
-
-	elapsed := time.Since(start)
-	throughput := float64(totalEvents) / elapsed.Seconds()
-
-	t.Logf("Low concurrency: %d goroutines, %d events, %.2f events/sec, %v total",
-		goroutines, totalEvents, throughput, elapsed)
-	require.Equal(t, int64(0), errorCount.Load(),
-		"No enqueue errors should occur")
-
-	require.Equal(t, int64(totalEvents), received.Load(),
-		"All events should be delivered")
+	return errorCount.Load()
 }
 
 // TestStress_MixedCardinality tests a mix of cardinalities in a single test

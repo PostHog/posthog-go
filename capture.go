@@ -121,31 +121,11 @@ func (msg Capture) internal() {
 
 // Validate checks that the capture message has a non-empty Event and DistinctId.
 func (msg Capture) Validate() error {
-	if err := validateCaptureEvent(msg); err != nil {
-		return err
-	}
-
-	if len(msg.DistinctId) == 0 {
-		return FieldError{
-			Type:  "posthog.Capture",
-			Name:  "DistinctId",
-			Value: msg.DistinctId,
-		}
-	}
-
-	return nil
+	return validateRequiredStringFields("posthog.Capture", requiredStringField{name: "Event", value: msg.Event}, requiredStringField{name: "DistinctId", value: msg.DistinctId})
 }
 
 func validateCaptureEvent(msg Capture) error {
-	if len(msg.Event) == 0 {
-		return FieldError{
-			Type:  "posthog.Capture",
-			Name:  "Event",
-			Value: msg.Event,
-		}
-	}
-
-	return nil
+	return validateRequiredStringFields("posthog.Capture", requiredStringField{name: "Event", value: msg.Event})
 }
 
 // CaptureInApi is the wire-format payload produced from a Capture message.

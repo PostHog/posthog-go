@@ -121,7 +121,7 @@ func TestFlags(t *testing.T) {
 						t.Errorf("Expected IsFeatureEnabled to return %v but was %v", subTest.expected, isMatch)
 					}
 
-					event := capture.waitForEvent(time.Second)
+					event := capture.waitForEvent(5 * time.Second)
 					validateCapturedEvent(t, event)
 				})
 			}
@@ -161,7 +161,7 @@ func TestFlags(t *testing.T) {
 						t.Errorf("Expected GetFeatureFlag to return %v but was %v", subTest.expected, flag)
 					}
 
-					event := capture.waitForEvent(time.Second)
+					event := capture.waitForEvent(5 * time.Second)
 					validateCapturedEvent(t, event)
 				})
 			}
@@ -201,7 +201,7 @@ func TestFlags(t *testing.T) {
 						t.Errorf("Expected GetFeatureFlagPayload to return %v but was %v", subTest.expected, payload)
 					}
 
-					event := capture.waitForEvent(time.Second)
+					event := capture.waitForEvent(5 * time.Second)
 					validateCapturedEvent(t, event)
 				})
 			}
@@ -234,7 +234,7 @@ func TestFeatureFlagCalledIncludesDeviceId(t *testing.T) {
 		},
 	)
 
-	event := capture.waitForEvent(time.Second)
+	event := capture.waitForEvent(5 * time.Second)
 	if event == nil {
 		t.Fatal("Expected a $feature_flag_called event, got nil")
 	}
@@ -265,7 +265,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := capture.waitForEvent(time.Second)
+		event := capture.waitForEvent(5 * time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -295,7 +295,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := capture.waitForEvent(time.Second)
+		event := capture.waitForEvent(5 * time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -324,7 +324,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := capture.waitForEvent(time.Second)
+		event := capture.waitForEvent(5 * time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -354,7 +354,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := capture.waitForEvent(time.Second)
+		event := capture.waitForEvent(5 * time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -383,7 +383,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := capture.waitForEvent(time.Second)
+		event := capture.waitForEvent(5 * time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -412,7 +412,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 			DistinctId: "user-123",
 		})
 
-		event := capture.waitForEvent(time.Second)
+		event := capture.waitForEvent(5 * time.Second)
 		if event == nil {
 			t.Fatal("Expected a captured event")
 		}
@@ -472,7 +472,7 @@ func TestFlagsV4(t *testing.T) {
 				t.Errorf("Expected GetFeatureFlag(%s) to return %v but was %v", test.flagKey, test.expected, flag)
 			}
 
-			capturedEvent := capture.waitForEvent(time.Second)
+			capturedEvent := capture.waitForEvent(5 * time.Second)
 			if capturedEvent == nil {
 				t.Fatalf("Expected a $feature_flag_called for %s event, got nil", test.flagKey)
 			}
@@ -594,7 +594,7 @@ func TestGetFeatureFlagResult(t *testing.T) {
 			}
 
 			// Verify $feature_flag_called event was emitted
-			event := capture.waitForEvent(time.Second)
+			event := capture.waitForEvent(5 * time.Second)
 			if event == nil {
 				t.Fatal("Expected a $feature_flag_called event")
 			}
@@ -647,7 +647,7 @@ func TestGetFeatureFlagResult(t *testing.T) {
 			}
 
 			// Verify $feature_flag_called event was emitted
-			event := capture.waitForEvent(time.Second)
+			event := capture.waitForEvent(5 * time.Second)
 			if event == nil {
 				t.Fatal("Expected a $feature_flag_called event")
 			}
@@ -684,7 +684,7 @@ func TestGetFeatureFlagResult(t *testing.T) {
 			}
 
 			// Verify $feature_flag_called event was emitted
-			event := capture.waitForEvent(time.Second)
+			event := capture.waitForEvent(5 * time.Second)
 			if event == nil {
 				t.Fatal("Expected a $feature_flag_called event")
 			}
@@ -715,7 +715,7 @@ func TestGetFeatureFlagResult(t *testing.T) {
 			}
 
 			// Verify $feature_flag_called event was emitted with error
-			event := capture.waitForEvent(time.Second)
+			event := capture.waitForEvent(5 * time.Second)
 			if event == nil {
 				t.Fatal("Expected a $feature_flag_called event")
 			}

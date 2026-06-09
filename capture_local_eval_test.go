@@ -199,107 +199,36 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 }
 
 // TestCaptureSendFeatureFlagsFallsBackForStaticCohort verifies that a flag gated on
-// a static cohort — which can't be evaluated locally and returns
-// RequiresServerEvaluationError rather than InconclusiveMatchError — still triggers
-// the remote /flags fallback during capture enrichment, instead of erroring and
-// dropping enrichment for the whole event.
+// a static cohort still triggers the remote /flags fallback during capture enrichment.
 func TestCaptureSendFeatureFlagsFallsBackForStaticCohort(t *testing.T) {
 	t.Parallel()
-	var decideCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
-			// Flag gated on cohort 999 with no cohort definitions, so it's a static
-			// cohort that requires server evaluation.
-			w.Write([]byte(`{
-				"flags": [
-					{
-						"id": 1,
-						"key": "static-cohort-flag",
-						"active": true,
-						"filters": {
-							"groups": [
-								{
-									"properties": [
-										{"key": "id", "value": 999, "type": "cohort"}
-									],
-									"rollout_percentage": 100
-								}
-							]
-						}
-					}
-				],
-				"cohorts": {}
-			}`))
-		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
-			decideCalls.Add(1)
-			w.Write([]byte(`{"featureFlags": {"static-cohort-flag": true}}`))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
-		default:
-			t.Errorf("unexpected request to %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	client, capture, _ := newEvalClient(t, server, func(c *Config) {
-		c.PersonalApiKey = "personal-key"
-	})
-	waitForFlagDefinitions(t, client)
-
-	if err := client.Enqueue(Capture{
-		Event:            "test_event",
-		DistinctId:       "distinct-id",
-		SendFeatureFlags: SendFeatureFlags(true),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	event := capture.waitForEvent(2 * time.Second)
-	if event == nil {
-		t.Fatal("timed out waiting for captured event")
-	}
-	if got := decideCalls.Load(); got != 1 {
-		t.Errorf("expected exactly 1 remote /flags fallback for the static cohort, got %d", got)
-	}
-	if event.Properties["$feature/static-cohort-flag"] != true {
-		t.Errorf("expected $feature/static-cohort-flag=true from remote fallback, got %v", event.Properties["$feature/static-cohort-flag"])
-	}
+	assertCaptureFeatureFlagFallback(t, `{
+		"flags": [{"id": 1, "key": "static-cohort-flag", "active": true, "filters": {"groups": [{"properties": [{"key": "id", "value": 999, "type": "cohort"}], "rollout_percentage": 100}]}}],
+		"cohorts": {}
+	}`, `{"featureFlags": {"static-cohort-flag": true}}`, "$feature/static-cohort-flag", true)
 }
 
 // TestCaptureSendFeatureFlagsFallsBackForGroupFlagWithoutGroups verifies that a
-// group-aggregated flag captured without the relevant group context — which
-// computeFlagLocally reports as a plain error (not Inconclusive/ServerEval) — still
-// defers to the remote /flags request rather than dropping enrichment for the event.
+// group-aggregated flag captured without the relevant group context defers to /flags.
 func TestCaptureSendFeatureFlagsFallsBackForGroupFlagWithoutGroups(t *testing.T) {
 	t.Parallel()
+	assertCaptureFeatureFlagFallback(t, `{
+		"flags": [{"id": 1, "key": "group-flag", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [{"properties": [], "rollout_percentage": 100}]}}],
+		"group_type_mapping": {"0": "company"},
+		"cohorts": {}
+	}`, `{"featureFlags": {"group-flag": "group-value"}}`, "$feature/group-flag", "group-value")
+}
+
+func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, featureProperty string, want interface{}) {
+	t.Helper()
 	var decideCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
-			// Flag aggregated on the "company" group. The capture below passes no
-			// groups, so it can't be computed locally.
-			w.Write([]byte(`{
-				"flags": [
-					{
-						"id": 1,
-						"key": "group-flag",
-						"active": true,
-						"filters": {
-							"aggregation_group_type_index": 0,
-							"groups": [
-								{"properties": [], "rollout_percentage": 100}
-							]
-						}
-					}
-				],
-				"group_type_mapping": {"0": "company"},
-				"cohorts": {}
-			}`))
+			w.Write([]byte(definitions))
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			decideCalls.Add(1)
-			w.Write([]byte(`{"featureFlags": {"group-flag": "group-value"}}`))
+			w.Write([]byte(flagsResponse))
 		case strings.HasPrefix(r.URL.Path, "/batch"):
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{}`))
@@ -307,29 +236,22 @@ func TestCaptureSendFeatureFlagsFallsBackForGroupFlagWithoutGroups(t *testing.T)
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
-	client, capture, _ := newEvalClient(t, server, func(c *Config) {
-		c.PersonalApiKey = "personal-key"
-	})
+	client, capture, _ := newEvalClient(t, server, func(c *Config) { c.PersonalApiKey = "personal-key" })
 	waitForFlagDefinitions(t, client)
 
-	if err := client.Enqueue(Capture{
-		Event:            "test_event",
-		DistinctId:       "distinct-id",
-		SendFeatureFlags: SendFeatureFlags(true),
-	}); err != nil {
+	if err := client.Enqueue(Capture{Event: "test_event", DistinctId: "distinct-id", SendFeatureFlags: SendFeatureFlags(true)}); err != nil {
 		t.Fatal(err)
 	}
-
 	event := capture.waitForEvent(2 * time.Second)
 	if event == nil {
 		t.Fatal("timed out waiting for captured event")
 	}
 	if got := decideCalls.Load(); got != 1 {
-		t.Errorf("expected exactly 1 remote /flags fallback for the group flag, got %d", got)
+		t.Errorf("expected exactly 1 remote /flags fallback, got %d", got)
 	}
-	if event.Properties["$feature/group-flag"] != "group-value" {
-		t.Errorf("expected $feature/group-flag=group-value from remote fallback, got %v", event.Properties["$feature/group-flag"])
+	if event.Properties[featureProperty] != want {
+		t.Errorf("expected %s=%v from remote fallback, got %v", featureProperty, want, event.Properties[featureProperty])
 	}
 }

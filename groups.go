@@ -8,11 +8,10 @@ type Groups map[string]interface{}
 
 // NewGroups creates an empty Groups map for fluent construction.
 func NewGroups() Groups {
-	return make(Groups, 10)
+	return newStringInterfaceMap[Groups]()
 }
 
 // Set assigns a group type to a group key or ID and returns the receiver.
 func (p Groups) Set(name string, value interface{}) Groups {
-	p[name] = value
-	return p
+	return setStringInterfaceMapValue(p, name, value)
 }

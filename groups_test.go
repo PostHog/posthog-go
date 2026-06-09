@@ -28,3 +28,12 @@ func TestGroups(t *testing.T) {
 		})
 	}
 }
+
+func TestGroupsSetReturnsReceiver(t *testing.T) {
+	groups := NewGroups()
+	returned := groups.Set("company", "acme")
+	returned.Set("team", "sdk")
+
+	require.Equal(t, "acme", groups["company"])
+	require.Equal(t, "sdk", groups["team"])
+}
