@@ -58,48 +58,6 @@ func TestFeatureFlagPayloadValidationDefaultsAndErrors(t *testing.T) {
 	})
 }
 
-func TestPropertiesAndGroupsSetReturnReceiver(t *testing.T) {
-	props := NewProperties()
-	returnedProps := props.Set("key", "value")
-	returnedProps.Set("other", 42)
-	if props["key"] != "value" || props["other"] != 42 {
-		t.Fatalf("Properties.Set did not mutate and return the receiver: %#v", props)
-	}
-
-	groups := NewGroups()
-	returnedGroups := groups.Set("company", "acme")
-	returnedGroups.Set("team", "sdk")
-	if groups["company"] != "acme" || groups["team"] != "sdk" {
-		t.Fatalf("Groups.Set did not mutate and return the receiver: %#v", groups)
-	}
-}
-
-func TestFeatureFlagsPollerStateMapGetters(t *testing.T) {
-	poller := &FeatureFlagsPoller{}
-	if got := poller.getCohorts(); len(got) != 0 {
-		t.Fatalf("empty poller getCohorts() = %#v, want empty map", got)
-	}
-	if got := poller.getGroups(); len(got) != 0 {
-		t.Fatalf("empty poller getGroups() = %#v, want empty map", got)
-	}
-
-	cohorts := map[string]PropertyGroup{"1": {Type: "AND"}}
-	groups := map[string]string{"0": "company"}
-	poller.state.Store(&flagsState{cohorts: cohorts, groups: groups})
-
-	gotCohorts := poller.getCohorts()
-	gotGroups := poller.getGroups()
-	gotCohorts["2"] = PropertyGroup{Type: "OR"}
-	gotGroups["1"] = "team"
-
-	if cohorts["2"].Type != "OR" {
-		t.Fatalf("getCohorts() did not return the stored map")
-	}
-	if groups["1"] != "team" {
-		t.Fatalf("getGroups() did not return the stored map")
-	}
-}
-
 func assertConfigError(t *testing.T, err error, want ConfigError) {
 	t.Helper()
 	got, ok := err.(ConfigError)

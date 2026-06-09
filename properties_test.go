@@ -59,3 +59,13 @@ func TestPropertiesMergeNil(t *testing.T) {
 		t.Errorf("invalid properties produced by merge:\n- expected %#v\n- found: %#v", expected, props)
 	}
 }
+
+func TestPropertiesSetReturnsReceiver(t *testing.T) {
+	props := NewProperties()
+	returned := props.Set("key", "value")
+	returned.Set("other", 42)
+
+	if props["key"] != "value" || props["other"] != 42 {
+		t.Fatalf("Properties.Set did not mutate and return the receiver: %#v", props)
+	}
+}
