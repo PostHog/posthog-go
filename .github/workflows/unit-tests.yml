@@ -7,9 +7,56 @@ on:
       - main
   merge_group:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Build
+    name: Build (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
+        go-version: ['1.21', '1.x']
+    steps:
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Check out source code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build
+        run: go build .
+
+  test:
+    name: Test (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
+        go-version: ['1.21', '1.x']
+    steps:
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Check out source code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Test
+        run: go test -v -count=1 -timeout=5m -coverprofile=coverage.out ./...
+
+  race:
+    name: Race tests
     runs-on: ubuntu-latest
     steps:
       - name: Set up Go 1.21
@@ -20,8 +67,20 @@ jobs:
       - name: Check out source code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Build
-        run: go build .
+      - name: Race tests
+        run: go test -v -race -count=1 -timeout=5m ./...
 
-      - name: Test
-        run: go test -v -race -count=1 -timeout=5m -coverprofile=coverage.out ./...
+  vet:
+    name: Go vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go 1.21
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: 1.21
+
+      - name: Check out source code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Vet
+        run: go vet ./...
