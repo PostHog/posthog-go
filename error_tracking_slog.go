@@ -80,6 +80,9 @@ func (h *SlogCaptureHandler) Handle(ctx context.Context, r slog.Record) error {
 		ExceptionFingerprint: h.cfg.fingerprint(ctx, r),
 		Properties:           h.cfg.properties(ctx, r),
 	}
+	if provider, ok := h.cfg.stackTraceExtractor.(DebugImageProvider); ok {
+		ex.DebugImages = provider.GetDebugImages()
+	}
 	_ = enqueueWithContext(ctx, h.client, ex) // ignore enqueue error to keep logging safe
 
 	return err
