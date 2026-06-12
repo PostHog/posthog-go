@@ -116,19 +116,21 @@ func gnuBuildID(file *elf.File) []byte {
 		if err != nil {
 			continue
 		}
-		if id := parseGNUBuildIDNote(data); id != nil {
+		if id := parseGNUBuildIDNote(data, file.ByteOrder); id != nil {
 			return id
 		}
 	}
 	return nil
 }
 
-func parseGNUBuildIDNote(data []byte) []byte {
+// parseGNUBuildIDNote walks ELF note records; their header fields use the
+// file's own byte order.
+func parseGNUBuildIDNote(data []byte, byteOrder binary.ByteOrder) []byte {
 	const gnuBuildIDType = 3
 	for len(data) >= 12 {
-		nameSize := binary.LittleEndian.Uint32(data[0:4])
-		descSize := binary.LittleEndian.Uint32(data[4:8])
-		noteType := binary.LittleEndian.Uint32(data[8:12])
+		nameSize := byteOrder.Uint32(data[0:4])
+		descSize := byteOrder.Uint32(data[4:8])
+		noteType := byteOrder.Uint32(data[8:12])
 		data = data[12:]
 
 		alignedName := (nameSize + 3) &^ 3
