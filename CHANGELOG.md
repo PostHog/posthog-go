@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Minor Changes
+
+- Add `NativeStackTraceExtractor` and `NewNativeException` for server-side symbolication: stack frames carry raw instruction addresses and the executable is reported as a `$debug_images` entry, so PostHog can resolve frames (including exact inline expansion and source context) against debug symbols uploaded with `posthog-cli debug-symbols upload`. Frames keep the runtime-resolved function/file/line as a fallback, and are sent in wire order (outermost first). Requires a PostHog version that understands `platform: "native"` frames; the default extractor is unchanged.
+
 ## 1.15.0
 
 ### Minor Changes
