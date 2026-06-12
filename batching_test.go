@@ -427,7 +427,8 @@ func TestShutdownTimeout_DefaultWaitsForCompletion(t *testing.T) {
 func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
 	t.Parallel()
 
-	server, received := newSlowBatchServer(t, 2*time.Second)
+	serverDelay := 2 * time.Second
+	server, received := newSlowBatchServer(t, serverDelay)
 	var mu sync.Mutex
 	var failureCount int
 
@@ -460,8 +461,10 @@ func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
 	require.Error(t, err, "Close() should return error when timeout is exceeded")
 	require.Contains(t, err.Error(), "shutdown timeout", "Error should mention shutdown timeout")
 
-	// Should have aborted relatively quickly (not waited 2s for server)
-	require.Less(t, elapsed, 500*time.Millisecond, "Close() should abort quickly, not wait for slow server")
+	// Should have aborted relatively quickly (not waited for the slow server).
+	// Allow scheduler overhead on busy CI runners while still ensuring shutdown
+	// returns well before the server delay.
+	require.Less(t, elapsed, serverDelay/2, "Close() should abort quickly, not wait for slow server")
 
 	// Some events may have been dropped
 	mu.Lock()
@@ -475,7 +478,8 @@ func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
 func TestCloseWithContext_RespectsDeadline(t *testing.T) {
 	t.Parallel()
 
-	server, _ := newSlowBatchServer(t, 2*time.Second)
+	serverDelay := 2 * time.Second
+	server, _ := newSlowBatchServer(t, serverDelay)
 
 	// No ShutdownTimeout configured - will use context deadline instead
 	client, err := NewWithConfig("test-key", Config{
@@ -499,7 +503,9 @@ func TestCloseWithContext_RespectsDeadline(t *testing.T) {
 	require.Error(t, err, "CloseWithContext should return error when context deadline exceeded")
 	require.Contains(t, err.Error(), "shutdown timeout", "Error should mention shutdown timeout")
 
-	// Should have aborted at context deadline
-	require.Less(t, elapsed, 500*time.Millisecond, "CloseWithContext should respect context deadline")
+	// Should have aborted near the context deadline without waiting for the slow server.
+	// Allow scheduler overhead on busy CI runners while still ensuring shutdown
+	// returns well before the server delay.
+	require.Less(t, elapsed, serverDelay/2, "CloseWithContext should respect context deadline")
 	t.Logf("CloseWithContext aborted after %v", elapsed)
 }

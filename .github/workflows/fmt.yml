@@ -10,6 +10,10 @@ on:
       - main
   merge_group:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fmt:
     name: Check formatting
@@ -27,3 +31,20 @@ jobs:
         run: |
           go fmt ./...
           git diff --exit-code || (echo "Files are not formatted. Run \`go fmt ./...\` locally and commit the changes." && exit 1)
+
+  mod-tidy:
+    name: Check go.mod is tidy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go 1.21
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: 1.21
+
+      - name: Check out source code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Check go.mod/go.sum
+        run: |
+          go mod tidy
+          git diff --exit-code || (echo "go.mod/go.sum are not tidy. Run \`go mod tidy\` locally and commit the changes." && exit 1)
