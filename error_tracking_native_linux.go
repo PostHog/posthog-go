@@ -29,7 +29,10 @@ func loadMainImage() mainImageInfo {
 		return mainImageInfo{}
 	}
 
-	file, err := elf.Open(exe)
+	// Open the magic link rather than the resolved path: it always reads the
+	// mapped image, even after the binary on disk is replaced or deleted
+	// (e.g. mid-deploy).
+	file, err := elf.Open("/proc/self/exe")
 	if err != nil {
 		return mainImageInfo{}
 	}
