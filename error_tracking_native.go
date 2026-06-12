@@ -78,24 +78,33 @@ func (n NativeStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace 
 	image := mainImage()
 
 	traces := make([]StackFrame, 0, stackCallCount)
-	// One wire frame per captured program counter: the server re-expands
-	// inlined frames from the address, so expanding them client-side too
-	// would duplicate them. For enrichment, take the innermost logical frame
-	// of each pc — the most precise attribution for display.
-	for _, pc := range pcs[:stackCallCount] {
+	// One wire frame per physical stack frame: the server re-derives the
+	// full inline chain from each frame's address, so sending the entries
+	// runtime.Callers synthesizes for inlined calls would duplicate their
+	// parents after symbolication. The innermost entry of each group is the
+	// one whose address expands to the whole chain, and it carries the most
+	// precise attribution for display.
+	i := 0
+	for i < stackCallCount {
+		pc := pcs[i]
+		i++
 		frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
 		if frame == (runtime.Frame{}) {
 			continue
 		}
 
 		stackFrame := StackFrame{
-			Filename:        frame.File,
-			LineNo:          frame.Line,
-			Function:        frame.Function,
-			InApp:           n.InAppDecider(frame),
-			Synthetic:       false,
-			Platform:        "native",
-			Lang:            "go",
+			Filename:  frame.File,
+			LineNo:    frame.Line,
+			Function:  frame.Function,
+			InApp:     n.InAppDecider(frame),
+			Synthetic: false,
+			Platform:  "native",
+			Lang:      "go",
+			// The raw return address: the server subtracts one to target the
+			// call instruction, the same contract as the other native SDKs.
+			// (frame.PC is already adjusted, so sending it would shift the
+			// lookup one instruction too far.)
 			InstructionAddr: fmt.Sprintf("0x%x", uint64(pc)),
 		}
 		if frame.Entry != 0 {
@@ -106,6 +115,19 @@ func (n NativeStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace 
 		}
 
 		traces = append(traces, stackFrame)
+
+		// An inlined entry (Func == nil) is followed by synthesized entries
+		// for its parent(s) within the same physical frame, ending at the
+		// physical function (Func != nil): swallow them.
+		if frame.Func == nil {
+			for i < stackCallCount {
+				parent, _ := runtime.CallersFrames([]uintptr{pcs[i]}).Next()
+				i++
+				if parent == (runtime.Frame{}) || parent.Func != nil {
+					break
+				}
+			}
+		}
 	}
 
 	// Reverse to wire order: outermost first, capture site last.
@@ -117,6 +139,14 @@ func (n NativeStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace 
 		Type:   "raw",
 		Frames: traces,
 	}
+}
+
+// DebugImageProvider is implemented by stack trace extractors that can also
+// report the binary images their frames reference. Integrations that accept a
+// StackTraceExtractor (e.g. the slog capture handler) use it to attach
+// $debug_images to the exceptions they build.
+type DebugImageProvider interface {
+	GetDebugImages() []DebugImage
 }
 
 // GetDebugImages returns the debug images referenced by captured frames —

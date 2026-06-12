@@ -1,8 +1,10 @@
 package posthog
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -157,5 +159,82 @@ func TestNativeImageArch(t *testing.T) {
 	arch := nativeImageArch()
 	if arch == "amd64" || arch == "arm64" {
 		t.Errorf("nativeImageArch() = %q, want shared vocabulary", arch)
+	}
+}
+
+//go:noinline
+func collapseCapture() Exception {
+	return NewNativeException(time.Now(), "user-1", "InlineTest", "inline collapse test")
+}
+
+// collapseLeaf is cheap enough for the compiler to inline into its caller;
+// the runtime then synthesizes separate pcs entries for it and its parent
+// within one physical frame, which the extractor must collapse.
+func collapseLeaf(value int) (Exception, int) {
+	doubled := value * 2
+	doubled += value / 3
+	exception := collapseCapture()
+	return exception, doubled + 5
+}
+
+//go:noinline
+func collapseParent(value int) Exception {
+	exception, _ := collapseLeaf(value)
+	return exception
+}
+
+func TestNativeExtractorCollapsesInlineFrames(t *testing.T) {
+	exception := collapseParent(len(t.Name()))
+	frames := exception.ExceptionList[0].Stacktrace.Frames
+
+	var leaf, parent *StackFrame
+	for i := range frames {
+		if strings.Contains(frames[i].Function, "collapseLeaf") {
+			leaf = &frames[i]
+		}
+		if strings.Contains(frames[i].Function, "collapseParent") {
+			parent = &frames[i]
+		}
+	}
+
+	if leaf == nil {
+		t.Skip("collapseLeaf frame not captured")
+	}
+	if parent != nil && parent.SymbolAddr != leaf.SymbolAddr {
+		t.Skip("collapseLeaf was not inlined by this toolchain")
+	}
+	// When inlined, leaf and parent share one physical frame; the server
+	// re-derives the parent from the leaf's address, so it must not also be
+	// sent as its own wire frame.
+	if parent != nil {
+		t.Error("expected the inlined frame's parent to be collapsed away")
+	}
+}
+
+func TestSlogHandlerAttachesDebugImages(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	next := &fakeNextSlogHandler{isEnabled: false}
+	handler := NewSlogCaptureHandler(next, client,
+		WithDistinctIDFn(func(_ context.Context, _ slog.Record) string { return "user-1" }),
+		WithStackTraceExtractor(NativeStackTraceExtractor{InAppDecider: SimpleInAppDecider}),
+	)
+
+	if err := handler.Handle(context.Background(), createLogRecord(slog.LevelError, "boom")); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.enqueuedMsgs) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(client.enqueuedMsgs))
+	}
+
+	exception, ok := client.enqueuedMsgs[0].(Exception)
+	if !ok {
+		t.Fatalf("expected Exception, got %T", client.enqueuedMsgs[0])
+	}
+	if len(exception.DebugImages) == 0 {
+		t.Skip("no debug image for the test binary on this platform/build")
+	}
+	frames := exception.ExceptionList[0].Stacktrace.Frames
+	if len(frames) == 0 || frames[0].Platform != "native" {
+		t.Errorf("expected native frames from the configured extractor")
 	}
 }
