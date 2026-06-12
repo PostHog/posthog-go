@@ -22,9 +22,15 @@ bench: vet
 bench-quick: vet
 	@go test -bench=. -run=^$$ .
 
+api-diff:
+	@bin/api-diff
+
+api-update:
+	@bin/api-diff --update
+
 build: test
 	@go build ./...
 
 ci: dependencies test
 
-.PHONY: dependencies vet test bench bench-quick ci
+.PHONY: dependencies vet test bench bench-quick api-diff api-update ci
