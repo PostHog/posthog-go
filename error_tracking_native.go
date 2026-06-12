@@ -116,14 +116,20 @@ func (n NativeStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace 
 
 		traces = append(traces, stackFrame)
 
-		// An inlined entry (Func == nil) is followed by synthesized entries
-		// for its parent(s) within the same physical frame, ending at the
-		// physical function (Func != nil): swallow them.
-		if frame.Func == nil {
+		// An inlined call (Func == nil with a known entry) is followed by
+		// synthesized entries for its ancestors, all sharing the physical
+		// function's entry pc: swallow through that anchor frame. Matching on
+		// the entry pc keeps non-Go frames (also Func == nil, but with zero or
+		// distinct entries) and recursive calls of the physical function.
+		if frame.Func == nil && frame.Entry != 0 {
 			for i < stackCallCount {
 				parent, _ := runtime.CallersFrames([]uintptr{pcs[i]}).Next()
+				if parent == (runtime.Frame{}) || parent.Entry != frame.Entry {
+					break
+				}
 				i++
-				if parent == (runtime.Frame{}) || parent.Func != nil {
+				if parent.Func != nil {
+					// The physical frame anchoring this inline group.
 					break
 				}
 			}
