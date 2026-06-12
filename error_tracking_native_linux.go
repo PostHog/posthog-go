@@ -77,20 +77,14 @@ func executableMappedRange(exe string) (base, end uint64, ok bool) {
 	}
 	defer file.Close()
 
+	// A replaced-on-disk executable keeps its mapping but both readlink
+	// /proc/self/exe and the maps pathname grow a " (deleted)" suffix.
+	exe = strings.TrimSuffix(exe, " (deleted)")
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		// Format: start-end perms offset dev inode path
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 6 || fields[5] != exe {
-			continue
-		}
-		addrs := strings.SplitN(fields[0], "-", 2)
-		if len(addrs) != 2 {
-			continue
-		}
-		start, err1 := strconv.ParseUint(addrs[0], 16, 64)
-		stop, err2 := strconv.ParseUint(addrs[1], 16, 64)
-		if err1 != nil || err2 != nil {
+		start, stop, lineOK := mapsLineRange(scanner.Text(), exe)
+		if !lineOK {
 			continue
 		}
 		if !ok || start < base {
@@ -103,6 +97,31 @@ func executableMappedRange(exe string) (base, end uint64, ok bool) {
 	}
 
 	return base, end, ok
+}
+
+// mapsLineRange parses one /proc/self/maps line and returns its address range
+// when the mapping belongs to exe. Format: start-end perms offset dev inode
+// pathname — the pathname is the remainder of the line (it may contain
+// spaces), so it can't be pulled out with Fields.
+func mapsLineRange(line, exe string) (start, stop uint64, ok bool) {
+	pathIdx := strings.IndexByte(line, '/')
+	if pathIdx < 0 || strings.TrimSuffix(line[pathIdx:], " (deleted)") != exe {
+		return 0, 0, false
+	}
+	fields := strings.Fields(line[:pathIdx])
+	if len(fields) < 5 {
+		return 0, 0, false
+	}
+	addrs := strings.SplitN(fields[0], "-", 2)
+	if len(addrs) != 2 {
+		return 0, 0, false
+	}
+	start, err1 := strconv.ParseUint(addrs[0], 16, 64)
+	stop, err2 := strconv.ParseUint(addrs[1], 16, 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return start, stop, true
 }
 
 // gnuBuildID extracts the NT_GNU_BUILD_ID note from an ELF file. Returns nil
