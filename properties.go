@@ -20,6 +20,9 @@ func NewProperties() Properties {
 	return newStringInterfaceMap[Properties]()
 }
 
+// PublicAPICanary is a temporary exported symbol used to verify the public API check.
+func PublicAPICanary() {}
+
 func newStringInterfaceMap[M ~map[string]interface{}]() M {
 	return make(M, 10)
 }
