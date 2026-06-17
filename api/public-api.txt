@@ -164,6 +164,8 @@ func (b *Backoff) NewTicker() *Ticker
 
 func (b *Backoff) Sleep(attempt int)
 
+type BeforeSendFunc func(Message) Message
+
 type Callback interface {
 
 	Success(APIMessage)
@@ -205,6 +207,8 @@ type CaptureInApi struct {
 
 type Client interface {
 	EnqueueClient
+
+	BeforeSend(BeforeSendFunc)
 
 	Close() error
 
@@ -273,6 +277,8 @@ type Config struct {
 	DefaultEventProperties Properties
 
 	Callback Callback
+
+	BeforeSend BeforeSendFunc
 
 	BatchSize int
 
