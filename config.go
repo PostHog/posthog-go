@@ -92,6 +92,10 @@ type Config struct {
 	// PostHog batch API.
 	Callback Callback
 
+	// BeforeSend is called after SDK enrichment and before messages are serialized.
+	// Return the message to send a modified version, or nil to drop it.
+	BeforeSend BeforeSendFunc
+
 	// BatchSize is the maximum number of messages sent in one batch API call.
 	// Messages are sent when BatchSize is reached or when Interval fires. If zero,
 	// it defaults to DefaultBatchSize. The API still enforces a 500KB request limit.

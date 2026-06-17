@@ -25,6 +25,10 @@ type Callback interface {
 	Failure(APIMessage, error)
 }
 
+// BeforeSendFunc is called before a message is converted to the PostHog API format.
+// It can return a modified message, or nil to drop the message.
+type BeforeSendFunc func(Message) Message
+
 // Message represents a PostHog object that can be queued with Client.Enqueue.
 //
 // Built-in message types such as Capture, Identify, Alias, GroupIdentify, and
