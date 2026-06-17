@@ -310,7 +310,7 @@ func makeHttpClient(transport http.RoundTripper, timeout time.Duration) http.Cli
 	return httpClient
 }
 
-func cloneBeforeSendProperties(properties Properties) Properties {
+func cloneProperties(properties Properties) Properties {
 	if properties == nil {
 		return nil
 	}
@@ -321,7 +321,7 @@ func cloneBeforeSendProperties(properties Properties) Properties {
 	return clone
 }
 
-func cloneBeforeSendGroups(groups Groups) Groups {
+func cloneGroups(groups Groups) Groups {
 	if groups == nil {
 		return nil
 	}
@@ -332,7 +332,7 @@ func cloneBeforeSendGroups(groups Groups) Groups {
 	return clone
 }
 
-func cloneBeforeSendExceptionList(items []ExceptionItem) []ExceptionItem {
+func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
 	if items == nil {
 		return nil
 	}
@@ -367,18 +367,20 @@ func cloneMessage(msg Message) Message {
 	case Alias:
 		return m
 	case Identify:
-		m.Properties = cloneBeforeSendProperties(m.Properties)
+		m.Properties = cloneProperties(m.Properties)
 		return m
 	case GroupIdentify:
-		m.Properties = cloneBeforeSendProperties(m.Properties)
+		m.Properties = cloneProperties(m.Properties)
 		return m
 	case Capture:
-		m.Properties = cloneBeforeSendProperties(m.Properties)
-		m.Groups = cloneBeforeSendGroups(m.Groups)
+		m.Properties = cloneProperties(m.Properties)
+		m.Groups = cloneGroups(m.Groups)
+		m.Flags = nil
+		m.SendFeatureFlags = nil
 		return m
 	case Exception:
-		m.Properties = cloneBeforeSendProperties(m.Properties)
-		m.ExceptionList = cloneBeforeSendExceptionList(m.ExceptionList)
+		m.Properties = cloneProperties(m.Properties)
+		m.ExceptionList = cloneExceptionList(m.ExceptionList)
 		if m.ExceptionFingerprint != nil {
 			fingerprint := *m.ExceptionFingerprint
 			m.ExceptionFingerprint = &fingerprint
