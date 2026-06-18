@@ -12,6 +12,7 @@ var _ Message = (*Exception)(nil)
 // fills Type, Uuid, Timestamp, and DisableGeoIP, then sends the message as a $exception event.
 type Exception struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
+	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	Uuid string
@@ -84,7 +85,8 @@ type StackFrame struct {
 
 // ExceptionInApi is the wire-format payload produced from an Exception message.
 type ExceptionInApi struct {
-	// Type is the message type sent to the batch API.
+	// Type is the legacy message type sent to the batch API.
+	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string `json:"type"`
 	// Uuid is the event UUID sent to the batch API.
 	Uuid string `json:"uuid"`

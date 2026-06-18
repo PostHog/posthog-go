@@ -84,6 +84,7 @@ var _ Message = (*Capture)(nil)
 // the event for a future batch upload.
 type Capture struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
+	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// Set it only when you need idempotency, for example to prevent duplicate events.
@@ -130,7 +131,8 @@ func validateCaptureEvent(msg Capture) error {
 
 // CaptureInApi is the wire-format payload produced from a Capture message.
 type CaptureInApi struct {
-	// Type is the message type sent to the batch API.
+	// Type is the legacy message type sent to the batch API.
+	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string `json:"type"`
 	// Uuid is the event UUID sent to the batch API.
 	Uuid string `json:"uuid"`

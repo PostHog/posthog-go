@@ -11,6 +11,7 @@ var _ Message = (*Identify)(nil)
 // DisableGeoIP, then sends the message as a $identify event.
 type Identify struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
+	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	Uuid string
@@ -42,7 +43,8 @@ func (msg Identify) Validate() error {
 
 // IdentifyInApi is the wire-format payload produced from an Identify message.
 type IdentifyInApi struct {
-	// Type is the message type sent to the batch API.
+	// Type is the legacy message type sent to the batch API.
+	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string `json:"type"`
 	// Uuid is the event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
