@@ -350,7 +350,7 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 		return msg, true
 	}
 
-	messageType := fmt.Sprintf("%T", dereferenceMessage(msg))
+	messageType := fmt.Sprintf("%T", msg)
 	originalReservedType, hasReservedType := reservedMessageType(msg)
 	next, ok := c.runBeforeSendHook(c.BeforeSend, msg, messageType)
 	if !ok {
