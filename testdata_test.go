@@ -141,6 +141,23 @@ type templateData struct {
 	groups     Groups
 }
 
+// cloneProperties creates a shallow copy of a Properties map.
+func cloneProperties(src Properties) Properties { return cloneStringInterfaceMap(src) }
+
+// cloneGroups creates a shallow copy of a Groups map.
+func cloneGroups(src Groups) Groups { return cloneStringInterfaceMap(src) }
+
+func cloneStringInterfaceMap[M ~map[string]interface{}](src M) M {
+	if src == nil {
+		return nil
+	}
+	dst := make(M, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
 // Next returns the next event (cycling through pool) - thread-safe
 // Returns a copy with cloned Properties/Groups to prevent races when the SDK
 // modifies the maps (via Merge, prepareForSend) in the Enqueue caller thread

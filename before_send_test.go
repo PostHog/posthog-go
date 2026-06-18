@@ -108,7 +108,7 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			expectLog: "BeforeSend changed message type from posthog.Capture to posthog.Identify; dropping message",
 		},
 		{
-			name: "does not expose processed feature flag inputs",
+			name: "receives expanded feature flag properties",
 			capture: Capture{
 				Properties:       NewProperties(),
 				SendFeatureFlags: SendFeatureFlagsWithOptions(&SendFeatureFlagsOptions{OnlyEvaluateLocally: true}),
@@ -116,9 +116,6 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			},
 			beforeSend: func(msg Message) Message {
 				capture := msg.(Capture)
-				if capture.Flags != nil || capture.SendFeatureFlags != nil {
-					return Capture{}
-				}
 				capture.Properties["hook_ran"] = true
 				return capture
 			},

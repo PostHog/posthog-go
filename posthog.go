@@ -299,86 +299,6 @@ func makeHttpClient(transport http.RoundTripper, timeout time.Duration) http.Cli
 	return httpClient
 }
 
-func cloneProperties(properties Properties) Properties {
-	if properties == nil {
-		return nil
-	}
-	clone := make(Properties, len(properties))
-	for key, value := range properties {
-		clone[key] = value
-	}
-	return clone
-}
-
-func cloneGroups(groups Groups) Groups {
-	if groups == nil {
-		return nil
-	}
-	clone := make(Groups, len(groups))
-	for key, value := range groups {
-		clone[key] = value
-	}
-	return clone
-}
-
-func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
-	if items == nil {
-		return nil
-	}
-	clone := make([]ExceptionItem, len(items))
-	for i, item := range items {
-		if item.Stacktrace != nil {
-			stacktrace := *item.Stacktrace
-			if item.Stacktrace.Frames != nil {
-				stacktrace.Frames = append([]StackFrame(nil), item.Stacktrace.Frames...)
-			}
-			item.Stacktrace = &stacktrace
-		}
-		if item.Mechanism != nil {
-			mechanism := *item.Mechanism
-			if item.Mechanism.Handled != nil {
-				handled := *item.Mechanism.Handled
-				mechanism.Handled = &handled
-			}
-			if item.Mechanism.Synthetic != nil {
-				synthetic := *item.Mechanism.Synthetic
-				mechanism.Synthetic = &synthetic
-			}
-			item.Mechanism = &mechanism
-		}
-		clone[i] = item
-	}
-	return clone
-}
-
-func cloneMessage(msg Message) Message {
-	switch m := dereferenceMessage(msg).(type) {
-	case Alias:
-		return m
-	case Identify:
-		m.Properties = cloneProperties(m.Properties)
-		return m
-	case GroupIdentify:
-		m.Properties = cloneProperties(m.Properties)
-		return m
-	case Capture:
-		m.Properties = cloneProperties(m.Properties)
-		m.Groups = cloneGroups(m.Groups)
-		m.Flags = nil
-		m.SendFeatureFlags = nil
-		return m
-	case Exception:
-		m.Properties = cloneProperties(m.Properties)
-		m.ExceptionList = cloneExceptionList(m.ExceptionList)
-		if m.ExceptionFingerprint != nil {
-			fingerprint := *m.ExceptionFingerprint
-			m.ExceptionFingerprint = &fingerprint
-		}
-		return m
-	}
-	return msg
-}
-
 func dereferenceMessage(msg Message) Message {
 	switch m := msg.(type) {
 	case *Alias:
@@ -417,7 +337,7 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 	}
 
 	messageType := fmt.Sprintf("%T", dereferenceMessage(msg))
-	next, ok := c.runBeforeSendHook(c.BeforeSend, cloneMessage(msg), messageType)
+	next, ok := c.runBeforeSendHook(c.BeforeSend, msg, messageType)
 	if !ok {
 		return nil, false
 	}
