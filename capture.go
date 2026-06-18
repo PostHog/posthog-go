@@ -84,6 +84,8 @@ var _ Message = (*Capture)(nil)
 // the event for a future batch upload.
 type Capture struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
+	// Deprecated: PostHog ignores the top-level type field on capture events. Use Event for
+	// the captured event name.
 	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// Set it only when you need idempotency, for example to prevent duplicate events.
@@ -102,6 +104,7 @@ type Capture struct {
 	Groups Groups
 	// SendFeatureFlags requests legacy feature flag enrichment on this event.
 	// Deprecated: Prefer Client.EvaluateFlags and pass the returned snapshot via Flags.
+	// Flags writes the canonical $feature/<key> and $active_feature_flags properties.
 	SendFeatureFlags SendFeatureFlagsValue
 	// Flags, when set, attaches $feature/<key> and $active_feature_flags
 	// properties from a snapshot returned by Client.EvaluateFlags. It is
@@ -130,13 +133,17 @@ func validateCaptureEvent(msg Capture) error {
 
 // CaptureInApi is the wire-format payload produced from a Capture message.
 type CaptureInApi struct {
-	// Type is the message type sent to the batch API.
+	// Type is the legacy message discriminator sent to the batch API.
+	// Deprecated: PostHog ignores this top-level field for capture events. Use Event
+	// for the captured event name.
 	Type string `json:"type"`
 	// Uuid is the event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the legacy top-level SDK name sent to the batch API.
+	// Deprecated: PostHog reads SDK identity from Properties["$lib"].
 	Library string `json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the legacy top-level SDK version sent to the batch API.
+	// Deprecated: PostHog reads SDK version from Properties["$lib_version"].
 	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API.
 	Timestamp time.Time `json:"timestamp"`
@@ -148,6 +155,8 @@ type CaptureInApi struct {
 	// Properties contains event, SDK, system, group, and feature flag properties.
 	Properties Properties `json:"properties"`
 	// SendFeatureFlags carries the legacy send_feature_flags value for compatibility.
+	// Deprecated: PostHog ignores this top-level field. Use Capture.Flags to send
+	// the canonical $feature/<key> and $active_feature_flags properties.
 	SendFeatureFlags SendFeatureFlagsValue `json:"send_feature_flags"`
 }
 
