@@ -313,24 +313,6 @@ func reservedMessageType(msg Message) (string, bool) {
 	return "", false
 }
 
-func restoreReservedMessageType(msg Message, typ string) Message {
-	switch m := msg.(type) {
-	case Alias:
-		m.Type = typ
-		return m
-	case Identify:
-		m.Type = typ
-		return m
-	case Capture:
-		m.Type = typ
-		return m
-	case Exception:
-		m.Type = typ
-		return m
-	}
-	return msg
-}
-
 func dereferenceMessage(msg Message) Message {
 	switch m := msg.(type) {
 	case *Alias:
@@ -394,8 +376,7 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 	}
 	if hasReservedType {
 		if nextReservedType, ok := reservedMessageType(next); ok && nextReservedType != originalReservedType {
-			c.Warnf("BeforeSend changed %s.Type from %q to %q; restoring %q", messageType, originalReservedType, nextReservedType, originalReservedType)
-			next = restoreReservedMessageType(next, originalReservedType)
+			c.Warnf("BeforeSend changed %s.Type from %q to %q", messageType, originalReservedType, nextReservedType)
 		}
 	}
 
