@@ -83,7 +83,7 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 				return capture
 			},
 			expectRequest: true,
-			expectLog:     `BeforeSend changed posthog.Capture.Type from "capture" to "mutated"`,
+			expectLog:     `BeforeSend changed reserved posthog.Capture.Type field from "capture" to "mutated"`,
 			assert: func(t *testing.T, message map[string]interface{}, properties map[string]interface{}) {
 				require.Equal(t, "mutated", message["type"])
 				require.Equal(t, true, properties["hook_ran"])
@@ -120,7 +120,7 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			beforeSend: func(Message) Message {
 				return Identify{DistinctId: "user-123"}
 			},
-			expectLog: "BeforeSend changed message type from posthog.Capture to posthog.Identify; dropping message",
+			expectLog: "BeforeSend returned posthog.Identify instead of posthog.Capture; dropping message",
 		},
 		{
 			name: "receives expanded feature flag properties",

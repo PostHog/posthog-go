@@ -367,7 +367,7 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 		return nil, false
 	}
 	if nextType := fmt.Sprintf("%T", next); nextType != messageType {
-		c.Errorf("BeforeSend changed message type from %s to %s; dropping message", messageType, nextType)
+		c.Errorf("BeforeSend returned %s instead of %s; dropping message", nextType, messageType)
 		return nil, false
 	}
 	if err := next.Validate(); err != nil {
@@ -376,7 +376,7 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 	}
 	if hasReservedType {
 		if nextReservedType, ok := reservedMessageType(next); ok && nextReservedType != originalReservedType {
-			c.Warnf("BeforeSend changed %s.Type from %q to %q", messageType, originalReservedType, nextReservedType)
+			c.Warnf("BeforeSend changed reserved %s.Type field from %q to %q", messageType, originalReservedType, nextReservedType)
 		}
 	}
 
