@@ -49,7 +49,7 @@ trap cleanup EXIT
                 awk '!/^[[:space:]]*\/\// && !/^    /'
             echo
         done
-} > "$tmp_file"
+} | sed -E 's/^(const Version = )"[^"]+"$/\1"<version>"/' > "$tmp_file"
 
 if $update; then
     mkdir -p "$(dirname "$snapshot_file")"
