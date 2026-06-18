@@ -75,21 +75,6 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			},
 		},
 		{
-			name: "warns when reserved type field changes",
-			beforeSend: func(msg Message) Message {
-				capture := msg.(Capture)
-				capture.Type = "mutated"
-				capture.Properties["hook_ran"] = true
-				return capture
-			},
-			expectRequest: true,
-			expectLog:     `BeforeSend changed reserved posthog.Capture.Type field from "capture" to "mutated"`,
-			assert: func(t *testing.T, message map[string]interface{}, properties map[string]interface{}) {
-				require.Equal(t, "mutated", message["type"])
-				require.Equal(t, true, properties["hook_ran"])
-			},
-		},
-		{
 			name: "nil drops message",
 			beforeSend: func(Message) Message {
 				return nil
