@@ -191,16 +191,16 @@ func (msg Capture) APIfy() APIMessage
 func (msg Capture) Validate() error
 
 type CaptureInApi struct {
-	Type string `json:"type"`
+	Type string `json:"-"`
 	Uuid string `json:"uuid"`
-	Library string `json:"library"`
-	LibraryVersion string `json:"library_version"`
+	Library string `json:"-"`
+	LibraryVersion string `json:"-"`
 	Timestamp time.Time `json:"timestamp"`
 
 	DistinctId string `json:"distinct_id"`
 	Event string `json:"event"`
 	Properties Properties `json:"properties"`
-	SendFeatureFlags SendFeatureFlagsValue `json:"send_feature_flags"`
+	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 
 type Client interface {

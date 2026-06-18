@@ -4,8 +4,6 @@
     {
       "distinct_id": "123456",
       "event": "Download",
-      "library": "posthog-go",
-      "library_version": "1.0.0",
       "properties": {
         "$geoip_disable": true,
         "$lib": "posthog-go",
@@ -18,9 +16,7 @@
         "application": "PostHog Go",
         "version": "1.0.0"
       },
-      "send_feature_flags": false,
       "timestamp": "2009-11-10T23:00:00Z",
-      "type": "capture",
       "uuid": "00000000-0000-0000-0000-000000000011"
     }
   ]
