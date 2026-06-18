@@ -41,6 +41,7 @@ func newFlagsServer(t *testing.T, fixtureName string) *flagsServer {
 			w.Write([]byte(fixture(fixtureName)))
 		}
 	}))
+	t.Cleanup(fs.close)
 	return fs
 }
 
@@ -176,7 +177,6 @@ func findEvent(events []CaptureInApi, eventName, flagKey string) *CaptureInApi {
 func TestEvaluateFlags_ReturnsSnapshotWithSingleRequest(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, _ := newEvalClient(t, fs.server)
 
@@ -199,7 +199,6 @@ func TestEvaluateFlags_ReturnsSnapshotWithSingleRequest(t *testing.T) {
 func TestEvaluateFlagsWithContext_UsesRequestContextDistinctId(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 	ctx := WithFreshRequestContext(context.Background(), RequestContext{
@@ -239,7 +238,6 @@ func TestEvaluateFlagsWithContext_UsesRequestContextDistinctId(t *testing.T) {
 func TestEvaluateFlagsWithContext_ExplicitDistinctIdOverridesRequestContext(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, _ := newEvalClient(t, fs.server)
 	ctx := WithFreshRequestContext(context.Background(), RequestContext{DistinctId: "context-user"})
@@ -257,7 +255,6 @@ func TestEvaluateFlagsWithContext_ExplicitDistinctIdOverridesRequestContext(t *t
 func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, _ := newEvalClient(t, fs.server)
 
@@ -273,7 +270,6 @@ func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
 func TestEvaluateFlags_NoEventsUntilAccessed(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
@@ -294,7 +290,6 @@ func TestEvaluateFlags_NoEventsUntilAccessed(t *testing.T) {
 func TestIsEnabled_FiresEventWithFullMetadataAndDedupes(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
@@ -347,7 +342,6 @@ func TestIsEnabled_FiresEventWithFullMetadataAndDedupes(t *testing.T) {
 func TestGetFlag_FiresEventWithVariant(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
@@ -374,7 +368,6 @@ func TestGetFlag_FiresEventWithVariant(t *testing.T) {
 func TestGetFlagPayload_DoesNotFireEvent(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
@@ -409,7 +402,6 @@ func TestGetFlagPayload_DoesNotFireEvent(t *testing.T) {
 func TestOnlyAccessed_FiltersToAccessedFlags(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, _ := newEvalClient(t, fs.server)
 
@@ -433,7 +425,6 @@ func TestOnlyAccessed_FiltersToAccessedFlags(t *testing.T) {
 func TestOnlyAccessed_ReturnsEmptyWhenNoFlagsAccessed(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, logger := newEvalClient(t, fs.server)
 
@@ -453,7 +444,6 @@ func TestOnlyAccessed_ReturnsEmptyWhenNoFlagsAccessed(t *testing.T) {
 func TestOnly_DropsUnknownKeysWithWarning(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, logger := newEvalClient(t, fs.server)
 
@@ -480,7 +470,6 @@ func TestOnly_DropsUnknownKeysWithWarning(t *testing.T) {
 func TestFilteredSnapshots_DoNotBackPropagateAccess(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, _ := newEvalClient(t, fs.server)
 
@@ -500,11 +489,13 @@ func TestFilteredSnapshots_DoNotBackPropagateAccess(t *testing.T) {
 func TestCaptureWithFlags_AttachesPropertiesNoExtraRequest(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
-	snap, _ := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags failed: %v", err)
+	}
 	if err := client.Enqueue(Capture{
 		DistinctId: "user-1",
 		Event:      "thing-happened",
@@ -559,7 +550,6 @@ func TestCaptureWithFlags_AttachesPropertiesNoExtraRequest(t *testing.T) {
 func TestEvaluateFlags_ForwardsFlagKeys(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, _ := newEvalClient(t, fs.server)
 
@@ -591,7 +581,7 @@ func TestEvaluateFlags_EmptyDistinctId_NoEvents(t *testing.T) {
 			w.Write([]byte(fixture("test-flags-v4.json")))
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	client, capture, _ := newEvalClient(t, server)
 
@@ -634,7 +624,7 @@ func TestEvaluateFlags_LocalEvaluation_TagsLocallyEvaluated(t *testing.T) {
 			w.Write([]byte(fixture("test-flags-v4.json")))
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	client, capture, _ := newEvalClient(t, server, func(c *Config) {
 		c.PersonalApiKey = "personal-key"
@@ -685,7 +675,6 @@ func (silentLogger) Errorf(string, ...interface{}) {}
 func TestFilterWarnings_SilencedByQuietLogger(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	// Override Logger entirely so Only's warning has nowhere to go.
 	cfg := Config{
@@ -708,7 +697,6 @@ func TestFilterWarnings_SilencedByQuietLogger(t *testing.T) {
 func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
@@ -735,7 +723,6 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 func TestCaptureFlagCalled_FiresPerGroupContext(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
@@ -807,7 +794,6 @@ func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fs := newFlagsServer(t, "test-flags-v4.json")
-			defer fs.close()
 
 			client, capture, _ := newEvalClient(t, fs.server)
 
@@ -859,7 +845,7 @@ func TestErrorsWhileComputingFlags_PropagatesToEvent(t *testing.T) {
 			}`))
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	client, capture, _ := newEvalClient(t, server)
 
@@ -896,7 +882,6 @@ func TestErrorsWhileComputingFlags_PropagatesToEvent(t *testing.T) {
 func TestCaptureWarnsAndUsesFlagsWhenBothFlagsAndSendFeatureFlagsSet(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, _, logger := newEvalClient(t, fs.server)
 
@@ -945,7 +930,7 @@ func TestEvaluateFlags_RemoteErrorReturnsPartialLocalSnapshot(t *testing.T) {
 			http.Error(w, "boom", http.StatusInternalServerError)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	cli, _, _ := newEvalClient(t, server, func(c *Config) {
 		c.PersonalApiKey = "personal-key"
@@ -976,7 +961,6 @@ func TestEvaluateFlags_RemoteErrorReturnsPartialLocalSnapshot(t *testing.T) {
 func TestCaptureWithFlags_UserPropertiesOverrideGenerated(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
-	defer fs.close()
 
 	client, capture, _ := newEvalClient(t, fs.server)
 
