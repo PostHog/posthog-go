@@ -1,9 +1,11 @@
 package posthog
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,98 +49,63 @@ func firstProperties(t *testing.T, batch map[string]interface{}) map[string]inte
 	return properties
 }
 
-func TestBeforeSendCaptureHooks(t *testing.T) {
+func TestBeforeSendCaptureHook(t *testing.T) {
 	tests := []struct {
-		name             string
-		capture          Capture
-		configBeforeSend func(*testing.T) BeforeSendFunc
-		registerHooks    func(*testing.T, Client, *atomic.Int64)
-		expectRequest    bool
-		assert           func(*testing.T, map[string]interface{}, map[string]interface{}, *atomic.Int64)
+		name          string
+		capture       Capture
+		beforeSend    BeforeSendFunc
+		expectRequest bool
+		expectLog     string
+		assert        func(*testing.T, map[string]interface{}, map[string]interface{})
 	}{
 		{
-			name: "runs config and client hooks in order",
-			configBeforeSend: func(t *testing.T) BeforeSendFunc {
-				return func(msg Message) Message {
-					capture, ok := msg.(Capture)
-					require.True(t, ok)
-					require.Equal(t, "capture", capture.Type)
-					require.Equal(t, mockTime(), capture.Timestamp)
-					capture.Properties["order"] = "config"
-					return capture
-				}
-			},
-			registerHooks: func(t *testing.T, client Client, _ *atomic.Int64) {
-				client.BeforeSend(func(msg Message) Message {
-					capture, ok := msg.(Capture)
-					require.True(t, ok)
-					capture.Properties["order"] = capture.Properties["order"].(string) + ",client"
-					capture.Properties["added_by_hook"] = true
-					return capture
-				})
+			name: "modifies capture after enrichment",
+			beforeSend: func(msg Message) Message {
+				capture := msg.(Capture)
+				capture.Properties["type"] = capture.Type
+				capture.Properties["timestamp"] = capture.Timestamp
+				capture.Properties["added_by_hook"] = true
+				return capture
 			},
 			expectRequest: true,
-			assert: func(t *testing.T, _ map[string]interface{}, properties map[string]interface{}, _ *atomic.Int64) {
-				require.Equal(t, "config,client", properties["order"])
+			assert: func(t *testing.T, _ map[string]interface{}, properties map[string]interface{}) {
+				require.Equal(t, "capture", properties["type"])
+				require.Equal(t, mockTime().Format(time.RFC3339), properties["timestamp"])
 				require.Equal(t, true, properties["added_by_hook"])
 			},
 		},
 		{
-			name: "nil drops message and stops later hooks",
-			registerHooks: func(_ *testing.T, client Client, secondHookCalls *atomic.Int64) {
-				client.BeforeSend(func(Message) Message { return nil })
-				client.BeforeSend(func(msg Message) Message {
-					secondHookCalls.Add(1)
-					return msg
-				})
+			name: "nil drops message",
+			beforeSend: func(Message) Message {
+				return nil
 			},
-			expectRequest: false,
-			assert: func(t *testing.T, _ map[string]interface{}, _ map[string]interface{}, secondHookCalls *atomic.Int64) {
-				require.Zero(t, secondHookCalls.Load())
-			},
+			expectLog: "BeforeSend returned nil for posthog.Capture; dropping message",
 		},
 		{
-			name: "panic keeps current message without leaking mutations",
-			registerHooks: func(_ *testing.T, client Client, _ *atomic.Int64) {
-				client.BeforeSend(func(msg Message) Message {
-					capture := msg.(Capture)
-					capture.Properties["panic_leaked"] = true
-					panic("boom")
-				})
-				client.BeforeSend(func(msg Message) Message {
-					capture := msg.(Capture)
-					capture.Properties["after_error"] = true
-					return capture
-				})
+			name: "panic drops message",
+			beforeSend: func(msg Message) Message {
+				capture := msg.(Capture)
+				capture.Properties["panic_leaked"] = true
+				panic("boom")
 			},
-			expectRequest: true,
-			assert: func(t *testing.T, message map[string]interface{}, properties map[string]interface{}, _ *atomic.Int64) {
-				require.Equal(t, "user-123", message["distinct_id"])
-				require.Equal(t, true, properties["after_error"])
-				require.Nil(t, properties["panic_leaked"])
-			},
+			expectLog: "panic in BeforeSend hook for posthog.Capture: boom; dropping message",
 		},
 		{
-			name: "invalid return keeps current message without leaking mutations",
-			registerHooks: func(_ *testing.T, client Client, _ *atomic.Int64) {
-				client.BeforeSend(func(msg Message) Message {
-					capture := msg.(Capture)
-					capture.Properties["invalid_leaked"] = true
-					capture.Event = ""
-					return capture
-				})
-				client.BeforeSend(func(msg Message) Message {
-					capture := msg.(Capture)
-					capture.Properties["after_error"] = true
-					return capture
-				})
+			name: "invalid return drops message",
+			beforeSend: func(msg Message) Message {
+				capture := msg.(Capture)
+				capture.Properties["invalid_leaked"] = true
+				capture.Event = ""
+				return capture
 			},
-			expectRequest: true,
-			assert: func(t *testing.T, message map[string]interface{}, properties map[string]interface{}, _ *atomic.Int64) {
-				require.Equal(t, "user-123", message["distinct_id"])
-				require.Equal(t, true, properties["after_error"])
-				require.Nil(t, properties["invalid_leaked"])
+			expectLog: "BeforeSend returned invalid posthog.Capture",
+		},
+		{
+			name: "type change drops message",
+			beforeSend: func(Message) Message {
+				return Identify{DistinctId: "user-123"}
 			},
+			expectLog: "BeforeSend changed message type from posthog.Capture to posthog.Identify; dropping message",
 		},
 		{
 			name: "does not expose processed feature flag inputs",
@@ -147,19 +114,16 @@ func TestBeforeSendCaptureHooks(t *testing.T) {
 				SendFeatureFlags: SendFeatureFlagsWithOptions(&SendFeatureFlagsOptions{OnlyEvaluateLocally: true}),
 				Flags:            &FeatureFlagEvaluations{flags: map[string]evaluatedFlagRecord{"flag-a": {Key: "flag-a", Enabled: true}}},
 			},
-			registerHooks: func(t *testing.T, client Client, _ *atomic.Int64) {
-				client.BeforeSend(func(msg Message) Message {
-					capture, ok := msg.(Capture)
-					require.True(t, ok)
-					require.Nil(t, capture.Flags)
-					require.Nil(t, capture.SendFeatureFlags)
-					require.Equal(t, true, capture.Properties["$feature/flag-a"])
-					capture.Properties["hook_ran"] = true
-					return capture
-				})
+			beforeSend: func(msg Message) Message {
+				capture := msg.(Capture)
+				if capture.Flags != nil || capture.SendFeatureFlags != nil {
+					return Capture{}
+				}
+				capture.Properties["hook_ran"] = true
+				return capture
 			},
 			expectRequest: true,
-			assert: func(t *testing.T, _ map[string]interface{}, properties map[string]interface{}, _ *atomic.Int64) {
+			assert: func(t *testing.T, _ map[string]interface{}, properties map[string]interface{}) {
 				require.Equal(t, true, properties["$feature/flag-a"])
 				require.Equal(t, true, properties["hook_ran"])
 			},
@@ -179,21 +143,22 @@ func TestBeforeSendCaptureHooks(t *testing.T) {
 			}))
 			defer server.Close()
 
-			config := Config{
-				Endpoint:  server.URL,
-				BatchSize: 1,
-				now:       mockTime,
-			}
-			if tt.configBeforeSend != nil {
-				config.BeforeSend = tt.configBeforeSend(t)
-			}
-			client, err := NewWithConfig("test-api-key", config)
+			var logged []string
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:   server.URL,
+				BatchSize:  1,
+				now:        mockTime,
+				BeforeSend: tt.beforeSend,
+				Logger: testLogger{
+					logf: func(format string, args ...interface{}) {
+						logged = append(logged, formatMessage(format, args...))
+					},
+					errorf: func(format string, args ...interface{}) {
+						logged = append(logged, formatMessage(format, args...))
+					},
+				},
+			})
 			require.NoError(t, err)
-
-			var secondHookCalls atomic.Int64
-			if tt.registerHooks != nil {
-				tt.registerHooks(t, client, &secondHookCalls)
-			}
 
 			capture := tt.capture
 			if capture.DistinctId == "" {
@@ -205,9 +170,11 @@ func TestBeforeSendCaptureHooks(t *testing.T) {
 			require.NoError(t, client.Enqueue(capture))
 			require.NoError(t, client.Close())
 
+			if tt.expectLog != "" {
+				require.True(t, containsLog(logged, tt.expectLog), "logs: %v", logged)
+			}
 			if !tt.expectRequest {
 				require.Zero(t, requests.Load())
-				tt.assert(t, nil, nil, &secondHookCalls)
 				return
 			}
 
@@ -215,16 +182,17 @@ func TestBeforeSendCaptureHooks(t *testing.T) {
 			batch := readBatch(t, body)
 			message := firstMessage(t, batch)
 			properties := firstProperties(t, batch)
-			tt.assert(t, message, properties, &secondHookCalls)
+			tt.assert(t, message, properties)
 		})
 	}
 }
 
 func TestBeforeSendReceivesTypedMessagesBeforeAPIfy(t *testing.T) {
 	tests := []struct {
-		name   string
-		msg    Message
-		assert func(*testing.T, map[string]interface{})
+		name       string
+		msg        Message
+		beforeSend BeforeSendFunc
+		assert     func(*testing.T, map[string]interface{})
 	}{
 		{
 			name: "exception",
@@ -235,6 +203,17 @@ func TestBeforeSendReceivesTypedMessagesBeforeAPIfy(t *testing.T) {
 					Type:  "error type",
 					Value: "error value",
 				}},
+			},
+			beforeSend: func(msg Message) Message {
+				exception := msg.(Exception)
+				if len(exception.ExceptionList) != 1 {
+					return Exception{}
+				}
+				if exception.Properties == nil {
+					exception.Properties = NewProperties()
+				}
+				exception.Properties["seen_exception"] = true
+				return exception
 			},
 			assert: func(t *testing.T, message map[string]interface{}) {
 				properties, ok := message["properties"].(map[string]interface{})
@@ -250,32 +229,32 @@ func TestBeforeSendReceivesTypedMessagesBeforeAPIfy(t *testing.T) {
 			body, server := mockServer()
 			defer server.Close()
 
-			var sawMessage atomic.Bool
 			client, err := NewWithConfig("test-api-key", Config{
-				Endpoint:  server.URL,
-				BatchSize: 1,
-				now:       mockTime,
+				Endpoint:   server.URL,
+				BatchSize:  1,
+				now:        mockTime,
+				BeforeSend: tt.beforeSend,
 			})
 			require.NoError(t, err)
 			defer client.Close()
 
-			client.BeforeSend(func(msg Message) Message {
-				exception, ok := msg.(Exception)
-				require.True(t, ok)
-				require.Len(t, exception.ExceptionList, 1)
-				sawMessage.Store(true)
-				if exception.Properties == nil {
-					exception.Properties = NewProperties()
-				}
-				exception.Properties["seen_exception"] = true
-				return exception
-			})
-
 			require.NoError(t, client.Enqueue(tt.msg))
 
 			message := firstMessage(t, readBatch(t, body))
-			require.True(t, sawMessage.Load())
 			tt.assert(t, message)
 		})
 	}
+}
+
+func formatMessage(format string, args ...interface{}) string {
+	return fmt.Sprintf(format, args...)
+}
+
+func containsLog(logs []string, want string) bool {
+	for _, log := range logs {
+		if strings.Contains(log, want) {
+			return true
+		}
+	}
+	return false
 }

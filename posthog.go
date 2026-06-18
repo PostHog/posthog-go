@@ -59,11 +59,6 @@ type EnqueueClient interface {
 type Client interface {
 	EnqueueClient
 
-	// BeforeSend registers a hook that runs after SDK enrichment and before
-	// messages are serialized. Hooks run in registration order. Returning nil
-	// drops the message and prevents later hooks from running.
-	BeforeSend(BeforeSendFunc)
-
 	// Close gracefully shuts down the client and flushes pending messages.
 	// If Config.ShutdownTimeout is positive, Close uses it as the shutdown deadline;
 	// otherwise it waits indefinitely. Repeated calls return ErrClosed.
@@ -160,9 +155,6 @@ type client struct {
 	// Tracks in-flight batches for graceful shutdown
 	inFlight atomic.Int64
 
-	beforeSendMu    sync.RWMutex
-	beforeSendHooks []BeforeSendFunc
-
 	// These two channels are used to synchronize the client shutting down when
 	// `Close` is called.
 	// The first channel is closed to signal the backend goroutine that it has
@@ -258,9 +250,6 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		cancel:                          cancel,
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
 		distinctIdsFeatureFlagsReported: reportedCache,
-	}
-	if config.BeforeSend != nil {
-		c.beforeSendHooks = append(c.beforeSendHooks, config.BeforeSend)
 	}
 
 	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger)
@@ -422,69 +411,42 @@ func dereferenceMessage(msg Message) Message {
 	return msg
 }
 
-func (c *client) BeforeSend(hook BeforeSendFunc) {
-	if hook == nil {
-		return
-	}
-
-	c.beforeSendMu.Lock()
-	c.beforeSendHooks = append(c.beforeSendHooks, hook)
-	c.beforeSendMu.Unlock()
-}
-
-func (c *client) beforeSendSnapshot() []BeforeSendFunc {
-	c.beforeSendMu.RLock()
-	defer c.beforeSendMu.RUnlock()
-
-	if len(c.beforeSendHooks) == 0 {
-		return nil
-	}
-	hooks := make([]BeforeSendFunc, len(c.beforeSendHooks))
-	copy(hooks, c.beforeSendHooks)
-	return hooks
-}
-
 func (c *client) processBeforeSend(msg Message) (Message, bool) {
-	hooks := c.beforeSendSnapshot()
-	if len(hooks) == 0 {
+	if c.BeforeSend == nil {
 		return msg, true
 	}
 
-	current := msg
 	messageType := fmt.Sprintf("%T", dereferenceMessage(msg))
-	for _, hook := range hooks {
-		next, ok := c.runBeforeSendHook(hook, cloneMessage(current))
-		if !ok {
-			continue
-		}
-		if next == nil {
-			c.Warnf("BeforeSend returned nil for %s; dropping message", messageType)
-			return nil, false
-		}
-
-		next = dereferenceMessage(next)
-		if next == nil {
-			c.Warnf("BeforeSend returned nil for %s; dropping message", messageType)
-			return nil, false
-		}
-		if nextType := fmt.Sprintf("%T", next); nextType != messageType {
-			c.Errorf("BeforeSend changed message type from %s to %s; keeping original message", messageType, nextType)
-			continue
-		}
-		if err := next.Validate(); err != nil {
-			c.Errorf("BeforeSend returned invalid %s: %v; keeping original message", messageType, err)
-			continue
-		}
-		current = next
+	next, ok := c.runBeforeSendHook(c.BeforeSend, cloneMessage(msg), messageType)
+	if !ok {
+		return nil, false
+	}
+	if next == nil {
+		c.Warnf("BeforeSend returned nil for %s; dropping message", messageType)
+		return nil, false
 	}
 
-	return current, true
+	next = dereferenceMessage(next)
+	if next == nil {
+		c.Warnf("BeforeSend returned nil for %s; dropping message", messageType)
+		return nil, false
+	}
+	if nextType := fmt.Sprintf("%T", next); nextType != messageType {
+		c.Errorf("BeforeSend changed message type from %s to %s; dropping message", messageType, nextType)
+		return nil, false
+	}
+	if err := next.Validate(); err != nil {
+		c.Errorf("BeforeSend returned invalid %s: %v; dropping message", messageType, err)
+		return nil, false
+	}
+
+	return next, true
 }
 
-func (c *client) runBeforeSendHook(hook BeforeSendFunc, msg Message) (next Message, ok bool) {
+func (c *client) runBeforeSendHook(hook BeforeSendFunc, msg Message, messageType string) (next Message, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("panic in BeforeSend hook: %v; keeping original message", r)
+			c.Errorf("panic in BeforeSend hook for %s: %v; dropping message", messageType, r)
 			next = nil
 			ok = false
 		}

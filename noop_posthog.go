@@ -25,8 +25,6 @@ func (c *noopClient) EnqueueWithContext(context.Context, Message) error {
 	return ErrSDKDisabled
 }
 
-func (c *noopClient) BeforeSend(BeforeSendFunc) {}
-
 func (c *noopClient) IsFeatureEnabled(FeatureFlagPayload) (interface{}, error) {
 	return false, ErrSDKDisabled
 }

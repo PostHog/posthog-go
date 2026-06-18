@@ -208,8 +208,6 @@ type CaptureInApi struct {
 type Client interface {
 	EnqueueClient
 
-	BeforeSend(BeforeSendFunc)
-
 	Close() error
 
 	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
