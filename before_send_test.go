@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,19 +141,23 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			}))
 			defer server.Close()
 
-			var logged []string
+			var (
+				logged   []string
+				loggedMu sync.Mutex
+			)
+			appendLog := func(format string, args ...interface{}) {
+				loggedMu.Lock()
+				logged = append(logged, formatMessage(format, args...))
+				loggedMu.Unlock()
+			}
 			client, err := NewWithConfig("test-api-key", Config{
 				Endpoint:   server.URL,
 				BatchSize:  1,
 				now:        mockTime,
 				BeforeSend: tt.beforeSend,
 				Logger: testLogger{
-					logf: func(format string, args ...interface{}) {
-						logged = append(logged, formatMessage(format, args...))
-					},
-					errorf: func(format string, args ...interface{}) {
-						logged = append(logged, formatMessage(format, args...))
-					},
+					logf:   appendLog,
+					errorf: appendLog,
 				},
 			})
 			require.NoError(t, err)
@@ -168,7 +173,10 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			require.NoError(t, client.Close())
 
 			if tt.expectLog != "" {
-				require.True(t, containsLog(logged, tt.expectLog), "logs: %v", logged)
+				loggedMu.Lock()
+				logs := append([]string(nil), logged...)
+				loggedMu.Unlock()
+				require.True(t, containsLog(logs, tt.expectLog), "logs: %v", logs)
 			}
 			if !tt.expectRequest {
 				require.Zero(t, requests.Load())
