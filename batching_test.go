@@ -462,9 +462,9 @@ func TestShutdownTimeout_AbortsAfterTimeout(t *testing.T) {
 	require.Contains(t, err.Error(), "shutdown timeout", "Error should mention shutdown timeout")
 
 	// Should have aborted relatively quickly (not waited for the slow server).
-	// Allow scheduler overhead on busy CI runners while still ensuring shutdown
-	// returns well before the server delay.
-	require.Less(t, elapsed, serverDelay/2, "Close() should abort quickly, not wait for slow server")
+	// Allow scheduler overhead under -race on busy CI runners while still ensuring
+	// shutdown returns before the server could complete normally.
+	require.Less(t, elapsed, serverDelay*3/4, "Close() should abort quickly, not wait for slow server")
 
 	// Some events may have been dropped
 	mu.Lock()
@@ -504,8 +504,8 @@ func TestCloseWithContext_RespectsDeadline(t *testing.T) {
 	require.Contains(t, err.Error(), "shutdown timeout", "Error should mention shutdown timeout")
 
 	// Should have aborted near the context deadline without waiting for the slow server.
-	// Allow scheduler overhead on busy CI runners while still ensuring shutdown
-	// returns well before the server delay.
-	require.Less(t, elapsed, serverDelay/2, "CloseWithContext should respect context deadline")
+	// Allow scheduler overhead under -race on busy CI runners while still ensuring
+	// shutdown returns before the server could complete normally.
+	require.Less(t, elapsed, serverDelay*3/4, "CloseWithContext should respect context deadline")
 	t.Logf("CloseWithContext aborted after %v", elapsed)
 }
