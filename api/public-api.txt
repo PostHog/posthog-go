@@ -61,7 +61,7 @@ const (
 	HeaderPostHogDistinctID = "X-PostHog-Distinct-Id"
 	HeaderPostHogSessionID = "X-PostHog-Session-Id"
 )
-const Version = "1.15.0"
+const Version = "<version>"
 
 
 VARIABLES
