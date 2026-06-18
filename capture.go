@@ -84,7 +84,8 @@ var _ Message = (*Capture)(nil)
 // the event for a future batch upload.
 type Capture struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
-	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
+	// Deprecated: PostHog ignores the top-level type field on capture events. Use Event for
+	// the captured event name.
 	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// Set it only when you need idempotency, for example to prevent duplicate events.
@@ -103,6 +104,7 @@ type Capture struct {
 	Groups Groups
 	// SendFeatureFlags requests legacy feature flag enrichment on this event.
 	// Deprecated: Prefer Client.EvaluateFlags and pass the returned snapshot via Flags.
+	// Flags writes the canonical $feature/<key> and $active_feature_flags properties.
 	SendFeatureFlags SendFeatureFlagsValue
 	// Flags, when set, attaches $feature/<key> and $active_feature_flags
 	// properties from a snapshot returned by Client.EvaluateFlags. It is
@@ -131,15 +133,20 @@ func validateCaptureEvent(msg Capture) error {
 
 // CaptureInApi is the wire-format payload produced from a Capture message.
 type CaptureInApi struct {
-	// Type is the legacy message type sent to the batch API.
-	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
-	Type string `json:"type"`
+	// Type is the legacy message discriminator retained for callbacks.
+	// Deprecated: PostHog ignores this top-level field for capture events, so it
+	// is no longer serialized. Use Event for the captured event name.
+	Type string `json:"-"`
 	// Uuid is the event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the SDK name sent to the batch API.
-	Library string `json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
-	LibraryVersion string `json:"library_version"`
+	// Library is the legacy top-level SDK name retained for callbacks.
+	// Deprecated: PostHog reads SDK identity from Properties["$lib"], so this
+	// top-level field is no longer serialized.
+	Library string `json:"-"`
+	// LibraryVersion is the legacy top-level SDK version retained for callbacks.
+	// Deprecated: PostHog reads SDK version from Properties["$lib_version"], so
+	// this top-level field is no longer serialized.
+	LibraryVersion string `json:"-"`
 	// Timestamp is the event timestamp sent to the batch API.
 	Timestamp time.Time `json:"timestamp"`
 
@@ -149,8 +156,11 @@ type CaptureInApi struct {
 	Event string `json:"event"`
 	// Properties contains event, SDK, system, group, and feature flag properties.
 	Properties Properties `json:"properties"`
-	// SendFeatureFlags carries the legacy send_feature_flags value for compatibility.
-	SendFeatureFlags SendFeatureFlagsValue `json:"send_feature_flags"`
+	// SendFeatureFlags carries the legacy send_feature_flags value for callbacks.
+	// Deprecated: PostHog ignores this top-level field, so it is no longer
+	// serialized. Use Capture.Flags to send the canonical $feature/<key> and
+	// $active_feature_flags properties.
+	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 
 // APIfy converts a Capture message into the PostHog batch API representation.

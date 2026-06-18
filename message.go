@@ -76,6 +76,10 @@ type batch struct {
 }
 
 // APIMessage is a wire-format message produced by Message.APIfy and passed to callbacks.
+// Legacy API message structs may still expose top-level fields such as type,
+// library, library_version, and send_feature_flags for compatibility. Capture
+// ingestion uses event plus properties such as $lib, $lib_version,
+// $feature/<key>, and $active_feature_flags instead.
 type APIMessage interface{}
 
 // prepareForSend creates the API message and serializes it to JSON.

@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.15.1
+
+### Patch Changes
+
+- 52b7373: Stop sending ignored top-level capture fields and rely on canonical event properties.
+
 ## 1.15.0
 
 ### Minor Changes

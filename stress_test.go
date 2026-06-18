@@ -189,7 +189,11 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 
 			client, err := NewWithConfig("test-key", Config{
 				Endpoint: server.URL,
-				// Uses production defaults for BatchSize, MaxEnqueuedRequests
+				// The race detector can make large high-cardinality batches slow enough
+				// to hit the production 100ms submit timeout on CI. This test is about
+				// cardinality handling, not queue backpressure, so allow extra time for
+				// workers to dequeue batches.
+				BatchSubmitTimeout: 5 * time.Second,
 			})
 			require.NoError(t, err)
 
