@@ -26,7 +26,9 @@ type Callback interface {
 }
 
 // BeforeSendFunc is called before a message is converted to the PostHog API format.
-// It can return a modified message, or nil to drop the message.
+// It can return a modified message, or nil to drop the message. If the hook
+// panics, returns an invalid message, or returns a different message type, the
+// message is dropped.
 type BeforeSendFunc func(Message) Message
 
 // Message represents a PostHog object that can be queued with Client.Enqueue.

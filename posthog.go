@@ -299,6 +299,47 @@ func makeHttpClient(transport http.RoundTripper, timeout time.Duration) http.Cli
 	return httpClient
 }
 
+func cloneMessageProperties(properties Properties) Properties {
+	if properties == nil {
+		return nil
+	}
+	clone := make(Properties, len(properties))
+	for key, value := range properties {
+		clone[key] = value
+	}
+	return clone
+}
+
+func cloneMessageGroups(groups Groups) Groups {
+	if groups == nil {
+		return nil
+	}
+	clone := make(Groups, len(groups))
+	for key, value := range groups {
+		clone[key] = value
+	}
+	return clone
+}
+
+func isolateBeforeSendMessage(msg Message) Message {
+	switch m := msg.(type) {
+	case Identify:
+		m.Properties = cloneMessageProperties(m.Properties)
+		return m
+	case GroupIdentify:
+		m.Properties = cloneMessageProperties(m.Properties)
+		return m
+	case Capture:
+		m.Properties = cloneMessageProperties(m.Properties)
+		m.Groups = cloneMessageGroups(m.Groups)
+		return m
+	case Exception:
+		m.Properties = cloneMessageProperties(m.Properties)
+		return m
+	}
+	return msg
+}
+
 func dereferenceMessage(msg Message) Message {
 	switch m := msg.(type) {
 	case *Alias:
@@ -337,7 +378,7 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 	}
 
 	messageType := fmt.Sprintf("%T", msg)
-	next, ok := c.runBeforeSendHook(c.BeforeSend, msg, messageType)
+	next, ok := c.runBeforeSendHook(c.BeforeSend, isolateBeforeSendMessage(msg), messageType)
 	if !ok {
 		return nil, false
 	}

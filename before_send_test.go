@@ -192,6 +192,35 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 	}
 }
 
+func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
+	body, server := mockServer()
+	defer server.Close()
+
+	originalProperties := Properties{"email": "test@example.com"}
+	client, err := NewWithConfig("test-api-key", Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		BeforeSend: func(msg Message) Message {
+			identify := msg.(Identify)
+			identify.Properties["hook_ran"] = true
+			return identify
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.Enqueue(Identify{
+		DistinctId: "user-123",
+		Properties: originalProperties,
+	}))
+
+	message := firstMessage(t, readBatch(t, body))
+	set, ok := message["$set"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, true, set["hook_ran"])
+	require.Nil(t, originalProperties["hook_ran"])
+}
+
 func TestBeforeSendReceivesTypedMessagesBeforeAPIfy(t *testing.T) {
 	tests := []struct {
 		name       string
