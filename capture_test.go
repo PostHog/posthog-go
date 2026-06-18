@@ -31,11 +31,18 @@ func TestCaptureAPIfyUsesCanonicalLibraryProperties(t *testing.T) {
 		t.Fatalf("expected CaptureInApi, got %T", apiMsg)
 	}
 
-	if got := apiMsg.Properties["$lib"]; got != SDKName {
-		t.Errorf("$lib: got %v, want %s", got, SDKName)
-	}
-	if got := apiMsg.Properties["$lib_version"]; got != getVersion() {
-		t.Errorf("$lib_version: got %v, want %s", got, getVersion())
+	for _, tt := range []struct {
+		key  string
+		want interface{}
+	}{
+		{key: "$lib", want: SDKName},
+		{key: "$lib_version", want: getVersion()},
+	} {
+		t.Run(tt.key, func(t *testing.T) {
+			if got := apiMsg.Properties[tt.key]; got != tt.want {
+				t.Errorf("%s: got %v, want %v", tt.key, got, tt.want)
+			}
+		})
 	}
 }
 
