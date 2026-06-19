@@ -14,6 +14,7 @@ type Alias struct {
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
+	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
 	Uuid string
 
 	// Alias is the alternate distinct ID to attach to DistinctId.
@@ -62,7 +63,7 @@ type AliasInApi struct {
 	// Type is the legacy message type sent to the batch API.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
 	Type string `json:"type"`
-	// Uuid is the event UUID sent to the batch API.
+	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
 	// Library is the SDK name sent to the batch API.
 	Library string `json:"library"`

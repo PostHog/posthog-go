@@ -88,6 +88,7 @@ type Capture struct {
 	// the captured event name.
 	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
+	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
 	// Set it only when you need idempotency, for example to prevent duplicate events.
 	Uuid string
 	// DistinctId identifies the user or entity that performed Event.
@@ -137,7 +138,7 @@ type CaptureInApi struct {
 	// Deprecated: PostHog ignores this top-level field for capture events, so it
 	// is no longer serialized. Use Event for the captured event name.
 	Type string `json:"-"`
-	// Uuid is the event UUID sent to the batch API.
+	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
 	// Library is the legacy top-level SDK name retained for callbacks.
 	// Deprecated: PostHog reads SDK identity from Properties["$lib"], so this
