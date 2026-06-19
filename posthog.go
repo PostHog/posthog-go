@@ -321,6 +321,44 @@ func cloneMessageGroups(groups Groups) Groups {
 	return clone
 }
 
+func cloneExceptionFingerprint(fingerprint *string) *string {
+	if fingerprint == nil {
+		return nil
+	}
+	clone := *fingerprint
+	return &clone
+}
+
+func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
+	if items == nil {
+		return nil
+	}
+	clone := make([]ExceptionItem, len(items))
+	for i, item := range items {
+		if item.Mechanism != nil {
+			mechanism := *item.Mechanism
+			if item.Mechanism.Handled != nil {
+				handled := *item.Mechanism.Handled
+				mechanism.Handled = &handled
+			}
+			if item.Mechanism.Synthetic != nil {
+				synthetic := *item.Mechanism.Synthetic
+				mechanism.Synthetic = &synthetic
+			}
+			item.Mechanism = &mechanism
+		}
+		if item.Stacktrace != nil {
+			stacktrace := *item.Stacktrace
+			if item.Stacktrace.Frames != nil {
+				stacktrace.Frames = append([]StackFrame(nil), item.Stacktrace.Frames...)
+			}
+			item.Stacktrace = &stacktrace
+		}
+		clone[i] = item
+	}
+	return clone
+}
+
 func isolateBeforeSendMessage(msg Message) Message {
 	switch m := msg.(type) {
 	case Identify:
@@ -332,9 +370,13 @@ func isolateBeforeSendMessage(msg Message) Message {
 	case Capture:
 		m.Properties = cloneMessageProperties(m.Properties)
 		m.Groups = cloneMessageGroups(m.Groups)
+		m.SendFeatureFlags = nil
+		m.Flags = nil
 		return m
 	case Exception:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.ExceptionList = cloneExceptionList(m.ExceptionList)
+		m.ExceptionFingerprint = cloneExceptionFingerprint(m.ExceptionFingerprint)
 		return m
 	}
 	return msg

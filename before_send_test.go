@@ -117,12 +117,16 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			},
 			beforeSend: func(msg Message) Message {
 				capture := msg.(Capture)
+				capture.Properties["flags_nil"] = capture.Flags == nil
+				capture.Properties["send_feature_flags_nil"] = capture.SendFeatureFlags == nil
 				capture.Properties["hook_ran"] = true
 				return capture
 			},
 			expectRequest: true,
 			assert: func(t *testing.T, _ map[string]interface{}, properties map[string]interface{}) {
 				require.Equal(t, true, properties["$feature/flag-a"])
+				require.Equal(t, true, properties["flags_nil"])
+				require.Equal(t, true, properties["send_feature_flags_nil"])
 				require.Equal(t, true, properties["hook_ran"])
 			},
 		},
@@ -219,6 +223,73 @@ func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, true, set["hook_ran"])
 	require.Nil(t, originalProperties["hook_ran"])
+}
+
+func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {
+	body, server := mockServer()
+	defer server.Close()
+
+	handled := true
+	synthetic := false
+	fingerprint := "original-fingerprint"
+	originalList := []ExceptionItem{{
+		Type:  "RuntimeError",
+		Value: "boom",
+		Mechanism: &ExceptionMechanism{
+			Handled:   &handled,
+			Synthetic: &synthetic,
+		},
+		Stacktrace: &ExceptionStacktrace{
+			Type: "raw",
+			Frames: []StackFrame{{
+				Filename: "original.go",
+				LineNo:   1,
+			}},
+		},
+	}}
+
+	client, err := NewWithConfig("test-api-key", Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		BeforeSend: func(msg Message) Message {
+			exception := msg.(Exception)
+			if exception.Properties == nil {
+				exception.Properties = NewProperties()
+			}
+			*exception.ExceptionFingerprint = "hook-fingerprint"
+			exception.ExceptionList[0].Type = "HookError"
+			exception.ExceptionList[0].Value = "changed"
+			*exception.ExceptionList[0].Mechanism.Handled = false
+			*exception.ExceptionList[0].Mechanism.Synthetic = true
+			exception.ExceptionList[0].Stacktrace.Type = "hook"
+			exception.ExceptionList[0].Stacktrace.Frames[0].Filename = "hook.go"
+			exception.ExceptionList[0].Stacktrace.Frames[0].LineNo = 2
+			exception.Properties["hook_ran"] = true
+			return exception
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.Enqueue(Exception{
+		DistinctId:           "user-123",
+		Properties:           NewProperties(),
+		ExceptionList:        originalList,
+		ExceptionFingerprint: &fingerprint,
+	}))
+
+	message := firstMessage(t, readBatch(t, body))
+	properties, ok := message["properties"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, true, properties["hook_ran"])
+	require.Equal(t, "original-fingerprint", fingerprint)
+	require.Equal(t, "RuntimeError", originalList[0].Type)
+	require.Equal(t, "boom", originalList[0].Value)
+	require.True(t, *originalList[0].Mechanism.Handled)
+	require.False(t, *originalList[0].Mechanism.Synthetic)
+	require.Equal(t, "raw", originalList[0].Stacktrace.Type)
+	require.Equal(t, "original.go", originalList[0].Stacktrace.Frames[0].Filename)
+	require.Equal(t, 1, originalList[0].Stacktrace.Frames[0].LineNo)
 }
 
 func TestBeforeSendReceivesTypedMessagesBeforeAPIfy(t *testing.T) {
