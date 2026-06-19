@@ -65,12 +65,12 @@ func makeTimestamp(t time.Time, def time.Time) time.Time {
 }
 
 // makeUUID returns the UUID passed as first argument if non-empty,
-// otherwise generates and returns a new random UUID (v4).
+// otherwise generates and returns a new UUID v7.
 func makeUUID(u string) string {
 	if u != "" {
 		return u
 	}
-	return uuid.New().String()
+	return uuid.Must(uuid.NewV7()).String()
 }
 
 // batch represents objects sent to the /batch/ endpoint with pre-serialized messages.

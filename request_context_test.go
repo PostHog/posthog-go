@@ -99,7 +99,7 @@ func TestEnqueueWithContext_MissingIdentityWithRequestContextCreatesPersonlessCa
 	event := readSingleBatchEvent(t, body)
 	distinctID, ok := event["distinct_id"].(string)
 	require.True(t, ok)
-	require.NoError(t, uuid.Validate(distinctID))
+	requireUUIDv7(t, distinctID)
 	properties := requireProperties(t, event)
 	require.Equal(t, false, properties[propertyProcessPersonProfile])
 }
@@ -226,7 +226,7 @@ func TestEnqueueWithContext_ExceptionMissingIdentityWithRequestContextCreatesPer
 	properties := requireProperties(t, event)
 	distinctID, ok := properties["distinct_id"].(string)
 	require.True(t, ok)
-	require.NoError(t, uuid.Validate(distinctID))
+	requireUUIDv7(t, distinctID)
 	require.Equal(t, false, properties[propertyProcessPersonProfile])
 }
 
@@ -256,7 +256,7 @@ func TestRequestContextMiddleware_DisableTracingHeadersPreservesMetadata(t *test
 	distinctID, ok := event["distinct_id"].(string)
 	require.True(t, ok)
 	require.NotEqual(t, "header-user", distinctID)
-	require.NoError(t, uuid.Validate(distinctID))
+	requireUUIDv7(t, distinctID)
 	properties := requireProperties(t, event)
 	require.Equal(t, false, properties[propertyProcessPersonProfile])
 	require.NotContains(t, properties, propertySessionID)
@@ -284,7 +284,7 @@ func TestRequestContextMiddleware_SanitizesHeaders(t *testing.T) {
 	event := readSingleBatchEvent(t, body)
 	distinctID, ok := event["distinct_id"].(string)
 	require.True(t, ok)
-	require.NoError(t, uuid.Validate(distinctID))
+	requireUUIDv7(t, distinctID)
 	properties := requireProperties(t, event)
 	require.Equal(t, strings.Repeat("s", maxRequestContextValueLength), properties[propertySessionID])
 }
@@ -507,6 +507,13 @@ func requireProperties(t *testing.T, event map[string]interface{}) map[string]in
 	properties, ok := event["properties"].(map[string]interface{})
 	require.True(t, ok)
 	return properties
+}
+
+func requireUUIDv7(t testing.TB, value string) {
+	t.Helper()
+	parsed, err := uuid.Parse(value)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(7), parsed.Version())
 }
 
 func requireExceptionStackContainsFunction(t *testing.T, properties map[string]interface{}, functionName string) {
