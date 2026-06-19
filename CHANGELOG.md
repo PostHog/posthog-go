@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.16.1
+
+### Patch Changes
+
+- 922cfff: Validate user-supplied event UUIDs before sending and generate a fallback UUID when invalid.
+
 ## 1.16.0
 
 ### Minor Changes
