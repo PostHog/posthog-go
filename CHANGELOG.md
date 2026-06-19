@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.16.0
+
+### Minor Changes
+
+- 1068ec9: Add a BeforeSend hook for modifying or dropping messages before they are sent.
+
 ## 1.15.1
 
 ### Patch Changes
