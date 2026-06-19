@@ -37,8 +37,9 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 				defer server.Close()
 
 				client, err := NewWithConfig("test-key", Config{
-					Endpoint: server.URL,
-					// Uses production defaults for BatchSize, MaxEnqueuedRequests
+					Endpoint:            server.URL,
+					BatchSubmitTimeout:  5 * time.Second,
+					MaxEnqueuedRequests: 5000,
 				})
 				require.NoError(t, err)
 

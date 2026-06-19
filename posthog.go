@@ -299,6 +299,151 @@ func makeHttpClient(transport http.RoundTripper, timeout time.Duration) http.Cli
 	return httpClient
 }
 
+func cloneMessageProperties(properties Properties) Properties {
+	if properties == nil {
+		return nil
+	}
+	clone := make(Properties, len(properties))
+	for key, value := range properties {
+		clone[key] = cloneMessagePropertyValue(value)
+	}
+	return clone
+}
+
+func cloneMessageGroups(groups Groups) Groups {
+	if groups == nil {
+		return nil
+	}
+	clone := make(Groups, len(groups))
+	for key, value := range groups {
+		clone[key] = cloneMessagePropertyValue(value)
+	}
+	return clone
+}
+
+func cloneMessagePropertyValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case Properties:
+		return cloneMessageProperties(v)
+	case Groups:
+		return cloneMessageGroups(v)
+	case map[string]interface{}:
+		clone := make(map[string]interface{}, len(v))
+		for key, nested := range v {
+			clone[key] = cloneMessagePropertyValue(nested)
+		}
+		return clone
+	case map[string]string:
+		clone := make(map[string]string, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]bool:
+		clone := make(map[string]bool, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]int:
+		clone := make(map[string]int, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]int64:
+		clone := make(map[string]int64, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]float64:
+		clone := make(map[string]float64, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case []interface{}:
+		clone := make([]interface{}, len(v))
+		for i, nested := range v {
+			clone[i] = cloneMessagePropertyValue(nested)
+		}
+		return clone
+	case []string:
+		return append([]string(nil), v...)
+	case []bool:
+		return append([]bool(nil), v...)
+	case []int:
+		return append([]int(nil), v...)
+	case []int64:
+		return append([]int64(nil), v...)
+	case []float64:
+		return append([]float64(nil), v...)
+	}
+	return value
+}
+
+func cloneExceptionFingerprint(fingerprint *string) *string {
+	if fingerprint == nil {
+		return nil
+	}
+	clone := *fingerprint
+	return &clone
+}
+
+func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
+	if items == nil {
+		return nil
+	}
+	clone := make([]ExceptionItem, len(items))
+	for i, item := range items {
+		if item.Mechanism != nil {
+			mechanism := *item.Mechanism
+			if item.Mechanism.Handled != nil {
+				handled := *item.Mechanism.Handled
+				mechanism.Handled = &handled
+			}
+			if item.Mechanism.Synthetic != nil {
+				synthetic := *item.Mechanism.Synthetic
+				mechanism.Synthetic = &synthetic
+			}
+			item.Mechanism = &mechanism
+		}
+		if item.Stacktrace != nil {
+			stacktrace := *item.Stacktrace
+			if item.Stacktrace.Frames != nil {
+				stacktrace.Frames = append([]StackFrame(nil), item.Stacktrace.Frames...)
+			}
+			item.Stacktrace = &stacktrace
+		}
+		clone[i] = item
+	}
+	return clone
+}
+
+func isolateBeforeSendMessage(msg Message) Message {
+	switch m := msg.(type) {
+	case Identify:
+		m.Properties = cloneMessageProperties(m.Properties)
+		return m
+	case GroupIdentify:
+		m.Properties = cloneMessageProperties(m.Properties)
+		return m
+	case Capture:
+		m.Properties = cloneMessageProperties(m.Properties)
+		m.Groups = cloneMessageGroups(m.Groups)
+		m.SendFeatureFlags = nil
+		m.Flags = nil
+		return m
+	case Exception:
+		m.Properties = cloneMessageProperties(m.Properties)
+		m.ExceptionList = cloneExceptionList(m.ExceptionList)
+		m.ExceptionFingerprint = cloneExceptionFingerprint(m.ExceptionFingerprint)
+		return m
+	}
+	return msg
+}
+
 func dereferenceMessage(msg Message) Message {
 	switch m := msg.(type) {
 	case *Alias:
@@ -329,6 +474,48 @@ func dereferenceMessage(msg Message) Message {
 	}
 
 	return msg
+}
+
+func (c *client) processBeforeSend(msg Message) (Message, bool) {
+	if c.BeforeSend == nil {
+		return msg, true
+	}
+
+	messageType := fmt.Sprintf("%T", msg)
+	next, ok := c.runBeforeSendHook(c.BeforeSend, isolateBeforeSendMessage(msg), messageType)
+	if !ok {
+		return nil, false
+	}
+	if next == nil {
+		c.Warnf("BeforeSend returned nil for %s; dropping message", messageType)
+		return nil, false
+	}
+
+	next = dereferenceMessage(next)
+	if next == nil {
+		c.Warnf("BeforeSend returned nil for %s; dropping message", messageType)
+		return nil, false
+	}
+	if nextType := fmt.Sprintf("%T", next); nextType != messageType {
+		c.Errorf("BeforeSend returned %s instead of %s; dropping message", nextType, messageType)
+		return nil, false
+	}
+	if err := next.Validate(); err != nil {
+		c.Errorf("BeforeSend returned invalid %s: %v; dropping message", messageType, err)
+		return nil, false
+	}
+	return next, true
+}
+
+func (c *client) runBeforeSendHook(hook BeforeSendFunc, msg Message, messageType string) (next Message, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.Errorf("panic in BeforeSend hook for %s: %v; dropping message", messageType, r)
+			next = nil
+			ok = false
+		}
+	}()
+	return hook(msg), true
 }
 
 func (c *client) Enqueue(msg Message) error {
@@ -373,6 +560,11 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
+		processed, shouldSend := c.processBeforeSend(m)
+		if !shouldSend {
+			return nil
+		}
+		m = processed.(Alias)
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -390,6 +582,11 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
+		processed, shouldSend := c.processBeforeSend(m)
+		if !shouldSend {
+			return nil
+		}
+		m = processed.(Identify)
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -406,6 +603,11 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
+		processed, shouldSend := c.processBeforeSend(m)
+		if !shouldSend {
+			return nil
+		}
+		m = processed.(GroupIdentify)
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -487,6 +689,11 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		if captureContext.personlessProcessProfileGuard {
 			m.Properties[propertyProcessPersonProfile] = false
 		}
+		processed, shouldSend := c.processBeforeSend(m)
+		if !shouldSend {
+			return nil
+		}
+		m = processed.(Capture)
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -511,6 +718,11 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		if err = m.Validate(); err != nil {
 			return
 		}
+		processed, shouldSend := c.processBeforeSend(m)
+		if !shouldSend {
+			return nil
+		}
+		m = processed.(Exception)
 		data, apiMsg, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)

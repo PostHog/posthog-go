@@ -141,10 +141,10 @@ type templateData struct {
 	groups     Groups
 }
 
-// cloneProperties creates a shallow copy of a Properties map
+// cloneProperties creates a shallow copy of a Properties map.
 func cloneProperties(src Properties) Properties { return cloneStringInterfaceMap(src) }
 
-// cloneGroups creates a shallow copy of a Groups map
+// cloneGroups creates a shallow copy of a Groups map.
 func cloneGroups(src Groups) Groups { return cloneStringInterfaceMap(src) }
 
 func cloneStringInterfaceMap[M ~map[string]interface{}](src M) M {
