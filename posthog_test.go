@@ -678,8 +678,8 @@ func TestEnqueue(t *testing.T) {
 	}
 }
 
-// TestEnqueue_UUID_PreSupplied verifies that user-provided UUIDs are preserved
-// on outgoing events for all message types.
+// TestEnqueue_UUID_PreSupplied verifies that valid user-provided UUIDs are
+// preserved on outgoing events for all message types.
 func TestEnqueue_UUID_PreSupplied(t *testing.T) {
 	tests := []struct {
 		name string
@@ -688,34 +688,34 @@ func TestEnqueue_UUID_PreSupplied(t *testing.T) {
 	}{
 		{
 			name: "Capture",
-			msg:  Capture{Uuid: "user-provided-uuid-capture", Event: "test", DistinctId: "user1"},
-			uuid: "user-provided-uuid-capture",
+			msg:  Capture{Uuid: "11111111-1111-4111-8111-111111111111", Event: "test", DistinctId: "user1"},
+			uuid: "11111111-1111-4111-8111-111111111111",
 		},
 		{
 			name: "Alias",
-			msg:  Alias{Uuid: "user-provided-uuid-alias", Alias: "new", DistinctId: "user1"},
-			uuid: "user-provided-uuid-alias",
+			msg:  Alias{Uuid: "22222222-2222-4222-8222-222222222222", Alias: "new", DistinctId: "user1"},
+			uuid: "22222222-2222-4222-8222-222222222222",
 		},
 		{
 			name: "Identify",
-			msg:  Identify{Uuid: "user-provided-uuid-identify", DistinctId: "user1"},
-			uuid: "user-provided-uuid-identify",
+			msg:  Identify{Uuid: "33333333-3333-4333-8333-333333333333", DistinctId: "user1"},
+			uuid: "33333333-3333-4333-8333-333333333333",
 		},
 		{
 			name: "GroupIdentify",
-			msg:  GroupIdentify{Uuid: "user-provided-uuid-group", Type: "company", Key: "acme"},
-			uuid: "user-provided-uuid-group",
+			msg:  GroupIdentify{Uuid: "44444444-4444-4444-8444-444444444444", Type: "company", Key: "acme"},
+			uuid: "44444444-4444-4444-8444-444444444444",
 		},
 		{
 			name: "Exception",
 			msg: Exception{
-				Uuid:       "user-provided-uuid-exception",
+				Uuid:       "55555555-5555-4555-8555-555555555555",
 				DistinctId: "user1",
 				ExceptionList: []ExceptionItem{
 					{Type: "Error", Value: "test error"},
 				},
 			},
-			uuid: "user-provided-uuid-exception",
+			uuid: "55555555-5555-4555-8555-555555555555",
 		},
 	}
 
@@ -739,6 +739,78 @@ func TestEnqueue_UUID_PreSupplied(t *testing.T) {
 			case res := <-body:
 				require.Contains(t, string(res), tt.uuid,
 					"pre-supplied UUID should be preserved in request body")
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for request")
+			}
+		})
+	}
+}
+
+// TestEnqueue_UUID_InvalidPreSupplied verifies that invalid user-provided UUIDs
+// are replaced with generated UUIDs instead of being sent as-is.
+func TestEnqueue_UUID_InvalidPreSupplied(t *testing.T) {
+	uuidPattern := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+	tests := []struct {
+		name        string
+		msg         Message
+		invalidUUID string
+	}{
+		{
+			name:        "Capture",
+			msg:         Capture{Uuid: "not-a-uuid-capture", Event: "test", DistinctId: "user1"},
+			invalidUUID: "not-a-uuid-capture",
+		},
+		{
+			name:        "Alias",
+			msg:         Alias{Uuid: "not-a-uuid-alias", Alias: "new", DistinctId: "user1"},
+			invalidUUID: "not-a-uuid-alias",
+		},
+		{
+			name:        "Identify",
+			msg:         Identify{Uuid: "not-a-uuid-identify", DistinctId: "user1"},
+			invalidUUID: "not-a-uuid-identify",
+		},
+		{
+			name:        "GroupIdentify",
+			msg:         GroupIdentify{Uuid: "not-a-uuid-group", Type: "company", Key: "acme"},
+			invalidUUID: "not-a-uuid-group",
+		},
+		{
+			name: "Exception",
+			msg: Exception{
+				Uuid:       "not-a-uuid-exception",
+				DistinctId: "user1",
+				ExceptionList: []ExceptionItem{
+					{Type: "Error", Value: "test error"},
+				},
+			},
+			invalidUUID: "not-a-uuid-exception",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			cli, _ := NewWithConfig("test-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				now:       mockTime,
+			})
+			defer cli.Close()
+
+			err := cli.Enqueue(tt.msg)
+			require.NoError(t, err)
+
+			select {
+			case res := <-body:
+				resStr := string(res)
+				require.NotContains(t, resStr, tt.invalidUUID,
+					"invalid pre-supplied UUID should not be preserved in request body")
+				require.NotEmpty(t, uuidPattern.FindAllString(resStr, -1),
+					"generated UUID should be present in request body")
 			case <-time.After(time.Second):
 				t.Fatal("timeout waiting for request")
 			}

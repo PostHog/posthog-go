@@ -64,10 +64,10 @@ func makeTimestamp(t time.Time, def time.Time) time.Time {
 	return t
 }
 
-// makeUUID returns the UUID passed as first argument if non-empty,
+// makeUUID returns the UUID passed as first argument if non-empty and valid,
 // otherwise generates and returns a new random UUID (v4).
 func makeUUID(u string) string {
-	if u != "" {
+	if u != "" && uuid.Validate(u) == nil {
 		return u
 	}
 	return uuid.New().String()
