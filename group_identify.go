@@ -14,6 +14,7 @@ type GroupIdentify struct {
 	// Key is the group key or ID within the group type.
 	Key string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
+	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
 	Uuid string
 
 	// DistinctId is accepted for compatibility but the wire payload uses a generated group distinct ID.
@@ -41,7 +42,7 @@ func (msg GroupIdentify) Validate() error {
 
 // GroupIdentifyInApi is the wire-format payload produced from a GroupIdentify message.
 type GroupIdentifyInApi struct {
-	// Uuid is the event UUID sent to the batch API.
+	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
 	// Library is the SDK name sent to the batch API.
 	Library string `json:"library"`
