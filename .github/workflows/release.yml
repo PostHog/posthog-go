@@ -109,8 +109,8 @@ jobs:
         run: |
           pnpm changeset version
           NEW_VERSION=$(node -p "require('./package.json').version")
-          CURRENT_VERSION=$(grep -oP 'const Version = "\K[^"]+' version.go)
-          sed -i "s/const Version = \"${CURRENT_VERSION}\"/const Version = \"${NEW_VERSION}\"/" version.go
+          CURRENT_VERSION=$(grep -oP 'const Version = "\K[^"]+' src/version.go)
+          sed -i "s/const Version = \"${CURRENT_VERSION}\"/const Version = \"${NEW_VERSION}\"/" src/version.go
           echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
 

@@ -1,0 +1,5121 @@
+package posthog
+
+import (
+	"bytes"
+	"fmt"
+
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	json "github.com/goccy/go-json"
+	"github.com/stretchr/testify/require"
+)
+
+// Note: Property matching tests (TestMatchProperty*) have been moved to feature_flags_matching_test.go
+
+func newFeatureFlagsFixtureClient(t *testing.T, fixtureName string) Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture(fixtureName)))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{PersonalApiKey: "some very secret key", Endpoint: server.URL})
+	require.NoError(t, err)
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+func newFeatureFlagsLocalClient(t *testing.T, definitionsFixture string) Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture(definitionsFixture)))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+func TestFlagPersonProperty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:              "simple-flag",
+			DistinctId:       "some-distinct-id",
+			PersonProperties: NewProperties().Set("region", "USA"),
+		},
+	)
+
+	if isMatch != true {
+		t.Error("Should match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:              "simple-flag",
+			DistinctId:       "some-distinct-id",
+			PersonProperties: NewProperties().Set("region", "Canada"),
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+}
+
+func TestFlagGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			var reqBody FlagsRequestData
+			err := decoder.Decode(&reqBody)
+			if err != nil {
+				t.Error(err)
+			}
+
+			groupsEquality := reflect.DeepEqual(reqBody.Groups, Groups{"company": "abc"})
+			if !groupsEquality {
+				t.Errorf("Expected groups to be map[company:abc], got %s", reqBody.Groups)
+			}
+
+			distinctIdEquality := reflect.DeepEqual(reqBody.DistinctId, "-")
+			if !distinctIdEquality {
+				t.Errorf("Expected distinctId to be -, got %s", reqBody.DistinctId)
+			}
+
+			apiKeyEquality := reflect.DeepEqual(reqBody.ApiKey, "Csyjlnlun3OzyNJAafdlv")
+			if !apiKeyEquality {
+				t.Errorf("Expected apiKey to be Csyjlnlun3OzyNJAafdlv, got %s", reqBody.ApiKey)
+			}
+
+			personPropertiesEquality := reflect.DeepEqual(reqBody.PersonProperties, Properties{"region": "Canada"})
+			if !personPropertiesEquality {
+				t.Errorf("Expected personProperties to be map[region:Canada], got %s", reqBody.PersonProperties)
+			}
+
+			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": {"name": "Project Name 1"}})
+			if !groupPropertiesEquality {
+				t.Errorf("Expected groupProperties to be map[company:map[name:Project Name 1]], got %s", reqBody.GroupProperties)
+			}
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// Ignore batch requests
+		} else {
+			t.Error("Unknown request made by library")
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "unknown-flag",
+			DistinctId:          "-",
+			Groups:              Groups{"company": "abc"},
+			PersonProperties:    NewProperties().Set("region", "Canada"),
+			GroupProperties:     map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")},
+			OnlyEvaluateLocally: false,
+		},
+	)
+
+	if isMatch != false {
+		t.Error("Unknown flag shouldn't match known flags")
+	}
+}
+
+func TestFlagGroupProperty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:             "group-flag",
+			DistinctId:      "some-distinct-id",
+			GroupProperties: map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")},
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:             "group-flag",
+			DistinctId:      "some-distinct-id",
+			GroupProperties: map[string]Properties{"company": NewProperties().Set("name", "Project Name 2")},
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:             "group-flag",
+			DistinctId:      "some-distinct-id",
+			Groups:          Groups{"company": "amazon_without_rollout"},
+			GroupProperties: map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")},
+		},
+	)
+
+	if isMatch != true {
+		t.Error("Should match")
+	}
+}
+
+func TestComplexDefinition(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-complex-definition.json"))) // Don't return anything for local eval
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	isMatch, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:              "complex-flag",
+			DistinctId:       "some-distinct-id",
+			PersonProperties: NewProperties().Set("region", "USA").Set("name", "Aloha"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, isMatch)
+
+	isMatch, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:              "complex-flag",
+			DistinctId:       "some-distinct-id_within_rollout_3",
+			PersonProperties: NewProperties().Set("region", "USA").Set("email", "a@b.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, isMatch)
+}
+
+func TestFallbackToFlags(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte("{}")) // Don't return anything for local eval
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "simple-flag",
+			DistinctId: "some-distinct-id",
+		},
+	)
+
+	if isMatch != true {
+		t.Error("Should match")
+	}
+}
+
+func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte("test-flags-v3.json"))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-feature-flags-dont-fallback-to-decide-when-only-local-evaluation-is-true.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	matchedPayload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:                 "beta-feature",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if matchedPayload != "" {
+		t.Error("Should not match")
+	}
+
+	matchedVariant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:                 "beta-feature",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if matchedVariant != nil {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "beta-feature",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+	matchedVariant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:                 "beta-feature2",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if matchedVariant != nil {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "beta-feature2",
+			DistinctId:          "some-distinct-id",
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+}
+
+func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-false.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	isMatch, _ := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "false-flag",
+			DistinctId: "some-distinct-id",
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "false-flag",
+			DistinctId: "some-distinct-id",
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "false-flag-2",
+			DistinctId: "some-distinct-id",
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "false-flag-2",
+			DistinctId: "some-distinct-id",
+		},
+	)
+
+	if isMatch == true {
+		t.Error("Should not match")
+	}
+
+}
+
+func TestFeatureFlagNullComeIntoPlayOnlyWhenFlagsErrorsOut(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("{ads}"))
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	matchedPayload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if matchedPayload != "" {
+		t.Error("Should not match")
+	}
+
+	isMatch, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if isMatch != nil {
+		t.Error("Should be nil")
+	}
+
+	isMatch, _ = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if isMatch != nil {
+		t.Error("Should be nil")
+	}
+}
+
+func TestExperienceContinuityOverride(t *testing.T) {
+	client := newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag.json")
+
+	featureVariant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if featureVariant != "decide-fallback-value" {
+		t.Error("Should be decide-fallback-value")
+	}
+
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:        "beta-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if payload != "{\"foo\": \"bar\"}" {
+		t.Error(`Should be "{"foo": "bar"}"`)
+	}
+}
+
+func TestGetAllFlags(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-multiple-flags.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+		DistinctId: "distinct-id",
+	})
+
+	if featureVariants["beta-feature"] != "decide-fallback-value" || featureVariants["beta-feature2"] != "variant-2" {
+		t.Error("Should match decide values")
+	}
+}
+
+func TestGetAllFlagsEmptyLocal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte("{}"))
+		}
+	}))
+
+	defer server.Close()
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	featureVariants, err := client.GetAllFlags(FeatureFlagPayloadNoKey{
+		DistinctId: "distinct-id",
+	})
+	require.NoError(t, err)
+
+	if featureVariants["beta-feature"] != "decide-fallback-value" || featureVariants["beta-feature2"] != "variant-2" {
+		t.Error("Should match decide values")
+	}
+}
+
+func TestGetAllFlagsNoRemoteFallback(t *testing.T) {
+	assertAllFlags(t, newFeatureFlagsLocalClient(t, "feature_flag/test-multiple-flags-valid.json"), FeatureFlagPayloadNoKey{DistinctId: "distinct-id"}, map[string]interface{}{"beta-feature": true, "disabled-feature": false})
+}
+
+func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-get-all-flags-with-fallback-but-only-local-evaluation-set.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	featureVariants, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{
+		DistinctId:          "distinct-id",
+		OnlyEvaluateLocally: true,
+	})
+
+	if featureVariants["beta-feature"] != true || featureVariants["disabled-feature"] != false || featureVariants["beta-feature2"] != nil {
+		t.Error("Should match")
+	}
+}
+
+func TestComputeInactiveFlagsLocally(t *testing.T) {
+	payload := FeatureFlagPayloadNoKey{DistinctId: "distinct-id"}
+	assertAllFlags(t, newFeatureFlagsLocalClient(t, "feature_flag/test-compute-inactive-flags-locally.json"), payload, map[string]interface{}{"beta-feature": true, "disabled-feature": false})
+	assertAllFlags(t, newFeatureFlagsLocalClient(t, "feature_flag/test-compute-inactive-flags-locally-2.json"), payload, map[string]interface{}{"beta-feature": false, "disabled-feature": true})
+}
+
+func TestFeatureFlagWithDependencies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-flag-with-dependencies.json")))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-api-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test that flag evaluation handles flag dependencies properly
+	// The flag has a dependency on "beta-feature" which doesn't exist locally
+	// Since OnlyEvaluateLocally is true and the dependency can't be resolved locally,
+	// this should return an error
+	_, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-with-dependencies",
+			DistinctId:          "test-user",
+			PersonProperties:    NewProperties().Set("email", "test@example.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	// Should return an error since dependency can't be evaluated locally
+	if err == nil {
+		t.Error("Should return error when flag dependencies can't be evaluated locally")
+	}
+
+	// Test with email that doesn't match - should also error due to missing dependency
+	_, err = client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:                 "flag-with-dependencies",
+			DistinctId:          "test-user-2",
+			PersonProperties:    NewProperties().Set("email", "test@other.com"),
+			OnlyEvaluateLocally: true,
+		},
+	)
+
+	if err == nil {
+		t.Error("Should return error when flag dependencies can't be evaluated locally")
+	}
+}
+
+func TestFeatureEnabledSimpleIsTrueWhenRolloutUndefined(t *testing.T) {
+	assertFeatureEnabled(t, newFeatureFlagsFixtureClient(t, "feature_flag/test-simple-flag-without-rollout.json"), FeatureFlagPayload{Key: "simple-flag", DistinctId: "distinct-id"}, true)
+}
+
+func TestFeatureFlagEarlyExit(t *testing.T) {
+	// Each fixture defines two condition groups that both match on region=USA:
+	// the first with rollout_percentage 0 (always out of rollout bound) and the
+	// second with rollout_percentage 100 (always in rollout). The behaviour
+	// depends solely on the filters.early_exit flag.
+	tests := []struct {
+		name             string
+		fixture          string
+		personProperties Properties
+		expected         interface{}
+	}{
+		{
+			// early_exit enabled: the first group is out of rollout bound, so
+			// evaluation short-circuits to false without considering the
+			// second (matching) group.
+			name:             "early_exit enabled returns false and skips later matching group",
+			fixture:          "feature_flag/test-early-exit.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         false,
+		},
+		{
+			// early_exit unset: existing behaviour, falls through to the second
+			// matching group and returns true.
+			name:             "early_exit unset falls through to later matching group",
+			fixture:          "feature_flag/test-early-exit-unset.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         true,
+		},
+		{
+			// early_exit explicitly false: same as unset, falls through.
+			name:             "early_exit explicitly false falls through to later matching group",
+			fixture:          "feature_flag/test-early-exit-false.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         true,
+		},
+		{
+			// early_exit enabled but the first group fails on a PROPERTY filter
+			// (region != Canada), which is NO_MATCH and must always fall
+			// through to the second matching group rather than early-exit.
+			name:             "property mismatch does not early-exit even when enabled",
+			fixture:          "feature_flag/test-early-exit-property-mismatch.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         true,
+		},
+		{
+			// early_exit enabled, but a prior condition group is inconclusive
+			// (missing property). The early-exit OutOfRolloutBound group must
+			// not continue to the third (matching) group — it must propagate the
+			// inconclusive error so the poller falls back to the server. The
+			// server mock has no record of this flag so the result is false,
+			// not the spurious true that the third group would produce locally.
+			name:             "inconclusive prior group forces server fallback on early-exit",
+			fixture:          "feature_flag/test-early-exit-inconclusive-prior.json",
+			personProperties: NewProperties().Set("region", "USA"),
+			expected:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixtureFile := tt.fixture
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+					w.Write([]byte(fixture("test-flags-v3.json")))
+				} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+					w.Write([]byte(fixture(fixtureFile)))
+				}
+			}))
+			defer server.Close()
+
+			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+				PersonalApiKey: "some very secret key",
+				Endpoint:       server.URL,
+			})
+			defer client.Close()
+
+			key := "early-exit-flag"
+			if strings.Contains(fixtureFile, "property-mismatch") {
+				key = "early-exit-property-mismatch-flag"
+			} else if strings.Contains(fixtureFile, "inconclusive-prior") {
+				key = "early-exit-inconclusive-prior-flag"
+			}
+
+			result, err := client.GetFeatureFlag(FeatureFlagPayload{
+				Key:              key,
+				DistinctId:       "some-distinct-id",
+				PersonProperties: tt.personProperties,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGetFeatureFlag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	var capturedEvent *CaptureInApi
+	var mu sync.Mutex
+	eventCaptured := make(chan struct{}, 1)
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+		BatchSize:      1,
+		Callback: testCallback{
+			func(m APIMessage) {
+				if capture, ok := m.(CaptureInApi); ok {
+					mu.Lock()
+					capturedEvent = &capture
+					mu.Unlock()
+					select {
+					case eventCaptured <- struct{}{}:
+					default:
+					}
+				}
+			},
+			func(m APIMessage, e error) {},
+		},
+	})
+	defer client.Close()
+
+	variant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "test-get-feature",
+			DistinctId: "distinct_id",
+		},
+	)
+
+	if variant != "variant-1" {
+		t.Error("Should match")
+	}
+
+	select {
+	case <-eventCaptured:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for captured event")
+	}
+
+	mu.Lock()
+	lastEvent := capturedEvent
+	mu.Unlock()
+
+	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
+		t.Errorf("Expected a $feature_flag_called event, got: %v", lastEvent)
+	}
+
+	if lastEvent != nil {
+		if lastEvent.Properties["$feature_flag"] != "test-get-feature" {
+			t.Errorf("Expected feature flag key 'test-get-feature', got: %v", lastEvent.Properties["$feature_flag"])
+		}
+		if lastEvent.Properties["$feature_flag_response"] != "variant-1" {
+			t.Errorf("Expected feature flag response 'variant-1', got: %v", lastEvent.Properties["$feature_flag_response"])
+		}
+		if lastEvent.Properties["locally_evaluated"] != false {
+			t.Errorf("Expected locally_evaluated to be false (test-get-feature is only in /flags response), got: %v", lastEvent.Properties["locally_evaluated"])
+		}
+	}
+}
+
+func TestGetFeatureFlagLocallyEvaluated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-simple-flag-person-prop.json")))
+		}
+	}))
+	defer server.Close()
+
+	var capturedEvent *CaptureInApi
+	var mu sync.Mutex
+	eventCaptured := make(chan struct{}, 1)
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+		BatchSize:      1,
+		Callback: testCallback{
+			func(m APIMessage) {
+				if capture, ok := m.(CaptureInApi); ok {
+					mu.Lock()
+					capturedEvent = &capture
+					mu.Unlock()
+					select {
+					case eventCaptured <- struct{}{}:
+					default:
+					}
+				}
+			},
+			func(m APIMessage, e error) {},
+		},
+	})
+	defer client.Close()
+
+	value, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:              "simple-flag",
+		DistinctId:       "distinct_id",
+		PersonProperties: NewProperties().Set("region", "USA"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value != true {
+		t.Errorf("Expected simple-flag to evaluate to true, got: %v", value)
+	}
+
+	select {
+	case <-eventCaptured:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for captured event")
+	}
+
+	mu.Lock()
+	lastEvent := capturedEvent
+	mu.Unlock()
+
+	if lastEvent == nil || lastEvent.Event != "$feature_flag_called" {
+		t.Fatalf("Expected a $feature_flag_called event, got: %v", lastEvent)
+	}
+	if lastEvent.Properties["locally_evaluated"] != true {
+		t.Errorf("Expected locally_evaluated to be true for local evaluation, got: %v", lastEvent.Properties["locally_evaluated"])
+	}
+}
+
+func TestGetFeatureFlagPayload(t *testing.T) {
+	assertFeatureFlagPayload(t, newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag-person-prop.json"), FeatureFlagPayload{Key: "test-get-feature", DistinctId: "distinct_id"}, "this is a string")
+}
+
+func TestGetRemoteConfigPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("test-remote-config.json")))
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	payload, _ := client.GetRemoteConfigPayload("flag_key")
+
+	var payloadMap map[string]interface{}
+	err := json.Unmarshal([]byte(payload), &payloadMap)
+	if err != nil {
+		t.Error("Failed to decode payload")
+	}
+
+	if payloadMap["foo"] != "bar" || payloadMap["baz"] != float64(42) {
+		t.Error("Should match")
+	}
+}
+
+func TestFlagVariantOverrides(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+		checks  []variantPayloadCheck
+	}{
+		{"valid", "feature_flag/test-variant-override.json", []variantPayloadCheck{{"test_id", "test@posthog.com", "second-variant", "{\"test\": 2}"}, {"example_id", "", "first-variant", "{\"test\": 1}"}}},
+		{"clashing", "feature_flag/test-variant-override-clashing.json", []variantPayloadCheck{{"test_id", "test@posthog.com", "second-variant", "{\"test\": 2}"}, {"example_id", "test@posthog.com", "second-variant", "{\"test\": 2}"}}},
+		{"invalid", "feature_flag/test-variant-override-invalid.json", []variantPayloadCheck{{"test_id", "test@posthog.com", "third-variant", "{\"test\": 3}"}, {"example_id", "", "second-variant", "{\"test\": 2}"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newFeatureFlagsLocalClient(t, tt.fixture)
+			for _, check := range tt.checks {
+				assertFlagVariantAndPayload(t, client, featureFlagPayloadFor(check.distinctID, check.email), check.variant, check.payload)
+			}
+		})
+	}
+}
+
+type variantPayloadCheck struct {
+	distinctID string
+	email      string
+	variant    interface{}
+	payload    string
+}
+
+func featureFlagPayloadFor(distinctID, email string) FeatureFlagPayload {
+	payload := FeatureFlagPayload{Key: "beta-feature", DistinctId: distinctID}
+	if email != "" {
+		payload.PersonProperties = NewProperties().Set("email", email)
+	}
+	return payload
+}
+
+func assertFlagVariantAndPayload(t *testing.T, client Client, request FeatureFlagPayload, wantVariant interface{}, wantPayload string) {
+	t.Helper()
+	assertFeatureFlag(t, client, request, wantVariant)
+	assertFeatureFlagPayload(t, client, request, wantPayload)
+}
+
+func assertAllFlags(t *testing.T, client Client, request FeatureFlagPayloadNoKey, want map[string]interface{}) {
+	t.Helper()
+	featureVariants, _ := client.GetAllFlags(request)
+	for key, value := range want {
+		if featureVariants[key] != value {
+			t.Error("Should match")
+		}
+	}
+}
+
+func assertFeatureFlag(t *testing.T, client Client, request FeatureFlagPayload, want interface{}) {
+	t.Helper()
+	variant, _ := client.GetFeatureFlag(request)
+	if variant != want {
+		t.Error("Should match", variant, want)
+	}
+}
+
+func assertFeatureFlagPayload(t *testing.T, client Client, request FeatureFlagPayload, want string) {
+	t.Helper()
+	payload, _ := client.GetFeatureFlagPayload(request)
+	if payload != want {
+		t.Error("Should match", payload, want)
+	}
+}
+
+func TestConditionsEvaluatedInOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-condition-order.json")))
+		}
+	}))
+
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test 1: User with @vip.com email should get "first-condition" variant
+	// because the first condition (100% rollout) matches before the VIP condition
+	variant, _ := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "order-test-flag",
+			DistinctId:       "vip-user",
+			PersonProperties: NewProperties().Set("email", "user@vip.com"),
+		},
+	)
+
+	if variant != "first-condition" {
+		t.Error("Expected first-condition variant for VIP user, but got", variant)
+	}
+
+	payload, _ := client.GetFeatureFlagPayload(
+		FeatureFlagPayload{
+			Key:              "order-test-flag",
+			DistinctId:       "vip-user",
+			PersonProperties: NewProperties().Set("email", "user@vip.com"),
+		},
+	)
+
+	if payload != "{\"order\": 1}" {
+		t.Error("Expected payload {\"order\": 1} for VIP user, but got", payload)
+	}
+
+	// Test 2: User with test@posthog.com should also get "first-condition" variant
+	// because the first condition matches before the specific email condition
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "order-test-flag",
+			DistinctId:       "test-user",
+			PersonProperties: NewProperties().Set("email", "test@posthog.com"),
+		},
+	)
+
+	if variant != "first-condition" {
+		t.Error("Expected first-condition variant for test@posthog.com user, but got", variant)
+	}
+
+	// Test 3: Any other user should also get "first-condition" variant
+	variant, _ = client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:              "order-test-flag",
+			DistinctId:       "random-user",
+			PersonProperties: NewProperties().Set("email", "random@example.com"),
+		},
+	)
+
+	if variant != "first-condition" {
+		t.Error("Expected first-condition variant for random user, but got", variant)
+	}
+}
+
+func TestCaptureIsCalled(t *testing.T) {
+	assertFeatureFlag(t, newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag-person-prop.json"), FeatureFlagPayload{Key: "test-get-feature", DistinctId: "distinct_id"}, "variant-1")
+}
+
+func TestSimpleFlagConsistency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	results := []bool{
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		false,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+		false,
+		false,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		true,
+		false,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false,
+		true,
+		true,
+		true,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		true,
+		false,
+		true,
+		true,
+	}
+
+	for i := 0; i < 1000; i++ {
+		isMatch, _ := client.IsFeatureEnabled(
+			FeatureFlagPayload{
+				Key:        "simple-flag",
+				DistinctId: fmt.Sprintf("%s%d", "distinct_id_", i),
+			},
+		)
+		if results[i] != isMatch {
+			t.Error("Match result is not consistent")
+		}
+	}
+}
+
+func TestMultivariateFlagConsistency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-multivariate-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	results := []interface{}{
+		"second-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		"fourth-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		false,
+		"third-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		"second-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		"second-variant",
+		"third-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		"fourth-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		false,
+		"third-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"fifth-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"third-variant",
+		"third-variant",
+		false,
+		false,
+		false,
+		false,
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		"third-variant",
+		false,
+		"third-variant",
+		"second-variant",
+		"third-variant",
+		false,
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		"second-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		"third-variant",
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		"fifth-variant",
+		"second-variant",
+		false,
+		"second-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		"fifth-variant",
+		"third-variant",
+		false,
+		false,
+		"fourth-variant",
+		false,
+		false,
+		false,
+		false,
+		"third-variant",
+		false,
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		"second-variant",
+		"second-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		"fifth-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"second-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		"third-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		"third-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		"second-variant",
+		"fifth-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		"third-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		"third-variant",
+		false,
+		false,
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		"fourth-variant",
+		"fourth-variant",
+		"third-variant",
+		"second-variant",
+		"first-variant",
+		"third-variant",
+		"fifth-variant",
+		false,
+		"first-variant",
+		"fifth-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		"fifth-variant",
+		"second-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		false,
+		"third-variant",
+		false,
+		"second-variant",
+		"fifth-variant",
+		false,
+		"third-variant",
+		"first-variant",
+		false,
+		false,
+		"fourth-variant",
+		false,
+		false,
+		"second-variant",
+		false,
+		false,
+		"first-variant",
+		"fourth-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		"second-variant",
+		"second-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"fifth-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		"third-variant",
+		"first-variant",
+		"fourth-variant",
+		"first-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		false,
+		"fourth-variant",
+		"fifth-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		"third-variant",
+		"third-variant",
+		"first-variant",
+		false,
+		false,
+		"second-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		false,
+		false,
+		false,
+		"third-variant",
+		"fourth-variant",
+		"fourth-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"first-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		"third-variant",
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		false,
+		false,
+		false,
+		"fourth-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		"fourth-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		false,
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		"second-variant",
+		"fourth-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		"second-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		"fifth-variant",
+		"fourth-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"fourth-variant",
+		false,
+		false,
+		false,
+		"fourth-variant",
+		false,
+		false,
+		"third-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		"third-variant",
+		"second-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		"second-variant",
+		false,
+		false,
+		"fifth-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"second-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		"third-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		"fourth-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"third-variant",
+		false,
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		"second-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		"second-variant",
+		"third-variant",
+		"second-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		"second-variant",
+		"third-variant",
+		"second-variant",
+		"fourth-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		false,
+		false,
+		false,
+		"second-variant",
+		false,
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		false,
+		"third-variant",
+		false,
+		false,
+		"second-variant",
+		false,
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"second-variant",
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"second-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"fifth-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		false,
+		"second-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"fourth-variant",
+		"second-variant",
+		"first-variant",
+		"second-variant",
+		false,
+		"second-variant",
+		false,
+		"second-variant",
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		"first-variant",
+		false,
+		"fifth-variant",
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		"fifth-variant",
+		false,
+		false,
+		"third-variant",
+		false,
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		"second-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		"fifth-variant",
+		"first-variant",
+		false,
+		false,
+		"fourth-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		"fourth-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		"third-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		"third-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		false,
+		"second-variant",
+		false,
+		"third-variant",
+		"first-variant",
+		"second-variant",
+		"fifth-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"first-variant",
+		"fifth-variant",
+		false,
+		false,
+		false,
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"fourth-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		false,
+		"third-variant",
+		"third-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		"second-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		false,
+		"third-variant",
+		false,
+		"first-variant",
+		"fifth-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"fourth-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"fifth-variant",
+		false,
+		false,
+		false,
+		"second-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		"second-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		"third-variant",
+		"first-variant",
+		false,
+		"second-variant",
+		false,
+		false,
+		"third-variant",
+		"second-variant",
+		"third-variant",
+		false,
+		"first-variant",
+		"third-variant",
+		"second-variant",
+		"first-variant",
+		"third-variant",
+		false,
+		false,
+		"first-variant",
+		"first-variant",
+		false,
+		false,
+		false,
+		"first-variant",
+		"third-variant",
+		"second-variant",
+		"first-variant",
+		"first-variant",
+		"first-variant",
+		false,
+		"third-variant",
+		"second-variant",
+		"third-variant",
+		false,
+		false,
+		"third-variant",
+		"first-variant",
+		false,
+		"first-variant",
+	}
+
+	for i := 0; i < 1000; i++ {
+
+		variant, _ := client.GetFeatureFlag(
+			FeatureFlagPayload{
+				Key:        "multivariate-flag",
+				DistinctId: fmt.Sprintf("%s%d", "distinct_id_", i),
+			},
+		)
+		if results[i] != variant {
+			t.Error("Match result is not consistent")
+		}
+	}
+}
+
+func TestMultivariateFlagConsistencyPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fixture("feature_flag/test-multivariate-flag.json")))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	results := []string{
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 4}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 4}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 5}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 5}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 4}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 5}",
+		"",
+		"",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 2}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"",
+		"",
+		"{\"test\": 1}",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 2}",
+		"{\"test\": 3}",
+		"",
+		"",
+		"{\"test\": 3}",
+		"{\"test\": 1}",
+		"",
+		"{\"test\": 1}",
+	}
+
+	for i := 0; i < 1000; i++ {
+		variant, _ := client.GetFeatureFlagPayload(
+			FeatureFlagPayload{
+				Key:        "multivariate-flag",
+				DistinctId: fmt.Sprintf("%s%d", "distinct_id_", i),
+			},
+		)
+		if results[i] != variant {
+			t.Errorf("Match result is not consistent, expected %s, got %s", results[i], variant)
+		}
+	}
+}
+
+// Note: Cohort tests (TestComplexCohorts*) have been moved to feature_flags_cohorts_test.go
+
+func TestFlagsFetchFail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.WriteHeader(http.StatusInternalServerError)
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore batch requests
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey:            "some very secret key",
+		Endpoint:                  server.URL,
+		FeatureFlagRequestTimeout: 10 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+	_, err = client.GetFeatureFlag(FeatureFlagPayload{
+		Key:                 "enabled-flag",
+		DistinctId:          "123",
+		OnlyEvaluateLocally: true,
+	})
+	require.EqualError(t, err, "flags were not successfully fetched yet")
+}
+
+func TestFlagWithTimeoutExceeded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			time.Sleep(1 * time.Second)
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// Ignore batch requests
+		} else {
+			t.Error("Unknown request made by library")
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey:            "some very secret key",
+		Endpoint:                  server.URL,
+		FeatureFlagRequestTimeout: 10 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	isMatch, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "-",
+		},
+	)
+
+	require.Error(t, err)
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Error("Expected context deadline exceeded error")
+	}
+	require.Nil(t, isMatch)
+
+	// get all flags with no local evaluation possible
+	variants, err := client.GetAllFlags(
+		FeatureFlagPayloadNoKey{
+			DistinctId: "-",
+			Groups:     Groups{"company": "posthog1"},
+		},
+	)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "context deadline exceeded")
+
+	require.Empty(t, variants)
+
+	// get all flags with partial local evaluation possible
+	variants, err = client.GetAllFlags(
+		FeatureFlagPayloadNoKey{
+			DistinctId:       "-",
+			Groups:           Groups{"company": "posthog1"},
+			PersonProperties: NewProperties().Set("region", "USA"),
+		},
+	)
+
+	require.Error(t, err)
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Error("Expected context deadline exceeded error")
+	}
+	require.EqualValues(t, map[string]interface{}{"simple-flag": true}, variants)
+
+	// get all flags with full local evaluation possible
+	variants, err = client.GetAllFlags(
+		FeatureFlagPayloadNoKey{
+			DistinctId:       "-",
+			Groups:           Groups{"company": "posthog1"},
+			PersonProperties: NewProperties().Set("region", "USA"),
+			GroupProperties:  map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")},
+		},
+	)
+
+	require.NoError(t, err)
+	fmt.Println(variants)
+	require.EqualValues(t, map[string]interface{}{"simple-flag": true, "group-flag": true}, variants)
+}
+
+func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
+	// Not run in parallel - timeout-based tests are sensitive to system load
+	// create buffer to write logs to
+	var buf bytes.Buffer
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			w.Write([]byte(fixture("test-flags-v3.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			// Sleep longer than client timeout (100ms) to trigger timeout
+			time.Sleep(1 * time.Second)
+			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// Ignore batch requests
+		} else {
+			t.Error("Unknown request made by library")
+		}
+	}))
+	defer server.Close()
+
+	client, clientErr := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey:            "some very secret key",
+		Endpoint:                  server.URL,
+		FeatureFlagRequestTimeout: 100 * time.Millisecond,
+		Logger:                    StdLogger(log.New(&buf, "posthog-test", log.LstdFlags), false),
+	})
+	if clientErr != nil {
+		t.Fatalf("Client creation failed: %v", clientErr)
+	}
+	defer client.Close()
+
+	_, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "enabled-flag",
+			DistinctId: "-",
+		},
+	)
+	if err != nil {
+		t.Error("Unexpected error")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Unable to fetch feature flags") {
+		t.Errorf("Expected error fetching flags, got: %q", output)
+	}
+
+	if !strings.Contains(output, "context deadline exceeded") {
+		t.Errorf("Expected timeout error fetching flags, got: %q", output)
+	}
+}
+
+func TestFetchFlagsFails(t *testing.T) {
+	// This test verifies that even in presence of HTTP errors flags continue to be fetched.
+	var called uint32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadUint32(&called) == 0 {
+			// Load initial flags successfully
+			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
+		} else {
+			// Fail all next requests
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		atomic.AddUint32(&called, 1)
+
+	}))
+	defer server.Close()
+
+	cli, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer cli.Close()
+
+	_, err := cli.(*client).featureFlagsPoller.GetFeatureFlags()
+	if err != nil {
+		t.Error("Should not fail", err)
+	}
+	cli.ReloadFeatureFlags()
+	cli.ReloadFeatureFlags()
+
+	_, err = cli.GetAllFlags(FeatureFlagPayloadNoKey{
+		DistinctId: "my-id",
+	})
+	if err != nil {
+		t.Error("Should not fail", err)
+	}
+
+	// Wait for the last request to complete
+	<-time.After(50 * time.Millisecond)
+
+	const expectedCalls = 3
+	actualCalls := atomic.LoadUint32(&called)
+	if actualCalls != expectedCalls {
+		t.Error("Expected to be called", expectedCalls, "times but got", actualCalls)
+	}
+}
+
+// The reference implementation of overrides may be found in Rust feature-flag implementation:
+//
+// Check link: https://github.com/PostHog/posthog/blob/0bb3ed063c37f5be280e4283a0d2a6a6683a9534/rust/feature-flags/src/api/request_handler.rs#L1412
+func TestFeatureFlagWithOverrides(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-group-props.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	cases := []struct {
+		name string
+		req  FeatureFlagPayload
+		want bool
+		err  error
+	}{
+		{
+			"matches group_key",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "1"},
+			},
+			true,
+			nil,
+		},
+		{
+			"distinct id does not match",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "2"},
+			},
+			false,
+			nil,
+		},
+		{
+			"matching group_key property is not overridden",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "2", "project": "7"},
+				GroupProperties: map[string]Properties{"company": {
+					"$group_key": "1",
+				}},
+			},
+			true,
+			nil,
+		},
+		{
+			"no match group_key property is not overridden",
+			FeatureFlagPayload{
+				Key:        "flag-with-groups",
+				DistinctId: "test-id",
+				Groups:     Groups{"company": "1", "project": "7"},
+				GroupProperties: map[string]Properties{"company": {
+					"$group_key": "2",
+				}},
+			},
+			false,
+			nil,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(tt *testing.T) {
+			enabled, err := client.GetFeatureFlag(c.req)
+			require.Equal(tt, c.err, err)
+			require.Equal(tt, c.want, enabled)
+		})
+	}
+}
+
+func TestFeatureFlagDistinctIDOverride(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-distinct-id-local.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	cases := []struct {
+		name string
+		req  FeatureFlagPayload
+		want bool
+		err  error
+	}{
+		{
+			"matches distinct id",
+			FeatureFlagPayload{
+				Key:        "test-boolean-flag-with-rollout-conditions",
+				DistinctId: "1",
+			},
+			true,
+			nil,
+		},
+		{
+			"distinct id does not match",
+			FeatureFlagPayload{
+				Key:        "test-boolean-flag-with-rollout-conditions",
+				DistinctId: "2",
+			},
+			false,
+			nil,
+		},
+		{
+			"distinct id property is not override",
+			FeatureFlagPayload{
+				Key:              "test-boolean-flag-with-rollout-conditions",
+				DistinctId:       "2",
+				PersonProperties: NewProperties().Set("distinct_id", "1"),
+			},
+			true,
+			nil,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(tt *testing.T) {
+			enabled, err := client.GetFeatureFlag(c.req)
+			require.Equal(tt, c.err, err)
+			require.Equal(tt, c.want, enabled)
+		})
+	}
+}
+
+func TestFeatureFlagDeviceIDBucketingLocalEvaluation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-device-id-bucketing.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	distinctId := "distinct-123"
+	deviceId := "device-456"
+	expectedDevice := checkIfSimpleFlagEnabled("device-bucket-flag", deviceId, 50)
+	expectedDistinct := checkIfSimpleFlagEnabled("device-bucket-flag", distinctId, 50)
+	require.NotEqual(t, expectedDistinct, expectedDevice)
+
+	enabled, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:                 "device-bucket-flag",
+		DistinctId:          distinctId,
+		DeviceId:            &deviceId,
+		OnlyEvaluateLocally: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedDevice, enabled)
+}
+
+func TestFeatureFlagWithFalseVariant(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-false-variant.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		PersonalApiKey: "some very secret key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test GetFeatureFlag - should return the variant name "false"
+	variant, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "test-id",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "false", variant)
+
+	// Test IsFeatureEnabled - should return the variant name "false"
+	// This will fail with the current implementation because it incorrectly converts "false" to false
+	isEnabled, err := client.IsFeatureEnabled(
+		FeatureFlagPayload{
+			Key:        "test-flag",
+			DistinctId: "test-id",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "false", isEnabled)
+}
+
+func TestBasicEmailPropertyMatching(t *testing.T) {
+	// Test basic property matching for icontains
+	property := FlagProperty{
+		Key:      "email",
+		Operator: "icontains",
+		Value:    "@example.com",
+		Type:     "person",
+	}
+
+	// Should match
+	properties1 := NewProperties().Set("email", "test@example.com")
+	match1, err1 := matchProperty(property, properties1)
+	require.NoError(t, err1)
+	require.True(t, match1, "Should match email containing @example.com")
+
+	// Should not match
+	properties2 := NewProperties().Set("email", "test@other.com")
+	match2, err2 := matchProperty(property, properties2)
+	require.NoError(t, err2)
+	require.False(t, match2, "Should not match email not containing @example.com")
+}
+
+// Note: Dependency tests (TestFlagDependencies*, TestMultiLevelMultivariateDependencyChain) have been moved to feature_flags_dependencies_test.go
+
+func TestProductionStyleMultivariateDependencyChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		response := `{
+			"flags": [
+				{
+					"id": 451,
+					"key": "multivariate-leaf-flag",
+					"name": "Multivariate Leaf Flag (Base)",
+					"active": true,
+					"deleted": false,
+					"is_simple_flag": false,
+					"rollout_percentage": null,
+					"filters": {
+						"multivariate": {
+							"variants": [
+								{
+									"key": "pineapple",
+									"rollout_percentage": 25
+								},
+								{
+									"key": "mango",
+									"rollout_percentage": 25
+								},
+								{
+									"key": "papaya",
+									"rollout_percentage": 25
+								},
+								{
+									"key": "kiwi",
+									"rollout_percentage": 25
+								}
+							]
+						},
+						"groups": [
+							{
+								"variant": "pineapple",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person",
+										"value": ["pineapple@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "mango",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person",
+										"value": ["mango@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "papaya",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person",
+										"value": ["papaya@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "kiwi",
+								"properties": [
+									{
+										"key": "email",
+										"type": "person",
+										"value": ["kiwi@example.com"],
+										"operator": "exact"
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"properties": [],
+								"rollout_percentage": 0
+							}
+						]
+					}
+				},
+				{
+					"id": 467,
+					"key": "multivariate-intermediate-flag",
+					"name": "Multivariate Intermediate Flag (Depends on fruit)",
+					"active": true,
+					"deleted": false,
+					"is_simple_flag": false,
+					"rollout_percentage": null,
+					"filters": {
+						"multivariate": {
+							"variants": [
+								{
+									"key": "blue",
+									"rollout_percentage": 100
+								},
+								{
+									"key": "red",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "green",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "black",
+									"rollout_percentage": 0
+								}
+							]
+						},
+						"groups": [
+							{
+								"variant": "blue",
+								"properties": [
+									{
+										"key": "multivariate-leaf-flag",
+										"type": "flag",
+										"value": "pineapple",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "red",
+								"properties": [
+									{
+										"key": "multivariate-leaf-flag",
+										"type": "flag",
+										"value": "mango",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							}
+						]
+					}
+				},
+				{
+					"id": 468,
+					"key": "multivariate-root-flag",
+					"name": "Multivariate Root Flag (Depends on color)",
+					"active": true,
+					"deleted": false,
+					"is_simple_flag": false,
+					"rollout_percentage": null,
+					"filters": {
+						"multivariate": {
+							"variants": [
+								{
+									"key": "breaking-bad",
+									"rollout_percentage": 100
+								},
+								{
+									"key": "the-wire",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "game-of-thrones",
+									"rollout_percentage": 0
+								},
+								{
+									"key": "the-expanse",
+									"rollout_percentage": 0
+								}
+							]
+						},
+						"groups": [
+							{
+								"variant": "breaking-bad",
+								"properties": [
+									{
+										"key": "multivariate-intermediate-flag",
+										"type": "flag",
+										"value": "blue",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag", "multivariate-intermediate-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							},
+							{
+								"variant": "the-wire",
+								"properties": [
+									{
+										"key": "multivariate-intermediate-flag",
+										"type": "flag",
+										"value": "red",
+										"operator": "flag_evaluates_to",
+										"dependency_chain": ["multivariate-leaf-flag", "multivariate-intermediate-flag"]
+									}
+								],
+								"rollout_percentage": 100
+							}
+						]
+					}
+				}
+			]
+		}`
+		w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Test successful pineapple -> blue -> breaking-bad chain
+	leafResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-leaf-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "pineapple@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "pineapple", leafResult)
+
+	intermediateResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-intermediate-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "pineapple@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "blue", intermediateResult)
+
+	rootResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-root-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "pineapple@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "breaking-bad", rootResult)
+
+	// Test successful mango -> red -> the-wire chain
+	mangoLeafResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-leaf-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "mango@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "mango", mangoLeafResult)
+
+	mangoIntermediateResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-intermediate-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "mango@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "red", mangoIntermediateResult)
+
+	mangoRootResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-root-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "mango@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "the-wire", mangoRootResult)
+
+	// Test broken chain - user without matching email gets default/false results
+	unknownLeafResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-leaf-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "unknown@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, unknownLeafResult) // No matching email -> null variant -> false
+
+	unknownIntermediateResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-intermediate-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "unknown@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, unknownIntermediateResult) // Dependency not satisfied
+
+	unknownRootResult, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:        "multivariate-root-flag",
+			DistinctId: "test-user",
+			PersonProperties: NewProperties().
+				Set("email", "unknown@example.com"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, false, unknownRootResult) // Dependency chain broken
+}
+
+func TestFallbackToAPIWhenFlagHasStaticCohortInMultiCondition(t *testing.T) {
+	// When a flag has multiple conditions and one contains a static cohort,
+	// the SDK should fallback to API for the entire flag, not just skip that
+	// condition and evaluate the next one locally.
+	//
+	// This prevents returning wrong variants when later conditions could match
+	// locally but the user is actually in the static cohort.
+
+	var flagsAPICalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			// Return API response indicating user is in the static cohort
+			flagsAPICalled = true
+			w.Write([]byte(`{"featureFlags": {"multi-condition-flag": "set-1"}}`))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			// Return local evaluation data WITHOUT cohort 999 (making it a static cohort)
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"key": "multi-condition-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{"key": "id", "value": 999, "type": "cohort"}
+									],
+									"rollout_percentage": 100,
+									"variant": "set-1"
+								},
+								{
+									"properties": [
+										{
+											"key": "$geoip_country_code",
+											"operator": "exact",
+											"value": ["DE"],
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100,
+									"variant": "set-8"
+								}
+							],
+							"multivariate": {
+								"variants": [
+									{"key": "set-1", "rollout_percentage": 50},
+									{"key": "set-8", "rollout_percentage": 50}
+								]
+							}
+						}
+					}
+				],
+				"cohorts": {}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test_api_key", Config{
+		Endpoint:       server.URL,
+		PersonalApiKey: "test_personal_api_key",
+	})
+	defer client.Close()
+
+	// Wait for local evaluation to load
+	time.Sleep(100 * time.Millisecond)
+
+	result, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:        "multi-condition-flag",
+		DistinctId: "test-user",
+		PersonProperties: NewProperties().
+			Set("$geoip_country_code", "DE"),
+	})
+
+	if err != nil {
+		t.Fatalf("GetFeatureFlag returned error: %v", err)
+	}
+
+	// Should return API result (set-1), not local evaluation result (set-8)
+	if !flagsAPICalled {
+		t.Errorf("FLAGS API was not called - local evaluation did not fallback")
+	}
+
+	if result != "set-1" {
+		t.Errorf("Expected 'set-1' from API, got %v", result)
+	}
+}
+
+func TestGetFeatureFlagPayloadFallbackToAPIWhenFlagHasStaticCohort(t *testing.T) {
+	// When a flag has a static cohort and GetFeatureFlagPayload is called,
+	// the SDK should fallback to API and return the API payload, not the local payload.
+	//
+	// This test verifies the fix for the bug where GetFeatureFlagPayload
+	// didn't properly handle static cohort errors like GetFeatureFlag did.
+
+	var flagsAPICalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
+			// Return API response with payload
+			flagsAPICalled = true
+			w.Write([]byte(`{"featureFlags": {"flag-with-cohort": "variant-a"}, "featureFlagPayloads": {"flag-with-cohort": "{\"message\": \"from-api\"}"}}`))
+		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			// Return local evaluation data WITHOUT cohort 999 (making it a static cohort)
+			w.Write([]byte(`{
+				"flags": [
+					{
+						"id": 1,
+						"key": "flag-with-cohort",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{"key": "id", "value": 999, "type": "cohort"}
+									],
+									"rollout_percentage": 100,
+									"variant": "variant-a"
+								}
+							],
+							"multivariate": {
+								"variants": [
+									{"key": "variant-a", "rollout_percentage": 100}
+								]
+							},
+							"payloads": {
+								"variant-a": "{\"message\": \"from-local\"}"
+							}
+						}
+					}
+				],
+				"cohorts": {}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test_api_key", Config{
+		Endpoint:       server.URL,
+		PersonalApiKey: "test_personal_api_key",
+	})
+	defer client.Close()
+
+	// Wait for local evaluation to load
+	time.Sleep(100 * time.Millisecond)
+
+	result, err := client.GetFeatureFlagPayload(FeatureFlagPayload{
+		Key:        "flag-with-cohort",
+		DistinctId: "test-user",
+	})
+
+	if err != nil {
+		t.Fatalf("GetFeatureFlagPayload returned error: %v", err)
+	}
+
+	// Should call FLAGS API since cohort is static (not in local cohorts map)
+	if !flagsAPICalled {
+		t.Errorf("FLAGS API was not called - local evaluation did not fallback")
+	}
+
+	// Should return API payload, not local payload
+	expectedPayload := "{\"message\": \"from-api\"}"
+	if result != expectedPayload {
+		t.Errorf("Expected payload '%s' from API, got '%s'", expectedPayload, result)
+	}
+}
+
+func TestDateBeforeOperatorAbsolute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			response := `{
+				"flags": [
+					{
+						"id": 1,
+						"key": "test-flag",
+						"active": true,
+						"filters": {
+							"groups": [
+								{
+									"properties": [
+										{
+											"key": "created_at",
+											"value": "2024-12-31T23:59:59Z",
+											"operator": "is_date_before",
+											"type": "person"
+										}
+									],
+									"rollout_percentage": 100
+								}
+							]
+						}
+					}
+				],
+				"group_type_mapping": {},
+				"cohorts": {}
+			}`
+			w.Write([]byte(response))
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewWithConfig("test-api-key", Config{
+		PersonalApiKey: "test-personal-key",
+		Endpoint:       server.URL,
+	})
+	defer client.Close()
+
+	// Person has created_at "2024-01-01T00:00:00Z" which is before "2024-12-31T23:59:59Z"
+	result, err := client.GetFeatureFlag(
+		FeatureFlagPayload{
+			Key:                   "test-flag",
+			DistinctId:            "user-123",
+			PersonProperties:      NewProperties().Set("created_at", "2024-01-01T00:00:00Z"),
+			OnlyEvaluateLocally:   true,
+			SendFeatureFlagEvents: nil,
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, true, result)
+}

@@ -1,0 +1,206 @@
+package posthog
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+)
+
+// SlogCaptureHandler wraps a slog.Handler and mirrors qualifying records
+// to PostHog error tracking using client.Enqueue(Exception{...}).
+type SlogCaptureHandler struct {
+	next   slog.Handler
+	client EnqueueClient
+	cfg    captureConfig
+}
+
+// NewSlogCaptureHandler wraps next and mirrors qualifying slog records to PostHog.
+//
+// The next parameter receives all records as your normal handler. The client
+// parameter receives captured Exception messages. The opts parameters customize
+// capture level, distinct ID resolution, stack traces, descriptions, fingerprints,
+// and extra properties.
+//
+// You typically wrap your existing handler:
+//
+//	client, err := posthog.NewWithConfig(...)
+//	// error handling and `defer client.Close()` call
+//	base := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+//	logger := slog.New(posthog.NewSlogCaptureHandler(base, client,
+//	  posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
+//	    return "my-user-id" // or pull from ctx
+//	  }),
+//	))
+func NewSlogCaptureHandler(next slog.Handler, client EnqueueClient, opts ...SlogOption) *SlogCaptureHandler {
+	cfg := defaultCaptureConfig()
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return &SlogCaptureHandler{next: next, client: client, cfg: cfg}
+}
+
+// Enabled reports whether either the wrapped handler or PostHog capture wants records at level.
+func (h *SlogCaptureHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	// Ensure we get called for capture-level records even if the base doesn't log them.
+	if level >= h.cfg.minCaptureLevel {
+		return true
+	}
+
+	return h.next.Enabled(ctx, level)
+}
+
+// Handle forwards the record to the wrapped handler and captures qualifying records as exceptions.
+// Enqueue errors are ignored so logging remains non-intrusive.
+func (h *SlogCaptureHandler) Handle(ctx context.Context, r slog.Record) error {
+	// Always forward to the wrapped handler first.
+	var err error
+	if h.next.Enabled(ctx, r.Level) {
+		err = h.next.Handle(ctx, r)
+	}
+
+	// Then, non-intrusively mirror to PostHog if configured.
+	if h.client == nil || r.Level < h.cfg.minCaptureLevel {
+		return err
+	}
+	distinctID := h.cfg.distinctID(ctx, r)
+	if distinctID == "" {
+		return err
+	}
+
+	ex := Exception{
+		DistinctId: distinctID,
+		Timestamp:  r.Time,
+		ExceptionList: []ExceptionItem{
+			{
+				Type:       r.Message,
+				Value:      h.cfg.descriptionExtractor.ExtractDescription(r),
+				Stacktrace: h.cfg.stackTraceExtractor.GetStackTrace(h.cfg.skip),
+			},
+		},
+		ExceptionFingerprint: h.cfg.fingerprint(ctx, r),
+		Properties:           h.cfg.properties(ctx, r),
+	}
+	_ = enqueueWithContext(ctx, h.client, ex) // ignore enqueue error to keep logging safe
+
+	return err
+}
+
+// WithAttrs returns a handler with attrs applied to the wrapped handler.
+func (h *SlogCaptureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &SlogCaptureHandler{
+		next:   h.next.WithAttrs(attrs),
+		client: h.client,
+		cfg:    h.cfg,
+	}
+}
+
+// WithGroup returns a handler with name applied to the wrapped handler's group.
+func (h *SlogCaptureHandler) WithGroup(name string) slog.Handler {
+	return &SlogCaptureHandler{
+		next:   h.next.WithGroup(name),
+		client: h.client,
+		cfg:    h.cfg,
+	}
+}
+
+// SlogAttrsAsProperties is a convenience implementation of the fn passed to
+// WithPropertiesFn. It copies every slog.Record attribute into a Properties
+// map, so log fields flow onto the captured exception event verbatim.
+//
+// Usage: posthog.WithPropertiesFn(posthog.SlogAttrsAsProperties)
+//
+// Note: this ships all attrs to PostHog — make sure none contain sensitive
+// data, or write a filtering fn instead.
+func SlogAttrsAsProperties(_ context.Context, r slog.Record) Properties {
+	props := NewProperties()
+	r.Attrs(func(a slog.Attr) bool {
+		props.Set(a.Key, a.Value.Any())
+		return true
+	})
+	return props
+}
+
+// DescriptionExtractor defines the interface for extracting a human-readable
+// description from a slog.Record for use in exception capture.
+//
+// Implementations should always return a non-empty string; returning an empty
+// string will prevent the error from being captured.
+type DescriptionExtractor interface {
+	// ExtractDescription returns the ExceptionItem.Value to use for a slog record.
+	ExtractDescription(r slog.Record) string
+}
+
+// ErrorExtractor implements DescriptionExtractor by scanning a slog.Record
+// for attributes containing an error.
+//
+// ErrorKeys specifies the list of attribute keys (case-insensitive) to check.
+// The first matching attribute with an error value is returned as the
+// description. If no matching error is found, the Fallback is returned.
+type ErrorExtractor struct {
+	// ErrorKeys are attribute keys to inspect for error values, case-insensitively.
+	ErrorKeys []string
+	// Fallback is returned when no matching error attribute is found.
+	Fallback string
+}
+
+// ExtractDescription returns the first matching error string from the slog record or Fallback.
+func (e ErrorExtractor) ExtractDescription(r slog.Record) string {
+	var found error
+
+	normalisedKeys := make([]string, len(e.ErrorKeys))
+	for i, k := range e.ErrorKeys {
+		normalisedKeys[i] = strings.ToLower(k)
+	}
+
+	r.Attrs(func(a slog.Attr) bool {
+		for _, errorKey := range normalisedKeys {
+			if strings.ToLower(a.Key) == errorKey {
+				if v := e.errorFromValue(a.Value); v != nil {
+					found = v
+					return false
+				}
+			}
+		}
+		return true
+	})
+	if found != nil {
+		return found.Error()
+	}
+
+	return e.Fallback
+}
+
+func (e ErrorExtractor) errorFromValue(v slog.Value) error {
+	switch v.Kind() {
+	case slog.KindAny:
+		any := v.Any()
+		if any == nil {
+			return nil
+		}
+		// direct error
+		if err, ok := any.(error); ok && err != nil {
+			return err
+		}
+		// common wrappers
+		type unwrappable interface{ Unwrap() error }
+		if c, ok := any.(unwrappable); ok {
+			if err := c.Unwrap(); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	case slog.KindGroup:
+		for _, ga := range v.Group() {
+			if err := e.errorFromValue(ga.Value); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	case slog.KindLogValuer:
+		return e.errorFromValue(v.Resolve())
+	default:
+		return nil
+	}
+}

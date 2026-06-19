@@ -6,6 +6,8 @@ Thanks for your interest in improving the PostHog Go SDK.
 
 Make sure you have Go installed (macOS: `brew install go`, Linux / Windows: https://go.dev/doc/install).
 
+Source files live in `src/` and root-level tests live in `tests/`. The repository root keeps symlinks to those files so the module remains importable as `github.com/posthog/posthog-go` and Go can run same-package tests.
+
 From the repository root:
 
 ```bash

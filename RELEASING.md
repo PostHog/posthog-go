@@ -23,7 +23,7 @@ A push to `main` that includes `.changeset/*.md` changes automatically starts th
 1. Checks for pending changesets
 2. Notifies the client libraries team in Slack for approval
 3. Waits for approval from a maintainer via the GitHub `Release` environment
-4. The workflow applies Changesets, syncs `version.go`, creates a `vX.Y.Z` Git tag, and creates a GitHub Release.
+4. The workflow applies Changesets, syncs `src/version.go`, creates a `vX.Y.Z` Git tag, and creates a GitHub Release.
 5. Notifies Slack when the release completes or fails
 
 ### Manual Trigger
