@@ -200,13 +200,25 @@ func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
 	body, server := mockServer()
 	defer server.Close()
 
-	originalProperties := Properties{"email": "test@example.com"}
+	originalProperties := Properties{
+		"email": "test@example.com",
+		"nested": map[string]interface{}{
+			"name": "original",
+			"items": []interface{}{
+				map[string]interface{}{"value": "first"},
+			},
+		},
+		"tags": []string{"one", "two"},
+	}
 	client, err := NewWithConfig("test-api-key", Config{
 		Endpoint:  server.URL,
 		BatchSize: 1,
 		BeforeSend: func(msg Message) Message {
 			identify := msg.(Identify)
 			identify.Properties["hook_ran"] = true
+			identify.Properties["nested"].(map[string]interface{})["name"] = "hook"
+			identify.Properties["nested"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["value"] = "hook"
+			identify.Properties["tags"].([]string)[0] = "hook"
 			return identify
 		},
 	})
@@ -223,6 +235,46 @@ func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, true, set["hook_ran"])
 	require.Nil(t, originalProperties["hook_ran"])
+	require.Equal(t, "original", originalProperties["nested"].(map[string]interface{})["name"])
+	require.Equal(t, "first", originalProperties["nested"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["value"])
+	require.Equal(t, []string{"one", "two"}, originalProperties["tags"])
+}
+
+func TestBeforeSendDoesNotMutateOriginalGroups(t *testing.T) {
+	body, server := mockServer()
+	defer server.Close()
+
+	originalGroups := Groups{
+		"company": "posthog",
+		"nested": map[string]interface{}{
+			"name": "original",
+		},
+	}
+	client, err := NewWithConfig("test-api-key", Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		BeforeSend: func(msg Message) Message {
+			capture := msg.(Capture)
+			capture.Groups["company"] = "hook"
+			capture.Groups["nested"].(map[string]interface{})["name"] = "hook"
+			return capture
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.Enqueue(Capture{
+		DistinctId: "user-123",
+		Event:      "test-event",
+		Groups:     originalGroups,
+	}))
+
+	properties := firstProperties(t, readBatch(t, body))
+	groups, ok := properties["$groups"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "hook", groups["company"])
+	require.Equal(t, "posthog", originalGroups["company"])
+	require.Equal(t, "original", originalGroups["nested"].(map[string]interface{})["name"])
 }
 
 func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {

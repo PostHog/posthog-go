@@ -305,7 +305,7 @@ func cloneMessageProperties(properties Properties) Properties {
 	}
 	clone := make(Properties, len(properties))
 	for key, value := range properties {
-		clone[key] = value
+		clone[key] = cloneMessagePropertyValue(value)
 	}
 	return clone
 }
@@ -316,9 +316,71 @@ func cloneMessageGroups(groups Groups) Groups {
 	}
 	clone := make(Groups, len(groups))
 	for key, value := range groups {
-		clone[key] = value
+		clone[key] = cloneMessagePropertyValue(value)
 	}
 	return clone
+}
+
+func cloneMessagePropertyValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case Properties:
+		return cloneMessageProperties(v)
+	case Groups:
+		return cloneMessageGroups(v)
+	case map[string]interface{}:
+		clone := make(map[string]interface{}, len(v))
+		for key, nested := range v {
+			clone[key] = cloneMessagePropertyValue(nested)
+		}
+		return clone
+	case map[string]string:
+		clone := make(map[string]string, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]bool:
+		clone := make(map[string]bool, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]int:
+		clone := make(map[string]int, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]int64:
+		clone := make(map[string]int64, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case map[string]float64:
+		clone := make(map[string]float64, len(v))
+		for key, nested := range v {
+			clone[key] = nested
+		}
+		return clone
+	case []interface{}:
+		clone := make([]interface{}, len(v))
+		for i, nested := range v {
+			clone[i] = cloneMessagePropertyValue(nested)
+		}
+		return clone
+	case []string:
+		return append([]string(nil), v...)
+	case []bool:
+		return append([]bool(nil), v...)
+	case []int:
+		return append([]int(nil), v...)
+	case []int64:
+		return append([]int64(nil), v...)
+	case []float64:
+		return append([]float64(nil), v...)
+	}
+	return value
 }
 
 func cloneExceptionFingerprint(fingerprint *string) *string {

@@ -29,6 +29,13 @@ type Callback interface {
 // It can return a modified message, or nil to drop the message. If the hook
 // panics, returns an invalid message, or returns a different message type, the
 // message is dropped.
+//
+// The SDK passes an isolated copy of SDK-owned mutable fields where practical:
+// Properties and Groups clone common JSON-like maps and slices, and Exception
+// clones its exception list, stack traces, mechanisms, and fingerprint. Arbitrary
+// reference values stored inside Properties or Groups (for example, pointers or
+// custom mutable structs held as interface{} values) are not deep-cloned and can
+// still share state with the caller.
 type BeforeSendFunc func(Message) Message
 
 // Message represents a PostHog object that can be queued with Client.Enqueue.
