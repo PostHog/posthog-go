@@ -720,6 +720,48 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	}
 }
 
+func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	clientIface, capture, _ := newEvalClient(t, fs.server)
+	cli := clientIface.(*client)
+
+	testCases := []struct {
+		name     string
+		response interface{}
+	}{
+		{name: "bool true", response: true},
+		{name: "bool false", response: false},
+		{name: "string variant", response: "variant-a"},
+		{name: "nil", response: nil},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := 0; i < 2; i++ {
+				cli.captureFlagCalledIfNeeded(
+					"user-1",
+					"changing-flag",
+					tc.response,
+					nil,
+					NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", tc.response),
+					nil,
+				)
+			}
+		})
+	}
+
+	_ = waitForEventCount(capture, len(testCases), 5*time.Second)
+	time.Sleep(150 * time.Millisecond)
+	events := snapshotCapturedEvents(capture)
+
+	count := countFlagCalledEvents(events, "changing-flag")
+	if count != len(testCases) {
+		t.Fatalf("expected exactly %d $feature_flag_called events (one per response value), got %d", len(testCases), count)
+	}
+}
+
 func TestCaptureFlagCalled_FiresPerGroupContext(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")

@@ -191,9 +191,10 @@ type client struct {
 type flagUser struct {
 	distinctID string
 	flagKey    string
+	flagValue  string
 	deviceID   string
 	// canonical JSON of the groups map (keys sorted) — empty when no groups
-	// were passed. Lets the same `(user, flag)` fire a separate
+	// were passed. Lets the same `(user, flag, value)` fire a separate
 	// `$feature_flag_called` event for each distinct group context, so
 	// group-scoped flags don't undercount exposures when a user is evaluated
 	// under multiple groups in the same process.
@@ -899,7 +900,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			properties.Set("$feature_flag_error", errorString)
 		}
 
-		c.captureFlagCalledIfNeeded(flagConfig.DistinctId, flagConfig.Key, flagConfig.DeviceId, properties, flagConfig.Groups)
+		c.captureFlagCalledIfNeeded(flagConfig.DistinctId, flagConfig.Key, flagValue, flagConfig.DeviceId, properties, flagConfig.Groups)
 	}
 
 	if flagValue == nil {
@@ -938,18 +939,18 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 }
 
 // captureFlagCalledIfNeeded fires a $feature_flag_called event if the
-// (distinctId, key, deviceId, groups) tuple has not already been reported on
-// this client. Group context is included so group-scoped flags fire a
+// (distinctId, key, value, deviceId, groups) tuple has not already been reported
+// on this client. Group context is included so group-scoped flags fire a
 // separate event for each group a user is evaluated under. The caller is
 // responsible for building the full properties dict; this helper only handles
 // dedup and enqueue. It is shared by the legacy per-flag evaluation path and
 // the FeatureFlagEvaluations snapshot path so both dedupe identically against
 // the same per-distinct_id LRU cache.
-func (c *client) captureFlagCalledIfNeeded(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
-	c.captureFlagCalledIfNeededWithContext(context.Background(), distinctId, key, deviceId, properties, groups)
+func (c *client) captureFlagCalledIfNeeded(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
+	c.captureFlagCalledIfNeededWithContext(context.Background(), distinctId, key, featureFlagResponse, deviceId, properties, groups)
 }
 
-func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, distinctId, key string, deviceId *string, properties Properties, groups Groups) {
+func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
 	deviceIDStr := ""
 	if deviceId != nil {
 		deviceIDStr = *deviceId
@@ -957,6 +958,7 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 	cacheKey := flagUser{
 		distinctID: distinctId,
 		flagKey:    key,
+		flagValue:  featureFlagResponseCacheKey(featureFlagResponse),
 		deviceID:   deviceIDStr,
 		groupsRepr: canonicalGroupsRepr(groups),
 	}
@@ -971,6 +973,12 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 	}); err == nil {
 		c.distinctIdsFeatureFlagsReported.Add(cacheKey, struct{}{})
 	}
+}
+
+// featureFlagResponseCacheKey returns a stable type-qualified representation
+// of a feature flag response value for exposure deduplication.
+func featureFlagResponseCacheKey(value interface{}) string {
+	return fmt.Sprintf("%T:%v", value, value)
 }
 
 // canonicalGroupsRepr returns a JSON string of the sorted key/value pairs of
@@ -1297,8 +1305,8 @@ func ptrString(s string) *string { return &s }
 // featureFlagEvaluationsHostWithContext wires the snapshot's callbacks to this client.
 func (c *client) featureFlagEvaluationsHostWithContext(ctx context.Context) featureFlagEvaluationsHost {
 	return featureFlagEvaluationsHost{
-		captureFlagCalledIfNeeded: func(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
-			c.captureFlagCalledIfNeededWithContext(ctx, distinctId, key, deviceId, properties, groups)
+		captureFlagCalledIfNeeded: func(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
+			c.captureFlagCalledIfNeededWithContext(ctx, distinctId, key, featureFlagResponse, deviceId, properties, groups)
 		},
 		logger: c.Logger,
 	}

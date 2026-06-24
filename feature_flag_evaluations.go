@@ -56,7 +56,7 @@ type evaluatedFlagRecord struct {
 // the SDK's Logger; users who want them silenced should pass a Logger that
 // drops Warnf calls.
 type featureFlagEvaluationsHost struct {
-	captureFlagCalledIfNeeded func(distinctId, key string, deviceId *string, properties Properties, groups Groups)
+	captureFlagCalledIfNeeded func(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups)
 	logger                    Logger
 }
 
@@ -296,7 +296,7 @@ func (e *FeatureFlagEvaluations) recordAccess(key string) {
 	if alreadyAccessed {
 		return
 	}
-	e.host.captureFlagCalledIfNeeded(e.distinctId, key, e.deviceId, properties, e.groups)
+	e.host.captureFlagCalledIfNeeded(e.distinctId, key, response, e.deviceId, properties, e.groups)
 }
 
 // cloneWith builds a child snapshot with the given flag set. The accessed set
