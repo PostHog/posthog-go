@@ -191,9 +191,10 @@ type client struct {
 type flagUser struct {
 	distinctID string
 	flagKey    string
+	flagValue  string
 	deviceID   string
 	// canonical JSON of the groups map (keys sorted) — empty when no groups
-	// were passed. Lets the same `(user, flag)` fire a separate
+	// were passed. Lets the same `(user, flag, value)` fire a separate
 	// `$feature_flag_called` event for each distinct group context, so
 	// group-scoped flags don't undercount exposures when a user is evaluated
 	// under multiple groups in the same process.
@@ -938,8 +939,8 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 }
 
 // captureFlagCalledIfNeeded fires a $feature_flag_called event if the
-// (distinctId, key, deviceId, groups) tuple has not already been reported on
-// this client. Group context is included so group-scoped flags fire a
+// (distinctId, key, value, deviceId, groups) tuple has not already been reported
+// on this client. Group context is included so group-scoped flags fire a
 // separate event for each group a user is evaluated under. The caller is
 // responsible for building the full properties dict; this helper only handles
 // dedup and enqueue. It is shared by the legacy per-flag evaluation path and
@@ -957,6 +958,7 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 	cacheKey := flagUser{
 		distinctID: distinctId,
 		flagKey:    key,
+		flagValue:  featureFlagResponseCacheKey(properties["$feature_flag_response"]),
 		deviceID:   deviceIDStr,
 		groupsRepr: canonicalGroupsRepr(groups),
 	}
@@ -977,6 +979,10 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 // the groups map. Two equal maps that were built with keys inserted in a
 // different order produce the same string, so they dedupe to one cache entry.
 // Empty / nil groups produce an empty string.
+func featureFlagResponseCacheKey(value interface{}) string {
+	return fmt.Sprintf("%T:%v", value, value)
+}
+
 func canonicalGroupsRepr(groups Groups) string {
 	if len(groups) == 0 {
 		return ""
@@ -1347,6 +1353,8 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 			// Wait for shutdown to acknowledge cancellation
 			<-c.shutdown
 		}
+
+		c.distinctIdsFeatureFlagsReported.Purge()
 	})
 
 	if alreadyClosed {

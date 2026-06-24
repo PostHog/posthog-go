@@ -720,6 +720,52 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	}
 }
 
+func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	clientIface, capture, _ := newEvalClient(t, fs.server)
+	cli := clientIface.(*client)
+
+	cli.captureFlagCalledIfNeeded(
+		"user-1",
+		"changing-flag",
+		nil,
+		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", true),
+		nil,
+	)
+	cli.captureFlagCalledIfNeeded(
+		"user-1",
+		"changing-flag",
+		nil,
+		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", false),
+		nil,
+	)
+	cli.captureFlagCalledIfNeeded(
+		"user-1",
+		"changing-flag",
+		nil,
+		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", true),
+		nil,
+	)
+	cli.captureFlagCalledIfNeeded(
+		"user-1",
+		"changing-flag",
+		nil,
+		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", false),
+		nil,
+	)
+
+	_ = waitForEventCount(capture, 2, 5*time.Second)
+	time.Sleep(150 * time.Millisecond)
+	events := snapshotCapturedEvents(capture)
+
+	count := countFlagCalledEvents(events, "changing-flag")
+	if count != 2 {
+		t.Fatalf("expected exactly 2 $feature_flag_called events (true and false), got %d", count)
+	}
+}
+
 func TestCaptureFlagCalled_FiresPerGroupContext(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
