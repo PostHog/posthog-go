@@ -743,6 +743,7 @@ func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
 				cli.captureFlagCalledIfNeeded(
 					"user-1",
 					"changing-flag",
+					tc.response,
 					nil,
 					NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", tc.response),
 					nil,

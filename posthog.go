@@ -900,7 +900,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			properties.Set("$feature_flag_error", errorString)
 		}
 
-		c.captureFlagCalledIfNeeded(flagConfig.DistinctId, flagConfig.Key, flagConfig.DeviceId, properties, flagConfig.Groups)
+		c.captureFlagCalledIfNeeded(flagConfig.DistinctId, flagConfig.Key, flagValue, flagConfig.DeviceId, properties, flagConfig.Groups)
 	}
 
 	if flagValue == nil {
@@ -946,11 +946,11 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 // dedup and enqueue. It is shared by the legacy per-flag evaluation path and
 // the FeatureFlagEvaluations snapshot path so both dedupe identically against
 // the same per-distinct_id LRU cache.
-func (c *client) captureFlagCalledIfNeeded(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
-	c.captureFlagCalledIfNeededWithContext(context.Background(), distinctId, key, deviceId, properties, groups)
+func (c *client) captureFlagCalledIfNeeded(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
+	c.captureFlagCalledIfNeededWithContext(context.Background(), distinctId, key, featureFlagResponse, deviceId, properties, groups)
 }
 
-func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, distinctId, key string, deviceId *string, properties Properties, groups Groups) {
+func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
 	deviceIDStr := ""
 	if deviceId != nil {
 		deviceIDStr = *deviceId
@@ -958,7 +958,7 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 	cacheKey := flagUser{
 		distinctID: distinctId,
 		flagKey:    key,
-		flagValue:  featureFlagResponseCacheKey(properties["$feature_flag_response"]),
+		flagValue:  featureFlagResponseCacheKey(featureFlagResponse),
 		deviceID:   deviceIDStr,
 		groupsRepr: canonicalGroupsRepr(groups),
 	}
@@ -1305,8 +1305,8 @@ func ptrString(s string) *string { return &s }
 // featureFlagEvaluationsHostWithContext wires the snapshot's callbacks to this client.
 func (c *client) featureFlagEvaluationsHostWithContext(ctx context.Context) featureFlagEvaluationsHost {
 	return featureFlagEvaluationsHost{
-		captureFlagCalledIfNeeded: func(distinctId, key string, deviceId *string, properties Properties, groups Groups) {
-			c.captureFlagCalledIfNeededWithContext(ctx, distinctId, key, deviceId, properties, groups)
+		captureFlagCalledIfNeeded: func(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
+			c.captureFlagCalledIfNeededWithContext(ctx, distinctId, key, featureFlagResponse, deviceId, properties, groups)
 		},
 		logger: c.Logger,
 	}
