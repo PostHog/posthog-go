@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.16.2
+
+### Patch Changes
+
+- 76de226: Dedupe `$feature_flag_called` events by feature flag response value.
+
 ## 1.16.1
 
 ### Patch Changes
