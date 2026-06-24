@@ -975,14 +975,16 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 	}
 }
 
-// canonicalGroupsRepr returns a JSON string of the sorted key/value pairs of
-// the groups map. Two equal maps that were built with keys inserted in a
-// different order produce the same string, so they dedupe to one cache entry.
-// Empty / nil groups produce an empty string.
+// featureFlagResponseCacheKey returns a stable type-qualified representation
+// of a feature flag response value for exposure deduplication.
 func featureFlagResponseCacheKey(value interface{}) string {
 	return fmt.Sprintf("%T:%v", value, value)
 }
 
+// canonicalGroupsRepr returns a JSON string of the sorted key/value pairs of
+// the groups map. Two equal maps that were built with keys inserted in a
+// different order produce the same string, so they dedupe to one cache entry.
+// Empty / nil groups produce an empty string.
 func canonicalGroupsRepr(groups Groups) string {
 	if len(groups) == 0 {
 		return ""
@@ -1353,8 +1355,6 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 			// Wait for shutdown to acknowledge cancellation
 			<-c.shutdown
 		}
-
-		c.distinctIdsFeatureFlagsReported.Purge()
 	})
 
 	if alreadyClosed {

@@ -727,42 +727,37 @@ func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
 	clientIface, capture, _ := newEvalClient(t, fs.server)
 	cli := clientIface.(*client)
 
-	cli.captureFlagCalledIfNeeded(
-		"user-1",
-		"changing-flag",
-		nil,
-		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", true),
-		nil,
-	)
-	cli.captureFlagCalledIfNeeded(
-		"user-1",
-		"changing-flag",
-		nil,
-		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", false),
-		nil,
-	)
-	cli.captureFlagCalledIfNeeded(
-		"user-1",
-		"changing-flag",
-		nil,
-		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", true),
-		nil,
-	)
-	cli.captureFlagCalledIfNeeded(
-		"user-1",
-		"changing-flag",
-		nil,
-		NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", false),
-		nil,
-	)
+	testCases := []struct {
+		name     string
+		response interface{}
+	}{
+		{name: "bool true", response: true},
+		{name: "bool false", response: false},
+		{name: "string variant", response: "variant-a"},
+		{name: "nil", response: nil},
+	}
 
-	_ = waitForEventCount(capture, 2, 5*time.Second)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := 0; i < 2; i++ {
+				cli.captureFlagCalledIfNeeded(
+					"user-1",
+					"changing-flag",
+					nil,
+					NewProperties().Set("$feature_flag", "changing-flag").Set("$feature_flag_response", tc.response),
+					nil,
+				)
+			}
+		})
+	}
+
+	_ = waitForEventCount(capture, len(testCases), 5*time.Second)
 	time.Sleep(150 * time.Millisecond)
 	events := snapshotCapturedEvents(capture)
 
 	count := countFlagCalledEvents(events, "changing-flag")
-	if count != 2 {
-		t.Fatalf("expected exactly 2 $feature_flag_called events (true and false), got %d", count)
+	if count != len(testCases) {
+		t.Fatalf("expected exactly %d $feature_flag_called events (one per response value), got %d", len(testCases), count)
 	}
 }
 
