@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,14 @@ import (
 )
 
 const VERSION = "1.0.0"
+
+// captureMode selects which capture protocol this adapter process speaks. It is
+// baked at build time via the CAPTURE_MODE env var ("v1" => capture-v1, anything
+// else => legacy v0), mirroring the v0/v1 Dockerfile split. One process speaks
+// one mode and advertises it via /health capabilities.
+var captureMode = os.Getenv("CAPTURE_MODE")
+
+func isV1() bool { return captureMode == "v1" }
 
 // TrackedTransport wraps http.RoundTripper to track requests
 type TrackedTransport struct {
@@ -32,43 +41,81 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 	// Make the request
 	resp, err := t.base.RoundTrip(req)
+	if resp == nil {
+		return resp, err
+	}
 
-	// Track the request
-	if resp != nil {
-		// Parse batch to get UUIDs
-		var batch struct {
-			Batch []struct {
-				UUID string `json:"uuid"`
-			} `json:"batch"`
+	// Parse batch to get UUIDs. The request body shape is the same for v0 and
+	// v1 ({"batch":[{"uuid":...}]}), so extraction is unchanged.
+	var batch struct {
+		Batch []struct {
+			UUID string `json:"uuid"`
+		} `json:"batch"`
+	}
+	uuids := []string{}
+	if len(bodyBytes) > 0 {
+		json.Unmarshal(bodyBytes, &batch)
+		for _, event := range batch.Batch {
+			if event.UUID != "" {
+				uuids = append(uuids, event.UUID)
+			}
 		}
-		uuids := []string{}
-		if len(bodyBytes) > 0 {
-			json.Unmarshal(bodyBytes, &batch)
-			for _, event := range batch.Batch {
-				if event.UUID != "" {
-					uuids = append(uuids, event.UUID)
+	}
+
+	// PostHog-Attempt is 1-based and only set on the v1 path. attempt-1 is the
+	// retry index; attempt > 1 means this request is a retry.
+	attempt := 1
+	if a := req.Header.Get("PostHog-Attempt"); a != "" {
+		if n, e := strconv.Atoi(a); e == nil && n > 0 {
+			attempt = n
+		}
+	}
+
+	// For v1, a 200 no longer means "all sent": read+restore the body and count
+	// only terminal results (anything other than "retry") as sent.
+	terminal := len(batch.Batch)
+	if isV1() {
+		var respBytes []byte
+		if resp.Body != nil {
+			respBytes, _ = io.ReadAll(resp.Body)
+			resp.Body = io.NopCloser(bytes.NewBuffer(respBytes))
+		}
+		if resp.StatusCode == 200 {
+			var parsed struct {
+				Results map[string]struct {
+					Result string `json:"result"`
+				} `json:"results"`
+			}
+			terminal = 0
+			if json.Unmarshal(respBytes, &parsed) == nil {
+				for _, r := range parsed.Results {
+					if r.Result != "retry" {
+						terminal++
+					}
 				}
 			}
 		}
-
-		t.state.mu.Lock()
-		t.state.requestsMade = append(t.state.requestsMade, RequestInfo{
-			TimestampMs:  time.Now().UnixMilli(),
-			StatusCode:   resp.StatusCode,
-			RetryAttempt: 0, // TODO: Track retries
-			EventCount:   len(batch.Batch),
-			UUIDList:     uuids,
-		})
-
-		if resp.StatusCode == 200 {
-			t.state.totalEventsSent += len(batch.Batch)
-			t.state.pendingEvents -= len(batch.Batch)
-			if t.state.pendingEvents < 0 {
-				t.state.pendingEvents = 0
-			}
-		}
-		t.state.mu.Unlock()
 	}
+
+	t.state.mu.Lock()
+	t.state.requestsMade = append(t.state.requestsMade, RequestInfo{
+		TimestampMs:  time.Now().UnixMilli(),
+		StatusCode:   resp.StatusCode,
+		RetryAttempt: attempt - 1,
+		EventCount:   len(batch.Batch),
+		UUIDList:     uuids,
+	})
+	if attempt > 1 {
+		t.state.totalRetries++
+	}
+	if resp.StatusCode == 200 {
+		t.state.totalEventsSent += terminal
+		t.state.pendingEvents -= terminal
+		if t.state.pendingEvents < 0 {
+			t.state.pendingEvents = 0
+		}
+	}
+	t.state.mu.Unlock()
 
 	return resp, err
 }
@@ -109,12 +156,14 @@ type HealthResponse struct {
 
 // InitRequest represents /init endpoint request
 type InitRequest struct {
-	APIKey            string `json:"api_key"`
-	Host              string `json:"host"`
-	FlushAt           *int   `json:"flush_at,omitempty"`
-	FlushIntervalMs   *int   `json:"flush_interval_ms,omitempty"`
-	MaxRetries        *int   `json:"max_retries,omitempty"`
-	EnableCompression *bool  `json:"enable_compression,omitempty"`
+	APIKey              string `json:"api_key"`
+	Host                string `json:"host"`
+	FlushAt             *int   `json:"flush_at,omitempty"`
+	FlushIntervalMs     *int   `json:"flush_interval_ms,omitempty"`
+	MaxRetries          *int   `json:"max_retries,omitempty"`
+	EnableCompression   *bool  `json:"enable_compression,omitempty"`
+	DisableGeoIP        *bool  `json:"disable_geoip,omitempty"`
+	HistoricalMigration *bool  `json:"historical_migration,omitempty"`
 }
 
 // CaptureRequest represents /capture endpoint request
@@ -123,6 +172,11 @@ type CaptureRequest struct {
 	Event      string                 `json:"event"`
 	Properties map[string]interface{} `json:"properties,omitempty"`
 	Timestamp  *string                `json:"timestamp,omitempty"`
+	// Options carries capture-v1 event options (cookieless_mode,
+	// disable_skew_correction, process_person_profile, product_tour_id, ...).
+	// The adapter folds them back into magic event properties so the SDK lifts
+	// them onto the wire options object.
+	Options map[string]interface{} `json:"options,omitempty"`
 }
 
 // FeatureFlagRequest represents /get_feature_flag endpoint request
@@ -152,11 +206,15 @@ func jsonResponse(w http.ResponseWriter, data interface{}) {
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	capabilities := []string{"capture_v0", "encoding_gzip"}
+	if isV1() {
+		capabilities = []string{"capture_v1", "encoding_gzip"}
+	}
 	response := HealthResponse{
 		SDKName:        "posthog-go",
 		SDKVersion:     posthog.Version,
 		AdapterVersion: VERSION,
-		Capabilities:   []string{"capture_v0", "encoding_gzip"},
+		Capabilities:   capabilities,
 	}
 	jsonResponse(w, response)
 }
@@ -193,6 +251,10 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		Interval:  100 * time.Millisecond, // Short interval for tests
 	}
 
+	if isV1() {
+		config.CaptureMode = posthog.CaptureModeAnalyticsV1
+	}
+
 	// Override with request params if provided
 	if req.FlushAt != nil {
 		config.BatchSize = *req.FlushAt
@@ -209,6 +271,12 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			config.Compression = posthog.CompressionNone
 		}
+	}
+	if req.DisableGeoIP != nil {
+		config.DisableGeoIP = req.DisableGeoIP
+	}
+	if req.HistoricalMigration != nil {
+		config.HistoricalMigration = *req.HistoricalMigration
 	}
 
 	client, err := posthog.NewWithConfig(req.APIKey, config)
@@ -243,6 +311,28 @@ func captureHandler(w http.ResponseWriter, r *http.Request) {
 		DistinctId: req.DistinctID,
 		Event:      req.Event,
 		Properties: req.Properties,
+	}
+
+	// Fold capture-v1 options back into magic event properties; the SDK lifts
+	// them onto the wire options object. Unknown keys get a "$" prefix.
+	if len(req.Options) > 0 {
+		if capture.Properties == nil {
+			capture.Properties = posthog.Properties{}
+		}
+		for k, v := range req.Options {
+			switch k {
+			case "cookieless_mode":
+				capture.Properties["$cookieless_mode"] = v
+			case "disable_skew_correction":
+				capture.Properties["$ignore_sent_at"] = v
+			case "process_person_profile":
+				capture.Properties["$process_person_profile"] = v
+			case "product_tour_id":
+				capture.Properties["$product_tour_id"] = v
+			default:
+				capture.Properties["$"+k] = v
+			}
+		}
 	}
 
 	if req.Timestamp != nil {
