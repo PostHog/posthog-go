@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,16 +73,17 @@ func (c *client) sendV1(pb preparedBatch) {
 		})
 		if err != nil {
 			c.Errorf("marshalling v1 batch wrapper - %s", err)
-			c.notifyFailure(pendingMsgs, err)
+			c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: err})
 			return
 		}
 
 		res, err := c.uploadV1(c.ctx, body, requestId, attempt)
 		if err != nil {
+			reqErr := newCaptureRequestError(res, err)
 			// A 2xx with an unparseable body is terminal for this batch -
 			// retrying a malformed success would loop forever.
 			if res != nil && isSuccessStatus(res.statusCode) {
-				c.notifyFailure(pendingMsgs, err)
+				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			// A terminal non-retryable status (400/401/429/...) whose body
@@ -94,32 +96,40 @@ func (c *client) sendV1(pb preparedBatch) {
 			// Transport error: retry unless shutting down or exhausted.
 			if c.ctx.Err() != nil {
 				c.Errorf("%d messages dropped: shutdown timeout", len(pendingMsgs))
-				c.notifyFailure(pendingMsgs, err)
+				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			if lastAttempt {
-				c.dropMessages(pendingMsgs, err)
+				c.dropMessages(pendingMsgs, reqErr)
 				return
 			}
 			if !c.backoffV1(i, res) {
-				c.notifyFailure(pendingMsgs, err)
+				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			continue
 		}
 
 		if isSuccessStatus(res.statusCode) {
+			c.logV1ResultSummary(requestId, attempt, res.results)
 			nextData, nextMsgs, nextUuids := c.partitionV1Results(res, pendingData, pendingMsgs, pendingUuids)
 			if len(nextUuids) == 0 {
 				return
 			}
 			if lastAttempt {
-				c.dropMessages(nextMsgs, fmt.Errorf("capture v1: %d events not persisted after %d attempts", len(nextMsgs), c.maxAttempts))
+				c.Errorf("%d messages dropped after %d attempts", len(nextMsgs), c.maxAttempts)
+				for idx, id := range nextUuids {
+					var details string
+					if r, ok := res.results[id]; ok && r.Details != nil {
+						details = *r.Details
+					}
+					c.notifyFailure([]APIMessage{nextMsgs[idx]}, &CaptureEventError{EventUUID: id, Result: resultRetry, Details: details, Exhausted: true})
+				}
 				return
 			}
 			pendingData, pendingMsgs, pendingUuids = nextData, nextMsgs, nextUuids
 			if !c.backoffV1(i, res) {
-				c.notifyFailure(pendingMsgs, fmt.Errorf("capture v1: shutdown during retry backoff"))
+				c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff})
 				return
 			}
 			continue
@@ -332,20 +342,59 @@ func isSuccessStatus(code int) bool {
 	return code >= 200 && code <= 299
 }
 
-// eventErrorV1 builds the per-event failure error for a "drop" result (or an
-// exhausted "retry"). PR5 replaces this with the typed CaptureEventError.
+// errShutdownDuringBackoff is the underlying cause when retries are abandoned
+// because the client is shutting down mid-backoff.
+var errShutdownDuringBackoff = errors.New("shutdown during retry backoff")
+
+// eventErrorV1 builds the per-event CaptureEventError for a terminal "drop".
 func eventErrorV1(eventUuid string, r eventResult) error {
-	if r.Details != nil && *r.Details != "" {
-		return fmt.Errorf("capture event %s: %s (%s)", eventUuid, r.Result, *r.Details)
+	details := ""
+	if r.Details != nil {
+		details = *r.Details
 	}
-	return fmt.Errorf("capture event %s: %s", eventUuid, r.Result)
+	return &CaptureEventError{EventUUID: eventUuid, Result: r.Result, Details: details}
 }
 
-// requestErrorV1 builds the batch-level failure error for a non-2xx response.
-// PR5 replaces this with the typed CaptureRequestError.
+// requestErrorV1 builds the batch-level CaptureRequestError for a non-2xx response.
 func requestErrorV1(res *v1Result) error {
-	if res.errResp != nil {
-		return fmt.Errorf("capture request failed: %d %s: %s", res.statusCode, res.errResp.Error, res.errResp.ErrorDescription)
+	return newCaptureRequestError(res, nil)
+}
+
+// newCaptureRequestError assembles a *CaptureRequestError from an optional parsed
+// result (status + structured error body) and an optional underlying error.
+func newCaptureRequestError(res *v1Result, underlying error) *CaptureRequestError {
+	e := &CaptureRequestError{Err: underlying}
+	if res != nil {
+		e.StatusCode = res.statusCode
+		if res.errResp != nil {
+			e.Code = res.errResp.Error
+			e.Description = res.errResp.ErrorDescription
+		}
 	}
-	return fmt.Errorf("capture request failed: %d", res.statusCode)
+	return e
+}
+
+// logV1ResultSummary emits a single verbose debug line per 2xx response that
+// tallies per-event directives (ok/warning/drop/retry/other), so operators can
+// debug partial-submission outcomes without diffing the raw response body.
+func (c *client) logV1ResultSummary(requestId string, attempt int, results map[string]eventResult) {
+	var ok, warning, drop, retry, other int
+	for _, r := range results {
+		switch r.Result {
+		case resultOk:
+			ok++
+		case resultWarning:
+			warning++
+		case resultDrop:
+			drop++
+		case resultRetry:
+			retry++
+		default:
+			other++
+		}
+	}
+	c.debugf(
+		"capture v1 response request_id=%s attempt=%d events=%d ok=%d warning=%d drop=%d retry=%d other=%d",
+		requestId, attempt, len(results), ok, warning, drop, retry, other,
+	)
 }
