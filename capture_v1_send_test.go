@@ -1,12 +1,12 @@
 package posthog
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +39,7 @@ func (s *v1TestServer) handler(t *testing.T) http.HandlerFunc {
 		raw, _ := io.ReadAll(r.Body)
 		body := raw
 		if r.Header.Get("Content-Encoding") == "gzip" {
-			gr, err := gzip.NewReader(strings.NewReader(string(raw)))
+			gr, err := gzip.NewReader(bytes.NewReader(raw))
 			if err != nil {
 				t.Errorf("gzip reader: %v", err)
 			} else {
@@ -508,12 +508,20 @@ func TestV1SendRetryAfterHonored(t *testing.T) {
 
 	// Configured backoff is 1ms; Retry-After of 1s must win.
 	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	start := time.Now()
 	c.sendV1(v1Batch(t, cap1(uuidA)))
-	elapsed := time.Since(start)
 
-	if elapsed < 900*time.Millisecond {
-		t.Errorf("elapsed %v, expected >= ~1s from Retry-After", elapsed)
+	reqs := srv.snapshot()
+	if len(reqs) < 2 {
+		t.Fatalf("expected >= 2 attempts, got %d", len(reqs))
+	}
+	t1, err1 := time.Parse(time.RFC3339, reqs[0].timestamp)
+	t2, err2 := time.Parse(time.RFC3339, reqs[1].timestamp)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("parse timestamps: %v / %v", err1, err2)
+	}
+	delta := t2.Sub(t1)
+	if delta < 900*time.Millisecond {
+		t.Errorf("attempt delta %v, expected >= ~1s from Retry-After", delta)
 	}
 	if s, f := cb.counts(); s != 1 || f != 0 {
 		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)

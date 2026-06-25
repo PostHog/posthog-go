@@ -71,6 +71,13 @@ func (c *client) sendV1(pb preparedBatch) {
 				c.notifyFailure(pendingMsgs, err)
 				return
 			}
+			// A terminal non-retryable status (400/401/429/...) whose body
+			// read errored: fail fast rather than falling through to the
+			// transport-retry path.
+			if res != nil && res.statusCode != 0 && !isRetryableStatusV1(res.statusCode) {
+				c.notifyFailure(pendingMsgs, err)
+				return
+			}
 			// Transport error: retry unless shutting down or exhausted.
 			if c.ctx.Err() != nil {
 				c.Errorf("%d messages dropped: shutdown timeout", len(pendingMsgs))
@@ -78,8 +85,7 @@ func (c *client) sendV1(pb preparedBatch) {
 				return
 			}
 			if lastAttempt {
-				c.Errorf("%d messages dropped after %d attempts", len(pendingMsgs), c.maxAttempts)
-				c.notifyFailure(pendingMsgs, err)
+				c.dropMessages(pendingMsgs, err)
 				return
 			}
 			if !c.backoffV1(i, res) {
@@ -95,9 +101,7 @@ func (c *client) sendV1(pb preparedBatch) {
 				return
 			}
 			if lastAttempt {
-				err := fmt.Errorf("capture v1: %d events not persisted after %d attempts", len(nextMsgs), c.maxAttempts)
-				c.Errorf("%d messages dropped after %d attempts", len(nextMsgs), c.maxAttempts)
-				c.notifyFailure(nextMsgs, err)
+				c.dropMessages(nextMsgs, fmt.Errorf("capture v1: %d events not persisted after %d attempts", len(nextMsgs), c.maxAttempts))
 				return
 			}
 			pendingData, pendingMsgs, pendingUuids = nextData, nextMsgs, nextUuids
@@ -111,8 +115,7 @@ func (c *client) sendV1(pb preparedBatch) {
 		if isRetryableStatusV1(res.statusCode) {
 			err := requestErrorV1(res)
 			if lastAttempt {
-				c.Errorf("%d messages dropped after %d attempts", len(pendingMsgs), c.maxAttempts)
-				c.notifyFailure(pendingMsgs, err)
+				c.dropMessages(pendingMsgs, err)
 				return
 			}
 			if !c.backoffV1(i, res) {
@@ -177,6 +180,13 @@ func (c *client) backoffV1(attemptIndex int, res *v1Result) bool {
 		}
 		return false
 	}
+}
+
+// dropMessages logs and notifies failure for events that are abandoned after
+// exhausting all retry attempts.
+func (c *client) dropMessages(msgs []APIMessage, err error) {
+	c.Errorf("%d messages dropped after %d attempts", len(msgs), c.maxAttempts)
+	c.notifyFailure(msgs, err)
 }
 
 // uploadV1 performs a single capture-v1 POST. It reuses c.http (which already
