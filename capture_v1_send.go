@@ -3,6 +3,7 @@ package posthog
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"fmt"
 	"io"
@@ -10,9 +11,22 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	json "github.com/goccy/go-json"
 	"github.com/google/uuid"
+	"github.com/klauspost/compress/zstd"
 )
+
+// zstdEncoder is shared across all clients: klauspost's EncodeAll is safe for
+// concurrent use and the library recommends reusing one encoder over
+// allocating per call. The options are static so NewWriter cannot fail here.
+var zstdEncoder = func() *zstd.Encoder {
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		panic(fmt.Sprintf("posthog: zstd encoder init: %v", err))
+	}
+	return enc
+}()
 
 // v1Result is the parsed outcome of a single capture-v1 HTTP attempt.
 type v1Result struct {
@@ -191,23 +205,64 @@ func (c *client) dropMessages(msgs []APIMessage, err error) {
 	c.notifyFailure(msgs, err)
 }
 
+// compressV1Body compresses the v1 request body per the configured mode and
+// returns the body plus the Content-Encoding wire token ("" when uncompressed,
+// "br" for brotli). gzip/deflate/brotli use per-call writers; zstd reuses the
+// shared concurrency-safe encoder. The codecs other than gzip are gated to
+// CaptureModeAnalyticsV1 by Config.Validate, so this is only reached for modes
+// the backend can decode via Content-Encoding.
+func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
+	switch mode {
+	case CompressionNone:
+		return raw, "", nil
+	case CompressionGzip:
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, err := gw.Write(raw); err != nil {
+			return nil, "", fmt.Errorf("gzip compression: %w", err)
+		}
+		if err := gw.Close(); err != nil {
+			return nil, "", fmt.Errorf("gzip close: %w", err)
+		}
+		return buf.Bytes(), "gzip", nil
+	case CompressionDeflate:
+		// zlib (RFC 1950) wraps the deflate stream so it begins with 0x78; the
+		// backend sniffs that byte to route Content-Encoding: deflate to its
+		// zlib decoder, avoiding ambiguity with raw (headerless) deflate.
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		if _, err := zw.Write(raw); err != nil {
+			return nil, "", fmt.Errorf("deflate compression: %w", err)
+		}
+		if err := zw.Close(); err != nil {
+			return nil, "", fmt.Errorf("deflate close: %w", err)
+		}
+		return buf.Bytes(), "deflate", nil
+	case CompressionZstd:
+		return zstdEncoder.EncodeAll(raw, make([]byte, 0, len(raw))), "zstd", nil
+	case CompressionBrotli:
+		var buf bytes.Buffer
+		bw := brotli.NewWriter(&buf)
+		if _, err := bw.Write(raw); err != nil {
+			return nil, "", fmt.Errorf("brotli compression: %w", err)
+		}
+		if err := bw.Close(); err != nil {
+			return nil, "", fmt.Errorf("brotli close: %w", err)
+		}
+		return buf.Bytes(), "br", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported compression mode %s", mode)
+	}
+}
+
 // uploadV1 performs a single capture-v1 POST. It reuses c.http (which already
 // carries BatchUploadTimeout) and the caller's ctx; it does not add a separate
 // per-request timeout.
 func (c *client) uploadV1(ctx context.Context, b []byte, requestId string, attempt int) (*v1Result, error) {
-	body := b
-	if c.Compression == CompressionGzip {
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		if _, err := gw.Write(b); err != nil {
-			c.Errorf("gzip compression - %s", err)
-			return nil, fmt.Errorf("gzip compression: %w", err)
-		}
-		if err := gw.Close(); err != nil {
-			c.Errorf("gzip close - %s", err)
-			return nil, fmt.Errorf("gzip close: %w", err)
-		}
-		body = buf.Bytes()
+	body, encoding, err := compressV1Body(c.Compression, b)
+	if err != nil {
+		c.Errorf("compressing v1 body (%s) - %s", c.Compression, err)
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+captureV1Path, bytes.NewReader(body))
@@ -225,8 +280,8 @@ func (c *client) uploadV1(ctx context.Context, b []byte, requestId string, attem
 	req.Header.Set("PostHog-Request-Id", requestId)
 	req.Header.Set("PostHog-Request-Timestamp", c.now().UTC().Format(time.RFC3339))
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-	if c.Compression == CompressionGzip {
-		req.Header.Set("Content-Encoding", "gzip")
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
 	}
 
 	res, err := c.http.Do(req)

@@ -3,6 +3,7 @@ package posthog
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,58 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	json "github.com/goccy/go-json"
+	"github.com/klauspost/compress/zstd"
 )
+
+// decodeV1Body decompresses a recorded request body per its Content-Encoding,
+// mirroring what the capture-v1 backend does. Reaching valid JSON proves the
+// SDK emitted a well-formed stream for that codec.
+func decodeV1Body(t *testing.T, encoding string, raw []byte) []byte {
+	t.Helper()
+	switch encoding {
+	case "":
+		return raw
+	case "gzip":
+		gr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			t.Errorf("gzip reader: %v", err)
+			return raw
+		}
+		defer gr.Close()
+		out, _ := io.ReadAll(gr)
+		return out
+	case "deflate":
+		zr, err := zlib.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			t.Errorf("zlib reader: %v", err)
+			return raw
+		}
+		defer zr.Close()
+		out, _ := io.ReadAll(zr)
+		return out
+	case "zstd":
+		zr, err := zstd.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			t.Errorf("zstd reader: %v", err)
+			return raw
+		}
+		defer zr.Close()
+		out, _ := io.ReadAll(zr)
+		return out
+	case "br":
+		out, err := io.ReadAll(brotli.NewReader(bytes.NewReader(raw)))
+		if err != nil {
+			t.Errorf("brotli reader: %v", err)
+			return raw
+		}
+		return out
+	default:
+		t.Errorf("unexpected Content-Encoding %q", encoding)
+		return raw
+	}
+}
 
 // recordedRequest captures what the server saw for one attempt.
 type recordedRequest struct {
@@ -37,16 +88,7 @@ func (s *v1TestServer) handler(t *testing.T) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		body := raw
-		if r.Header.Get("Content-Encoding") == "gzip" {
-			gr, err := gzip.NewReader(bytes.NewReader(raw))
-			if err != nil {
-				t.Errorf("gzip reader: %v", err)
-			} else {
-				body, _ = io.ReadAll(gr)
-				_ = gr.Close()
-			}
-		}
+		body := decodeV1Body(t, r.Header.Get("Content-Encoding"), raw)
 		var env eventBatch
 		if err := json.Unmarshal(body, &env); err != nil {
 			t.Errorf("server: unmarshal envelope: %v (body=%s)", err, string(body))
@@ -456,35 +498,98 @@ func TestV1SendMalformed200IsTerminal(t *testing.T) {
 	}
 }
 
-func TestV1SendGzipCompression(t *testing.T) {
-	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
-		m := map[string]eventResult{}
-		for _, u := range uuids {
-			m[u] = eventResult{Result: resultOk}
-		}
-		return http.StatusOK, resultsBody(t, m), ""
-	}}
-	ts := httptest.NewServer(srv.handler(t))
-	defer ts.Close()
+// TestV1SendCompressionCodecs exercises the full v1 send path for every
+// supported codec: the request carries the right Content-Encoding token and
+// the server (decoding per that token) recovers the original batch.
+func TestV1SendCompressionCodecs(t *testing.T) {
+	cases := []struct {
+		name     string
+		mode     CompressionMode
+		encoding string // expected Content-Encoding header ("" = uncompressed)
+	}{
+		{"none", CompressionNone, ""},
+		{"gzip", CompressionGzip, "gzip"},
+		{"zstd", CompressionZstd, "zstd"},
+		{"deflate", CompressionDeflate, "deflate"},
+		{"brotli", CompressionBrotli, "br"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cb := &recordingCallback{}
+			srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+				m := map[string]eventResult{}
+				for _, u := range uuids {
+					m[u] = eventResult{Result: resultOk}
+				}
+				return http.StatusOK, resultsBody(t, m), ""
+			}}
+			ts := httptest.NewServer(srv.handler(t))
+			defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) { cfg.Compression = CompressionGzip })
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+			c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
+				cfg.CaptureMode = CaptureModeAnalyticsV1
+				cfg.Compression = tc.mode
+			})
+			c.sendV1(v1Batch(t, cap1(uuidA)))
 
-	reqs := srv.snapshot()
-	if len(reqs) != 1 {
-		t.Fatalf("expected 1 request, got %d", len(reqs))
+			reqs := srv.snapshot()
+			if len(reqs) != 1 {
+				t.Fatalf("expected 1 request, got %d", len(reqs))
+			}
+			if reqs[0].encoding != tc.encoding {
+				t.Errorf("Content-Encoding = %q, want %q", reqs[0].encoding, tc.encoding)
+			}
+			// The handler decoded the body per Content-Encoding and parsed the
+			// uuid; reaching here with it recorded proves the body round-trips.
+			if len(reqs[0].uuids) != 1 || reqs[0].uuids[0] != uuidA {
+				t.Errorf("decoded uuids = %v, want [%s]", reqs[0].uuids, uuidA)
+			}
+			if s, _ := cb.counts(); s != 1 {
+				t.Errorf("success callbacks = %d, want 1", s)
+			}
+		})
 	}
-	if reqs[0].encoding != "gzip" {
-		t.Errorf("Content-Encoding = %q, want gzip", reqs[0].encoding)
+}
+
+// TestCompressV1Body checks the codec helper directly: correct wire token,
+// real size reduction on compressible input, and a clean round-trip. This
+// catches encoder regressions the send-path test cannot (size, error path).
+func TestCompressV1Body(t *testing.T) {
+	// Large, highly compressible payload so every codec yields real savings.
+	raw := bytes.Repeat([]byte(`{"event":"e","distinct_id":"d"},`), 512)
+
+	cases := []struct {
+		name     string
+		mode     CompressionMode
+		token    string
+		compress bool // expect output smaller than raw
+	}{
+		{"none", CompressionNone, "", false},
+		{"gzip", CompressionGzip, "gzip", true},
+		{"zstd", CompressionZstd, "zstd", true},
+		{"deflate", CompressionDeflate, "deflate", true},
+		{"brotli", CompressionBrotli, "br", true},
 	}
-	// The handler already decoded the gzip body and parsed the uuid; reaching
-	// here with the event uuid recorded proves the body was valid gzip.
-	if len(reqs[0].uuids) != 1 || reqs[0].uuids[0] != uuidA {
-		t.Errorf("decoded uuids = %v, want [%s]", reqs[0].uuids, uuidA)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, token, err := compressV1Body(tc.mode, raw)
+			if err != nil {
+				t.Fatalf("compressV1Body: %v", err)
+			}
+			if token != tc.token {
+				t.Errorf("token = %q, want %q", token, tc.token)
+			}
+			if tc.compress && len(body) >= len(raw) {
+				t.Errorf("%s output %d bytes did not shrink raw %d", tc.name, len(body), len(raw))
+			}
+			if got := decodeV1Body(t, token, body); !bytes.Equal(got, raw) {
+				t.Errorf("%s round-trip mismatch: got %d bytes, want %d", tc.name, len(got), len(raw))
+			}
+		})
 	}
-	if s, _ := cb.counts(); s != 1 {
-		t.Errorf("success callbacks = %d, want 1", s)
+
+	if _, _, err := compressV1Body(CompressionMode(99), raw); err == nil {
+		t.Error("expected error for unknown compression mode")
 	}
 }
 

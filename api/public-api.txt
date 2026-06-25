@@ -254,7 +254,12 @@ type CompressionMode uint8
 const (
 	CompressionNone CompressionMode = 0
 	CompressionGzip CompressionMode = 1
+	CompressionZstd CompressionMode = 2
+	CompressionDeflate CompressionMode = 3
+	CompressionBrotli CompressionMode = 4
 )
+func (m CompressionMode) String() string
+
 type Config struct {
 
 	Endpoint string

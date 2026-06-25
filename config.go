@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,9 +14,39 @@ type CompressionMode uint8
 const (
 	// CompressionNone disables compression (default).
 	CompressionNone CompressionMode = 0
-	// CompressionGzip enables GZIP compression for batch payloads.
+	// CompressionGzip enables GZIP compression for batch payloads. Valid on
+	// both capture modes.
 	CompressionGzip CompressionMode = 1
+	// CompressionZstd enables Zstandard compression. Requires
+	// CaptureModeAnalyticsV1 (the legacy /batch/ endpoint cannot decode it).
+	CompressionZstd CompressionMode = 2
+	// CompressionDeflate enables zlib (RFC 1950) compression, sent as
+	// Content-Encoding: deflate. Requires CaptureModeAnalyticsV1.
+	CompressionDeflate CompressionMode = 3
+	// CompressionBrotli enables Brotli compression, sent as
+	// Content-Encoding: br. Requires CaptureModeAnalyticsV1.
+	CompressionBrotli CompressionMode = 4
 )
+
+// String returns a human-readable codec name, used in config validation
+// errors and debug logs. It is not the on-the-wire Content-Encoding token
+// (brotli's token is "br"); see compressV1Body for wire tokens.
+func (m CompressionMode) String() string {
+	switch m {
+	case CompressionNone:
+		return "none"
+	case CompressionGzip:
+		return "gzip"
+	case CompressionZstd:
+		return "zstd"
+	case CompressionDeflate:
+		return "deflate"
+	case CompressionBrotli:
+		return "brotli"
+	default:
+		return fmt.Sprintf("CompressionMode(%d)", uint8(m))
+	}
+}
 
 // CaptureMode selects the capture wire protocol used for event ingestion.
 type CaptureMode uint8
@@ -250,7 +281,20 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Compression > CompressionGzip {
+	switch c.Compression {
+	case CompressionNone, CompressionGzip:
+		// Valid on both legacy and v1 capture modes.
+	case CompressionZstd, CompressionDeflate, CompressionBrotli:
+		// Only the v1 endpoint decodes these; the legacy /batch/ endpoint
+		// understands gzip/lz64/base64 only, so reject them up front.
+		if c.CaptureMode != CaptureModeAnalyticsV1 {
+			return ConfigError{
+				Reason: c.Compression.String() + " compression requires CaptureModeAnalyticsV1",
+				Field:  "Compression",
+				Value:  c.Compression,
+			}
+		}
+	default:
 		return ConfigError{
 			Reason: "invalid compression mode",
 			Field:  "Compression",
