@@ -21,6 +21,7 @@ const (
 
 	propertyProcessPersonProfile = "$process_person_profile"
 	propertySessionID            = "$session_id"
+	propertyWindowID             = "$window_id"
 	propertyCurrentURL           = "$current_url"
 	propertyRequestMethod        = "$request_method"
 	propertyRequestPath          = "$request_path"

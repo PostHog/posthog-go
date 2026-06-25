@@ -178,6 +178,23 @@ func TestV1IdentifySetInProperties(t *testing.T) {
 	}
 }
 
+func TestV1NilPropertiesOmitsSetKeys(t *testing.T) {
+	t.Run("identify", func(t *testing.T) {
+		ev := marshalV1(t, Identify{Uuid: "u", DistinctId: "d", Properties: nil})
+		props := wireProps(t, ev)
+		if _, ok := props["$set"]; ok {
+			t.Errorf("$set should be omitted when Properties is nil, got %v", props["$set"])
+		}
+	})
+	t.Run("group_identify", func(t *testing.T) {
+		ev := marshalV1(t, GroupIdentify{Uuid: "u", Type: "company", Key: "acme", Properties: nil})
+		props := wireProps(t, ev)
+		if _, ok := props["$group_set"]; ok {
+			t.Errorf("$group_set should be omitted when Properties is nil, got %v", props["$group_set"])
+		}
+	})
+}
+
 func TestV1GroupIdentifyKeepsGroupFieldsInProperties(t *testing.T) {
 	ev := marshalV1(t, GroupIdentify{Uuid: "u", Type: "company", Key: "acme", Properties: Properties{"name": "Acme"}})
 	props := wireProps(t, ev)

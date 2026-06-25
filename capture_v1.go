@@ -17,7 +17,6 @@ const (
 	propertyCookielessMode = "$cookieless_mode"
 	propertyIgnoreSentAt   = "$ignore_sent_at"
 	propertyProductTourId  = "$product_tour_id"
-	propertyWindowID       = "$window_id"
 )
 
 // v1 per-event result codes (the only four the backend emits, see
@@ -29,14 +28,26 @@ const (
 	resultRetry   = "retry"
 )
 
-// optionsExtractionTable maps a magic event property to its v1 options wire key.
-// Order mirrors posthog-rs OPTIONS_EXTRACTION_TABLE. A key is lifted only when
-// present in properties (i.e. the caller overrode a backend default).
-var optionsExtractionTable = []struct{ propKey, wireKey string }{
-	{propertyCookielessMode, "cookieless_mode"},
-	{propertyIgnoreSentAt, "disable_skew_correction"},
-	{propertyProductTourId, "product_tour_id"},
-	{propertyProcessPersonProfile, "process_person_profile"},
+// propertyExtraction defines a magic property that is lifted out of the
+// properties map during v1 serialization. If topLevel is true, the value is
+// placed into a top-level event field (session_id, window_id); otherwise it
+// goes into the options object under wireKey.
+type propertyExtraction struct {
+	propKey  string
+	wireKey  string
+	topLevel bool
+}
+
+// propertyExtractionTable maps magic event properties to their v1 wire
+// destinations. Order mirrors posthog-rs. A key is lifted only when present in
+// properties (i.e. the caller overrode a backend default).
+var propertyExtractionTable = []propertyExtraction{
+	{propertyCookielessMode, "cookieless_mode", false},
+	{propertyIgnoreSentAt, "disable_skew_correction", false},
+	{propertyProductTourId, "product_tour_id", false},
+	{propertyProcessPersonProfile, "process_person_profile", false},
+	{propertySessionID, "session_id", true},
+	{propertyWindowID, "window_id", true},
 }
 
 // eventBatch is the v1 request envelope. Unlike the legacy batch it carries no
@@ -88,19 +99,33 @@ type apiEvent struct {
 	properties Properties
 }
 
-// buildV1Event extracts magic properties into options, lifts session/window IDs
-// to top-level fields, and returns the wire payload. It mutates e.properties by
-// deleting the lifted keys; callers must ensure the properties map is not shared.
+// buildV1Event extracts magic properties into options or top-level fields and
+// returns the wire payload. It mutates e.properties by deleting the lifted keys;
+// callers must ensure the properties map is not shared.
 func buildV1Event(e apiEvent) eventPayload {
 	props := e.properties
 	if props == nil {
 		props = Properties{}
 	}
 	options := map[string]interface{}{}
-	for _, m := range optionsExtractionTable {
-		if v, ok := props[m.propKey]; ok {
+	var sessionId, windowId string
+	for _, m := range propertyExtractionTable {
+		v, ok := props[m.propKey]
+		if !ok {
+			continue
+		}
+		delete(props, m.propKey)
+		if m.topLevel {
+			if s, ok := v.(string); ok {
+				switch m.wireKey {
+				case "session_id":
+					sessionId = s
+				case "window_id":
+					windowId = s
+				}
+			}
+		} else {
 			options[m.wireKey] = v
-			delete(props, m.propKey)
 		}
 	}
 	return eventPayload{
@@ -108,25 +133,23 @@ func buildV1Event(e apiEvent) eventPayload {
 		Uuid:       e.uuid,
 		DistinctId: e.distinctId,
 		Timestamp:  e.timestamp,
-		SessionId:  popString(props, propertySessionID),
-		WindowId:   popString(props, propertyWindowID),
+		SessionId:  sessionId,
+		WindowId:   windowId,
 		Options:    options,
 		Properties: props,
 	}
 }
 
-// popString removes key from props and returns it as a string ("" if absent or
-// not a string).
-func popString(props Properties, key string) string {
-	v, ok := props[key]
-	if !ok {
-		return ""
+// baseV1Props returns the common properties shared by all v1 event types.
+func baseV1Props(isServer bool, disableGeoIP bool) Properties {
+	props := Properties{}
+	if isServer {
+		props.Set("$is_server", true)
 	}
-	delete(props, key)
-	if s, ok := v.(string); ok {
-		return s
+	if disableGeoIP {
+		props.Set(propertyGeoipDisable, true)
 	}
-	return ""
+	return props
 }
 
 // prepareForSendV1 is the v1 sibling of prepareForSend: it builds the callback
@@ -146,13 +169,10 @@ func prepareForSendV1(msg Message) (json.RawMessage, APIMessage, string, error) 
 // properties APIfy assembles, minus $lib/$lib_version (the PostHog-Sdk-Info
 // header is the authoritative SDK identity in v1).
 func (msg Capture) apifyEvent() apiEvent {
-	myProperties := Properties{}.
+	myProperties := baseV1Props(msg.IsServer, false).
 		Merge(msg.Properties).
 		Merge(getSystemContext().ToProperties())
 
-	if msg.IsServer {
-		myProperties.Set("$is_server", true)
-	}
 	if msg.Groups != nil {
 		myProperties.Set("$groups", msg.Groups)
 	}
@@ -169,16 +189,12 @@ func (msg Capture) apifyEvent() apiEvent {
 // apifyEvent builds the v1 intermediate event for an Identify. The person
 // properties are folded into properties.$set (v1 has no top-level $set).
 func (msg Identify) apifyEvent() apiEvent {
-	myProperties := Properties{}.
+	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
 		Merge(getSystemContext().ToProperties())
 
-	if msg.IsServer {
-		myProperties.Set("$is_server", true)
+	if msg.Properties != nil {
+		myProperties.Set("$set", msg.Properties)
 	}
-	if msg.DisableGeoIP {
-		myProperties.Set(propertyGeoipDisable, true)
-	}
-	myProperties.Set("$set", msg.Properties)
 
 	return apiEvent{
 		event:      "$identify",
@@ -193,17 +209,13 @@ func (msg Identify) apifyEvent() apiEvent {
 // identifiers and $group_set stay in properties (the ingestion groups step reads
 // them from there).
 func (msg GroupIdentify) apifyEvent() apiEvent {
-	myProperties := Properties{}.
+	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
-		Set("$group_set", msg.Properties).
 		Merge(getSystemContext().ToProperties())
 
-	if msg.IsServer {
-		myProperties.Set("$is_server", true)
-	}
-	if msg.DisableGeoIP {
-		myProperties.Set(propertyGeoipDisable, true)
+	if msg.Properties != nil {
+		myProperties.Set("$group_set", msg.Properties)
 	}
 
 	return apiEvent{
@@ -220,16 +232,9 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 // "alias" property and the top-level distinct_id, so no distinct_id is duplicated
 // into properties.
 func (msg Alias) apifyEvent() apiEvent {
-	myProperties := Properties{}.
+	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
 		Merge(getSystemContext().ToProperties()).
 		Set("alias", msg.Alias)
-
-	if msg.IsServer {
-		myProperties.Set("$is_server", true)
-	}
-	if msg.DisableGeoIP {
-		myProperties.Set(propertyGeoipDisable, true)
-	}
 
 	return apiEvent{
 		event:      "$create_alias",
@@ -244,19 +249,13 @@ func (msg Alias) apifyEvent() apiEvent {
 // exception fields win over custom properties on collision (matching the legacy
 // ExceptionInApiProperties marshal precedence).
 func (msg Exception) apifyEvent() apiEvent {
-	myProperties := Properties{}.
+	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
 		Merge(msg.Properties).
 		Merge(getSystemContext().ToProperties()).
 		Set("$exception_list", msg.ExceptionList)
 
 	if msg.ExceptionFingerprint != nil {
 		myProperties.Set("$exception_fingerprint", msg.ExceptionFingerprint)
-	}
-	if msg.IsServer {
-		myProperties.Set("$is_server", true)
-	}
-	if msg.DisableGeoIP {
-		myProperties.Set(propertyGeoipDisable, true)
 	}
 
 	return apiEvent{
