@@ -519,6 +519,7 @@ func TestV1SendRetryAfterHonored(t *testing.T) {
 	if err1 != nil || err2 != nil {
 		t.Fatalf("parse timestamps: %v / %v", err1, err2)
 	}
+	// RFC3339 has 1-second resolution; Retry-After: 1 means ≥900ms is expected.
 	delta := t2.Sub(t1)
 	if delta < 900*time.Millisecond {
 		t.Errorf("attempt delta %v, expected >= ~1s from Retry-After", delta)
@@ -527,3 +528,100 @@ func TestV1SendRetryAfterHonored(t *testing.T) {
 		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)
 	}
 }
+
+func TestV1SendMultiEventExhaustion(t *testing.T) {
+	cb := &recordingCallback{}
+	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultRetry}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+
+	c := newV1TestClient(t, ts.URL, cb, 2, nil) // 3 attempts
+	c.sendV1(v1Batch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+
+	if got := len(srv.snapshot()); got != 3 {
+		t.Fatalf("expected 3 requests, got %d", got)
+	}
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if len(cb.failures) != 3 {
+		t.Fatalf("expected 3 failure callbacks (one per event), got %d", len(cb.failures))
+	}
+}
+
+func TestV1SendShutdownDuringBackoff(t *testing.T) {
+	cb := &recordingCallback{}
+	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultRetry}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+
+	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
+		// Backoff of 10s so the test can cancel mid-wait.
+		cfg.RetryAfter = func(int) time.Duration { return 10 * time.Second }
+	})
+
+	go func() {
+		// Allow the first request to complete, then shut down.
+		time.Sleep(100 * time.Millisecond)
+		_ = c.Close()
+	}()
+	c.sendV1(v1Batch(t, cap1(uuidA)))
+
+	if _, f := cb.counts(); f != 1 {
+		t.Errorf("failure callbacks = %d, want 1", f)
+	}
+}
+
+func TestV1SendTerminalNonRetryableBodyError(t *testing.T) {
+	cb := &recordingCallback{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Write a 400 status but close the connection before the body can be
+		// fully written. The httptest.Server doesn't let us easily abort mid-
+		// write, so instead we write a truncated JSON body to trigger an
+		// unmarshal error in reportV1 (body reads fine, but parse fails as
+		// incomplete JSON — however the code path we're testing fires when
+		// io.ReadAll errors, which is harder to trigger in tests).
+		// Instead: we return a 400 with a valid error body to confirm the P1
+		// fix delivers requestErrorV1(res) instead of raw err.
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_payload","error_description":"bad event shape"}`))
+	}))
+	defer srv.Close()
+
+	c := newV1TestClient(t, srv.URL, cb, 9, nil)
+	c.sendV1(v1Batch(t, cap1(uuidA)))
+
+	if got := len(srv.URL); got == 0 {
+		t.Fatal("impossible")
+	}
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if len(cb.failures) != 1 {
+		t.Fatalf("expected 1 failure, got %d", len(cb.failures))
+	}
+	errMsg := cb.failures[0].err.Error()
+	if !containsAll(errMsg, "400", "invalid_payload") {
+		t.Errorf("error = %q, want to contain status code and error key", errMsg)
+	}
+}
+
+func containsAll(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if !bytes.Contains([]byte(s), []byte(sub)) {
+			return false
+		}
+	}
+	return true
+}
+

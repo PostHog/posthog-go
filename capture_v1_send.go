@@ -39,7 +39,7 @@ func isRetryableStatusV1(code int) bool {
 // sendV1 delivers a prepared batch to the capture-v1 endpoint with partial
 // retry: only events tagged "retry" in the response are re-sent on subsequent
 // attempts. PostHog-Request-Id and created_at are stable across attempts;
-// PostHog-Attempt increments. NOT wired into the live path yet (see PR3).
+// PostHog-Attempt increments.
 func (c *client) sendV1(pb preparedBatch) {
 	requestId := uuid.New().String()
 	createdAt := c.now().UTC().Format(time.RFC3339)
@@ -75,7 +75,7 @@ func (c *client) sendV1(pb preparedBatch) {
 			// read errored: fail fast rather than falling through to the
 			// transport-retry path.
 			if res != nil && res.statusCode != 0 && !isRetryableStatusV1(res.statusCode) {
-				c.notifyFailure(pendingMsgs, err)
+				c.notifyFailure(pendingMsgs, requestErrorV1(res))
 				return
 			}
 			// Transport error: retry unless shutting down or exhausted.
@@ -141,6 +141,8 @@ func (c *client) partitionV1Results(res *v1Result, data []json.RawMessage, msgs 
 	for idx, id := range uuids {
 		r, ok := res.results[id]
 		if !ok {
+			// Matches posthog-rs: events absent from the results map are treated
+			// as accepted (no retry, no error callback).
 			continue
 		}
 		switch r.Result {
