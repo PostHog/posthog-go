@@ -136,6 +136,10 @@ type preparedMessage struct {
 type preparedBatch struct {
 	data []json.RawMessage // pre-serialized messages for batch submission
 	msgs []APIMessage      // original messages for callbacks
+	// uuids holds the per-event UUID aligned with data/msgs, used by the
+	// capture-v1 send path to correlate per-event results. It is unused (nil)
+	// on the legacy path.
+	uuids []string
 }
 
 type client struct {
