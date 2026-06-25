@@ -1695,7 +1695,9 @@ func (c *client) loop() {
 
 		batchData = append(batchData, prepared.data)
 		batchMsgs = append(batchMsgs, prepared.msg)
-		batchUuids = append(batchUuids, prepared.uuid)
+		if c.CaptureMode == CaptureModeAnalyticsV1 {
+			batchUuids = append(batchUuids, prepared.uuid)
+		}
 		batchSize += msgSize
 
 		if len(batchData) >= c.BatchSize {
