@@ -31,12 +31,12 @@ func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
 	defer srv.Close()
 
 	cb := NewUnifiedCallback(t)
-	one := 0
+	zero := 0
 	c, err := NewWithConfig("phc_test", Config{
 		Endpoint:    srv.URL,
 		CaptureMode: CaptureModeAnalyticsV1,
 		Callback:    cb,
-		MaxRetries:  &one,
+		MaxRetries:  &zero,
 		Logger:      quietTestLogger{t},
 		Interval:    10 * time.Millisecond,
 		BatchSize:   1,
@@ -98,7 +98,7 @@ func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
 	defer srv.Close()
 
 	cb := NewUnifiedCallback(t)
-	c, _ := NewWithConfig("phc_test", Config{
+	c, err := NewWithConfig("phc_test", Config{
 		Endpoint:    srv.URL,
 		CaptureMode: CaptureModeAnalyticsV1,
 		Callback:    cb,
@@ -107,6 +107,9 @@ func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
 		BatchSize:   1,
 		Transport:   headerCaptureTransport{auth: &gotAuth, sdkInfo: &gotSdkInfo},
 	})
+	if err != nil {
+		t.Fatalf("NewWithConfig: %v", err)
+	}
 	_ = c.Enqueue(Capture{Event: "e", DistinctId: "d"})
 	waitForCounts(t, cb, 1)
 	_ = c.Close()
@@ -157,7 +160,7 @@ func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 
 	cb := NewUnifiedCallback(t)
 	nine := 9
-	c, _ := NewWithConfig("phc_test", Config{
+	c, err := NewWithConfig("phc_test", Config{
 		Endpoint:    srv.URL,
 		CaptureMode: CaptureModeAnalyticsV1,
 		Callback:    cb,
@@ -167,6 +170,9 @@ func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 		Interval:    10 * time.Millisecond,
 		BatchSize:   3,
 	})
+	if err != nil {
+		t.Fatalf("NewWithConfig: %v", err)
+	}
 	_ = c.Enqueue(Capture{Uuid: uuidA, Event: "e1", DistinctId: "d"})
 	_ = c.Enqueue(Capture{Uuid: uuidB, Event: "e2", DistinctId: "d"})
 	_ = c.Enqueue(Capture{Uuid: uuidC, Event: "e3", DistinctId: "d"})
