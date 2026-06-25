@@ -24,8 +24,12 @@ This will:
 
 1. Build the Go SDK adapters (v0 on `:8080`, v1 on `:8082`)
 2. Pull the test harness image
-3. Run all compliance tests
-4. Show the results
+3. Run the capture v0 compliance tests against the v0 adapter
+
+> **Note:** `docker-compose` currently targets the v0 adapter only. The v1
+> adapter image is built to verify it compiles, but v1 compliance tests run in
+> CI via the separate `compliance-v1` workflow job. To run v1 locally, use the
+> manual Docker instructions below with `Dockerfile.v1`.
 
 ### Manually with Docker
 

@@ -87,12 +87,14 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 				} `json:"results"`
 			}
 			terminal = 0
-			if json.Unmarshal(respBytes, &parsed) == nil {
+			if err := json.Unmarshal(respBytes, &parsed); err == nil {
 				for _, r := range parsed.Results {
 					if r.Result != "retry" {
 						terminal++
 					}
 				}
+			} else {
+				log.Printf("[adapter] v1 response body unmarshal failed: %v (terminal=0, pending events may appear stuck)", err)
 			}
 		}
 	}
