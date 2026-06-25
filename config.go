@@ -17,6 +17,18 @@ const (
 	CompressionGzip CompressionMode = 1
 )
 
+// CaptureMode selects the capture wire protocol used for event ingestion.
+type CaptureMode uint8
+
+const (
+	// CaptureModeLegacy sends events to the legacy POST /batch/ endpoint. This
+	// is the default, so upgrading is transparent to existing callers.
+	CaptureModeLegacy CaptureMode = 0
+	// CaptureModeAnalyticsV1 opts into POST /i/v1/analytics/events (Bearer auth,
+	// per-event results, partial retry).
+	CaptureModeAnalyticsV1 CaptureMode = 1
+)
+
 // Config carries configuration options used when constructing a Client with NewWithConfig.
 //
 // Each exported field's zero value is either meaningful or replaced by the
@@ -136,6 +148,11 @@ type Config struct {
 	// it defaults to CompressionNone.
 	Compression CompressionMode
 
+	// CaptureMode selects the capture wire protocol. It defaults to
+	// CaptureModeLegacy (POST /batch/). Set CaptureModeAnalyticsV1 to opt into
+	// POST /i/v1/analytics/events.
+	CaptureMode CaptureMode
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
@@ -238,6 +255,14 @@ func (c *Config) Validate() error {
 			Reason: "invalid compression mode",
 			Field:  "Compression",
 			Value:  c.Compression,
+		}
+	}
+
+	if c.CaptureMode > CaptureModeAnalyticsV1 {
+		return ConfigError{
+			Reason: "invalid capture mode",
+			Field:  "CaptureMode",
+			Value:  c.CaptureMode,
 		}
 	}
 

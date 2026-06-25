@@ -206,6 +206,12 @@ type CaptureInApi struct {
 	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 
+type CaptureMode uint8
+
+const (
+	CaptureModeLegacy CaptureMode = 0
+	CaptureModeAnalyticsV1 CaptureMode = 1
+)
 type Client interface {
 	EnqueueClient
 
@@ -296,6 +302,8 @@ type Config struct {
 	MaxEnqueuedRequests int
 
 	Compression CompressionMode
+
+	CaptureMode CaptureMode
 
 }
 
