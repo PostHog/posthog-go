@@ -11,7 +11,7 @@ import (
 // DebugImage describes a binary image loaded into the process, sent as the
 // event-level $debug_images property so PostHog can symbolicate raw frame
 // addresses against debug symbols uploaded with
-// `posthog-cli debug-symbols upload`.
+// `posthog-cli symbol-sets upload`.
 type DebugImage struct {
 	// Type is the image format: "elf" on Linux, "macho" on macOS.
 	Type string `json:"type"`
@@ -167,7 +167,7 @@ func (n NativeStackTraceExtractor) GetDebugImages() []DebugImage {
 
 // NewNativeException builds an Exception like NewDefaultException, but with
 // raw frame addresses and debug images for server-side symbolication. Upload
-// matching debug symbols with `posthog-cli debug-symbols upload`.
+// matching debug symbols with `posthog-cli symbol-sets upload`.
 func NewNativeException(
 	timestamp time.Time,
 	distinctID, title, description string,
