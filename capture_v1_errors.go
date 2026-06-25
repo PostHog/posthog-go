@@ -6,6 +6,11 @@ import "fmt"
 // capture-v1 endpoint rejected: either a terminal "drop" result, or an event
 // still asking to "retry" once the attempt budget is exhausted. Callers can use
 // errors.As to inspect the per-event outcome.
+//
+// This error type is produced exclusively on the 200-with-partial-results path —
+// when the batch-level HTTP exchange succeeds but individual events within the
+// batch are rejected or not persisted. It is never returned for batch-level
+// transport failures (use CaptureRequestError for those via errors.As).
 type CaptureEventError struct {
 	// EventUUID is the uuid of the rejected event (matches Capture.Uuid etc.).
 	EventUUID string
@@ -35,6 +40,11 @@ func (e *CaptureEventError) Error() string {
 // request fails: a non-2xx status, a transport error, or a malformed 2xx body.
 // It carries the HTTP status and any structured error body the endpoint returned,
 // and unwraps to the underlying transport/parse error when there is one.
+//
+// This error type covers batch-level failures — transport errors, terminal HTTP
+// statuses (400/401/429/...), retryable statuses (5xx) whose retry budget is
+// exhausted, and 2xx responses with unparseable bodies. For per-event failures
+// within a successful batch response, see CaptureEventError.
 type CaptureRequestError struct {
 	// StatusCode is the HTTP status, or 0 if the request never got a response.
 	StatusCode int

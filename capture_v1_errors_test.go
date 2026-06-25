@@ -150,3 +150,43 @@ func TestV1ResultSummaryLogged(t *testing.T) {
 		t.Errorf("expected a per-response debug summary, got debugf=%v", log.debugf)
 	}
 }
+
+func TestCaptureEventErrorFormat(t *testing.T) {
+	cases := []struct {
+		name string
+		err  CaptureEventError
+		want string
+	}{
+		{"drop_with_details", CaptureEventError{EventUUID: "u1", Result: "drop", Details: "billing"}, "capture event u1: drop (billing)"},
+		{"drop_no_details", CaptureEventError{EventUUID: "u2", Result: "drop"}, "capture event u2: drop"},
+		{"exhausted_with_details", CaptureEventError{EventUUID: "u3", Result: "retry", Details: "not_persisted", Exhausted: true}, "capture event u3 not persisted after retries: retry (not_persisted)"},
+		{"exhausted_no_details", CaptureEventError{EventUUID: "u4", Result: "retry", Exhausted: true}, "capture event u4 not persisted after retries: retry"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.err.Error(); got != tc.want {
+				t.Errorf("Error() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCaptureRequestErrorFormat(t *testing.T) {
+	cases := []struct {
+		name string
+		err  CaptureRequestError
+		want string
+	}{
+		{"code_and_description", CaptureRequestError{StatusCode: 400, Code: "invalid_payload", Description: "bad shape"}, "capture request failed: 400 invalid_payload: bad shape"},
+		{"status_only", CaptureRequestError{StatusCode: 429}, "capture request failed: 429"},
+		{"err_with_status", CaptureRequestError{StatusCode: 502, Err: fmt.Errorf("connection reset")}, "capture request failed: 502: connection reset"},
+		{"err_no_status", CaptureRequestError{Err: fmt.Errorf("dial timeout")}, "capture request failed: dial timeout"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.err.Error(); got != tc.want {
+				t.Errorf("Error() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
