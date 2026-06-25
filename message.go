@@ -52,7 +52,8 @@ type Message interface {
 	APIfy() APIMessage
 
 	// apifyEvent converts the message into the capture-v1 intermediate event.
-	// Unexported so it does not widen the public surface.
+	// Unexported so it does not widen the public surface. The returned properties
+	// are caller-owned; buildV1Event may mutate them in place.
 	apifyEvent() apiEvent
 
 	// internal prevents external packages from satisfying Message. Calling it panics.

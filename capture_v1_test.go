@@ -1,6 +1,8 @@
 package posthog
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,14 +81,16 @@ func TestV1DropsLibFromProperties(t *testing.T) {
 		Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "E", Value: "v"}}},
 	}
 	for _, m := range msgs {
-		ev := marshalV1(t, m)
-		props := wireProps(t, ev)
-		if _, ok := props["$lib"]; ok {
-			t.Errorf("%T: $lib must not be in v1 properties", m)
-		}
-		if _, ok := props["$lib_version"]; ok {
-			t.Errorf("%T: $lib_version must not be in v1 properties", m)
-		}
+		t.Run(fmt.Sprintf("%T", m), func(t *testing.T) {
+			ev := marshalV1(t, m)
+			props := wireProps(t, ev)
+			if _, ok := props["$lib"]; ok {
+				t.Errorf("$lib must not be in v1 properties")
+			}
+			if _, ok := props["$lib_version"]; ok {
+				t.Errorf("$lib_version must not be in v1 properties")
+			}
+		})
 	}
 }
 
@@ -213,7 +217,7 @@ func TestV1OptionsRendersEmptyObjectNotNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareForSendV1: %v", err)
 	}
-	if got := string(data); !containsSubstring(got, `"options":{}`) {
+	if got := string(data); !strings.Contains(got, `"options":{}`) {
 		t.Errorf("expected options to render as {}, got %s", got)
 	}
 }
@@ -288,13 +292,4 @@ func TestV1ErrorResponseUnmarshal(t *testing.T) {
 	if e.Error != "billing_limit_exceeded" || e.ErrorDescription != "over quota" {
 		t.Errorf("error response = %+v", e)
 	}
-}
-
-func containsSubstring(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }

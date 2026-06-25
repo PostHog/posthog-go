@@ -90,7 +90,7 @@ type apiEvent struct {
 
 // buildV1Event extracts magic properties into options, lifts session/window IDs
 // to top-level fields, and returns the wire payload. It mutates e.properties by
-// deleting the lifted keys.
+// deleting the lifted keys; callers must ensure the properties map is not shared.
 func buildV1Event(e apiEvent) eventPayload {
 	props := e.properties
 	if props == nil {
