@@ -8,11 +8,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
 
-func TestMakeFlagsRequestRetriesTransportErrorsThenSucceeds(t *testing.T) {
+func TestMakeFlagsRequestRetriesTransientTransportErrorThenSucceeds(t *testing.T) {
 	var calls atomic.Int32
 
 	client, err := newFlagsClient("test-api-key", "http://posthog.test", http.Client{
@@ -27,8 +28,8 @@ func TestMakeFlagsRequestRetriesTransportErrorsThenSucceeds(t *testing.T) {
 				t.Fatalf("request body was not rebuilt correctly: %s", string(body))
 			}
 
-			if calls.Load() < 3 {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			if calls.Load() == 1 {
+				return nil, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 			}
 
 			return &http.Response{
@@ -48,8 +49,8 @@ func TestMakeFlagsRequestRetriesTransportErrorsThenSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("makeFlagsRequest returned error: %v", err)
 	}
-	if got := calls.Load(); got != 3 {
-		t.Fatalf("expected 3 attempts, got %d", got)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
 	}
 	if got := res.FeatureFlags["beta-feature"]; got != true {
 		t.Fatalf("expected beta-feature=true, got %#v", got)
@@ -93,6 +94,29 @@ func TestMakeFlagsRequestRetriesReadNetworkErrorThenSucceeds(t *testing.T) {
 	}
 	if got := res.FeatureFlags["beta-feature"]; got != true {
 		t.Fatalf("expected beta-feature=true, got %#v", got)
+	}
+}
+
+func TestMakeFlagsRequestDoesNotRetryConnectionRefused(t *testing.T) {
+	var calls atomic.Int32
+
+	client, err := newFlagsClient("test-api-key", "http://posthog.test", http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		}),
+	}, time.Second, testLogger{t.Logf, t.Logf})
+	if err != nil {
+		t.Fatalf("newFlagsClient returned error: %v", err)
+	}
+	client.retryAfter = func(int) time.Duration { return 0 }
+
+	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected no retries for connection refused; got %d calls", got)
 	}
 }
 

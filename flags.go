@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"syscall"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -204,7 +206,7 @@ type flagsClient struct {
 	maxAttempts               int
 }
 
-const defaultFlagsRequestMaxAttempts = 3
+const defaultFlagsRequestMaxAttempts = 2
 
 // newFlagsClient creates a new flagsClient
 func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
@@ -334,15 +336,13 @@ func (d *flagsClient) sleepBeforeFlagsRetry(attempt int) {
 }
 
 func isRetryableFlagsRequestError(err error) bool {
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) {
 		return true
 	}
-	switch classifyError(err) {
-	case FeatureFlagErrorTimeout, FeatureFlagErrorConnectionError:
+	if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
 // rawMessageToString converts a json.RawMessage to a string.
