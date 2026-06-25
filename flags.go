@@ -3,6 +3,7 @@ package posthog
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -199,7 +200,11 @@ type flagsClient struct {
 	http                      http.Client
 	featureFlagRequestTimeout time.Duration
 	logger                    Logger
+	retryAfter                func(int) time.Duration
+	maxAttempts               int
 }
+
+const defaultFlagsRequestMaxAttempts = 3
 
 // newFlagsClient creates a new flagsClient
 func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
@@ -218,6 +223,8 @@ func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
 		http:                      httpClient,
 		featureFlagRequestTimeout: featureFlagRequestTimeout,
 		logger:                    logger,
+		retryAfter:                DefaultBackoff().Duration,
+		maxAttempts:               defaultFlagsRequestMaxAttempts,
 	}, nil
 }
 
@@ -251,32 +258,49 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 		return nil, fmt.Errorf("unable to marshal flags endpoint request data: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", d.endpoint, bytes.NewReader(requestDataBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %v", err)
-	}
+	var resBody []byte
+	attempts := d.flagsRequestMaxAttempts()
+	for attempt := 0; attempt < attempts; attempt++ {
+		// Create a fresh request and body for each attempt.
+		ctx, cancel := context.WithTimeout(context.Background(), d.featureFlagRequestTimeout)
+		req, err := http.NewRequestWithContext(ctx, "POST", d.endpoint, bytes.NewReader(requestDataBytes))
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("creating request: %v", err)
+		}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "posthog-go/"+Version)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "posthog-go/"+Version)
 
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), d.featureFlagRequestTimeout)
-	defer cancel()
-	req = req.WithContext(ctx)
+		res, err := d.http.Do(req)
+		if err != nil {
+			cancel()
+			requestErr := fmt.Errorf("sending request: %w", err)
+			if attempt == attempts-1 || !isRetryableFlagsRequestError(err) {
+				return nil, requestErr
+			}
+			d.sleepBeforeFlagsRetry(attempt)
+			continue
+		}
 
-	res, err := d.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("sending request: %v", err)
-	}
-	defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			res.Body.Close()
+			cancel()
+			return nil, NewAPIError(res.StatusCode, fmt.Sprintf("unexpected status code from /flags/: %d", res.StatusCode))
+		}
 
-	if res.StatusCode != http.StatusOK {
-		return nil, NewAPIError(res.StatusCode, fmt.Sprintf("unexpected status code from /flags/: %d", res.StatusCode))
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response from /flags/: %v", err)
+		resBody, err = io.ReadAll(res.Body)
+		res.Body.Close()
+		cancel()
+		if err != nil {
+			readErr := fmt.Errorf("error reading response from /flags/: %w", err)
+			if attempt == attempts-1 || !isRetryableFlagsRequestError(err) {
+				return nil, readErr
+			}
+			d.sleepBeforeFlagsRetry(attempt)
+			continue
+		}
+		break
 	}
 
 	var flagsResponse FlagsResponse
@@ -290,6 +314,35 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	}
 
 	return &flagsResponse, nil
+}
+
+func (d *flagsClient) flagsRequestMaxAttempts() int {
+	if d.maxAttempts > 0 {
+		return d.maxAttempts
+	}
+	return defaultFlagsRequestMaxAttempts
+}
+
+func (d *flagsClient) sleepBeforeFlagsRetry(attempt int) {
+	retryAfter := d.retryAfter
+	if retryAfter == nil {
+		retryAfter = DefaultBackoff().Duration
+	}
+	if delay := retryAfter(attempt); delay > 0 {
+		time.Sleep(delay)
+	}
+}
+
+func isRetryableFlagsRequestError(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	switch classifyError(err) {
+	case FeatureFlagErrorTimeout, FeatureFlagErrorConnectionError:
+		return true
+	default:
+		return false
+	}
 }
 
 // rawMessageToString converts a json.RawMessage to a string.
