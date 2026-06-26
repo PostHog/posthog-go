@@ -32,7 +32,7 @@ func (l legacyCapturer) send(pb preparedBatch) { l.c.send(pb) }
 type analyticsV1Capturer struct{ c *client }
 
 func (v analyticsV1Capturer) prepare(m Message) (json.RawMessage, APIMessage, string, error) {
-	return prepareForSendV1(m)
+	return prepareForSendV1(m, v.c.Logger)
 }
 
 func (v analyticsV1Capturer) send(pb preparedBatch) { v.c.sendV1(pb) }
