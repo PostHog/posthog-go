@@ -46,10 +46,48 @@ type propertyExtraction struct {
 	coerce   func(interface{}) (interface{}, bool) // nil = accept as-is (top-level entries)
 }
 
+// numericToFloat converts any built-in Go numeric type (or json.Number) to
+// float64, mirroring Rust's serde_json Value::Number::as_f64(). Returns
+// (0, false) for non-numeric types.
+func numericToFloat(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
+}
+
 // coerceBool converts a value to bool using the same truthiness rules the
-// backend would apply: real bool passes through; common string/numeric forms
-// are accepted ("true"/"1"/1/1.0 → true, "false"/"0"/0 → false). Returns
-// (zero, false) when the value is not interpretable as a boolean.
+// backend would apply: real bool passes through; common string forms are
+// accepted ("true"/"1" → true, "false"/"0" → false); any numeric type
+// (int*, uint*, float*, json.Number) coerces via nonzero == true, matching
+// posthog-rs's Value::Number arm. Returns (zero, false) when the value is
+// not interpretable as a boolean.
 func coerceBool(v interface{}) (interface{}, bool) {
 	switch t := v.(type) {
 	case bool:
@@ -62,11 +100,10 @@ func coerceBool(v interface{}) (interface{}, bool) {
 			return false, true
 		}
 		return nil, false
-	case float64:
-		return t != 0, true
-	case int:
-		return t != 0, true
 	default:
+		if f, ok := numericToFloat(v); ok {
+			return f != 0, true
+		}
 		return nil, false
 	}
 }
