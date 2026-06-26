@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -17,16 +18,14 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// zstdEncoder is shared across all clients: klauspost's EncodeAll is safe for
-// concurrent use and the library recommends reusing one encoder over
-// allocating per call. The options are static so NewWriter cannot fail here.
-var zstdEncoder = func() *zstd.Encoder {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
-	if err != nil {
-		panic(fmt.Sprintf("posthog: zstd encoder init: %v", err))
-	}
-	return enc
-}()
+// getZstdEncoder returns a shared zstd encoder, lazily initialized on first
+// call. klauspost's EncodeAll is safe for concurrent use and the library
+// recommends reusing one encoder over allocating per call. The init is
+// practically infallible with static options, but returning an error keeps
+// SDK setup graceful (no panic on load).
+var getZstdEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
+	return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+})
 
 // v1Result is the parsed outcome of a single capture-v1 HTTP attempt.
 type v1Result struct {
@@ -239,7 +238,11 @@ func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
 		}
 		return buf.Bytes(), "deflate", nil
 	case CompressionZstd:
-		return zstdEncoder.EncodeAll(raw, make([]byte, 0, len(raw))), "zstd", nil
+		enc, err := getZstdEncoder()
+		if err != nil {
+			return nil, "", fmt.Errorf("zstd encoder init: %w", err)
+		}
+		return enc.EncodeAll(raw, make([]byte, 0, len(raw))), "zstd", nil
 	case CompressionBrotli:
 		var buf bytes.Buffer
 		bw := brotli.NewWriter(&buf)
