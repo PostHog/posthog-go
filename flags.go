@@ -30,7 +30,7 @@ type FlagsRequestData struct {
 	// GroupProperties overrides group properties for this evaluation, keyed by group type.
 	GroupProperties map[string]Properties `json:"group_properties"`
 	// DisableGeoIP disables GeoIP enrichment for this flags request.
-	DisableGeoIP bool `json:"geoip_disable"`
+	DisableGeoIP bool `json:"geoip_disable,omitempty"`
 	// FlagKeysToEvaluate asks the server to evaluate only these flag keys when non-empty.
 	FlagKeysToEvaluate []string `json:"flag_keys_to_evaluate,omitempty"`
 }
@@ -245,14 +245,6 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	}
 	if personProperties == nil {
 		personProperties = Properties{}
-	}
-	if _, ok := personProperties["distinct_id"]; !ok {
-		updatedPersonProperties := make(Properties, len(personProperties)+1)
-		for k, v := range personProperties {
-			updatedPersonProperties[k] = v
-		}
-		updatedPersonProperties["distinct_id"] = distinctId
-		personProperties = updatedPersonProperties
 	}
 	if groupProperties == nil {
 		groupProperties = map[string]Properties{}

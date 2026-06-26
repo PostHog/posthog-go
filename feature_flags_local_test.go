@@ -121,9 +121,9 @@ func TestFlagGroup(t *testing.T) {
 				t.Errorf("Expected apiKey to be Csyjlnlun3OzyNJAafdlv, got %s", reqBody.ApiKey)
 			}
 
-			personPropertiesEquality := reflect.DeepEqual(reqBody.PersonProperties, Properties{"distinct_id": "-", "region": "Canada"})
+			personPropertiesEquality := reflect.DeepEqual(reqBody.PersonProperties, Properties{"region": "Canada"})
 			if !personPropertiesEquality {
-				t.Errorf("Expected personProperties to be map[distinct_id:- region:Canada], got %s", reqBody.PersonProperties)
+				t.Errorf("Expected personProperties to be map[region:Canada], got %s", reqBody.PersonProperties)
 			}
 
 			groupPropertiesEquality := reflect.DeepEqual(reqBody.GroupProperties, map[string]Properties{"company": {"name": "Project Name 1"}})
