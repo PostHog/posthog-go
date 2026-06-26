@@ -13,7 +13,7 @@ import (
 // generic map so tests can assert the on-the-wire shape.
 func marshalV1(t *testing.T, msg Message) map[string]interface{} {
 	t.Helper()
-	data, _, uuid, err := prepareForSendV1(msg)
+	data, _, uuid, err := prepareForSendV1(msg, nil)
 	if err != nil {
 		t.Fatalf("prepareForSendV1: %v", err)
 	}
@@ -138,6 +138,117 @@ func TestV1OptionsExtractedOnlyWhenPresent(t *testing.T) {
 	}
 }
 
+func TestV1OptionsBoolCoercion(t *testing.T) {
+	boolOptions := []struct {
+		propKey string
+		wireKey string
+	}{
+		{propertyCookielessMode, "cookieless_mode"},
+		{propertyIgnoreSentAt, "disable_skew_correction"},
+		{propertyProcessPersonProfile, "process_person_profile"},
+	}
+	coercionCases := []struct {
+		name     string
+		input    interface{}
+		wantBool bool
+		wantOk   bool
+	}{
+		{"native_true", true, true, true},
+		{"native_false", false, false, true},
+		{"string_true", "true", true, true},
+		{"string_TRUE", "TRUE", true, true},
+		{"string_1", "1", true, true},
+		{"string_false", "false", false, true},
+		{"string_FALSE", "FALSE", false, true},
+		{"string_0", "0", false, true},
+		{"int_1", int(1), true, true},
+		{"int_0", int(0), false, true},
+		{"float_1", float64(1), true, true},
+		{"float_0", float64(0), false, true},
+		{"string_yes_omitted", "yes", false, false},
+		{"map_omitted", map[string]string{"k": "v"}, false, false},
+		{"nil_omitted", nil, false, false},
+	}
+
+	for _, opt := range boolOptions {
+		for _, tc := range coercionCases {
+			t.Run(opt.wireKey+"/"+tc.name, func(t *testing.T) {
+				ev := marshalV1(t, Capture{
+					Uuid: "u", Event: "e", DistinctId: "d",
+					Properties: Properties{opt.propKey: tc.input, "keep": "yes"},
+				})
+				opts := wireOptions(t, ev)
+				props := wireProps(t, ev)
+
+				if _, inProps := props[opt.propKey]; inProps {
+					t.Errorf("%s must be stripped from properties regardless of coercion", opt.propKey)
+				}
+				if props["keep"] != "yes" {
+					t.Errorf("unrelated prop should remain in properties")
+				}
+
+				val, present := opts[opt.wireKey]
+				if tc.wantOk {
+					if !present {
+						t.Fatalf("%s should be present in options, got absent", opt.wireKey)
+					}
+					if val != tc.wantBool {
+						t.Errorf("%s = %v (%T), want %v", opt.wireKey, val, val, tc.wantBool)
+					}
+				} else {
+					if present {
+						t.Errorf("%s should be omitted from options on failed coercion, got %v", opt.wireKey, val)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestV1OptionsProductTourIdCoercion(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  interface{}
+		want   string
+		wantOk bool
+	}{
+		{"string", "tour-42", "tour-42", true},
+		{"int_omitted", 42, "", false},
+		{"bool_omitted", true, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := marshalV1(t, Capture{
+				Uuid: "u", Event: "e", DistinctId: "d",
+				Properties: Properties{propertyProductTourId: tc.input, "keep": "yes"},
+			})
+			opts := wireOptions(t, ev)
+			props := wireProps(t, ev)
+
+			if _, inProps := props[propertyProductTourId]; inProps {
+				t.Errorf("%s must be stripped from properties", propertyProductTourId)
+			}
+			if props["keep"] != "yes" {
+				t.Errorf("unrelated prop should remain in properties")
+			}
+
+			val, present := opts["product_tour_id"]
+			if tc.wantOk {
+				if !present {
+					t.Fatal("product_tour_id should be present in options")
+				}
+				if val != tc.want {
+					t.Errorf("product_tour_id = %v, want %v", val, tc.want)
+				}
+			} else {
+				if present {
+					t.Errorf("product_tour_id should be omitted on failed coercion, got %v", val)
+				}
+			}
+		})
+	}
+}
+
 func TestV1SessionAndWindowLifted(t *testing.T) {
 	ev := marshalV1(t, Capture{
 		Uuid: "u", Event: "e", DistinctId: "d",
@@ -230,7 +341,7 @@ func TestV1AliasIdentityPlacement(t *testing.T) {
 }
 
 func TestV1OptionsRendersEmptyObjectNotNull(t *testing.T) {
-	data, _, _, err := prepareForSendV1(Capture{Uuid: "u", Event: "e", DistinctId: "d"})
+	data, _, _, err := prepareForSendV1(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
 	if err != nil {
 		t.Fatalf("prepareForSendV1: %v", err)
 	}
@@ -240,7 +351,7 @@ func TestV1OptionsRendersEmptyObjectNotNull(t *testing.T) {
 }
 
 func TestV1EnvelopeShape(t *testing.T) {
-	data, _, _, err := prepareForSendV1(Capture{Uuid: "u", Event: "e", DistinctId: "d"})
+	data, _, _, err := prepareForSendV1(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
 	if err != nil {
 		t.Fatalf("prepareForSendV1: %v", err)
 	}

@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -32,22 +33,66 @@ const (
 // properties map during v1 serialization. If topLevel is true, the value is
 // placed into a top-level event field (session_id, window_id); otherwise it
 // goes into the options object under wireKey.
+//
+// For options entries (topLevel=false), coerce validates and normalizes the
+// caller's Go value into the type the v1 backend expects (bool or string).
+// The magic property is always removed from properties — these sentinel keys
+// must never reach v1 backend properties. If coercion fails, the option key
+// is omitted (backend applies its default) and a debug log is emitted.
 type propertyExtraction struct {
 	propKey  string
 	wireKey  string
 	topLevel bool
+	coerce   func(interface{}) (interface{}, bool) // nil = accept as-is (top-level entries)
+}
+
+// coerceBool converts a value to bool using the same truthiness rules the
+// backend would apply: real bool passes through; common string/numeric forms
+// are accepted ("true"/"1"/1/1.0 → true, "false"/"0"/0 → false). Returns
+// (zero, false) when the value is not interpretable as a boolean.
+func coerceBool(v interface{}) (interface{}, bool) {
+	switch t := v.(type) {
+	case bool:
+		return t, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "true", "1":
+			return true, true
+		case "false", "0":
+			return false, true
+		}
+		return nil, false
+	case float64:
+		return t != 0, true
+	case int:
+		return t != 0, true
+	default:
+		return nil, false
+	}
+}
+
+// coerceString accepts only string values. The backend's product_tour_id is
+// Option<String>; non-string types are not interpretable.
+func coerceString(v interface{}) (interface{}, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return nil, false
+	}
+	return s, true
 }
 
 // propertyExtractionTable maps magic event properties to their v1 wire
 // destinations. Order mirrors posthog-rs. A key is lifted only when present in
-// properties (i.e. the caller overrode a backend default).
+// properties (i.e. the caller overrode a backend default). Options entries
+// carry a coerce function matching the backend's expected type; top-level
+// entries leave coerce nil.
 var propertyExtractionTable = []propertyExtraction{
-	{propertyCookielessMode, "cookieless_mode", false},
-	{propertyIgnoreSentAt, "disable_skew_correction", false},
-	{propertyProductTourId, "product_tour_id", false},
-	{propertyProcessPersonProfile, "process_person_profile", false},
-	{propertySessionID, "session_id", true},
-	{propertyWindowID, "window_id", true},
+	{propertyCookielessMode, "cookieless_mode", false, coerceBool},
+	{propertyIgnoreSentAt, "disable_skew_correction", false, coerceBool},
+	{propertyProductTourId, "product_tour_id", false, coerceString},
+	{propertyProcessPersonProfile, "process_person_profile", false, coerceBool},
+	{propertySessionID, "session_id", true, nil},
+	{propertyWindowID, "window_id", true, nil},
 }
 
 // eventBatch is the v1 request envelope. Unlike the legacy batch it carries no
@@ -102,7 +147,12 @@ type apiEvent struct {
 // buildV1Event extracts magic properties into options or top-level fields and
 // returns the wire payload. It mutates e.properties by deleting the lifted keys;
 // callers must ensure the properties map is not shared.
-func buildV1Event(e apiEvent) eventPayload {
+//
+// Options entries are always removed from properties (these sentinel keys must
+// never appear in v1 backend properties) and type-coerced to match the
+// backend's strict serde schema. If coercion fails the option key is omitted
+// so the backend applies its default. logger may be nil (tests).
+func buildV1Event(e apiEvent, logger Logger) eventPayload {
 	props := e.properties
 	if props == nil {
 		props = Properties{}
@@ -114,8 +164,8 @@ func buildV1Event(e apiEvent) eventPayload {
 		if !ok {
 			continue
 		}
-		delete(props, m.propKey)
 		if m.topLevel {
+			delete(props, m.propKey)
 			if s, ok := v.(string); ok {
 				switch m.wireKey {
 				case "session_id":
@@ -125,7 +175,19 @@ func buildV1Event(e apiEvent) eventPayload {
 				}
 			}
 		} else {
-			options[m.wireKey] = v
+			delete(props, m.propKey)
+			if m.coerce == nil {
+				options[m.wireKey] = v
+				continue
+			}
+			coerced, ok := m.coerce(v)
+			if !ok {
+				if logger != nil {
+					logger.Debugf("v1 options: dropping %s (uncoercible %T value), backend will apply default", m.propKey, v)
+				}
+				continue
+			}
+			options[m.wireKey] = coerced
 		}
 	}
 	return eventPayload{
@@ -154,10 +216,10 @@ func baseV1Props(isServer bool, disableGeoIP bool) Properties {
 
 // prepareForSendV1 is the v1 sibling of prepareForSend: it builds the callback
 // APIMessage (unchanged legacy shape), serializes the v1 wire event, and returns
-// the event uuid for result correlation.
-func prepareForSendV1(msg Message) (json.RawMessage, APIMessage, string, error) {
+// the event uuid for result correlation. logger may be nil (tests).
+func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
-	ev := buildV1Event(msg.apifyEvent())
+	ev := buildV1Event(msg.apifyEvent(), logger)
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return nil, apiMsg, ev.Uuid, err
