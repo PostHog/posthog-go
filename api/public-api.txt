@@ -193,6 +193,16 @@ func (msg Capture) APIfy() APIMessage
 
 func (msg Capture) Validate() error
 
+type CaptureEventError struct {
+	EventUUID string
+	Result string
+	Details string
+	Exhausted bool
+}
+
+
+func (e *CaptureEventError) Error() string
+
 type CaptureInApi struct {
 	Type string `json:"-"`
 	Uuid string `json:"uuid"`
@@ -205,6 +215,24 @@ type CaptureInApi struct {
 	Properties Properties `json:"properties"`
 	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
+
+type CaptureMode uint8
+
+const (
+	CaptureModeLegacy CaptureMode = 0
+	CaptureModeAnalyticsV1 CaptureMode = 1
+)
+type CaptureRequestError struct {
+	StatusCode int
+	Code string
+	Description string
+	Err error
+}
+
+
+func (e *CaptureRequestError) Error() string
+
+func (e *CaptureRequestError) Unwrap() error
 
 type Client interface {
 	EnqueueClient
@@ -248,7 +276,12 @@ type CompressionMode uint8
 const (
 	CompressionNone CompressionMode = 0
 	CompressionGzip CompressionMode = 1
+	CompressionZstd CompressionMode = 2
+	CompressionDeflate CompressionMode = 3
+	CompressionBrotli CompressionMode = 4
 )
+func (m CompressionMode) String() string
+
 type Config struct {
 
 	Endpoint string
@@ -296,6 +329,8 @@ type Config struct {
 	MaxEnqueuedRequests int
 
 	Compression CompressionMode
+
+	CaptureMode CaptureMode
 
 }
 

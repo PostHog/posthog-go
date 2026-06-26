@@ -291,6 +291,10 @@ func (m testErrorMessage) APIfy() APIMessage {
 	return testAPIErrorMessage{}
 }
 
+func (m testErrorMessage) apifyEvent() apiEvent {
+	return apiEvent{event: "test_error", uuid: "test", distinctId: "test"}
+}
+
 var (
 	// A control error returned by mock functions to emulate a failure.
 	//lint:ignore ST1012 variable name is fine :D
@@ -905,6 +909,10 @@ func (c *customMessage) Validate() error {
 
 func (c *customMessage) APIfy() APIMessage {
 	return customAPIMessage{}
+}
+
+func (c *customMessage) apifyEvent() apiEvent {
+	return apiEvent{event: "custom", uuid: "custom", distinctId: "custom"}
 }
 
 func TestEnqueuingCustomTypeFails(t *testing.T) {

@@ -39,3 +39,6 @@ examples/.env
 # Macos
 .DS_Store
 node_modules/
+
+# built compliance adapter binary
+sdk_compliance_adapter/sdk_compliance_adapter
