@@ -172,7 +172,7 @@ func v1Batch(t *testing.T, msgs ...Message) preparedBatch {
 	t.Helper()
 	var pb preparedBatch
 	for _, m := range msgs {
-		data, apiMsg, uuid, err := prepareForSendV1(m)
+		data, apiMsg, uuid, err := prepareForSendV1(m, nil)
 		if err != nil {
 			t.Fatalf("prepareForSendV1: %v", err)
 		}
