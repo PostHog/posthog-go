@@ -39,7 +39,7 @@ func TestMakeFlagsRequestRetriesTransientTransportErrorThenSucceeds(t *testing.T
 				Request:    r,
 			}, nil
 		}),
-	}, time.Second, testLogger{t.Logf, t.Logf})
+	}, time.Second, testLogger{t.Logf, t.Logf}, nil)
 	if err != nil {
 		t.Fatalf("newFlagsClient returned error: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestMakeFlagsRequestRetriesReadNetworkErrorThenSucceeds(t *testing.T) {
 				Request:    r,
 			}, nil
 		}),
-	}, time.Second, testLogger{t.Logf, t.Logf})
+	}, time.Second, testLogger{t.Logf, t.Logf}, nil)
 	if err != nil {
 		t.Fatalf("newFlagsClient returned error: %v", err)
 	}
@@ -97,6 +97,29 @@ func TestMakeFlagsRequestRetriesReadNetworkErrorThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestMakeFlagsRequestDoesNotRetryWhenConfiguredMaxRetriesIsZero(t *testing.T) {
+	var calls atomic.Int32
+
+	client, err := newFlagsClient("test-api-key", "http://posthog.test", http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+		}),
+	}, time.Second, testLogger{t.Logf, t.Logf}, Ptr(0))
+	if err != nil {
+		t.Fatalf("newFlagsClient returned error: %v", err)
+	}
+	client.retryAfter = func(int) time.Duration { return 0 }
+
+	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected no retries when configured max retries is 0; got %d calls", got)
+	}
+}
+
 func TestMakeFlagsRequestDoesNotRetryConnectionRefused(t *testing.T) {
 	var calls atomic.Int32
 
@@ -105,7 +128,7 @@ func TestMakeFlagsRequestDoesNotRetryConnectionRefused(t *testing.T) {
 			calls.Add(1)
 			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 		}),
-	}, time.Second, testLogger{t.Logf, t.Logf})
+	}, time.Second, testLogger{t.Logf, t.Logf}, nil)
 	if err != nil {
 		t.Fatalf("newFlagsClient returned error: %v", err)
 	}
@@ -130,7 +153,7 @@ func TestMakeFlagsRequestDoesNotRetryHTTPStatusErrors(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := newFlagsClient("test-api-key", server.URL, http.Client{}, time.Second, testLogger{t.Logf, t.Logf})
+			client, err := newFlagsClient("test-api-key", server.URL, http.Client{}, time.Second, testLogger{t.Logf, t.Logf}, nil)
 			if err != nil {
 				t.Fatalf("newFlagsClient returned error: %v", err)
 			}

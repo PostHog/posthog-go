@@ -210,13 +210,18 @@ const defaultFlagsRequestMaxAttempts = 2
 
 // newFlagsClient creates a new flagsClient
 func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
-	featureFlagRequestTimeout time.Duration, logger Logger) (*flagsClient, error) {
+	featureFlagRequestTimeout time.Duration, logger Logger, maxRetries *int) (*flagsClient, error) {
 
 	// Try v2 endpoint first
 	flagsEndpoint := "flags/?v=2"
 	flagsEndpointURL, err := url.Parse(endpoint + "/" + flagsEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("creating url: %v", err)
+	}
+
+	maxAttempts := defaultFlagsRequestMaxAttempts
+	if maxRetries != nil {
+		maxAttempts = 1 + *maxRetries
 	}
 
 	return &flagsClient{
@@ -226,7 +231,7 @@ func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
 		featureFlagRequestTimeout: featureFlagRequestTimeout,
 		logger:                    logger,
 		retryAfter:                DefaultBackoff().Duration,
-		maxAttempts:               defaultFlagsRequestMaxAttempts,
+		maxAttempts:               maxAttempts,
 	}, nil
 }
 
