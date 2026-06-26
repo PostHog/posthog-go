@@ -186,8 +186,9 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create new client with tracked transport
 	config := posthog.Config{
-		Endpoint:  req.Host,
-		Transport: &TrackedTransport{base: http.DefaultTransport, state: state},
+		Endpoint:     req.Host,
+		Transport:    &TrackedTransport{base: http.DefaultTransport, state: state},
+		DisableGeoIP: posthog.Ptr(false),
 		// Set test-friendly defaults
 		BatchSize: 1,                      // Flush after each event by default
 		Interval:  100 * time.Millisecond, // Short interval for tests
@@ -317,6 +318,22 @@ func stateHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, response)
 }
 
+func sentEventCount() int {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.totalEventsSent
+}
+
+func waitForSentEventAfter(previous int, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if sentEventCount() > previous {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	var req FeatureFlagRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -355,14 +372,9 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		forceRemote = *req.ForceRemote
 	}
 
-	// Note: posthog-go's DisableGeoIP is a client-level config (Config.DisableGeoIP),
-	// not a per-call option on FeatureFlagPayload. We accept the field on the request
-	// for compatibility with the harness contract but do not honor it per-call. The
-	// SDK default (when DisableGeoIP is nil) is to disable geoip on flag requests,
-	// which matches the test harness's expected `geoip_disable: true` assertion.
-	_ = req.DisableGeoIP
-
-	// Convert groups/properties to SDK types
+	// Convert groups/properties to SDK types.
+	// The adapter initializes Config.DisableGeoIP=false for the harness default;
+	// GetFeatureFlag forwards this single key as flag_keys_to_evaluate.
 	var groups posthog.Groups
 	if req.Groups != nil {
 		groups = posthog.Groups(req.Groups)
@@ -381,6 +393,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	sentBefore := sentEventCount()
 	value, err := client.GetFeatureFlag(posthog.FeatureFlagPayload{
 		Key:                 req.Key,
 		DistinctId:          req.DistinctID,
@@ -388,6 +401,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		PersonProperties:    personProperties,
 		GroupProperties:     groupProperties,
 		OnlyEvaluateLocally: !forceRemote,
+		DisableGeoIP:        req.DisableGeoIP,
 	})
 	if err != nil {
 		// Avoid logging user-controlled fields (req.Key, req.DistinctID) to prevent log injection.
@@ -397,6 +411,8 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	waitForSentEventAfter(sentBefore, 500*time.Millisecond)
 
 	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
 	log.Printf("Evaluated feature flag")

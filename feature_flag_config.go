@@ -18,6 +18,8 @@ type FeatureFlagPayload struct {
 	GroupProperties map[string]Properties
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
 	OnlyEvaluateLocally bool
+	// DisableGeoIP, when non-nil, overrides the client-level DisableGeoIP for this evaluation only.
+	DisableGeoIP *bool
 	// SendFeatureFlagEvents controls whether $feature_flag_called is captured.
 	// Nil defaults to true during validation.
 	SendFeatureFlagEvents *bool

@@ -265,6 +265,8 @@ type Config struct {
 
 	FeatureFlagRequestTimeout time.Duration
 
+	FeatureFlagRequestMaxRetries *int
+
 	NextFeatureFlagsPollingTick func() time.Duration
 
 	HistoricalMigration bool
@@ -479,6 +481,7 @@ type FeatureFlagPayload struct {
 	PersonProperties Properties
 	GroupProperties map[string]Properties
 	OnlyEvaluateLocally bool
+	DisableGeoIP *bool
 	SendFeatureFlagEvents *bool
 }
 
@@ -605,7 +608,7 @@ type FlagsRequestData struct {
 	Groups Groups `json:"groups"`
 	PersonProperties Properties `json:"person_properties"`
 	GroupProperties map[string]Properties `json:"group_properties"`
-	DisableGeoIP bool `json:"geoip_disable,omitempty"`
+	DisableGeoIP bool `json:"geoip_disable"`
 	FlagKeysToEvaluate []string `json:"flag_keys_to_evaluate,omitempty"`
 }
 

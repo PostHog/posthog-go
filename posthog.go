@@ -844,8 +844,12 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		// if there's no poller, get the feature flag from the flags endpoint
 		c.debugf("getting feature flag from flags endpoint")
 		locallyEvaluated = false
-		remoteResult := c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
-			flagConfig.PersonProperties, flagConfig.GroupProperties)
+		disableGeoIP := c.GetDisableGeoIP()
+		if flagConfig.DisableGeoIP != nil {
+			disableGeoIP = *flagConfig.DisableGeoIP
+		}
+		remoteResult := c.getFeatureFlagFromRemoteWithDisableGeoIP(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
+			flagConfig.PersonProperties, flagConfig.GroupProperties, disableGeoIP)
 		evalResult = *remoteResult
 		flagValue = evalResult.Value
 		err = evalResult.Err
@@ -1850,12 +1854,17 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 
 func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties,
 	groupProperties map[string]Properties) *featureFlagEvaluationResult {
+	return c.getFeatureFlagFromRemoteWithDisableGeoIP(key, distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP())
+}
+
+func (c *client) getFeatureFlagFromRemoteWithDisableGeoIP(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties,
+	groupProperties map[string]Properties, disableGeoIP bool) *featureFlagEvaluationResult {
 
 	result := &featureFlagEvaluationResult{
 		Value: nil,
 	}
 
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP(), nil)
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, disableGeoIP, []string{key})
 
 	if err != nil {
 		result.Err = err

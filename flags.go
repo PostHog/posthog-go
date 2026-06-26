@@ -30,7 +30,7 @@ type FlagsRequestData struct {
 	// GroupProperties overrides group properties for this evaluation, keyed by group type.
 	GroupProperties map[string]Properties `json:"group_properties"`
 	// DisableGeoIP disables GeoIP enrichment for this flags request.
-	DisableGeoIP bool `json:"geoip_disable,omitempty"`
+	DisableGeoIP bool `json:"geoip_disable"`
 	// FlagKeysToEvaluate asks the server to evaluate only these flag keys when non-empty.
 	FlagKeysToEvaluate []string `json:"flag_keys_to_evaluate,omitempty"`
 }
@@ -246,6 +246,14 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	if personProperties == nil {
 		personProperties = Properties{}
 	}
+	if _, ok := personProperties["distinct_id"]; !ok {
+		updatedPersonProperties := make(Properties, len(personProperties)+1)
+		for k, v := range personProperties {
+			updatedPersonProperties[k] = v
+		}
+		updatedPersonProperties["distinct_id"] = distinctId
+		personProperties = updatedPersonProperties
+	}
 	if groupProperties == nil {
 		groupProperties = map[string]Properties{}
 	}
@@ -266,7 +274,7 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	}
 
 	var resBody []byte
-	attempts := d.flagsRequestMaxAttempts()
+	attempts := d.maxAttempts
 	for attempt := 0; attempt < attempts; attempt++ {
 		// Create a fresh request and body for each attempt.
 		ctx, cancel := context.WithTimeout(context.Background(), d.featureFlagRequestTimeout)
@@ -321,13 +329,6 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 	}
 
 	return &flagsResponse, nil
-}
-
-func (d *flagsClient) flagsRequestMaxAttempts() int {
-	if d.maxAttempts > 0 {
-		return d.maxAttempts
-	}
-	return defaultFlagsRequestMaxAttempts
 }
 
 func (d *flagsClient) sleepBeforeFlagsRetry(attempt int) {
