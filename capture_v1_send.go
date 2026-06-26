@@ -3,16 +3,30 @@ package posthog
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	json "github.com/goccy/go-json"
 	"github.com/google/uuid"
+	"github.com/klauspost/compress/zstd"
 )
+
+// getZstdEncoder returns a shared zstd encoder, lazily initialized on first
+// call. klauspost's EncodeAll is safe for concurrent use and the library
+// recommends reusing one encoder over allocating per call. The init is
+// practically infallible with static options, but returning an error keeps
+// SDK setup graceful (no panic on load).
+var getZstdEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
+	return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+})
 
 // v1Result is the parsed outcome of a single capture-v1 HTTP attempt.
 type v1Result struct {
@@ -59,16 +73,17 @@ func (c *client) sendV1(pb preparedBatch) {
 		})
 		if err != nil {
 			c.Errorf("marshalling v1 batch wrapper - %s", err)
-			c.notifyFailure(pendingMsgs, err)
+			c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: err})
 			return
 		}
 
 		res, err := c.uploadV1(c.ctx, body, requestId, attempt)
 		if err != nil {
+			reqErr := newCaptureRequestError(res, err)
 			// A 2xx with an unparseable body is terminal for this batch -
 			// retrying a malformed success would loop forever.
 			if res != nil && isSuccessStatus(res.statusCode) {
-				c.notifyFailure(pendingMsgs, err)
+				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			// A terminal non-retryable status (400/401/429/...) whose body
@@ -81,32 +96,40 @@ func (c *client) sendV1(pb preparedBatch) {
 			// Transport error: retry unless shutting down or exhausted.
 			if c.ctx.Err() != nil {
 				c.Errorf("%d messages dropped: shutdown timeout", len(pendingMsgs))
-				c.notifyFailure(pendingMsgs, err)
+				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			if lastAttempt {
-				c.dropMessages(pendingMsgs, err)
+				c.dropMessages(pendingMsgs, reqErr)
 				return
 			}
 			if !c.backoffV1(i, res) {
-				c.notifyFailure(pendingMsgs, err)
+				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			continue
 		}
 
 		if isSuccessStatus(res.statusCode) {
+			c.logV1ResultSummary(requestId, attempt, res.results)
 			nextData, nextMsgs, nextUuids := c.partitionV1Results(res, pendingData, pendingMsgs, pendingUuids)
 			if len(nextUuids) == 0 {
 				return
 			}
 			if lastAttempt {
-				c.dropMessages(nextMsgs, fmt.Errorf("capture v1: %d events not persisted after %d attempts", len(nextMsgs), c.maxAttempts))
+				c.Errorf("%d messages dropped after %d attempts", len(nextMsgs), c.maxAttempts)
+				for idx, id := range nextUuids {
+					var details string
+					if r, ok := res.results[id]; ok && r.Details != nil {
+						details = *r.Details
+					}
+					c.notifyFailure([]APIMessage{nextMsgs[idx]}, &CaptureEventError{EventUUID: id, Result: resultRetry, Details: details, Exhausted: true})
+				}
 				return
 			}
 			pendingData, pendingMsgs, pendingUuids = nextData, nextMsgs, nextUuids
 			if !c.backoffV1(i, res) {
-				c.notifyFailure(pendingMsgs, fmt.Errorf("capture v1: shutdown during retry backoff"))
+				c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff})
 				return
 			}
 			continue
@@ -191,23 +214,68 @@ func (c *client) dropMessages(msgs []APIMessage, err error) {
 	c.notifyFailure(msgs, err)
 }
 
+// compressV1Body compresses the v1 request body per the configured mode and
+// returns the body plus the Content-Encoding wire token ("" when uncompressed,
+// "br" for brotli). gzip/deflate/brotli use per-call writers; zstd reuses the
+// shared concurrency-safe encoder. The codecs other than gzip are gated to
+// CaptureModeAnalyticsV1 by Config.Validate, so this is only reached for modes
+// the backend can decode via Content-Encoding.
+func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
+	switch mode {
+	case CompressionNone:
+		return raw, "", nil
+	case CompressionGzip:
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, err := gw.Write(raw); err != nil {
+			return nil, "", fmt.Errorf("gzip compression: %w", err)
+		}
+		if err := gw.Close(); err != nil {
+			return nil, "", fmt.Errorf("gzip close: %w", err)
+		}
+		return buf.Bytes(), "gzip", nil
+	case CompressionDeflate:
+		// zlib (RFC 1950) wraps the deflate stream so it begins with 0x78; the
+		// backend sniffs that byte to route Content-Encoding: deflate to its
+		// zlib decoder, avoiding ambiguity with raw (headerless) deflate.
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		if _, err := zw.Write(raw); err != nil {
+			return nil, "", fmt.Errorf("deflate compression: %w", err)
+		}
+		if err := zw.Close(); err != nil {
+			return nil, "", fmt.Errorf("deflate close: %w", err)
+		}
+		return buf.Bytes(), "deflate", nil
+	case CompressionZstd:
+		enc, err := getZstdEncoder()
+		if err != nil {
+			return nil, "", fmt.Errorf("zstd encoder init: %w", err)
+		}
+		return enc.EncodeAll(raw, make([]byte, 0, len(raw))), "zstd", nil
+	case CompressionBrotli:
+		var buf bytes.Buffer
+		bw := brotli.NewWriter(&buf)
+		if _, err := bw.Write(raw); err != nil {
+			return nil, "", fmt.Errorf("brotli compression: %w", err)
+		}
+		if err := bw.Close(); err != nil {
+			return nil, "", fmt.Errorf("brotli close: %w", err)
+		}
+		return buf.Bytes(), "br", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported compression mode %s", mode)
+	}
+}
+
 // uploadV1 performs a single capture-v1 POST. It reuses c.http (which already
 // carries BatchUploadTimeout) and the caller's ctx; it does not add a separate
 // per-request timeout.
 func (c *client) uploadV1(ctx context.Context, b []byte, requestId string, attempt int) (*v1Result, error) {
-	body := b
-	if c.Compression == CompressionGzip {
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		if _, err := gw.Write(b); err != nil {
-			c.Errorf("gzip compression - %s", err)
-			return nil, fmt.Errorf("gzip compression: %w", err)
-		}
-		if err := gw.Close(); err != nil {
-			c.Errorf("gzip close - %s", err)
-			return nil, fmt.Errorf("gzip close: %w", err)
-		}
-		body = buf.Bytes()
+	body, encoding, err := compressV1Body(c.Compression, b)
+	if err != nil {
+		c.Errorf("compressing v1 body (%s) - %s", c.Compression, err)
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+captureV1Path, bytes.NewReader(body))
@@ -225,8 +293,8 @@ func (c *client) uploadV1(ctx context.Context, b []byte, requestId string, attem
 	req.Header.Set("PostHog-Request-Id", requestId)
 	req.Header.Set("PostHog-Request-Timestamp", c.now().UTC().Format(time.RFC3339))
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-	if c.Compression == CompressionGzip {
-		req.Header.Set("Content-Encoding", "gzip")
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
 	}
 
 	res, err := c.http.Do(req)
@@ -274,20 +342,59 @@ func isSuccessStatus(code int) bool {
 	return code >= 200 && code <= 299
 }
 
-// eventErrorV1 builds the per-event failure error for a "drop" result (or an
-// exhausted "retry"). PR5 replaces this with the typed CaptureEventError.
+// errShutdownDuringBackoff is the underlying cause when retries are abandoned
+// because the client is shutting down mid-backoff.
+var errShutdownDuringBackoff = errors.New("shutdown during retry backoff")
+
+// eventErrorV1 builds the per-event CaptureEventError for a terminal "drop".
 func eventErrorV1(eventUuid string, r eventResult) error {
-	if r.Details != nil && *r.Details != "" {
-		return fmt.Errorf("capture event %s: %s (%s)", eventUuid, r.Result, *r.Details)
+	details := ""
+	if r.Details != nil {
+		details = *r.Details
 	}
-	return fmt.Errorf("capture event %s: %s", eventUuid, r.Result)
+	return &CaptureEventError{EventUUID: eventUuid, Result: r.Result, Details: details}
 }
 
-// requestErrorV1 builds the batch-level failure error for a non-2xx response.
-// PR5 replaces this with the typed CaptureRequestError.
+// requestErrorV1 builds the batch-level CaptureRequestError for a non-2xx response.
 func requestErrorV1(res *v1Result) error {
-	if res.errResp != nil {
-		return fmt.Errorf("capture request failed: %d %s: %s", res.statusCode, res.errResp.Error, res.errResp.ErrorDescription)
+	return newCaptureRequestError(res, nil)
+}
+
+// newCaptureRequestError assembles a *CaptureRequestError from an optional parsed
+// result (status + structured error body) and an optional underlying error.
+func newCaptureRequestError(res *v1Result, underlying error) *CaptureRequestError {
+	e := &CaptureRequestError{Err: underlying}
+	if res != nil {
+		e.StatusCode = res.statusCode
+		if res.errResp != nil {
+			e.Code = res.errResp.Error
+			e.Description = res.errResp.ErrorDescription
+		}
 	}
-	return fmt.Errorf("capture request failed: %d", res.statusCode)
+	return e
+}
+
+// logV1ResultSummary emits a single verbose debug line per 2xx response that
+// tallies per-event directives (ok/warning/drop/retry/other), so operators can
+// debug partial-submission outcomes without diffing the raw response body.
+func (c *client) logV1ResultSummary(requestId string, attempt int, results map[string]eventResult) {
+	var ok, warning, drop, retry, other int
+	for _, r := range results {
+		switch r.Result {
+		case resultOk:
+			ok++
+		case resultWarning:
+			warning++
+		case resultDrop:
+			drop++
+		case resultRetry:
+			retry++
+		default:
+			other++
+		}
+	}
+	c.debugf(
+		"capture v1 response request_id=%s attempt=%d events=%d ok=%d warning=%d drop=%d retry=%d other=%d",
+		requestId, attempt, len(results), ok, warning, drop, retry, other,
+	)
 }

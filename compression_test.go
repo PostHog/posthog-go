@@ -232,9 +232,13 @@ func TestCompressionGzipReducesPayloadSize(t *testing.T) {
 }
 
 func TestCompressionModeConstants(t *testing.T) {
-	// Verify constant values are as documented
+	// Verify constant values are as documented (wire-stable: external callers
+	// may persist these as ints).
 	require.Equal(t, CompressionMode(0), CompressionNone)
 	require.Equal(t, CompressionMode(1), CompressionGzip)
+	require.Equal(t, CompressionMode(2), CompressionZstd)
+	require.Equal(t, CompressionMode(3), CompressionDeflate)
+	require.Equal(t, CompressionMode(4), CompressionBrotli)
 }
 
 func TestCompressionGzipWithCallback(t *testing.T) {

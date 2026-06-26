@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	json "github.com/goccy/go-json"
 )
 
 // TestScenario defines common test scenarios for transport mocking
@@ -102,12 +104,17 @@ type MockServerConfig struct {
 	BatchHandler     func(body []byte)
 	FlagsHandler     func(w http.ResponseWriter, r *http.Request)
 	LocalEvalHandler func(w http.ResponseWriter, r *http.Request)
+	// CaptureV1Handler handles the capture-v1 endpoint, returning (status, body).
+	// When nil, the server replies 200 with an all-"ok" results map derived from
+	// the request batch.
+	CaptureV1Handler func(body []byte) (int, string)
 }
 
 // MockServerBuilder builds configurable mock servers
 type MockServerBuilder struct {
 	config       MockServerConfig
 	requestCount int
+	paths        []string
 	mu           sync.Mutex
 }
 
@@ -145,6 +152,20 @@ func (b *MockServerBuilder) WithBatchHandler(handler func(body []byte)) *MockSer
 	return b
 }
 
+func (b *MockServerBuilder) WithCaptureV1Handler(handler func(body []byte) (int, string)) *MockServerBuilder {
+	b.config.CaptureV1Handler = handler
+	return b
+}
+
+// GetPaths returns the request paths the server has seen, in order.
+func (b *MockServerBuilder) GetPaths() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, len(b.paths))
+	copy(out, b.paths)
+	return out
+}
+
 func (b *MockServerBuilder) WithFailAfterN(n int) *MockServerBuilder {
 	b.config.FailAfterN = n
 	return b
@@ -164,6 +185,7 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 		b.mu.Lock()
 		b.requestCount++
 		count := b.requestCount
+		b.paths = append(b.paths, r.URL.Path)
 		b.mu.Unlock()
 
 		// Check if we should fail
@@ -174,6 +196,19 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 
 		// Route to appropriate handler
 		switch {
+		case strings.HasPrefix(r.URL.Path, captureV1Path):
+			body, _ := io.ReadAll(r.Body)
+			status, resp := http.StatusOK, ""
+			if b.config.CaptureV1Handler != nil {
+				status, resp = b.config.CaptureV1Handler(body)
+			} else {
+				status, resp = http.StatusOK, allOkResultsBody(body)
+			}
+			w.WriteHeader(status)
+			if resp != "" {
+				w.Write([]byte(resp))
+			}
+
 		case strings.HasPrefix(r.URL.Path, "/batch"):
 			if b.config.BatchHandler != nil {
 				body, _ := io.ReadAll(r.Body)
@@ -208,6 +243,25 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
+}
+
+// allOkResultsBody parses a capture-v1 request envelope and returns a results
+// body marking every event uuid as "ok".
+func allOkResultsBody(body []byte) string {
+	var env eventBatch
+	if err := json.Unmarshal(body, &env); err != nil {
+		return `{"results":{}}`
+	}
+	results := map[string]eventResult{}
+	for _, raw := range env.Batch {
+		var ev struct {
+			Uuid string `json:"uuid"`
+		}
+		_ = json.Unmarshal(raw, &ev)
+		results[ev.Uuid] = eventResult{Result: resultOk}
+	}
+	out, _ := json.Marshal(captureV1Response{Results: results})
+	return string(out)
 }
 
 // NewTestTransport creates a transport for the given test scenario
