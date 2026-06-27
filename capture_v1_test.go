@@ -96,13 +96,28 @@ func TestV1DropsLibFromProperties(t *testing.T) {
 
 func TestV1SystemContextAppliedAsDefaults(t *testing.T) {
 	sysCtx := getSystemContext().ToProperties()
-	ev := marshalV1(t, Capture{Uuid: "u", Event: "e", DistinctId: "d"})
-	props := wireProps(t, ev)
+	msgs := []struct {
+		name string
+		msg  Message
+	}{
+		{"capture", Capture{Uuid: "u", Event: "e", DistinctId: "d"}},
+		{"identify", Identify{Uuid: "u", DistinctId: "d"}},
+		{"groupidentify", GroupIdentify{Uuid: "u", Type: "company", Key: "acme"}},
+		{"alias", Alias{Uuid: "u", DistinctId: "d", Alias: "a"}},
+		{"exception", Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}}}},
+	}
 
-	for _, key := range []string{"$os", "$go_version"} {
-		if props[key] != sysCtx[key] {
-			t.Errorf("%s = %v, want system default %v", key, props[key], sysCtx[key])
-		}
+	for _, tc := range msgs {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := marshalV1(t, tc.msg)
+			props := wireProps(t, ev)
+
+			for _, key := range []string{"$os", "$go_version"} {
+				if props[key] != sysCtx[key] {
+					t.Errorf("%s = %v, want system default %v", key, props[key], sysCtx[key])
+				}
+			}
+		})
 	}
 }
 
