@@ -196,6 +196,103 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 	}
 }
 
+func TestBeforeSendCaptureReceivesDefaultProperties(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		mode CaptureMode
+	}{
+		{name: "legacy", mode: CaptureModeLegacy},
+		{name: "analytics-v1", mode: CaptureModeAnalyticsV1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := make(chan []byte, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				payload, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				body <- payload
+				w.WriteHeader(http.StatusOK)
+				if tt.mode == CaptureModeAnalyticsV1 {
+					_, _ = w.Write([]byte(`{"results":{}}`))
+				}
+			}))
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:    server.URL,
+				BatchSize:   1,
+				now:         mockTime,
+				CaptureMode: tt.mode,
+				BeforeSend: func(msg Message) Message {
+					capture := msg.(Capture)
+					capture.Properties["hook_saw_is_server"] = capture.Properties[propertyIsServer]
+					capture.Properties["hook_saw_geoip_disable"] = capture.Properties[propertyGeoipDisable]
+					return capture
+				},
+			})
+			require.NoError(t, err)
+
+			require.NoError(t, client.Enqueue(Capture{
+				DistinctId: "user-123",
+				Event:      "test-event",
+			}))
+			require.NoError(t, client.Close())
+
+			properties := firstProperties(t, readBatch(t, body))
+			require.Equal(t, true, properties["hook_saw_is_server"])
+			require.Equal(t, true, properties["hook_saw_geoip_disable"])
+			require.Equal(t, true, properties[propertyIsServer])
+			require.Equal(t, true, properties[propertyGeoipDisable])
+		})
+	}
+}
+
+func TestBeforeSendCaptureCanRemoveDefaultIsServerProperty(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		mode CaptureMode
+	}{
+		{name: "legacy", mode: CaptureModeLegacy},
+		{name: "analytics-v1", mode: CaptureModeAnalyticsV1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := make(chan []byte, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				payload, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				body <- payload
+				w.WriteHeader(http.StatusOK)
+				if tt.mode == CaptureModeAnalyticsV1 {
+					_, _ = w.Write([]byte(`{"results":{}}`))
+				}
+			}))
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:    server.URL,
+				BatchSize:   1,
+				now:         mockTime,
+				CaptureMode: tt.mode,
+				BeforeSend: func(msg Message) Message {
+					capture := msg.(Capture)
+					delete(capture.Properties, propertyIsServer)
+					return capture
+				},
+			})
+			require.NoError(t, err)
+
+			require.NoError(t, client.Enqueue(Capture{
+				DistinctId: "user-123",
+				Event:      "test-event",
+			}))
+			require.NoError(t, client.Close())
+
+			properties := firstProperties(t, readBatch(t, body))
+			require.NotContains(t, properties, propertyIsServer)
+			require.Equal(t, true, properties[propertyGeoipDisable])
+		})
+	}
+}
+
 func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
 	body, server := mockServer()
 	defer server.Close()
