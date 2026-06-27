@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -548,6 +549,45 @@ func TestV1SendCompressionCodecs(t *testing.T) {
 				t.Errorf("success callbacks = %d, want 1", s)
 			}
 		})
+	}
+}
+
+func TestV1SendCompressionFailureFallsBackToUncompressed(t *testing.T) {
+	originalCompressGzip := compressGzip
+	compressGzip = func([]byte) ([]byte, error) {
+		return nil, errors.New("compression unavailable")
+	}
+	defer func() { compressGzip = originalCompressGzip }()
+
+	cb := &recordingCallback{}
+	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultOk}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+
+	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
+		cfg.CaptureMode = CaptureModeAnalyticsV1
+		cfg.Compression = CompressionGzip
+	})
+	c.sendV1(v1Batch(t, cap1(uuidA)))
+
+	reqs := srv.snapshot()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(reqs))
+	}
+	if reqs[0].encoding != "" {
+		t.Errorf("Content-Encoding = %q, want empty fallback", reqs[0].encoding)
+	}
+	if len(reqs[0].uuids) != 1 || reqs[0].uuids[0] != uuidA {
+		t.Errorf("decoded uuids = %v, want [%s]", reqs[0].uuids, uuidA)
+	}
+	if s, f := cb.counts(); s != 1 || f != 0 {
+		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)
 	}
 }
 

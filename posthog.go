@@ -2,7 +2,6 @@ package posthog
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -1529,20 +1528,17 @@ func (c *client) send(pb preparedBatch) {
 func (c *client) upload(ctx context.Context, b []byte) error {
 	url := c.Endpoint + "/batch/"
 	body := b
+	encoding := ""
 
 	if c.Compression == CompressionGzip {
-		url += "?compression=gzip"
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		if _, err := gw.Write(b); err != nil {
-			c.Errorf("gzip compression - %s", err)
-			return fmt.Errorf("gzip compression: %w", err)
+		compressed, err := compressGzip(b)
+		if err != nil {
+			c.Warnf("gzip compression failed; sending uncompressed - %s", err)
+		} else {
+			url += "?compression=gzip"
+			body = compressed
+			encoding = "gzip"
 		}
-		if err := gw.Close(); err != nil {
-			c.Errorf("gzip close - %s", err)
-			return fmt.Errorf("gzip close: %w", err)
-		}
-		body = buf.Bytes()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -1556,8 +1552,8 @@ func (c *client) upload(ctx context.Context, b []byte) error {
 	req.Header.Add("User-Agent", SDKName+"/"+version)
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(body)))
-	if c.Compression == CompressionGzip {
-		req.Header.Add("Content-Encoding", "gzip")
+	if encoding != "" {
+		req.Header.Add("Content-Encoding", encoding)
 	}
 
 	res, err := c.http.Do(req)

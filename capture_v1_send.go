@@ -2,8 +2,6 @@ package posthog
 
 import (
 	"bytes"
-	"compress/gzip"
-	"compress/zlib"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/andybalholm/brotli"
 	json "github.com/goccy/go-json"
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
@@ -216,53 +213,42 @@ func (c *client) dropMessages(msgs []APIMessage, err error) {
 
 // compressV1Body compresses the v1 request body per the configured mode and
 // returns the body plus the Content-Encoding wire token ("" when uncompressed,
-// "br" for brotli). gzip/deflate/brotli use per-call writers; zstd reuses the
-// shared concurrency-safe encoder. The codecs other than gzip are gated to
-// CaptureModeAnalyticsV1 by Config.Validate, so this is only reached for modes
-// the backend can decode via Content-Encoding.
+// "br" for brotli). If a configured codec fails, the raw body is returned
+// without a Content-Encoding token so the batch can still be sent
+// uncompressed. zstd reuses the shared concurrency-safe encoder. The codecs
+// other than gzip are gated to CaptureModeAnalyticsV1 by Config.Validate, so
+// this is only reached for modes the backend can decode via Content-Encoding.
 func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
 	switch mode {
 	case CompressionNone:
 		return raw, "", nil
 	case CompressionGzip:
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		if _, err := gw.Write(raw); err != nil {
-			return nil, "", fmt.Errorf("gzip compression: %w", err)
+		body, err := compressGzip(raw)
+		if err != nil {
+			return raw, "", nil
 		}
-		if err := gw.Close(); err != nil {
-			return nil, "", fmt.Errorf("gzip close: %w", err)
-		}
-		return buf.Bytes(), "gzip", nil
+		return body, "gzip", nil
 	case CompressionDeflate:
 		// zlib (RFC 1950) wraps the deflate stream so it begins with 0x78; the
 		// backend sniffs that byte to route Content-Encoding: deflate to its
 		// zlib decoder, avoiding ambiguity with raw (headerless) deflate.
-		var buf bytes.Buffer
-		zw := zlib.NewWriter(&buf)
-		if _, err := zw.Write(raw); err != nil {
-			return nil, "", fmt.Errorf("deflate compression: %w", err)
+		body, err := deflateCompress(raw)
+		if err != nil {
+			return raw, "", nil
 		}
-		if err := zw.Close(); err != nil {
-			return nil, "", fmt.Errorf("deflate close: %w", err)
-		}
-		return buf.Bytes(), "deflate", nil
+		return body, "deflate", nil
 	case CompressionZstd:
 		enc, err := getZstdEncoder()
 		if err != nil {
-			return nil, "", fmt.Errorf("zstd encoder init: %w", err)
+			return raw, "", nil
 		}
 		return enc.EncodeAll(raw, make([]byte, 0, len(raw))), "zstd", nil
 	case CompressionBrotli:
-		var buf bytes.Buffer
-		bw := brotli.NewWriter(&buf)
-		if _, err := bw.Write(raw); err != nil {
-			return nil, "", fmt.Errorf("brotli compression: %w", err)
+		body, err := brotliCompress(raw)
+		if err != nil {
+			return raw, "", nil
 		}
-		if err := bw.Close(); err != nil {
-			return nil, "", fmt.Errorf("brotli close: %w", err)
-		}
-		return buf.Bytes(), "br", nil
+		return body, "br", nil
 	default:
 		return nil, "", fmt.Errorf("unsupported compression mode %s", mode)
 	}
@@ -276,6 +262,9 @@ func (c *client) uploadV1(ctx context.Context, b []byte, requestId string, attem
 	if err != nil {
 		c.Errorf("compressing v1 body (%s) - %s", c.Compression, err)
 		return nil, err
+	}
+	if c.Compression != CompressionNone && encoding == "" {
+		c.Warnf("compressing v1 body (%s) failed; sending uncompressed", c.Compression)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+captureV1Path, bytes.NewReader(body))
