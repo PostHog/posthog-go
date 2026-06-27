@@ -401,8 +401,17 @@ func flushHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "SDK not initialized", http.StatusBadRequest)
 		return
 	}
+	state.mu.Unlock()
 
-	// Get configured interval
+	eventsFlushed := waitForPendingEvents()
+	jsonResponse(w, map[string]interface{}{
+		"success":        true,
+		"events_flushed": eventsFlushed,
+	})
+}
+
+func waitForPendingEvents() int {
+	state.mu.Lock()
 	interval := state.config.Interval
 	if interval == 0 {
 		interval = 5 * time.Second // Default
@@ -411,8 +420,8 @@ func flushHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Wait only until the current queue drains, with a small cap. Most harness
 	// tests use BatchSize=1, while batch-format tests rely on the short interval
-	// above to flush partial batches. Avoid a fixed 500ms sleep per test: the
-	// compliance suite has many flushes and long retry waits of its own.
+	// above to flush partial batches. Avoid fixed sleeps per test: the compliance
+	// suite has many flushes and long retry waits of its own.
 	deadline := time.Now().Add(interval + (100 * time.Millisecond))
 	for {
 		state.mu.Lock()
@@ -421,11 +430,7 @@ func flushHandler(w http.ResponseWriter, r *http.Request) {
 		state.mu.Unlock()
 
 		if pendingEvents == 0 || time.Now().After(deadline) {
-			jsonResponse(w, map[string]interface{}{
-				"success":        true,
-				"events_flushed": eventsFlushed,
-			})
-			return
+			return eventsFlushed
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -551,6 +556,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	state.totalEventsCaptured++
 	state.pendingEvents++
 	state.mu.Unlock()
+	waitForPendingEvents()
 
 	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
 	log.Printf("Evaluated feature flag")
