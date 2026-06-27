@@ -209,6 +209,22 @@ func jsonResponse(w http.ResponseWriter, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// validateHarnessHost maps user-provided /init hosts to explicit SDK test
+// harness mock targets. The adapter is only intended to call the harness mock
+// server, so keep the outbound network target on a small allowlist.
+func validateHarnessHost(raw string) (string, bool) {
+	switch strings.TrimRight(raw, "/") {
+	case "http://test-harness:8081":
+		return "http://test-harness:8081", true
+	case "http://localhost:8081":
+		return "http://localhost:8081", true
+	case "http://127.0.0.1:8081":
+		return "http://127.0.0.1:8081", true
+	default:
+		return "", false
+	}
+}
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	capabilities := []string{"capture_v0", "encoding_gzip"}
 	if isV1() {
@@ -227,6 +243,12 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	var req InitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	validatedHost, ok := validateHarnessHost(req.Host)
+	if !ok {
+		http.Error(w, "host must be the SDK harness mock URL", http.StatusBadRequest)
 		return
 	}
 
@@ -251,7 +273,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create new client with tracked transport
 	config := posthog.Config{
-		Endpoint:  req.Host,
+		Endpoint:  validatedHost,
 		Transport: &TrackedTransport{base: http.DefaultTransport, state: state},
 		// Set test-friendly defaults
 		BatchSize: 1,                     // Flush after each event by default
@@ -296,7 +318,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	state.client = client
 	state.config = &config
 	state.apiKey = req.APIKey
-	state.host = req.Host
+	state.host = validatedHost
 	state.mu.Unlock()
 
 	jsonResponse(w, map[string]bool{"success": true})
@@ -497,6 +519,10 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		jsonError(w, http.StatusInternalServerError, "flags request failed with status "+strconv.Itoa(resp.StatusCode))
+		return
+	}
 	var decoded map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -525,7 +551,6 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	state.totalEventsCaptured++
 	state.pendingEvents++
 	state.mu.Unlock()
-	time.Sleep(200 * time.Millisecond)
 
 	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
 	log.Printf("Evaluated feature flag")
