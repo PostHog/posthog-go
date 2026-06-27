@@ -214,10 +214,11 @@ func (c *client) dropMessages(msgs []APIMessage, err error) {
 // compressV1Body compresses the v1 request body per the configured mode and
 // returns the body plus the Content-Encoding wire token ("" when uncompressed,
 // "br" for brotli). If a configured codec fails, the raw body is returned
-// without a Content-Encoding token so the batch can still be sent
-// uncompressed. zstd reuses the shared concurrency-safe encoder. The codecs
-// other than gzip are gated to CaptureModeAnalyticsV1 by Config.Validate, so
-// this is only reached for modes the backend can decode via Content-Encoding.
+// without a Content-Encoding token plus the compression error so callers can
+// log it while still sending the batch uncompressed. zstd reuses the shared
+// concurrency-safe encoder. The codecs other than gzip are gated to
+// CaptureModeAnalyticsV1 by Config.Validate, so this is only reached for modes
+// the backend can decode via Content-Encoding.
 func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
 	switch mode {
 	case CompressionNone:
@@ -225,7 +226,7 @@ func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
 	case CompressionGzip:
 		body, err := compressGzip(raw)
 		if err != nil {
-			return raw, "", nil
+			return raw, "", err
 		}
 		return body, "gzip", nil
 	case CompressionDeflate:
@@ -234,19 +235,19 @@ func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
 		// zlib decoder, avoiding ambiguity with raw (headerless) deflate.
 		body, err := deflateCompress(raw)
 		if err != nil {
-			return raw, "", nil
+			return raw, "", err
 		}
 		return body, "deflate", nil
 	case CompressionZstd:
 		enc, err := getZstdEncoder()
 		if err != nil {
-			return raw, "", nil
+			return raw, "", fmt.Errorf("zstd encoder init: %w", err)
 		}
 		return enc.EncodeAll(raw, make([]byte, 0, len(raw))), "zstd", nil
 	case CompressionBrotli:
 		body, err := brotliCompress(raw)
 		if err != nil {
-			return raw, "", nil
+			return raw, "", err
 		}
 		return body, "br", nil
 	default:
@@ -260,11 +261,11 @@ func compressV1Body(mode CompressionMode, raw []byte) ([]byte, string, error) {
 func (c *client) uploadV1(ctx context.Context, b []byte, requestId string, attempt int) (*v1Result, error) {
 	body, encoding, err := compressV1Body(c.Compression, b)
 	if err != nil {
-		c.Errorf("compressing v1 body (%s) - %s", c.Compression, err)
-		return nil, err
-	}
-	if c.Compression != CompressionNone && encoding == "" {
-		c.Warnf("compressing v1 body (%s) failed; sending uncompressed", c.Compression)
+		if body == nil {
+			c.Errorf("compressing v1 body (%s) - %s", c.Compression, err)
+			return nil, err
+		}
+		c.Warnf("compressing v1 body (%s) failed; sending uncompressed - %s", c.Compression, err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+captureV1Path, bytes.NewReader(body))

@@ -9,7 +9,11 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
-var compressGzip = gzipCompress
+var (
+	compressGzip    = gzipCompress
+	deflateCompress = zlibCompress
+	brotliCompress  = brotliEncode
+)
 
 func gzipCompress(raw []byte) ([]byte, error) {
 	var buf bytes.Buffer
@@ -23,7 +27,7 @@ func gzipCompress(raw []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func deflateCompress(raw []byte) ([]byte, error) {
+func zlibCompress(raw []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
 	if _, err := zw.Write(raw); err != nil {
@@ -35,7 +39,7 @@ func deflateCompress(raw []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func brotliCompress(raw []byte) ([]byte, error) {
+func brotliEncode(raw []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	bw := brotli.NewWriter(&buf)
 	if _, err := bw.Write(raw); err != nil {
