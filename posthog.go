@@ -2,7 +2,6 @@ package posthog
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ const (
 	CACHE_DEFAULT_SIZE = 300_000
 
 	propertyGeoipDisable = "$geoip_disable"
+	propertyIsServer     = "$is_server"
 
 	// DefaultIdleConns is the default max idle connections for the HTTP client.
 	DefaultIdleConns = 100
@@ -270,7 +270,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		c.capture = legacyCapturer{c}
 	}
 
-	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger)
+	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger, config.FeatureFlagRequestMaxRetries)
 	if err != nil {
 		return nil, fmt.Errorf("error creating flags client: %v", err)
 	}
@@ -704,6 +704,9 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
+		if m.IsServer {
+			m.Properties.Set(propertyIsServer, true)
+		}
 		if captureContext.personlessProcessProfileGuard {
 			m.Properties[propertyProcessPersonProfile] = false
 		}
@@ -712,6 +715,13 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Capture)
+		// $is_server was materialized into Properties before BeforeSend;
+		// from this point, the hook's returned Properties are the source of truth.
+		if isServer, ok := m.Properties[propertyIsServer].(bool); ok {
+			m.IsServer = isServer
+		} else if m.Properties != nil {
+			m.IsServer = false
+		}
 		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
@@ -1529,20 +1539,17 @@ func (c *client) send(pb preparedBatch) {
 func (c *client) upload(ctx context.Context, b []byte) error {
 	url := c.Endpoint + "/batch/"
 	body := b
+	encoding := ""
 
 	if c.Compression == CompressionGzip {
-		url += "?compression=gzip"
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		if _, err := gw.Write(b); err != nil {
-			c.Errorf("gzip compression - %s", err)
-			return fmt.Errorf("gzip compression: %w", err)
+		compressed, err := compressGzip(b)
+		if err != nil {
+			c.Warnf("gzip compression failed; sending uncompressed - %s", err)
+		} else {
+			url += "?compression=gzip"
+			body = compressed
+			encoding = "gzip"
 		}
-		if err := gw.Close(); err != nil {
-			c.Errorf("gzip close - %s", err)
-			return fmt.Errorf("gzip close: %w", err)
-		}
-		body = buf.Bytes()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -1556,8 +1563,8 @@ func (c *client) upload(ctx context.Context, b []byte) error {
 	req.Header.Add("User-Agent", SDKName+"/"+version)
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(body)))
-	if c.Compression == CompressionGzip {
-		req.Header.Add("Content-Encoding", "gzip")
+	if encoding != "" {
+		req.Header.Add("Content-Encoding", encoding)
 	}
 
 	res, err := c.http.Do(req)

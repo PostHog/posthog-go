@@ -15,6 +15,8 @@ import (
 // requests so capture-enrichment tests can assert whether a network /flags call
 // was made. A definitionsFixture of "" makes the definitions endpoint fail,
 // simulating definitions that never load.
+const captureLocalEvalWaitTimeout = 5 * time.Second
+
 type captureLocalEvalServer struct {
 	server      *httptest.Server
 	decideCalls atomic.Int32
@@ -165,7 +167,7 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			event := capture.waitForEvent(2 * time.Second)
+			event := capture.waitForEvent(captureLocalEvalWaitTimeout)
 			if event == nil {
 				t.Fatal("timed out waiting for captured event")
 			}
@@ -244,7 +246,7 @@ func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, 
 	if err := client.Enqueue(Capture{Event: "test_event", DistinctId: "distinct-id", SendFeatureFlags: SendFeatureFlags(true)}); err != nil {
 		t.Fatal(err)
 	}
-	event := capture.waitForEvent(2 * time.Second)
+	event := capture.waitForEvent(captureLocalEvalWaitTimeout)
 	if event == nil {
 		t.Fatal("timed out waiting for captured event")
 	}

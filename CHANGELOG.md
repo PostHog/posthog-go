@@ -1,5 +1,27 @@
 ## Unreleased
 
+## 1.17.2
+
+### Patch Changes
+
+- d98ef79: Retry feature flag requests after transient network errors only. The feature flag request retry count defaults to 1 and can be set to 0 to disable retries.
+
+## 1.17.1
+
+### Patch Changes
+
+- 651b303: Preserve caller-provided system context values when building capture v1 event properties.
+- e0eb8bd: Send capture batches uncompressed when request-body compression fails instead of failing the batch.
+- 71f5c2e: Expose capture default properties to BeforeSend hooks before serialization.
+
+## 1.17.0
+
+### Minor Changes
+
+- ff0e74b: Enrich capture-v1 failure reporting with typed errors and verbose result logging. When `CaptureMode` is `CaptureModeAnalyticsV1`, `Callback.Failure` now receives either a `*CaptureEventError` (a single event the server dropped, or one still asking to retry once attempts are exhausted — exposing `EventUUID`, `Result`, `Details`, and `Exhausted`) or a `*CaptureRequestError` (a whole request that failed on a non-2xx status, transport error, or malformed body — exposing `StatusCode`, `Code`, `Description`, and unwrapping to the underlying error). Inspect them with `errors.As`. Additionally, with `Verbose: true` the SDK logs one debug line per 2xx response summarizing the per-event directive counts (ok/warning/drop/retry/other) so partial-submission outcomes are easy to debug. The legacy path and its callback errors are unchanged.
+- ff0e74b: Add opt-in capture-v1 support via a new `Config.CaptureMode` option. It defaults to `CaptureModeLegacy` (the existing `POST /batch/` endpoint), so upgrading is transparent and requires no code changes. Set `CaptureMode: posthog.CaptureModeAnalyticsV1` to send events to `POST /i/v1/analytics/events` instead, which uses Bearer auth, per-event delivery results, and partial retry (only the events the server asks to retry are re-sent). For v1, the `Callback` interface is unchanged but outcomes become per-event: a `drop` result fails an individual event (and can fire `Failure` on an HTTP 200), `warning` counts as success, and a uuid missing from the results is silently dropped. All other configuration (host, API key, `Callback`, `Logger`, `MaxRetries`, `Compression`) is reused across both modes.
+- ff0e74b: Add zstd, deflate, and brotli compression for the capture-v1 path, alongside the existing gzip. Select one via `Config.Compression` (`CompressionZstd`, `CompressionDeflate`, `CompressionBrotli`) and the SDK sets the matching `Content-Encoding` header (`zstd`, `deflate`, `br`). These three codecs require `CaptureMode: posthog.CaptureModeAnalyticsV1` — the legacy `POST /batch/` endpoint only understands gzip, so configuring them with `CaptureModeLegacy` returns a validation error. `CompressionGzip` and `CompressionNone` continue to work on both capture modes. All codecs use pure-Go libraries (stdlib `compress/zlib`, `github.com/klauspost/compress/zstd`, `github.com/andybalholm/brotli`), so `CGO_ENABLED=0` builds are unaffected.
+
 ## 1.16.2
 
 ### Patch Changes
