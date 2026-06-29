@@ -298,6 +298,8 @@ type Config struct {
 
 	FeatureFlagRequestTimeout time.Duration
 
+	FeatureFlagRequestMaxRetries *int
+
 	NextFeatureFlagsPollingTick func() time.Duration
 
 	HistoricalMigration bool

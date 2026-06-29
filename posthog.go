@@ -270,7 +270,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		c.capture = legacyCapturer{c}
 	}
 
-	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger)
+	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger, config.FeatureFlagRequestMaxRetries)
 	if err != nil {
 		return nil, fmt.Errorf("error creating flags client: %v", err)
 	}

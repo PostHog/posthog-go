@@ -109,6 +109,10 @@ type Config struct {
 	// Use time.Duration values such as 3 * time.Second.
 	FeatureFlagRequestTimeout time.Duration
 
+	// FeatureFlagRequestMaxRetries is the maximum number of retries after a transient
+	// network error on /flags requests. If nil, it defaults to 1. Set to 0 to disable.
+	FeatureFlagRequestMaxRetries *int
+
 	// NextFeatureFlagsPollingTick optionally calculates the next local feature flag
 	// polling delay. When set, it overrides DefaultFeatureFlagsPollingInterval.
 	NextFeatureFlagsPollingTick func() time.Duration
@@ -278,6 +282,14 @@ func (c *Config) Validate() error {
 			Reason: "max retries out of range [0,9]",
 			Field:  "MaxRetries",
 			Value:  *c.MaxRetries,
+		}
+	}
+
+	if c.FeatureFlagRequestMaxRetries != nil && (*c.FeatureFlagRequestMaxRetries < 0 || *c.FeatureFlagRequestMaxRetries > 9) {
+		return ConfigError{
+			Reason: "feature flag request max retries out of range [0,9]",
+			Field:  "FeatureFlagRequestMaxRetries",
+			Value:  *c.FeatureFlagRequestMaxRetries,
 		}
 	}
 
