@@ -26,6 +26,7 @@ const (
 	CACHE_DEFAULT_SIZE = 300_000
 
 	propertyGeoipDisable = "$geoip_disable"
+	propertyIsServer     = "$is_server"
 
 	// DefaultIdleConns is the default max idle connections for the HTTP client.
 	DefaultIdleConns = 100
@@ -704,6 +705,9 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
+		if m.IsServer {
+			m.Properties.Set(propertyIsServer, true)
+		}
 		if captureContext.personlessProcessProfileGuard {
 			m.Properties[propertyProcessPersonProfile] = false
 		}
@@ -712,6 +716,13 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Capture)
+		// $is_server was materialized into Properties before BeforeSend;
+		// from this point, the hook's returned Properties are the source of truth.
+		if isServer, ok := m.Properties[propertyIsServer].(bool); ok {
+			m.IsServer = isServer
+		} else if m.Properties != nil {
+			m.IsServer = false
+		}
 		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
