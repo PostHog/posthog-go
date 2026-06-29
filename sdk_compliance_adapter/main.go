@@ -507,7 +507,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := map[string]interface{}{
-		"token":                 apiKey,
+		"api_key":               apiKey,
 		"distinct_id":           req.DistinctID,
 		"person_properties":     personProperties,
 		"groups":                groups,
