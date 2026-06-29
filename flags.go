@@ -206,7 +206,12 @@ type flagsClient struct {
 	maxAttempts               int
 }
 
-const defaultFlagsRequestMaxAttempts = 2
+const defaultFeatureFlagRequestMaxRetries = 1
+const defaultFlagsRequestMaxAttempts = 1 + defaultFeatureFlagRequestMaxRetries
+
+func defaultFlagsBackoff() *Backoff {
+	return NewBackoff(300*time.Millisecond, 2, 0, 30*time.Second)
+}
 
 // newFlagsClient creates a new flagsClient
 func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
@@ -230,7 +235,7 @@ func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
 		http:                      httpClient,
 		featureFlagRequestTimeout: featureFlagRequestTimeout,
 		logger:                    logger,
-		retryAfter:                DefaultBackoff().Duration,
+		retryAfter:                defaultFlagsBackoff().Duration,
 		maxAttempts:               maxAttempts,
 	}, nil
 }
@@ -326,7 +331,7 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 func (d *flagsClient) sleepBeforeFlagsRetry(attempt int) {
 	retryAfter := d.retryAfter
 	if retryAfter == nil {
-		retryAfter = DefaultBackoff().Duration
+		retryAfter = defaultFlagsBackoff().Duration
 	}
 	if delay := retryAfter(attempt); delay > 0 {
 		time.Sleep(delay)

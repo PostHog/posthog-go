@@ -86,6 +86,17 @@ func TestMakeFlagsRequestRetriesTransientErrorsThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestDefaultFlagsBackoffStartsAt300msAndDoubles(t *testing.T) {
+	backoff := defaultFlagsBackoff()
+
+	if got := backoff.Duration(0); got != 300*time.Millisecond {
+		t.Fatalf("first retry delay = %s, want 300ms", got)
+	}
+	if got := backoff.Duration(1); got != 600*time.Millisecond {
+		t.Fatalf("second retry delay = %s, want 600ms", got)
+	}
+}
+
 func TestMakeFlagsRequestRetriesTransientErrorUntilExhausted(t *testing.T) {
 	var calls atomic.Int32
 
