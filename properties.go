@@ -47,3 +47,22 @@ func (p Properties) Merge(props Properties) Properties {
 
 	return p
 }
+
+// mergeDefaults adds properties from defaults only when the receiver does not
+// already contain the key.
+func (p Properties) mergeDefaults(defaults Properties) Properties {
+	if p == nil {
+		p = Properties{}
+	}
+	if defaults == nil {
+		return p
+	}
+
+	for k, v := range defaults {
+		if _, exists := p[k]; !exists {
+			p[k] = v
+		}
+	}
+
+	return p
+}

@@ -117,27 +117,42 @@ func assertConfigBoolDefaultTrue(t *testing.T, set func(*Config, *bool), get fun
 }
 
 func TestConfigCompression(t *testing.T) {
-	// CompressionNone (0) should be valid
-	c := Config{Compression: CompressionNone}
-	require.NoError(t, c.Validate())
-
-	// CompressionGzip (1) should be valid
-	c = Config{Compression: CompressionGzip}
-	require.NoError(t, c.Validate())
-
-	// Values > CompressionGzip should be invalid
-	c = Config{Compression: 2}
-	err := c.Validate()
-	require.Error(t, err)
-	configErr, ok := err.(ConfigError)
-	require.True(t, ok, "expected ConfigError")
-	require.Equal(t, "Compression", configErr.Field)
-	require.Equal(t, CompressionMode(2), configErr.Value)
-	require.Contains(t, configErr.Reason, "invalid compression mode")
-
-	// Higher invalid values should also fail
-	c = Config{Compression: 255}
-	err = c.Validate()
-	require.Error(t, err)
-	require.ErrorContains(t, err, "invalid compression mode")
+	// gzip and none are valid on both capture modes; zstd/deflate/brotli are
+	// v1-only (legacy /batch/ cannot decode them); unknown values are rejected.
+	cases := []struct {
+		name        string
+		compression CompressionMode
+		captureMode CaptureMode
+		wantErr     string // reason substring; "" means valid
+		wantValue   CompressionMode
+	}{
+		{"none legacy", CompressionNone, CaptureModeLegacy, "", 0},
+		{"none v1", CompressionNone, CaptureModeAnalyticsV1, "", 0},
+		{"gzip legacy", CompressionGzip, CaptureModeLegacy, "", 0},
+		{"gzip v1", CompressionGzip, CaptureModeAnalyticsV1, "", 0},
+		{"zstd legacy rejected", CompressionZstd, CaptureModeLegacy, "zstd compression requires CaptureModeAnalyticsV1", CompressionZstd},
+		{"zstd v1 ok", CompressionZstd, CaptureModeAnalyticsV1, "", 0},
+		{"deflate legacy rejected", CompressionDeflate, CaptureModeLegacy, "deflate compression requires CaptureModeAnalyticsV1", CompressionDeflate},
+		{"deflate v1 ok", CompressionDeflate, CaptureModeAnalyticsV1, "", 0},
+		{"brotli legacy rejected", CompressionBrotli, CaptureModeLegacy, "brotli compression requires CaptureModeAnalyticsV1", CompressionBrotli},
+		{"brotli v1 ok", CompressionBrotli, CaptureModeAnalyticsV1, "", 0},
+		{"unknown legacy", CompressionMode(255), CaptureModeLegacy, "invalid compression mode", CompressionMode(255)},
+		{"unknown v1", CompressionMode(255), CaptureModeAnalyticsV1, "invalid compression mode", CompressionMode(255)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{Compression: tc.compression, CaptureMode: tc.captureMode}
+			err := c.Validate()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			configErr, ok := err.(ConfigError)
+			require.True(t, ok, "expected ConfigError")
+			require.Equal(t, "Compression", configErr.Field)
+			require.Equal(t, tc.wantValue, configErr.Value)
+			require.Contains(t, configErr.Reason, tc.wantErr)
+		})
+	}
 }

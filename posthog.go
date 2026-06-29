@@ -2,7 +2,6 @@ package posthog
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ const (
 	CACHE_DEFAULT_SIZE = 300_000
 
 	propertyGeoipDisable = "$geoip_disable"
+	propertyIsServer     = "$is_server"
 
 	// DefaultIdleConns is the default max idle connections for the HTTP client.
 	DefaultIdleConns = 100
@@ -129,6 +129,9 @@ type Client interface {
 type preparedMessage struct {
 	data json.RawMessage // pre-serialized JSON for batch submission
 	msg  APIMessage      // original message for callbacks
+	// uuid is the per-event UUID, used by the capture-v1 path to correlate
+	// per-event results. Empty on the legacy path.
+	uuid string
 }
 
 // preparedBatch holds both raw data for efficient serialization and
@@ -136,6 +139,10 @@ type preparedMessage struct {
 type preparedBatch struct {
 	data []json.RawMessage // pre-serialized messages for batch submission
 	msgs []APIMessage      // original messages for callbacks
+	// uuids holds the per-event UUID aligned with data/msgs, used by the
+	// capture-v1 send path to correlate per-event results. It is unused (nil)
+	// on the legacy path.
+	uuids []string
 }
 
 type client struct {
@@ -186,6 +193,10 @@ type client struct {
 
 	// Decider for feature flag methods
 	decider decider
+
+	// capture is the wire-protocol strategy (legacy /batch/ or analytics-v1),
+	// chosen once in NewWithConfig from Config.CaptureMode.
+	capture capturer
 }
 
 type flagUser struct {
@@ -251,6 +262,12 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		cancel:                          cancel,
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
 		distinctIdsFeatureFlagsReported: reportedCache,
+	}
+
+	if config.CaptureMode == CaptureModeAnalyticsV1 {
+		c.capture = analyticsV1Capturer{c}
+	} else {
+		c.capture = legacyCapturer{c}
 	}
 
 	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger, config.FeatureFlagRequestMaxRetries)
@@ -566,12 +583,12 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Alias)
-		data, apiMsg, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
-		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
 		return
 
 	case Identify:
@@ -588,12 +605,12 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Identify)
-		data, apiMsg, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
-		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
 		return
 
 	case GroupIdentify:
@@ -609,12 +626,12 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(GroupIdentify)
-		data, apiMsg, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
-		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
 		return
 
 	case Capture:
@@ -687,6 +704,9 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			m.Properties = NewProperties()
 		}
 		m.Properties.Merge(c.DefaultEventProperties)
+		if m.IsServer {
+			m.Properties.Set(propertyIsServer, true)
+		}
 		if captureContext.personlessProcessProfileGuard {
 			m.Properties[propertyProcessPersonProfile] = false
 		}
@@ -695,12 +715,19 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Capture)
-		data, apiMsg, serErr := prepareForSend(m)
+		// $is_server was materialized into Properties before BeforeSend;
+		// from this point, the hook's returned Properties are the source of truth.
+		if isServer, ok := m.Properties[propertyIsServer].(bool); ok {
+			m.IsServer = isServer
+		} else if m.Properties != nil {
+			m.IsServer = false
+		}
+		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
-		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
 		return
 
 	case Exception:
@@ -724,12 +751,12 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Exception)
-		data, apiMsg, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
 		}
-		sendPrepared(preparedMessage{data: data, msg: apiMsg})
+		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
 		return
 
 	default:
@@ -1386,7 +1413,7 @@ func (c *client) processBatch() {
 		}
 	}()
 
-	c.send(batch)
+	c.capture.send(batch)
 }
 
 // sendBatch attempts to enqueue a batch for processing.
@@ -1512,20 +1539,17 @@ func (c *client) send(pb preparedBatch) {
 func (c *client) upload(ctx context.Context, b []byte) error {
 	url := c.Endpoint + "/batch/"
 	body := b
+	encoding := ""
 
 	if c.Compression == CompressionGzip {
-		url += "?compression=gzip"
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		if _, err := gw.Write(b); err != nil {
-			c.Errorf("gzip compression - %s", err)
-			return fmt.Errorf("gzip compression: %w", err)
+		compressed, err := compressGzip(b)
+		if err != nil {
+			c.Warnf("gzip compression failed; sending uncompressed - %s", err)
+		} else {
+			url += "?compression=gzip"
+			body = compressed
+			encoding = "gzip"
 		}
-		if err := gw.Close(); err != nil {
-			c.Errorf("gzip close - %s", err)
-			return fmt.Errorf("gzip close: %w", err)
-		}
-		body = buf.Bytes()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -1539,8 +1563,8 @@ func (c *client) upload(ctx context.Context, b []byte) error {
 	req.Header.Add("User-Agent", SDKName+"/"+version)
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(body)))
-	if c.Compression == CompressionGzip {
-		req.Header.Add("Content-Encoding", "gzip")
+	if encoding != "" {
+		req.Header.Add("Content-Encoding", encoding)
 	}
 
 	res, err := c.http.Do(req)
@@ -1635,6 +1659,7 @@ func (c *client) loop() {
 
 	var batchData []json.RawMessage
 	var batchMsgs []APIMessage
+	var batchUuids []string
 	var batchSize int
 
 	tick := time.NewTicker(c.Interval)
@@ -1645,7 +1670,7 @@ func (c *client) loop() {
 		if len(batchData) == 0 {
 			return true
 		}
-		batch := preparedBatch{data: batchData, msgs: batchMsgs}
+		batch := preparedBatch{data: batchData, msgs: batchMsgs, uuids: batchUuids}
 		if !c.sendBatch(batch) {
 			c.Errorf("sending batch failed - %s", ErrTooManyRequests)
 			c.notifyFailure(batchMsgs, ErrTooManyRequests)
@@ -1656,7 +1681,7 @@ func (c *client) loop() {
 
 	// Helper to reset batch state
 	resetBatch := func() {
-		batchData, batchMsgs, batchSize = nil, nil, 0
+		batchData, batchMsgs, batchUuids, batchSize = nil, nil, nil, 0
 	}
 
 	// Helper to process a single message: validate, batch, flush if needed.
@@ -1677,6 +1702,9 @@ func (c *client) loop() {
 
 		batchData = append(batchData, prepared.data)
 		batchMsgs = append(batchMsgs, prepared.msg)
+		if c.CaptureMode == CaptureModeAnalyticsV1 {
+			batchUuids = append(batchUuids, prepared.uuid)
+		}
 		batchSize += msgSize
 
 		if len(batchData) >= c.BatchSize {

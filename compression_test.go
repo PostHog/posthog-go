@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"compress/gzip"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -232,9 +233,63 @@ func TestCompressionGzipReducesPayloadSize(t *testing.T) {
 }
 
 func TestCompressionModeConstants(t *testing.T) {
-	// Verify constant values are as documented
+	// Verify constant values are as documented (wire-stable: external callers
+	// may persist these as ints).
 	require.Equal(t, CompressionMode(0), CompressionNone)
 	require.Equal(t, CompressionMode(1), CompressionGzip)
+	require.Equal(t, CompressionMode(2), CompressionZstd)
+	require.Equal(t, CompressionMode(3), CompressionDeflate)
+	require.Equal(t, CompressionMode(4), CompressionBrotli)
+}
+
+func TestCompressionGzipFailureFallsBackToUncompressed(t *testing.T) {
+	originalCompressGzip := compressGzip
+	compressGzip = func([]byte) ([]byte, error) {
+		return nil, errors.New("compression unavailable")
+	}
+	defer func() { compressGzip = originalCompressGzip }()
+
+	var receivedContentEncoding string
+	var receivedURL string
+	var receivedBody []byte
+	var successCount, failureCount int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/batch") {
+			receivedContentEncoding = r.Header.Get("Content-Encoding")
+			receivedURL = r.URL.String()
+			receivedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(200)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig("test-key", Config{
+		Endpoint:    server.URL,
+		Compression: CompressionGzip,
+		BatchSize:   1,
+		Callback: testCallback{
+			success: func(m APIMessage) { successCount++ },
+			failure: func(m APIMessage, e error) { failureCount++ },
+		},
+	})
+	require.NoError(t, err)
+
+	err = client.Enqueue(Capture{
+		DistinctId: "user-1",
+		Event:      "test-event",
+	})
+	require.NoError(t, err)
+	client.Close()
+
+	require.Equal(t, "/batch/", receivedURL)
+	require.Empty(t, receivedContentEncoding)
+	var batch map[string]interface{}
+	err = json.Unmarshal(receivedBody, &batch)
+	require.NoError(t, err, "fallback body should be uncompressed JSON")
+	require.Contains(t, batch, "batch")
+	require.Equal(t, 1, successCount, "batch should not fail when compression fails")
+	require.Equal(t, 0, failureCount)
 }
 
 func TestCompressionGzipWithCallback(t *testing.T) {
