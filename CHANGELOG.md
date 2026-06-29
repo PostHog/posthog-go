@@ -1,5 +1,13 @@
 ## Unreleased
 
+## 1.17.1
+
+### Patch Changes
+
+- 651b303: Preserve caller-provided system context values when building capture v1 event properties.
+- e0eb8bd: Send capture batches uncompressed when request-body compression fails instead of failing the batch.
+- 71f5c2e: Expose capture default properties to BeforeSend hooks before serialization.
+
 ## 1.17.0
 
 ### Minor Changes
