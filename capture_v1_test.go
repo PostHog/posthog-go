@@ -94,6 +94,77 @@ func TestV1DropsLibFromProperties(t *testing.T) {
 	}
 }
 
+func TestV1SystemContextAppliedAsDefaults(t *testing.T) {
+	sysCtx := getSystemContext().ToProperties()
+	msgs := []struct {
+		name string
+		msg  Message
+	}{
+		{"capture", Capture{Uuid: "u", Event: "e", DistinctId: "d"}},
+		{"identify", Identify{Uuid: "u", DistinctId: "d"}},
+		{"groupidentify", GroupIdentify{Uuid: "u", Type: "company", Key: "acme"}},
+		{"alias", Alias{Uuid: "u", DistinctId: "d", Alias: "a"}},
+		{"exception", Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}}}},
+	}
+
+	for _, tc := range msgs {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := marshalV1(t, tc.msg)
+			props := wireProps(t, ev)
+
+			for _, key := range []string{"$os", "$go_version"} {
+				if props[key] != sysCtx[key] {
+					t.Errorf("%s = %v, want system default %v", key, props[key], sysCtx[key])
+				}
+			}
+		})
+	}
+}
+
+func TestV1SystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
+	callerContext := Properties{
+		"$os":         "caller-os",
+		"$os_version": "caller-os-version",
+		"$os_distro":  "caller-os-distro",
+		"$go_version": "caller-go-version",
+	}
+	msgs := []struct {
+		name string
+		msg  Message
+	}{
+		{
+			name: "capture",
+			msg: Capture{
+				Uuid:       "u",
+				Event:      "e",
+				DistinctId: "d",
+				Properties: callerContext,
+			},
+		},
+		{
+			name: "exception",
+			msg: Exception{
+				Uuid:          "u",
+				DistinctId:    "d",
+				Properties:    callerContext,
+				ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			},
+		},
+	}
+
+	for _, tc := range msgs {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := marshalV1(t, tc.msg)
+			props := wireProps(t, ev)
+			for key, want := range callerContext {
+				if props[key] != want {
+					t.Errorf("%s = %v, want caller value %v", key, props[key], want)
+				}
+			}
+		})
+	}
+}
+
 func TestV1OptionsExtractedOnlyWhenPresent(t *testing.T) {
 	// No magic props -> empty options object.
 	ev := marshalV1(t, Capture{Uuid: "u", Event: "e", DistinctId: "d"})

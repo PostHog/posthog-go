@@ -270,7 +270,7 @@ func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, 
 func (msg Capture) apifyEvent() apiEvent {
 	myProperties := baseV1Props(msg.IsServer, false).
 		Merge(msg.Properties).
-		Merge(getSystemContext().ToProperties())
+		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Groups != nil {
 		myProperties.Set("$groups", msg.Groups)
@@ -289,7 +289,7 @@ func (msg Capture) apifyEvent() apiEvent {
 // properties are folded into properties.$set (v1 has no top-level $set).
 func (msg Identify) apifyEvent() apiEvent {
 	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
-		Merge(getSystemContext().ToProperties())
+		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Properties != nil {
 		myProperties.Set("$set", msg.Properties)
@@ -311,7 +311,7 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
-		Merge(getSystemContext().ToProperties())
+		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Properties != nil {
 		myProperties.Set("$group_set", msg.Properties)
@@ -332,7 +332,7 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 // into properties.
 func (msg Alias) apifyEvent() apiEvent {
 	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
-		Merge(getSystemContext().ToProperties()).
+		mergeDefaults(getSystemContext().ToProperties()).
 		Set("alias", msg.Alias)
 
 	return apiEvent{
@@ -350,7 +350,7 @@ func (msg Alias) apifyEvent() apiEvent {
 func (msg Exception) apifyEvent() apiEvent {
 	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
 		Merge(msg.Properties).
-		Merge(getSystemContext().ToProperties()).
+		mergeDefaults(getSystemContext().ToProperties()).
 		Set("$exception_list", msg.ExceptionList)
 
 	if msg.ExceptionFingerprint != nil {
