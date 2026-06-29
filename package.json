@@ -1,6 +1,6 @@
 {
   "name": "posthog-go",
-  "version": "1.16.2",
+  "version": "1.17.0",
   "private": true,
   "description": "Release metadata and changesets for the PostHog Go SDK",
   "packageManager": "pnpm@11.7.0",
