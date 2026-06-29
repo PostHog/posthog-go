@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -546,6 +548,126 @@ func TestV1SendCompressionCodecs(t *testing.T) {
 			}
 			if s, _ := cb.counts(); s != 1 {
 				t.Errorf("success callbacks = %d, want 1", s)
+			}
+		})
+	}
+}
+
+func TestV1SendCompressionFailureFallsBackToUncompressed(t *testing.T) {
+	originalCompressGzip := compressGzip
+	compressGzip = func([]byte) ([]byte, error) {
+		return nil, errors.New("gzip unavailable")
+	}
+	defer func() { compressGzip = originalCompressGzip }()
+
+	cb := &recordingCallback{}
+	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultOk}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+
+	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
+		cfg.CaptureMode = CaptureModeAnalyticsV1
+		cfg.Compression = CompressionGzip
+	})
+	c.sendV1(v1Batch(t, cap1(uuidA)))
+
+	reqs := srv.snapshot()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(reqs))
+	}
+	if reqs[0].encoding != "" {
+		t.Errorf("Content-Encoding = %q, want empty fallback", reqs[0].encoding)
+	}
+	if len(reqs[0].uuids) != 1 || reqs[0].uuids[0] != uuidA {
+		t.Errorf("decoded uuids = %v, want [%s]", reqs[0].uuids, uuidA)
+	}
+	if s, f := cb.counts(); s != 1 || f != 0 {
+		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)
+	}
+}
+
+func TestCompressV1BodyFailureFallsBackToUncompressed(t *testing.T) {
+	raw := []byte(`{"event":"e","distinct_id":"d"}`)
+
+	cases := []struct {
+		name    string
+		mode    CompressionMode
+		stubErr string
+		stub    func() func()
+	}{
+		{
+			name:    "gzip",
+			mode:    CompressionGzip,
+			stubErr: "gzip unavailable",
+			stub: func() func() {
+				original := compressGzip
+				compressGzip = func([]byte) ([]byte, error) {
+					return nil, errors.New("gzip unavailable")
+				}
+				return func() { compressGzip = original }
+			},
+		},
+		{
+			name:    "zstd",
+			mode:    CompressionZstd,
+			stubErr: "zstd unavailable",
+			stub: func() func() {
+				original := getZstdEncoder
+				getZstdEncoder = func() (*zstd.Encoder, error) {
+					return nil, errors.New("zstd unavailable")
+				}
+				return func() { getZstdEncoder = original }
+			},
+		},
+		{
+			name:    "deflate",
+			mode:    CompressionDeflate,
+			stubErr: "deflate unavailable",
+			stub: func() func() {
+				original := deflateCompress
+				deflateCompress = func([]byte) ([]byte, error) {
+					return nil, errors.New("deflate unavailable")
+				}
+				return func() { deflateCompress = original }
+			},
+		},
+		{
+			name:    "brotli",
+			mode:    CompressionBrotli,
+			stubErr: "brotli unavailable",
+			stub: func() func() {
+				original := brotliCompress
+				brotliCompress = func([]byte) ([]byte, error) {
+					return nil, errors.New("brotli unavailable")
+				}
+				return func() { brotliCompress = original }
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			restore := tc.stub()
+			defer restore()
+
+			body, token, err := compressV1Body(tc.mode, raw)
+			if err == nil {
+				t.Fatal("expected compression error")
+			}
+			if !strings.Contains(err.Error(), tc.stubErr) {
+				t.Fatalf("error = %v, want to contain %q", err, tc.stubErr)
+			}
+			if token != "" {
+				t.Errorf("token = %q, want empty fallback", token)
+			}
+			if !bytes.Equal(body, raw) {
+				t.Errorf("body = %q, want raw", body)
 			}
 		})
 	}
