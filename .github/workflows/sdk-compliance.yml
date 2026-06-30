@@ -14,20 +14,26 @@ on:
 jobs:
   compliance:
     name: PostHog SDK compliance tests (capture v0)
-    # Pinned to the 0.8.0 tag (commit be8b8d5) of the reusable workflow + harness
-    # image so v0/v1 runs are reproducible and pick up the capture-v1 suites.
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@be8b8d5a3f94a249659844e94832e874f049c1e4
+    # Keep the harness image pinned so v0/v1 runs are reproducible and pick up
+    # the capture-v1 suites.
+    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@fix/sdk-harness-options-20260630
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
       adapter-context: "."
       test-harness-version: "0.8.0"
       report-name: "sdk-compliance-report-v0"
 
+      suite: "capture"
+      sdk-type: "server"
+      continue-on-error: false
   compliance-v1:
     name: PostHog SDK compliance tests (capture v1)
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@be8b8d5a3f94a249659844e94832e874f049c1e4
+    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@fix/sdk-harness-options-20260630
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile.v1"
       adapter-context: "."
       test-harness-version: "0.8.0"
       report-name: "sdk-compliance-report-v1"
+      suite: "capture_v1"
+      sdk-type: "server"
+      continue-on-error: false
