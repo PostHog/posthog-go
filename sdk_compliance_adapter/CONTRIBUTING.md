@@ -9,8 +9,8 @@ Tests run automatically in CI via GitHub Actions.
 CI runs two jobs: `compliance` (capture v0, `Dockerfile`) and `compliance-v1`
 (capture v1, `Dockerfile.v1`). The only difference between the images is the
 `CAPTURE_MODE=v1` env var, which flips the adapter's `/health` capabilities and
-selects `posthog.CaptureModeAnalyticsV1` at init. Both jobs pin the harness to
-`0.8.0`.
+selects `posthog.CaptureModeAnalyticsV1` at init. Both jobs pin the reusable
+workflow to the 0.9.0 release commit and run the `0.9.0` harness image.
 
 ### Locally with Docker Compose
 
@@ -45,7 +45,7 @@ docker run -d --name sdk-adapter --network test-network -p 8080:8080 posthog-go-
 docker run --rm \
   --name test-harness \
   --network test-network \
-  ghcr.io/posthog/sdk-test-harness:0.8.0 \
+  ghcr.io/posthog/sdk-test-harness:0.9.0 \
   run --adapter-url http://sdk-adapter:8080 --mock-url http://test-harness:8081
 
 # Cleanup
