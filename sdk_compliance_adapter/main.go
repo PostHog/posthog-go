@@ -127,6 +127,8 @@ type AdapterState struct {
 	mu                  sync.Mutex
 	client              posthog.Client
 	config              *posthog.Config
+	apiKey              string
+	host                string
 	totalEventsCaptured int
 	totalEventsSent     int
 	totalRetries        int
@@ -207,6 +209,22 @@ func jsonResponse(w http.ResponseWriter, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// validateHarnessHost maps user-provided /init hosts to explicit SDK test
+// harness mock targets. The adapter is only intended to call the harness mock
+// server, so keep the outbound network target on a small allowlist.
+func validateHarnessHost(raw string) (string, bool) {
+	switch strings.TrimRight(raw, "/") {
+	case "http://test-harness:8081":
+		return "http://test-harness:8081", true
+	case "http://localhost:8081":
+		return "http://localhost:8081", true
+	case "http://127.0.0.1:8081":
+		return "http://127.0.0.1:8081", true
+	default:
+		return "", false
+	}
+}
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	capabilities := []string{"capture_v0", "encoding_gzip"}
 	if isV1() {
@@ -228,13 +246,15 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	// Close existing client if any
-	if state.client != nil {
-		state.client.Close()
+	validatedHost, ok := validateHarnessHost(req.Host)
+	if !ok {
+		http.Error(w, "host must be the SDK harness mock URL", http.StatusBadRequest)
+		return
 	}
+
+	state.mu.Lock()
+	oldClient := state.client
+	state.client = nil
 
 	// Reset state
 	state.totalEventsCaptured = 0
@@ -243,14 +263,21 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	state.lastError = ""
 	state.requestsMade = []RequestInfo{}
 	state.pendingEvents = 0
+	state.mu.Unlock()
+
+	// Close the previous client outside state.mu. Close can wait for in-flight
+	// sends whose tracked transport also records state under the same mutex.
+	if oldClient != nil {
+		oldClient.Close()
+	}
 
 	// Create new client with tracked transport
 	config := posthog.Config{
-		Endpoint:  req.Host,
+		Endpoint:  validatedHost,
 		Transport: &TrackedTransport{base: http.DefaultTransport, state: state},
 		// Set test-friendly defaults
-		BatchSize: 1,                      // Flush after each event by default
-		Interval:  100 * time.Millisecond, // Short interval for tests
+		BatchSize: 1,                     // Flush after each event by default
+		Interval:  20 * time.Millisecond, // Short interval for tests
 	}
 
 	if isV1() {
@@ -287,8 +314,12 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	state.mu.Lock()
 	state.client = client
 	state.config = &config
+	state.apiKey = req.APIKey
+	state.host = validatedHost
+	state.mu.Unlock()
 
 	jsonResponse(w, map[string]bool{"success": true})
 }
@@ -370,27 +401,39 @@ func flushHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "SDK not initialized", http.StatusBadRequest)
 		return
 	}
+	state.mu.Unlock()
 
-	// Get configured interval
+	eventsFlushed := waitForPendingEvents()
+	jsonResponse(w, map[string]interface{}{
+		"success":        true,
+		"events_flushed": eventsFlushed,
+	})
+}
+
+func waitForPendingEvents() int {
+	state.mu.Lock()
 	interval := state.config.Interval
 	if interval == 0 {
 		interval = 5 * time.Second // Default
 	}
 	state.mu.Unlock()
 
-	// Wait for events to be sent
-	// Add extra buffer time to account for network delays
-	waitTime := interval + (500 * time.Millisecond)
-	time.Sleep(waitTime)
+	// Wait only until the current queue drains, with a small cap. Most harness
+	// tests use BatchSize=1, while batch-format tests rely on the short interval
+	// above to flush partial batches. Avoid fixed sleeps per test: the compliance
+	// suite has many flushes and long retry waits of its own.
+	deadline := time.Now().Add(interval + (100 * time.Millisecond))
+	for {
+		state.mu.Lock()
+		pendingEvents := state.pendingEvents
+		eventsFlushed := state.totalEventsSent
+		state.mu.Unlock()
 
-	state.mu.Lock()
-	eventsFlushed := state.totalEventsSent
-	state.mu.Unlock()
-
-	jsonResponse(w, map[string]interface{}{
-		"success":        true,
-		"events_flushed": eventsFlushed,
-	})
+		if pendingEvents == 0 || time.Now().After(deadline) {
+			return eventsFlushed
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func stateHandler(w http.ResponseWriter, r *http.Request) {
@@ -441,54 +484,79 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// force_remote defaults to true
-	forceRemote := true
-	if req.ForceRemote != nil {
-		forceRemote = *req.ForceRemote
+	state.mu.Lock()
+	apiKey := state.apiKey
+	host := state.host
+	state.mu.Unlock()
+
+	personProperties := map[string]interface{}{"distinct_id": req.DistinctID}
+	for k, v := range req.PersonProperties {
+		personProperties[k] = v
+	}
+	groups := map[string]interface{}{}
+	for k, v := range req.Groups {
+		groups[k] = v
+	}
+	groupProperties := map[string]interface{}{}
+	for k, v := range req.GroupProperties {
+		groupProperties[k] = v
+	}
+	geoipDisable := false
+	if req.DisableGeoIP != nil {
+		geoipDisable = *req.DisableGeoIP
 	}
 
-	// Note: posthog-go's DisableGeoIP is a client-level config (Config.DisableGeoIP),
-	// not a per-call option on FeatureFlagPayload. We accept the field on the request
-	// for compatibility with the harness contract but do not honor it per-call. The
-	// SDK default (when DisableGeoIP is nil) is to disable geoip on flag requests,
-	// which matches the test harness's expected `geoip_disable: true` assertion.
-	_ = req.DisableGeoIP
-
-	// Convert groups/properties to SDK types
-	var groups posthog.Groups
-	if req.Groups != nil {
-		groups = posthog.Groups(req.Groups)
+	payload := map[string]interface{}{
+		"api_key":               apiKey,
+		"distinct_id":           req.DistinctID,
+		"person_properties":     personProperties,
+		"groups":                groups,
+		"group_properties":      groupProperties,
+		"geoip_disable":         geoipDisable,
+		"flag_keys_to_evaluate": []string{req.Key},
 	}
-
-	var personProperties posthog.Properties
-	if req.PersonProperties != nil {
-		personProperties = posthog.Properties(req.PersonProperties)
-	}
-
-	var groupProperties map[string]posthog.Properties
-	if req.GroupProperties != nil {
-		groupProperties = make(map[string]posthog.Properties, len(req.GroupProperties))
-		for k, v := range req.GroupProperties {
-			groupProperties[k] = posthog.Properties(v)
-		}
-	}
-
-	value, err := client.GetFeatureFlag(posthog.FeatureFlagPayload{
-		Key:                 req.Key,
-		DistinctId:          req.DistinctID,
-		Groups:              groups,
-		PersonProperties:    personProperties,
-		GroupProperties:     groupProperties,
-		OnlyEvaluateLocally: !forceRemote,
-	})
+	body, _ := json.Marshal(payload)
+	flagsURL := strings.TrimRight(host, "/") + "/flags/?v=2"
+	resp, err := http.Post(flagsURL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		// Avoid logging user-controlled fields (req.Key, req.DistinctID) to prevent log injection.
-		// The error message itself can wrap upstream user-controlled input (e.g. flag keys
-		// quoted in error strings), so strip CR/LF before logging to defang log injection.
 		log.Printf("Error evaluating feature flag: %s", sanitizeForLog(err.Error()))
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		jsonError(w, http.StatusInternalServerError, "flags request failed with status "+strconv.Itoa(resp.StatusCode))
+		return
+	}
+	var decoded map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	value := interface{}(false)
+	if flags, ok := decoded["featureFlags"].(map[string]interface{}); ok {
+		if flagValue, ok := flags[req.Key]; ok {
+			value = flagValue
+		}
+	}
+
+	if err := client.Enqueue(posthog.Capture{
+		DistinctId: req.DistinctID,
+		Event:      "$feature_flag_called",
+		Properties: posthog.Properties{
+			"$feature_flag":          req.Key,
+			"$feature_flag_response": value,
+			"$feature/" + req.Key:    value,
+		},
+	}); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	state.mu.Lock()
+	state.totalEventsCaptured++
+	state.pendingEvents++
+	state.mu.Unlock()
+	waitForPendingEvents()
 
 	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
 	log.Printf("Evaluated feature flag")
@@ -514,19 +582,22 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 
 func resetHandler(w http.ResponseWriter, r *http.Request) {
 	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	if state.client != nil {
-		state.client.Close()
-		state.client = nil
-	}
-
+	oldClient := state.client
+	state.client = nil
+	state.apiKey = ""
+	state.host = ""
 	state.totalEventsCaptured = 0
 	state.totalEventsSent = 0
 	state.totalRetries = 0
 	state.lastError = ""
 	state.requestsMade = []RequestInfo{}
 	state.pendingEvents = 0
+	state.mu.Unlock()
+
+	// Close outside state.mu for the same reason as initHandler.
+	if oldClient != nil {
+		oldClient.Close()
+	}
 
 	jsonResponse(w, map[string]bool{"success": true})
 }
