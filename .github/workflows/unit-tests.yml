@@ -15,8 +15,126 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_go_checks: ${{ steps.classify.outputs.run_go_checks }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        continue-on-error: true
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classify
+        shell: bash
+        env:
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+
+          run_go_checks=true
+          reason="Unable to determine changed files; running Go checks."
+          changed_files="$(mktemp)"
+
+          finish() {
+            echo "run_go_checks=${run_go_checks}" >> "${GITHUB_OUTPUT}"
+            echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+            echo "run_go_checks=${run_go_checks}"
+            echo "${reason}"
+          }
+
+          if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            reason="Checkout was unavailable; running Go checks."
+            finish
+            exit 0
+          fi
+
+          base=""
+          head="${GITHUB_SHA}"
+
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request)
+              base="${PULL_REQUEST_BASE_SHA}"
+              ;;
+            push)
+              base="${PUSH_BEFORE_SHA}"
+              if [[ -z "${base}" || "${base}" =~ ^0+$ ]]; then
+                reason="Push base SHA is unavailable; running Go checks."
+                finish
+                exit 0
+              fi
+              ;;
+            merge_group)
+              base="${MERGE_GROUP_BASE_SHA}"
+              ;;
+            *)
+              reason="Unsupported event ${GITHUB_EVENT_NAME}; running Go checks."
+              finish
+              exit 0
+              ;;
+          esac
+
+          if [[ -z "${base}" || -z "${head}" ]]; then
+            reason="Diff base or head SHA is unavailable; running Go checks."
+            finish
+            exit 0
+          fi
+
+          if ! git rev-parse --verify "${base}^{commit}" >/dev/null 2>&1; then
+            reason="Base commit ${base} is unavailable; running Go checks."
+            finish
+            exit 0
+          fi
+
+          if ! git rev-parse --verify "${head}^{commit}" >/dev/null 2>&1; then
+            reason="Head commit ${head} is unavailable; running Go checks."
+            finish
+            exit 0
+          fi
+
+          if ! git diff --name-only "${base}" "${head}" > "${changed_files}"; then
+            reason="Unable to diff ${base}..${head}; running Go checks."
+            finish
+            exit 0
+          fi
+
+          if [[ ! -s "${changed_files}" ]]; then
+            reason="No changed files detected; running Go checks."
+            finish
+            exit 0
+          fi
+
+          run_go_checks=false
+          reason="Only non-impacting files changed; skipping Go checks."
+
+          echo "Changed files:"
+          while IFS= read -r file; do
+            [[ -z "${file}" ]] && continue
+            echo " - ${file}"
+
+            case "${file}" in
+              *.md|docs/**|.changeset/*.md|.github/ISSUE_TEMPLATE/**|.github/PULL_REQUEST_TEMPLATE/**|.github/pull_request_template.md|.github/workflows/release.yml|.github/workflows/stale.yaml|.github/workflows/lint-pr.yml|.github/workflows/call-flags-project-board.yml)
+                ;;
+              *)
+                run_go_checks=true
+                reason="Found SDK/build-impacting or unknown file: ${file}; running Go checks."
+                break
+                ;;
+            esac
+          done < "${changed_files}"
+
+          finish
+
   build:
     name: Build (Go ${{ matrix.go-version }})
+    needs: changes
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -24,34 +142,56 @@ jobs:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
         go-version: ['1.21', '1.x']
     steps:
+      - name: Skip non-impacting changes
+        if: needs.changes.outputs.run_go_checks == 'false'
+        env:
+          SKIP_REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "${SKIP_REASON}"
+
       - name: Set up Go ${{ matrix.go-version }}
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Check out source code
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Build
+        if: needs.changes.outputs.run_go_checks != 'false'
         run: go build .
 
   public-api:
     name: Public API
+    needs: changes
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
+      - name: Skip non-impacting changes
+        if: needs.changes.outputs.run_go_checks == 'false'
+        env:
+          SKIP_REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "${SKIP_REASON}"
+
       - name: Set up Go
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: '1.21'
 
       - name: Check out source code
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Check public API snapshot
+        if: needs.changes.outputs.run_go_checks != 'false'
         run: make api-diff
 
   test:
     name: Test (Go ${{ matrix.go-version }})
+    needs: changes
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -59,19 +199,30 @@ jobs:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
         go-version: ['1.21', '1.x']
     steps:
+      - name: Skip non-impacting changes
+        if: needs.changes.outputs.run_go_checks == 'false'
+        env:
+          SKIP_REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "${SKIP_REASON}"
+
       - name: Set up Go ${{ matrix.go-version }}
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Check out source code
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Test
+        if: needs.changes.outputs.run_go_checks != 'false'
         run: go test -v -count=1 -timeout=5m -coverprofile=coverage.out ./...
 
   race:
     name: Race tests (Go ${{ matrix.go-version }})
+    needs: changes
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -79,19 +230,30 @@ jobs:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
         go-version: ['1.21', '1.x']
     steps:
+      - name: Skip non-impacting changes
+        if: needs.changes.outputs.run_go_checks == 'false'
+        env:
+          SKIP_REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "${SKIP_REASON}"
+
       - name: Set up Go ${{ matrix.go-version }}
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Check out source code
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Race tests
+        if: needs.changes.outputs.run_go_checks != 'false'
         run: go test -v -race -count=1 -timeout=5m ./...
 
   vet:
     name: Go vet (Go ${{ matrix.go-version }})
+    needs: changes
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -99,13 +261,22 @@ jobs:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
         go-version: ['1.21', '1.x']
     steps:
+      - name: Skip non-impacting changes
+        if: needs.changes.outputs.run_go_checks == 'false'
+        env:
+          SKIP_REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "${SKIP_REASON}"
+
       - name: Set up Go ${{ matrix.go-version }}
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Check out source code
+        if: needs.changes.outputs.run_go_checks != 'false'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Vet
+        if: needs.changes.outputs.run_go_checks != 'false'
         run: go vet ./...
