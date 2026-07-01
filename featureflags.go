@@ -1928,7 +1928,7 @@ func flagHasDependencies(flag FeatureFlag) bool {
 }
 
 // flagHasPersonProperties returns true if any condition in the flag checks person properties.
-// When false, the distinct_id merge into personProperties can be skipped entirely.
+// When false, local evaluation can skip constructing person-property context for the flag.
 func flagHasPersonProperties(flag FeatureFlag) bool {
 	for _, group := range flag.Filters.Groups {
 		if len(group.Properties) > 0 {
