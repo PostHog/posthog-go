@@ -52,7 +52,6 @@ func TestTCPDropRecovery(t *testing.T) {
 
 			url, err := server.Start()
 			require.NoError(t, err, "Failed to start server")
-			defer server.Close()
 			t.Logf("TCP server started at %s", url)
 
 			callback := newTestCallback(t)
@@ -91,6 +90,7 @@ func TestTCPDropRecovery(t *testing.T) {
 			}
 
 			client.Close()
+			require.NoError(t, server.Close(), "Failed to close server")
 
 			success, failure := callback.GetCounts()
 			assert.Equal(t, 1, success, "Expected 1 success")
@@ -148,7 +148,6 @@ func TestTCPDropFailure(t *testing.T) {
 
 			url, err := server.Start()
 			require.NoError(t, err, "Failed to start server")
-			defer server.Close()
 			t.Logf("TCP server started at %s", url)
 
 			callback := newTestCallback(t)
@@ -187,6 +186,7 @@ func TestTCPDropFailure(t *testing.T) {
 			}
 
 			client.Close()
+			require.NoError(t, server.Close(), "Failed to close server")
 
 			success, failure := callback.GetCounts()
 			assert.Equal(t, 10, server.ConnCount())
