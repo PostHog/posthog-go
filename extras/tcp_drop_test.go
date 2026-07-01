@@ -91,6 +91,7 @@ func TestTCPDropRecovery(t *testing.T) {
 			}
 
 			client.Close()
+			require.NoError(t, server.Close(), "Failed to close server")
 
 			success, failure := callback.GetCounts()
 			assert.Equal(t, 1, success, "Expected 1 success")
