@@ -335,7 +335,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		personProps := NewProperties().Set("email", "test@example.com")
 		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, personProps, nil)
 
-			if requestData.PersonProperties["email"] != "test@example.com" {
+		if requestData.PersonProperties["email"] != "test@example.com" {
 			t.Errorf("Expected request body to contain person properties, got: %v", requestData.PersonProperties)
 		}
 		if _, ok := requestData.PersonProperties["distinct_id"]; ok {
