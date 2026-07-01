@@ -338,6 +338,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if requestData.PersonProperties["email"] != "test@example.com" {
 			t.Errorf("Expected request body to contain person properties, got: %v", requestData.PersonProperties)
 		}
+		if _, ok := requestData.PersonProperties["distinct_id"]; ok {
+			t.Errorf("Expected request body person properties to not duplicate distinct_id, got: %v", requestData.PersonProperties)
+		}
 	})
 
 	t.Run("passes groups in request", func(t *testing.T) {
