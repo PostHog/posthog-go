@@ -385,7 +385,7 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		defer posthog.Close()
 
 		_, err := posthog.GetAllFlags(FeatureFlagPayloadNoKey{
-			DistinctId:        "user-123",
+			DistinctId:       "user-123",
 			PersonProperties: NewProperties().Set("email", "test@example.com"),
 		})
 		if err != nil {
