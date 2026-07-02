@@ -86,6 +86,76 @@ func TestMakeFlagsRequestRetriesTransientErrorsThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestMakeFlagsRequestRetriesHTTP502And504ThenSucceeds(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusGatewayTimeout} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				call := calls.Add(1)
+				if call == 1 {
+					w.WriteHeader(status)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"featureFlags":{"beta-feature":true},"featureFlagPayloads":{}}`))
+			}))
+			defer server.Close()
+
+			client, err := newFlagsClient("test-api-key", server.URL, http.Client{}, time.Second, testLogger{t.Logf, t.Logf}, nil)
+			if err != nil {
+				t.Fatalf("newFlagsClient returned error: %v", err)
+			}
+			client.retryAfter = func(int) time.Duration { return 0 }
+
+			res, err := client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+			if err != nil {
+				t.Fatalf("makeFlagsRequest returned error: %v", err)
+			}
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("expected 2 attempts, got %d", got)
+			}
+			if got := res.FeatureFlags["beta-feature"]; got != true {
+				t.Fatalf("expected beta-feature=true, got %#v", got)
+			}
+		})
+	}
+}
+
+func TestMakeFlagsRequestRetriesHTTP502And504UntilExhausted(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusGatewayTimeout} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			client, err := newFlagsClient("test-api-key", server.URL, http.Client{}, time.Second, testLogger{t.Logf, t.Logf}, nil)
+			if err != nil {
+				t.Fatalf("newFlagsClient returned error: %v", err)
+			}
+			client.retryAfter = func(int) time.Duration { return 0 }
+
+			_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			apiErr, ok := err.(*APIError)
+			if !ok {
+				t.Fatalf("expected APIError, got %T: %v", err, err)
+			}
+			if apiErr.StatusCode != status {
+				t.Fatalf("expected status %d, got %d", status, apiErr.StatusCode)
+			}
+			if got := calls.Load(); got != int32(defaultFlagsRequestMaxAttempts) {
+				t.Fatalf("expected %d attempts, got %d", defaultFlagsRequestMaxAttempts, got)
+			}
+		})
+	}
+}
+
 func TestDefaultFlagsBackoffStartsAt300msAndDoubles(t *testing.T) {
 	backoff := defaultFlagsBackoff()
 
