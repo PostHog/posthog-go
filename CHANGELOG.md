@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.17.4
+
+### Patch Changes
+
+- 25e43f8: Stop duplicating `distinct_id` inside `/flags` person properties.
+
 ## 1.17.3
 
 ### Patch Changes
