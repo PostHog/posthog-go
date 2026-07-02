@@ -338,6 +338,100 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 		if requestData.PersonProperties["email"] != "test@example.com" {
 			t.Errorf("Expected request body to contain person properties, got: %v", requestData.PersonProperties)
 		}
+		if _, ok := requestData.PersonProperties["distinct_id"]; ok {
+			t.Errorf("Expected request body person properties to not duplicate distinct_id, got: %v", requestData.PersonProperties)
+		}
+	})
+
+	t.Run("preserves explicit person properties distinct_id", func(t *testing.T) {
+		var requestData FlagsRequestData
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
+			w.Write([]byte(`{"flags": {}, "requestId": "req-props"}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		personProps := NewProperties().Set("distinct_id", "custom-distinct-id")
+		c.getFeatureFlagFromRemote("test-flag", "user-123", nil, nil, personProps, nil)
+
+		if requestData.PersonProperties["distinct_id"] != "custom-distinct-id" {
+			t.Errorf("Expected explicit distinct_id person property to be preserved, got: %v", requestData.PersonProperties)
+		}
+	})
+
+	t.Run("GetAllFlags does not duplicate distinct_id in person properties", func(t *testing.T) {
+		var requestData FlagsRequestData
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
+			w.Write([]byte(`{"featureFlags": {"test-flag": true}, "requestId": "req-all"}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint: server.URL,
+		})
+		defer posthog.Close()
+
+		_, err := posthog.GetAllFlags(FeatureFlagPayloadNoKey{
+			DistinctId:       "user-123",
+			PersonProperties: NewProperties().Set("email", "test@example.com"),
+		})
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+		if _, ok := requestData.PersonProperties["distinct_id"]; ok {
+			t.Errorf("Expected GetAllFlags request person properties to not duplicate distinct_id, got: %v", requestData.PersonProperties)
+		}
+	})
+
+	t.Run("capture enrichment fallback does not duplicate distinct_id in person properties", func(t *testing.T) {
+		var requestData FlagsRequestData
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/flags/definitions" {
+				w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &requestData); err != nil {
+				t.Errorf("Failed to parse request body: %v", err)
+			}
+			w.Write([]byte(`{"featureFlags": {"test-flag": true}, "requestId": "req-fallback"}`))
+		}))
+		defer server.Close()
+
+		posthog, _ := NewWithConfig("test-api-key", Config{
+			Endpoint:       server.URL,
+			PersonalApiKey: "test-personal-key",
+		})
+		defer posthog.Close()
+
+		c := posthog.(*client)
+		_, err := c.featureFlagsPoller.getFeatureFlagVariantsWithFallback(
+			"user-123",
+			nil,
+			nil,
+			NewProperties().Set("email", "test@example.com"),
+			nil,
+			false,
+		)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+		if _, ok := requestData.PersonProperties["distinct_id"]; ok {
+			t.Errorf("Expected capture enrichment fallback person properties to not duplicate distinct_id, got: %v", requestData.PersonProperties)
+		}
 	})
 
 	t.Run("passes groups in request", func(t *testing.T) {

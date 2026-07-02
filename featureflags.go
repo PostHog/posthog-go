@@ -601,10 +601,6 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
 	flag, err := poller.getFeatureFlag(flagConfig)
 
-	// Make sure person_properties contains distinct_id so /flags request payloads
-	// have it under person_properties (matches the batch path and what server expects).
-	personProps := mergeDistinctIDIntoProperties(flagConfig.PersonProperties, flagConfig.DistinctId)
-
 	var result interface{}
 	locallyEvaluated := false
 
@@ -614,7 +610,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.DistinctId,
 			flagConfig.DeviceId,
 			flagConfig.Groups,
-			personProps,
+			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
 			poller.getCohorts(),
 		)
@@ -626,28 +622,13 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, personProps, flagConfig.GroupProperties)
+		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
 		if err != nil {
 			return nil, locallyEvaluated, err
 		}
 	}
 
 	return result, locallyEvaluated, err
-}
-
-// mergeDistinctIDIntoProperties returns a copy of properties with distinct_id added
-// (if not already present). Used so /flags request payloads always carry distinct_id
-// inside person_properties as well as at the top level.
-func mergeDistinctIDIntoProperties(properties Properties, distinctID string) Properties {
-	if _, ok := properties["distinct_id"]; ok {
-		return properties
-	}
-	merged := make(Properties, len(properties)+1)
-	merged["distinct_id"] = distinctID
-	for k, v := range properties {
-		merged[k] = v
-	}
-	return merged
 }
 
 // GetFeatureFlagPayload returns the payload for the evaluated flag value.
@@ -788,10 +769,6 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	// Pre-size response map to avoid rehashing as flags are added
 	response := make(map[string]interface{}, len(featureFlags))
 
-	// Pre-merge distinct_id into person properties once for the entire batch,
-	// instead of copying the map per-flag inside computeFlagLocally.
-	personProps := mergeDistinctIDIntoProperties(flagConfig.PersonProperties, flagConfig.DistinctId)
-
 	if len(featureFlags) == 0 {
 		fallbackToDecide = true
 	} else {
@@ -801,7 +778,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 				flagConfig.DistinctId,
 				flagConfig.DeviceId,
 				flagConfig.Groups,
-				personProps,
+				flagConfig.PersonProperties,
 				flagConfig.GroupProperties,
 				cohorts,
 			)
@@ -1951,7 +1928,7 @@ func flagHasDependencies(flag FeatureFlag) bool {
 }
 
 // flagHasPersonProperties returns true if any condition in the flag checks person properties.
-// When false, the distinct_id merge into personProperties can be skipped entirely.
+// When false, local evaluation can skip constructing person-property context for the flag.
 func flagHasPersonProperties(flag FeatureFlag) bool {
 	for _, group := range flag.Filters.Groups {
 		if len(group.Properties) > 0 {
@@ -2249,11 +2226,6 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 
 	cohorts := poller.getCohorts()
 	result := make(map[string]interface{}, len(flags))
-
-	// Merge distinct_id into person_properties so both local evaluation and the
-	// remote /flags fallback match on distinct_id as a person property, matching
-	// GetFeatureFlag and the GetAllFlags batch path.
-	personProperties = mergeDistinctIDIntoProperties(personProperties, distinctId)
 
 	// Fall back to the remote request when no definitions are loaded or any flag
 	// can't be computed locally.
