@@ -75,7 +75,7 @@ var (
 	// limit.
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
-	// ErrNoPersonalAPIKey is returned when PersonalApiKey is required for the
+	// ErrNoPersonalAPIKey is returned when a SecretKey is required for the
 	// requested operation but was not configured.
 	ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
 

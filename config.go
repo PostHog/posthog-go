@@ -70,10 +70,19 @@ type Config struct {
 	// If empty, it defaults to DefaultEndpoint.
 	Endpoint string
 
-	// PersonalApiKey enables local feature flag evaluation, remote config payloads,
-	// and lower-latency flag APIs. If empty, feature flag methods fall back to the
-	// /flags endpoint unless the method requires local-only behavior.
-	// See https://posthog.com/docs/api/overview for how to create a personal API key.
+	// SecretKey is the credential used for local feature flag evaluation, remote
+	// config payloads, and lower-latency flag APIs. It accepts either a Personal
+	// API Key (phx_...) or a Project Secret API Key (phs_...). If empty, feature
+	// flag methods fall back to the /flags endpoint unless the method requires
+	// local-only behavior. When both SecretKey and PersonalApiKey are set,
+	// SecretKey takes precedence.
+	// See https://posthog.com/docs/api/overview for how to create these keys.
+	SecretKey string
+
+	// PersonalApiKey is a deprecated alias for SecretKey. It is still honored for
+	// backwards compatibility but SecretKey is preferred.
+	//
+	// Deprecated: use SecretKey instead.
 	PersonalApiKey string
 
 	// DisableGeoIP controls whether event and feature flag requests include
@@ -100,7 +109,7 @@ type Config struct {
 	Interval time.Duration
 
 	// DefaultFeatureFlagsPollingInterval is the interval for reloading local feature
-	// flag definitions when PersonalApiKey is configured. If zero, it defaults to
+	// flag definitions when SecretKey is configured. If zero, it defaults to
 	// DefaultFeatureFlagsPollingInterval.
 	DefaultFeatureFlagsPollingInterval time.Duration
 
@@ -245,7 +254,16 @@ const (
 
 func (c *Config) normalize() {
 	c.Endpoint = strings.TrimSpace(c.Endpoint)
+	c.SecretKey = strings.TrimSpace(c.SecretKey)
 	c.PersonalApiKey = strings.TrimSpace(c.PersonalApiKey)
+}
+
+// effectiveSecretKey prefers SecretKey and falls back to the deprecated PersonalApiKey.
+func (c *Config) effectiveSecretKey() string {
+	if c.SecretKey != "" {
+		return c.SecretKey
+	}
+	return c.PersonalApiKey
 }
 
 // Validate verifies that fields that don't have zero-values are set to valid values,

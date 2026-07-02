@@ -26,6 +26,19 @@ func TestConfigValidateTrimsWhitespaceSensitiveFields(t *testing.T) {
 	require.Equal(t, "test-personal-key", c.PersonalApiKey)
 }
 
+func TestConfigEffectiveSecretKey(t *testing.T) {
+	require.Equal(t, "", (&Config{}).effectiveSecretKey())
+	require.Equal(t, "phx_personal", (&Config{PersonalApiKey: "phx_personal"}).effectiveSecretKey())
+	require.Equal(t, "phs_secret", (&Config{SecretKey: "phs_secret"}).effectiveSecretKey())
+	require.Equal(t, "phs_secret", (&Config{SecretKey: "phs_secret", PersonalApiKey: "phx_personal"}).effectiveSecretKey())
+}
+
+func TestConfigValidateTrimsSecretKey(t *testing.T) {
+	c := Config{SecretKey: " \tphs_secret\n "}
+	require.NoError(t, c.Validate())
+	require.Equal(t, "phs_secret", c.SecretKey)
+}
+
 func TestMakeConfigDefaultsWhitespaceEndpoint(t *testing.T) {
 	got := makeConfig(Config{Endpoint: " \n\t "})
 	require.Equal(t, DefaultEndpoint, got.Endpoint)

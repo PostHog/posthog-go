@@ -74,7 +74,7 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 		Interval:       30 * time.Second,
 		BatchSize:      100,
 		Verbose:        true,
-		PersonalApiKey: personalAPIKey,
+		SecretKey: personalAPIKey,
 		Endpoint:       endpoint,
 	})
 	defer client.Close()
@@ -123,7 +123,7 @@ func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpo
 		Interval:       30 * time.Second,
 		BatchSize:      100,
 		Verbose:        true,
-		PersonalApiKey: personalAPIKey,
+		SecretKey: personalAPIKey,
 		Endpoint:       endpoint,
 	})
 	defer client.Close()

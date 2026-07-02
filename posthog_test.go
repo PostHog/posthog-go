@@ -275,6 +275,40 @@ func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 	require.Equal(t, "Bearer test-personal-key", remoteConfigAuth)
 }
 
+func TestRemoteConfigAuthUsesResolvedSecretKey(t *testing.T) {
+	cases := []struct {
+		name     string
+		config   Config
+		wantAuth string
+	}{
+		{"secret key", Config{SecretKey: "phs_secret"}, "Bearer phs_secret"},
+		{"personal api key fallback", Config{PersonalApiKey: "phx_personal"}, "Bearer phx_personal"},
+		{"secret key wins", Config{SecretKey: "phs_secret", PersonalApiKey: "phx_personal"}, "Bearer phs_secret"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotAuth string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`"ok"`))
+			}))
+			defer server.Close()
+
+			tc.config.Endpoint = server.URL
+			client, err := NewWithConfig("test-api-key", tc.config)
+			require.NoError(t, err)
+			defer client.Close()
+
+			payload, err := client.GetRemoteConfigPayload("test-flag")
+			require.NoError(t, err)
+			require.Equal(t, "ok", payload)
+			require.Equal(t, tc.wantAuth, gotAuth)
+		})
+	}
+}
+
 var _ Message = (*testErrorMessage)(nil)
 
 // Instances of this type are used to force message validation errors in unit
@@ -1345,11 +1379,11 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	require.Empty(t, localEvaluations.Keys())
 
 	joinedLogs := strings.Join(logged, "\n")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; ReloadFeatureFlags requires a PersonalApiKey.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetRemoteConfigPayload requires a PersonalApiKey.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetFeatureFlagResult requires a PersonalApiKey.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; GetAllFlags requires a PersonalApiKey.")
-	require.Contains(t, joinedLogs, "PostHog personal_api_key is not configured; EvaluateFlags requires a PersonalApiKey.")
+	require.Contains(t, joinedLogs, "PostHog secret key is not configured; ReloadFeatureFlags requires a SecretKey.")
+	require.Contains(t, joinedLogs, "PostHog secret key is not configured; GetRemoteConfigPayload requires a SecretKey.")
+	require.Contains(t, joinedLogs, "PostHog secret key is not configured; GetFeatureFlagResult requires a SecretKey.")
+	require.Contains(t, joinedLogs, "PostHog secret key is not configured; GetAllFlags requires a SecretKey.")
+	require.Contains(t, joinedLogs, "PostHog secret key is not configured; EvaluateFlags requires a SecretKey.")
 }
 
 func TestFeatureFlagPublicMethodsKeepDistinctIDConfigError(t *testing.T) {
