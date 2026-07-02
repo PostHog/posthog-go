@@ -27,10 +27,20 @@ func TestConfigValidateTrimsWhitespaceSensitiveFields(t *testing.T) {
 }
 
 func TestConfigEffectiveSecretKey(t *testing.T) {
-	require.Equal(t, "", (&Config{}).effectiveSecretKey())
-	require.Equal(t, "phx_personal", (&Config{PersonalApiKey: "phx_personal"}).effectiveSecretKey())
-	require.Equal(t, "phs_secret", (&Config{SecretKey: "phs_secret"}).effectiveSecretKey())
-	require.Equal(t, "phs_secret", (&Config{SecretKey: "phs_secret", PersonalApiKey: "phx_personal"}).effectiveSecretKey())
+	for _, tc := range []struct {
+		name   string
+		config Config
+		want   string
+	}{
+		{"neither", Config{}, ""},
+		{"personal only", Config{PersonalApiKey: "phx_personal"}, "phx_personal"},
+		{"secret only", Config{SecretKey: "phs_secret"}, "phs_secret"},
+		{"secret precedence", Config{SecretKey: "phs_secret", PersonalApiKey: "phx_personal"}, "phs_secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.config.effectiveSecretKey())
+		})
+	}
 }
 
 func TestConfigValidateTrimsSecretKey(t *testing.T) {
