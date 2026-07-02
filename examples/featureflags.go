@@ -13,7 +13,7 @@ func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            true,
-		PersonalApiKey:                     personalAPIKey,
+		SecretKey:                          personalAPIKey,
 		Endpoint:                           endpoint,
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,
@@ -108,7 +108,7 @@ func TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint string) {
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            false, // Disable verbose logging for cleaner output
-		PersonalApiKey:                     personalAPIKey,
+		SecretKey:                          personalAPIKey,
 		Endpoint:                           endpoint,
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,

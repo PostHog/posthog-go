@@ -85,7 +85,7 @@ func TestETagPolling(projectAPIKey, personalAPIKey, endpointURL string) {
 	}
 
 	client, err := posthog.NewWithConfig(projectAPIKey, posthog.Config{
-		PersonalApiKey:                     personalAPIKey,
+		SecretKey:                          personalAPIKey,
 		Endpoint:                           endpointURL,
 		DefaultFeatureFlagsPollingInterval: etagPollInterval,
 		Transport:                          transport,

@@ -71,11 +71,11 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 	fmt.Println("   This demonstrates how to automatically include feature flag states with events")
 
 	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
-		Interval:       30 * time.Second,
-		BatchSize:      100,
-		Verbose:        true,
-		PersonalApiKey: personalAPIKey,
-		Endpoint:       endpoint,
+		Interval:  30 * time.Second,
+		BatchSize: 100,
+		Verbose:   true,
+		SecretKey: personalAPIKey,
+		Endpoint:  endpoint,
 	})
 	defer client.Close()
 
@@ -120,11 +120,11 @@ func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpo
 	fmt.Println("   This demonstrates advanced feature flag evaluation with custom properties")
 
 	client, _ := posthog.NewWithConfig(projectAPIKey, posthog.Config{
-		Interval:       30 * time.Second,
-		BatchSize:      100,
-		Verbose:        true,
-		PersonalApiKey: personalAPIKey,
-		Endpoint:       endpoint,
+		Interval:  30 * time.Second,
+		BatchSize: 100,
+		Verbose:   true,
+		SecretKey: personalAPIKey,
+		Endpoint:  endpoint,
 	})
 	defer client.Close()
 

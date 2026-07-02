@@ -80,7 +80,7 @@ type Client interface {
 	// GetFeatureFlagResult evaluates one feature flag and returns its value and payload together.
 	// Use this instead of calling GetFeatureFlag and GetFeatureFlagPayload separately.
 	// It returns ErrFlagNotFound when the flag cannot be found or evaluated and
-	// ErrNoPersonalAPIKey when OnlyEvaluateLocally is true without PersonalApiKey.
+	// ErrNoPersonalAPIKey when OnlyEvaluateLocally is true without SecretKey.
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
 	// GetFeatureFlagPayload returns the payload for the matching flag value, or an
@@ -90,12 +90,12 @@ type Client interface {
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
 	// GetRemoteConfigPayload returns the decrypted payload for a remote config flag key.
-	// It requires Config.PersonalApiKey and returns ErrNoPersonalAPIKey when missing.
+	// It requires Config.SecretKey and returns ErrNoPersonalAPIKey when missing.
 	GetRemoteConfigPayload(string) (string, error)
 
 	// GetAllFlags evaluates all flags for a user. Returned values are booleans for
 	// boolean flags and strings for multivariate variants. It returns ErrNoPersonalAPIKey
-	// when OnlyEvaluateLocally is true without PersonalApiKey.
+	// when OnlyEvaluateLocally is true without SecretKey.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
@@ -110,11 +110,11 @@ type Client interface {
 	// locally, EvaluateFlags returns a non-nil snapshot containing the
 	// locally-evaluated flags alongside the error so the caller can still
 	// branch on what was resolved.
-	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+	// If OnlyEvaluateLocally is true and no SecretKey is configured, returns ErrNoPersonalAPIKey.
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
 	// ReloadFeatureFlags forces a reload of feature flags.
-	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+	// If no SecretKey is configured, returns ErrNoPersonalAPIKey.
 	ReloadFeatureFlags() error
 
 	// CloseWithContext gracefully shuts down the client with the provided context.
@@ -224,7 +224,7 @@ func New(apiKey string) Client {
 
 // NewWithConfig creates a Client with the provided PostHog project API key and Config.
 //
-// The apiKey, Config.Endpoint, and Config.PersonalApiKey values are trimmed before use.
+// The apiKey, Config.Endpoint, Config.SecretKey, and Config.PersonalApiKey values are trimmed before use.
 // It returns a ConfigError when config contains invalid values such as negative
 // intervals or out-of-range retry settings; in that case the returned Client is nil.
 // If apiKey is empty after trimming, NewWithConfig returns a no-op client and nil error.
@@ -275,10 +275,11 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		return nil, fmt.Errorf("error creating flags client: %v", err)
 	}
 
-	if len(c.PersonalApiKey) > 0 {
+	secretKey := c.Config.effectiveSecretKey()
+	if len(secretKey) > 0 {
 		c.featureFlagsPoller, err = newFeatureFlagsPoller(
 			c.key,
-			c.Config.PersonalApiKey,
+			secretKey,
 			c.Logger,
 			c.Endpoint,
 			c.http,
@@ -1762,7 +1763,7 @@ func (c *client) debugf(format string, args ...interface{}) {
 }
 
 func (c *client) warnPersonalAPIKeyMissing(method string) {
-	c.Warnf("PostHog personal_api_key is not configured; %s requires a PersonalApiKey.", method)
+	c.Warnf("PostHog secret key is not configured; %s requires a SecretKey.", method)
 }
 
 func (c *client) Errorf(format string, args ...interface{}) {
@@ -1822,7 +1823,8 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 		return "", fmt.Errorf("parsing URL: %v", err)
 	}
 
-	if c.PersonalApiKey == "" {
+	secretKey := c.Config.effectiveSecretKey()
+	if secretKey == "" {
 		c.warnPersonalAPIKeyMissing("GetRemoteConfigPayload")
 		return "", ErrNoPersonalAPIKey
 	}
@@ -1836,7 +1838,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 		return "", fmt.Errorf("creating request: %v", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.PersonalApiKey)
+	req.Header.Set("Authorization", "Bearer "+secretKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "posthog-go/"+Version)
 

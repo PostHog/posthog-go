@@ -73,7 +73,7 @@ var (
 
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
-	ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
+	ErrNoPersonalAPIKey = errors.New("no SecretKey (or PersonalApiKey) provided")
 
 	ErrNoDistinctID = errors.New("no distinct_id provided")
 
@@ -285,6 +285,8 @@ func (m CompressionMode) String() string
 type Config struct {
 
 	Endpoint string
+
+	SecretKey string
 
 	PersonalApiKey string
 
