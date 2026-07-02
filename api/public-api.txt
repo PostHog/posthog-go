@@ -354,6 +354,21 @@ type ConfigError struct {
 
 func (e ConfigError) Error() string
 
+type DebugImage struct {
+	Type string `json:"type"`
+	DebugID string `json:"debug_id"`
+	CodeID string `json:"code_id,omitempty"`
+	ImageAddr string `json:"image_addr"`
+	ImageSize uint64 `json:"image_size,omitempty"`
+	ImageVmaddr string `json:"image_vmaddr,omitempty"`
+	CodeFile string `json:"code_file,omitempty"`
+	Arch string `json:"arch"`
+}
+
+type DebugImageProvider interface {
+	GetDebugImages() []DebugImage
+}
+
 type DecideRequestData struct {
 	ApiKey string `json:"api_key"`
 	DistinctId string `json:"distinct_id"`
@@ -413,6 +428,7 @@ type Exception struct {
 
 	ExceptionList []ExceptionItem
 	ExceptionFingerprint *string
+	DebugImages []DebugImage
 }
 
 func NewDefaultException(
@@ -420,6 +436,11 @@ func NewDefaultException(
 	distinctID, title, description string,
 ) Exception
 
+
+func NewNativeException(
+	timestamp time.Time,
+	distinctID, title, description string,
+) Exception
 
 func (msg Exception) APIfy() APIMessage
 
@@ -444,6 +465,7 @@ type ExceptionInApiProperties struct {
 	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
 	ExceptionList []ExceptionItem `json:"$exception_list"`
 	ExceptionFingerprint *string `json:"$exception_fingerprint,omitempty"`
+	DebugImages []DebugImage `json:"$debug_images,omitempty"`
 
 	Custom Properties `json:"-"`
 }
@@ -745,6 +767,15 @@ type Message interface {
 }
 
 
+type NativeStackTraceExtractor struct {
+	InAppDecider InAppDecider
+}
+
+
+func (n NativeStackTraceExtractor) GetDebugImages() []DebugImage
+
+func (n NativeStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
+
 type Properties map[string]interface{}
 
 
@@ -859,6 +890,10 @@ type StackFrame struct {
 	InApp bool `json:"in_app"`
 	Synthetic bool `json:"synthetic"`
 	Platform string `json:"platform"`
+	Lang string `json:"lang,omitempty"`
+	InstructionAddr string `json:"instruction_addr,omitempty"`
+	SymbolAddr string `json:"symbol_addr,omitempty"`
+	ImageAddr string `json:"image_addr,omitempty"`
 }
 
 type StackTraceExtractor interface {

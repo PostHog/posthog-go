@@ -36,6 +36,9 @@ type Exception struct {
 	ExceptionList []ExceptionItem
 	// ExceptionFingerprint optionally overrides PostHog's default exception grouping fingerprint.
 	ExceptionFingerprint *string
+	// DebugImages lists the binary images referenced by "native" stack
+	// frames, sent as $debug_images for server-side symbolication.
+	DebugImages []DebugImage
 }
 
 // ExceptionItem describes one exception in an Exception event.
@@ -80,8 +83,17 @@ type StackFrame struct {
 	InApp bool `json:"in_app"`
 	// Synthetic reports whether the frame was synthesized by instrumentation.
 	Synthetic bool `json:"synthetic"`
-	// Platform identifies the runtime platform; Go frames use "go".
+	// Platform identifies the runtime platform; Go frames use "go", frames
+	// with raw addresses for server-side symbolication use "native".
 	Platform string `json:"platform"`
+	// Lang is a display-language hint for "native" frames; Go frames use "go".
+	Lang string `json:"lang,omitempty"`
+	// InstructionAddr is the absolute address of the instruction, as hex.
+	InstructionAddr string `json:"instruction_addr,omitempty"`
+	// SymbolAddr is the start address of the enclosing function, as hex.
+	SymbolAddr string `json:"symbol_addr,omitempty"`
+	// ImageAddr is the load address of the image containing the instruction.
+	ImageAddr string `json:"image_addr,omitempty"`
 }
 
 // ExceptionInApi is the wire-format payload produced from an Exception message.
@@ -121,6 +133,8 @@ type ExceptionInApiProperties struct {
 	ExceptionList []ExceptionItem `json:"$exception_list"`
 	// ExceptionFingerprint is sent as $exception_fingerprint when provided.
 	ExceptionFingerprint *string `json:"$exception_fingerprint,omitempty"`
+	// DebugImages is sent as $debug_images when "native" frames are present.
+	DebugImages []DebugImage `json:"$debug_images,omitempty"`
 
 	// Custom is flattened into the wire "properties" on marshal.
 	// Typed fields win on collision.
@@ -232,6 +246,7 @@ func (msg Exception) APIfy() APIMessage {
 			DisableGeoIP:         msg.DisableGeoIP,
 			ExceptionList:        msg.ExceptionList,
 			ExceptionFingerprint: msg.ExceptionFingerprint,
+			DebugImages:          msg.DebugImages,
 			Custom:               msg.Properties,
 		},
 	}
