@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.17.3
+
+### Patch Changes
+
+- dafed74: Retry remote feature flag requests after transient 502 and 504 responses.
+
 ## 1.17.2
 
 ### Patch Changes
