@@ -288,9 +288,14 @@ func TestRemoteConfigAuthUsesResolvedSecretKey(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
 			var gotAuth string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotAuth = r.Header.Get("Authorization")
+				if auth := r.Header.Get("Authorization"); auth != "" {
+					mu.Lock()
+					gotAuth = auth
+					mu.Unlock()
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`"ok"`))
 			}))
@@ -304,7 +309,9 @@ func TestRemoteConfigAuthUsesResolvedSecretKey(t *testing.T) {
 			payload, err := client.GetRemoteConfigPayload("test-flag")
 			require.NoError(t, err)
 			require.Equal(t, "ok", payload)
+			mu.Lock()
 			require.Equal(t, tc.wantAuth, gotAuth)
+			mu.Unlock()
 		})
 	}
 }
