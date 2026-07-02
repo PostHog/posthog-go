@@ -296,9 +296,14 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 		}
 
 		if res.StatusCode != http.StatusOK {
+			statusCode := res.StatusCode
 			res.Body.Close()
 			cancel()
-			return nil, NewAPIError(res.StatusCode, fmt.Sprintf("unexpected status code from /flags/: %d", res.StatusCode))
+			if attempt != attempts-1 && isRetryableFlagsStatusCode(statusCode) {
+				d.sleepBeforeFlagsRetry(attempt)
+				continue
+			}
+			return nil, NewAPIError(statusCode, fmt.Sprintf("unexpected status code from /flags/: %d", statusCode))
 		}
 
 		resBody, err = io.ReadAll(res.Body)
@@ -346,6 +351,10 @@ func isRetryableFlagsRequestError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func isRetryableFlagsStatusCode(statusCode int) bool {
+	return statusCode == http.StatusBadGateway || statusCode == http.StatusGatewayTimeout
 }
 
 // rawMessageToString converts a json.RawMessage to a string.
