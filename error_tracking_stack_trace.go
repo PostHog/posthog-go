@@ -49,8 +49,9 @@ type DefaultStackTraceExtractor struct {
 	InAppDecider InAppDecider
 }
 
-// GetStackTrace captures the current goroutine stack and converts it to an ExceptionStacktrace.
-// The skip parameter omits leading runtime.Callers frames before conversion.
+// GetStackTrace captures the current goroutine stack in wire order (outermost
+// frame first, capture site last). The skip parameter omits leading
+// runtime.Callers frames before conversion.
 func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace {
 	pcs := make([]uintptr, 64)
 	stackCallCount := runtime.Callers(skip, pcs)
@@ -74,6 +75,13 @@ func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
 		if !hasMore {
 			break
 		}
+	}
+
+	// runtime.CallersFrames yields innermost first; reverse to the canonical
+	// wire order shared across PostHog SDKs (matching NativeStackTraceExtractor):
+	// outermost (entry point) first, capture site last.
+	for i, j := 0, len(traces)-1; i < j; i, j = i+1, j-1 {
+		traces[i], traces[j] = traces[j], traces[i]
 	}
 
 	return &ExceptionStacktrace{
