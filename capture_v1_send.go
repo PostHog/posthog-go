@@ -180,14 +180,29 @@ func (c *client) partitionV1Results(res *v1Result, data []json.RawMessage, msgs 
 	return nextData, nextMsgs, nextUuids
 }
 
-// backoffV1 waits before the next attempt, honoring Retry-After when it exceeds
-// the configured backoff. Returns false if shutdown was requested during the wait.
-func (c *client) backoffV1(attemptIndex int, res *v1Result) bool {
+// retryDelayV1 is the pure delay decision for the next attempt: the configured
+// backoff, raised to the server Retry-After when it is larger (Retry-After is a
+// minimum, not a replacement). The Retry-After is clamped to defaultMaxBackoff
+// so a hostile or buggy header can't park a batch goroutine; the configured
+// backoff itself (Config.RetryAfter) is never truncated.
+func (c *client) retryDelayV1(attemptIndex int, res *v1Result) time.Duration {
 	retryDelay := c.RetryAfter(attemptIndex)
-	if res != nil && res.hasRetryAfter && res.retryAfter > retryDelay {
-		retryDelay = res.retryAfter
+	if res != nil && res.hasRetryAfter {
+		clamped := res.retryAfter
+		if clamped > defaultMaxBackoff {
+			clamped = defaultMaxBackoff
+		}
+		if clamped > retryDelay {
+			retryDelay = clamped
+		}
 	}
-	retryTimer := time.NewTimer(retryDelay)
+	return retryDelay
+}
+
+// backoffV1 waits before the next attempt using retryDelayV1. Returns false if
+// shutdown was requested during the wait.
+func (c *client) backoffV1(attemptIndex int, res *v1Result) bool {
+	retryTimer := time.NewTimer(c.retryDelayV1(attemptIndex, res))
 	select {
 	case <-retryTimer.C:
 		return true
