@@ -229,6 +229,12 @@ const (
 	// DefaultBatchSize is the default batch size used when Config.BatchSize is zero.
 	DefaultBatchSize = 250
 
+	// DefaultMaxAttempts is the total number of capture delivery attempts (1
+	// initial + retries) used when Config.MaxRetries is unset or out of range.
+	// Chosen to match the cross-SDK Capture V1 parity standard (posthog-rs
+	// defaults to the same envelope). Applies to both the v0 and v1 send paths.
+	DefaultMaxAttempts = 4
+
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
 	// events to the /batch/ endpoint.
 	DefaultBatchUploadTimeout = 10 * time.Second
@@ -368,7 +374,7 @@ func makeConfig(c Config) Config {
 	if c.MaxRetries != nil && 0 <= *c.MaxRetries && *c.MaxRetries <= 9 {
 		c.maxAttempts = 1 + *c.MaxRetries
 	} else {
-		c.maxAttempts = 10
+		c.maxAttempts = DefaultMaxAttempts
 	}
 
 	// Note: ShutdownTimeout == 0 means wait indefinitely (backward compatible).

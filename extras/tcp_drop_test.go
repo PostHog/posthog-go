@@ -189,7 +189,7 @@ func TestTCPDropFailure(t *testing.T) {
 			require.NoError(t, server.Close(), "Failed to close server")
 
 			success, failure := callback.GetCounts()
-			assert.Equal(t, 10, server.ConnCount())
+			assert.Equal(t, posthog.DefaultMaxAttempts, server.ConnCount())
 			assert.Equal(t, 1, failure, "Expected 1 failure")
 			assert.Equal(t, 0, success, "Expected 0 success")
 		})
