@@ -61,25 +61,27 @@ func TestDefaultStackTraceExtractor_GetStackTrace(t *testing.T) {
 		skip              int
 		expectedNames     []string
 	}{
+		// Frames are emitted in canonical wire order: outermost (entry point,
+		// runtime.goexit) first, capture site (runtime.Callers) last.
 		"the basic happy path with no skip or function depth": {
 			functionCallDepth: 0,
 			skip:              0,
 			expectedNames: []string{
-				"runtime.Callers",
-				"github.com/posthog/posthog-go.DefaultStackTraceExtractor.GetStackTrace",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.TestDefaultStackTraceExtractor_GetStackTrace.func1",
-				"testing.tRunner",
 				"runtime.goexit",
+				"testing.tRunner",
+				"github.com/posthog/posthog-go.TestDefaultStackTraceExtractor_GetStackTrace.func1",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.DefaultStackTraceExtractor.GetStackTrace",
+				"runtime.Callers",
 			},
 		},
-		"skipping will remove entries from the head of the list, useful to omit internal function calls that add no value": {
+		"skipping removes the innermost frames, now at the tail, useful to omit internal function calls that add no value": {
 			functionCallDepth: 0,
 			skip:              3,
 			expectedNames: []string{
-				"github.com/posthog/posthog-go.TestDefaultStackTraceExtractor_GetStackTrace.func1",
-				"testing.tRunner",
 				"runtime.goexit",
+				"testing.tRunner",
+				"github.com/posthog/posthog-go.TestDefaultStackTraceExtractor_GetStackTrace.func1",
 			},
 		},
 		"calls with a very high skip level should return an empty stack trace": {
@@ -91,8 +93,9 @@ func TestDefaultStackTraceExtractor_GetStackTrace(t *testing.T) {
 			functionCallDepth: 5,
 			skip:              0,
 			expectedNames: []string{
-				"runtime.Callers",
-				"github.com/posthog/posthog-go.DefaultStackTraceExtractor.GetStackTrace",
+				"runtime.goexit",
+				"testing.tRunner",
+				"github.com/posthog/posthog-go.TestDefaultStackTraceExtractor_GetStackTrace.func1",
 				// +1 total for the 'actual' function call
 				"github.com/posthog/posthog-go.recursiveChain",
 				"github.com/posthog/posthog-go.recursiveChain",
@@ -100,79 +103,81 @@ func TestDefaultStackTraceExtractor_GetStackTrace(t *testing.T) {
 				"github.com/posthog/posthog-go.recursiveChain",
 				"github.com/posthog/posthog-go.recursiveChain",
 				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.TestDefaultStackTraceExtractor_GetStackTrace.func1",
-				"testing.tRunner",
-				"runtime.goexit",
+				"github.com/posthog/posthog-go.DefaultStackTraceExtractor.GetStackTrace",
+				"runtime.Callers",
 			},
 		},
-		"once we exceed the pre-configured limit of 64, we will start to drop traces at the tail end": {
+		// The 64-frame capture limit drops the outermost frames (the runtime
+		// stops yielding after 64 innermost entries), so after reversal the
+		// entry-point frames are gone and the slice starts mid-chain.
+		"once we exceed the pre-configured limit of 64, we will start to drop traces at the outermost end": {
 			functionCallDepth: 77,
 			skip:              0,
 			expectedNames: []string{
-				"runtime.Callers",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
+				"github.com/posthog/posthog-go.recursiveChain",
 				"github.com/posthog/posthog-go.DefaultStackTraceExtractor.GetStackTrace",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
-				"github.com/posthog/posthog-go.recursiveChain",
+				"runtime.Callers",
 			},
 		},
 	}
@@ -193,5 +198,27 @@ func TestDefaultStackTraceExtractor_GetStackTrace(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDefaultStackTraceExtractor_CanonicalWireOrder is an explicit regression
+// guard for the canonical wire order shared across PostHog SDKs: frames run
+// bottom-up, so the first frame is the outermost entry point and the last frame
+// is the innermost capture site. Reversing this order would silently break
+// server-side grouping and display.
+func TestDefaultStackTraceExtractor_CanonicalWireOrder(t *testing.T) {
+	extractor := DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}
+
+	traces := extractor.GetStackTrace(0)
+	if traces == nil || len(traces.Frames) < 2 {
+		t.Fatalf("expected at least two frames, got %v", traces)
+	}
+
+	if got := traces.Frames[0].Function; got != "runtime.goexit" {
+		t.Errorf("first frame should be the outermost entry point: got=%q want=%q", got, "runtime.goexit")
+	}
+
+	if got := traces.Frames[len(traces.Frames)-1].Function; got != "runtime.Callers" {
+		t.Errorf("last frame should be the innermost capture site: got=%q want=%q", got, "runtime.Callers")
 	}
 }
