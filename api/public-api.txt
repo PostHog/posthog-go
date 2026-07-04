@@ -23,6 +23,8 @@ const (
 
 	DefaultBatchSize = 250
 
+	DefaultMaxAttempts = 4
+
 	DefaultBatchUploadTimeout = 10 * time.Second
 
 	DefaultBatchSubmitTimeout = 100 * time.Millisecond

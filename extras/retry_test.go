@@ -32,14 +32,14 @@ func TestRetryBehavior(t *testing.T) {
 		},
 		{
 			name:          "AllRetriesFail_DropsMessage",
-			failCount:     0, // always fail, will exhaust all 10 retries
-			requestCount:  10,
+			failCount:     0, // always fail, will exhaust all attempts (DefaultMaxAttempts)
+			requestCount:  posthog.DefaultMaxAttempts,
 			disableRetry:  false,
 			expectSuccess: false,
 		},
 		{
 			name:          "QuitDuringRetry_DropsMessage",
-			failCount:     1, // always fail, will exhaust all 10 retries
+			failCount:     1, // fail, then quit forces close before retries run
 			requestCount:  1,
 			disableRetry:  false,
 			expectSuccess: false,
@@ -50,8 +50,8 @@ func TestRetryBehavior(t *testing.T) {
 		},
 		{
 			name:          "SuccessOnLastRetry",
-			failCount:     9, // fail 9 times, succeed on 10th (last retry)
-			requestCount:  10,
+			failCount:     posthog.DefaultMaxAttempts - 1, // fail on every attempt but the last
+			requestCount:  posthog.DefaultMaxAttempts,
 			disableRetry:  false,
 			expectSuccess: true,
 		},
