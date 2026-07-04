@@ -156,7 +156,7 @@ type Config struct {
 	RetryAfter func(int) time.Duration
 
 	// MaxRetries is the maximum number of retries after the first send attempt.
-	// It must be in [0,9]. If nil, it defaults to 9 retries (10 total attempts).
+	// It must be in [0,9]. If nil, it defaults to 3 retries (4 total attempts).
 	MaxRetries *int
 
 	// ShutdownTimeout is the maximum time Close waits for in-flight messages to be
