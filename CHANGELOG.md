@@ -1,5 +1,12 @@
 ## Unreleased
 
+## 1.17.5
+
+### Patch Changes
+
+- fe66557: Change the default capture delivery budget from 10 attempts to 4 (`DefaultMaxAttempts`) when `Config.MaxRetries` is unset, aligning with the cross-SDK Capture V1 parity standard (posthog-rs uses the same envelope). This affects **both** the v0 (`/batch/`) and v1 send paths, since they share the attempt budget. Callers that set `MaxRetries` explicitly are unaffected.
+- 3d8404a: Unify the capture retry backoff ceiling at 30s. `DefaultBackoff`'s cap changes from 10s to 30s (default only — override via `Config.RetryAfter`), and the Capture V1 send now clamps a server `Retry-After` to the same 30s so a hostile or buggy header cannot park a batch goroutine. `Retry-After` still acts as a minimum; the configured backoff is never truncated. This aligns the default retry behavior with posthog-rs and posthog-python.
+
 ## 1.17.4
 
 ### Patch Changes
