@@ -517,17 +517,13 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := json.Marshal(payload)
 	flagsURL := strings.TrimRight(host, "/") + "/flags/?v=2"
-	resp, err := http.Post(flagsURL, "application/json", bytes.NewReader(body))
+	resp, err := postFlagsWithRetry(flagsURL, body)
 	if err != nil {
 		log.Printf("Error evaluating feature flag: %s", sanitizeForLog(err.Error()))
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		jsonError(w, http.StatusInternalServerError, "flags request failed with status "+strconv.Itoa(resp.StatusCode))
-		return
-	}
 	var decoded map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -565,6 +561,35 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"value":   value,
 	})
+}
+
+func postFlagsWithRetry(flagsURL string, body []byte) (*http.Response, error) {
+	var lastStatus int
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := http.Post(flagsURL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			return resp, nil
+		}
+
+		lastStatus = resp.StatusCode
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadGateway && resp.StatusCode != http.StatusGatewayTimeout {
+			break
+		}
+	}
+
+	return nil, &flagsStatusError{statusCode: lastStatus}
+}
+
+type flagsStatusError struct {
+	statusCode int
+}
+
+func (e *flagsStatusError) Error() string {
+	return "flags request failed with status " + strconv.Itoa(e.statusCode)
 }
 
 // sanitizeForLog strips CR/LF characters from a string before logging, so
