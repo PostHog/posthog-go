@@ -34,7 +34,7 @@ func init() {
 
 	// Get configuration from environment variables
 	projectAPIKey = os.Getenv("POSTHOG_PROJECT_API_KEY")
-	personalAPIKey = os.Getenv("POSTHOG_PERSONAL_API_KEY")
+	personalAPIKey = os.Getenv("POSTHOG_SECRET_KEY")
 	endpoint = os.Getenv("POSTHOG_ENDPOINT")
 
 	if endpoint == "" {
@@ -64,7 +64,7 @@ func checkCredentials() {
 	// Check if credentials are provided
 	if projectAPIKey == "" || personalAPIKey == "" {
 		fmt.Println("❌ Missing PostHog credentials!")
-		fmt.Println("   Please set POSTHOG_PROJECT_API_KEY and POSTHOG_PERSONAL_API_KEY environment variables")
+		fmt.Println("   Please set POSTHOG_PROJECT_API_KEY and POSTHOG_SECRET_KEY environment variables")
 		fmt.Println("   or copy .env.example to .env and fill in your values")
 		fmt.Println()
 
@@ -72,12 +72,12 @@ func checkCredentials() {
 			projectAPIKey = promptForInput("Enter your PostHog project API key (starts with phc_): ")
 		}
 		if personalAPIKey == "" {
-			personalAPIKey = promptForInput("Enter your PostHog personal API key (starts with phx_): ")
+			personalAPIKey = promptForInput("Enter your PostHog secret API key (starts with phx_): ")
 		}
 	} else {
 		fmt.Println("✅ PostHog credentials loaded successfully!")
 		fmt.Println("   Project API Key: [REDACTED]")
-		fmt.Println("   Personal API Key: [REDACTED]")
+		fmt.Println("   Secret API Key: [REDACTED]")
 		fmt.Printf("   Endpoint: %s\n\n", endpoint)
 	}
 }
