@@ -20,7 +20,7 @@ go run *.go
 ```bash
 # Set your PostHog API keys
 export POSTHOG_PROJECT_API_KEY="your-project-api-key"
-export POSTHOG_PERSONAL_API_KEY="your-personal-api-key"
+export POSTHOG_SECRET_KEY="your-secret-api-key"
 
 # Run all examples
 go run *.go
@@ -38,7 +38,7 @@ Before running the examples, you'll need to:
 
 1. **PostHog API Keys**:
    - `POSTHOG_PROJECT_API_KEY`: Your project API key (starts with `phc_...`)
-   - `POSTHOG_PERSONAL_API_KEY`: Your personal API key (starts with `phx_...`)
+   - `POSTHOG_SECRET_KEY`: Your secret API key (starts with `phx_...`)
 
 2. **PostHog Instance** (optional):
    - Default: `http://localhost:8000`
@@ -62,7 +62,7 @@ The examples will automatically load configuration from a `.env` file if it exis
 ```bash
 # PostHog API Configuration
 POSTHOG_PROJECT_API_KEY=phc_your_project_api_key_here
-POSTHOG_PERSONAL_API_KEY=phx_your_personal_api_key_here
+POSTHOG_SECRET_KEY=phx_your_secret_api_key_here
 POSTHOG_ENDPOINT=https://us.i.posthog.com
 ```
 

@@ -27,7 +27,7 @@ func newFeatureFlagsFixtureClient(t *testing.T, fixtureName string) Client {
 	}))
 	t.Cleanup(server.Close)
 
-	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{PersonalApiKey: "some very secret key", Endpoint: server.URL})
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{SecretKey: "some very secret key", Endpoint: server.URL})
 	require.NoError(t, err)
 	t.Cleanup(func() { client.Close() })
 	return client
@@ -45,8 +45,8 @@ func newFeatureFlagsLocalClient(t *testing.T, definitionsFixture string) Client 
 	t.Cleanup(server.Close)
 
 	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { client.Close() })
@@ -65,8 +65,8 @@ func TestFlagPersonProperty(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -142,8 +142,8 @@ func TestFlagGroup(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -170,8 +170,8 @@ func TestFlagGroupProperty(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -224,8 +224,8 @@ func TestComplexDefinition(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	require.NoError(t, err)
 	defer client.Close()
@@ -263,8 +263,8 @@ func TestFallbackToFlags(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -291,8 +291,8 @@ func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -368,8 +368,8 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -427,8 +427,8 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenFlagsErrorsOut(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -504,8 +504,8 @@ func TestGetAllFlags(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -530,8 +530,8 @@ func TestGetAllFlagsEmptyLocal(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	require.NoError(t, err)
 	defer client.Close()
@@ -562,8 +562,8 @@ func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -592,8 +592,8 @@ func TestFeatureFlagWithDependencies(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("test-api-key", Config{
-		PersonalApiKey: "test-personal-api-key",
-		Endpoint:       server.URL,
+		SecretKey: "test-personal-api-key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -705,8 +705,8 @@ func TestFeatureFlagEarlyExit(t *testing.T) {
 			defer server.Close()
 
 			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-				PersonalApiKey: "some very secret key",
-				Endpoint:       server.URL,
+				SecretKey: "some very secret key",
+				Endpoint:  server.URL,
 			})
 			defer client.Close()
 
@@ -744,9 +744,9 @@ func TestGetFeatureFlag(t *testing.T) {
 	eventCaptured := make(chan struct{}, 1)
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-		BatchSize:      1,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
+		BatchSize: 1,
 		Callback: testCallback{
 			func(m APIMessage) {
 				if capture, ok := m.(CaptureInApi); ok {
@@ -817,9 +817,9 @@ func TestGetFeatureFlagLocallyEvaluated(t *testing.T) {
 	eventCaptured := make(chan struct{}, 1)
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
-		BatchSize:      1,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
+		BatchSize: 1,
 		Callback: testCallback{
 			func(m APIMessage) {
 				if capture, ok := m.(CaptureInApi); ok {
@@ -879,8 +879,8 @@ func TestGetRemoteConfigPayload(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -977,8 +977,8 @@ func TestConditionsEvaluatedInOrder(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -1047,8 +1047,8 @@ func TestSimpleFlagConsistency(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -2075,8 +2075,8 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -3104,8 +3104,8 @@ func TestMultivariateFlagConsistencyPayload(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -4140,7 +4140,7 @@ func TestFlagsFetchFail(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey:            "some very secret key",
+		SecretKey:                 "some very secret key",
 		Endpoint:                  server.URL,
 		FeatureFlagRequestTimeout: 10 * time.Millisecond,
 	})
@@ -4170,7 +4170,7 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey:            "some very secret key",
+		SecretKey:                 "some very secret key",
 		Endpoint:                  server.URL,
 		FeatureFlagRequestTimeout: 10 * time.Millisecond,
 	})
@@ -4254,7 +4254,7 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 	defer server.Close()
 
 	client, clientErr := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey:            "some very secret key",
+		SecretKey:                 "some very secret key",
 		Endpoint:                  server.URL,
 		FeatureFlagRequestTimeout: 100 * time.Millisecond,
 		Logger:                    StdLogger(log.New(&buf, "posthog-test", log.LstdFlags), false),
@@ -4301,8 +4301,8 @@ func TestFetchFlagsFails(t *testing.T) {
 	defer server.Close()
 
 	cli, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer cli.Close()
 
@@ -4346,8 +4346,8 @@ func TestFeatureFlagWithOverrides(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -4427,8 +4427,8 @@ func TestFeatureFlagDistinctIDOverride(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -4490,8 +4490,8 @@ func TestFeatureFlagDeviceIDBucketingLocalEvaluation(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -4524,8 +4524,8 @@ func TestFeatureFlagWithFalseVariant(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-		PersonalApiKey: "some very secret key",
-		Endpoint:       server.URL,
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -4790,8 +4790,8 @@ func TestProductionStyleMultivariateDependencyChain(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("test-api-key", Config{
-		PersonalApiKey: "test-personal-key",
-		Endpoint:       server.URL,
+		SecretKey: "test-personal-key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 
@@ -4958,8 +4958,8 @@ func TestFallbackToAPIWhenFlagHasStaticCohortInMultiCondition(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("test_api_key", Config{
-		Endpoint:       server.URL,
-		PersonalApiKey: "test_personal_api_key",
+		Endpoint:  server.URL,
+		SecretKey: "test_personal_api_key",
 	})
 	defer client.Close()
 
@@ -5036,8 +5036,8 @@ func TestGetFeatureFlagPayloadFallbackToAPIWhenFlagHasStaticCohort(t *testing.T)
 	defer server.Close()
 
 	client, _ := NewWithConfig("test_api_key", Config{
-		Endpoint:       server.URL,
-		PersonalApiKey: "test_personal_api_key",
+		Endpoint:  server.URL,
+		SecretKey: "test_personal_api_key",
 	})
 	defer client.Close()
 
@@ -5100,8 +5100,8 @@ func TestDateBeforeOperatorAbsolute(t *testing.T) {
 	defer server.Close()
 
 	client, _ := NewWithConfig("test-api-key", Config{
-		PersonalApiKey: "test-personal-key",
-		Endpoint:       server.URL,
+		SecretKey: "test-personal-key",
+		Endpoint:  server.URL,
 	})
 	defer client.Close()
 

@@ -75,9 +75,15 @@ var (
 	// limit.
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
-	// ErrNoPersonalAPIKey is returned when PersonalApiKey is required for the
-	// requested operation but was not configured.
-	ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
+	// ErrNoSecretKey is returned when a SecretKey is required for the requested
+	// operation but was not configured.
+	ErrNoSecretKey = errors.New("no SecretKey provided")
+
+	// ErrNoPersonalAPIKey is a deprecated alias for ErrNoSecretKey. It refers to
+	// the same error value, so errors.Is checks against either name still match.
+	//
+	// Deprecated: use ErrNoSecretKey.
+	ErrNoPersonalAPIKey = ErrNoSecretKey
 
 	// ErrNoDistinctID is returned when distinct_id is required for the requested
 	// operation but was not provided.
