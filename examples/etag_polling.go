@@ -70,7 +70,7 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // TestETagPolling demonstrates ETag support for local evaluation polling.
 // It polls every 5 seconds and logs the ETag behavior to show when
 // 304 Not Modified responses occur (indicating no data transfer).
-func TestETagPolling(projectAPIKey, personalAPIKey, endpointURL string) {
+func TestETagPolling(projectAPIKey, secretKey, endpointURL string) {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println("ETag Polling Test")
 	fmt.Println(strings.Repeat("=", 60))
@@ -85,7 +85,7 @@ func TestETagPolling(projectAPIKey, personalAPIKey, endpointURL string) {
 	}
 
 	client, err := posthog.NewWithConfig(projectAPIKey, posthog.Config{
-		SecretKey:                          personalAPIKey,
+		SecretKey:                          secretKey,
 		Endpoint:                           endpointURL,
 		DefaultFeatureFlagsPollingInterval: etagPollInterval,
 		Transport:                          transport,

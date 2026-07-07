@@ -23,9 +23,9 @@ import (
 )
 
 var (
-	projectAPIKey  string
-	personalAPIKey string
-	endpoint       string
+	projectAPIKey string
+	secretKey     string
+	endpoint      string
 )
 
 func init() {
@@ -34,7 +34,7 @@ func init() {
 
 	// Get configuration from environment variables
 	projectAPIKey = os.Getenv("POSTHOG_PROJECT_API_KEY")
-	personalAPIKey = os.Getenv("POSTHOG_SECRET_KEY")
+	secretKey = os.Getenv("POSTHOG_SECRET_KEY")
 	endpoint = os.Getenv("POSTHOG_ENDPOINT")
 
 	if endpoint == "" {
@@ -62,7 +62,7 @@ func promptForInput(prompt string) string {
 
 func checkCredentials() {
 	// Check if credentials are provided
-	if projectAPIKey == "" || personalAPIKey == "" {
+	if projectAPIKey == "" || secretKey == "" {
 		fmt.Println("❌ Missing PostHog credentials!")
 		fmt.Println("   Please set POSTHOG_PROJECT_API_KEY and POSTHOG_SECRET_KEY environment variables")
 		fmt.Println("   or copy .env.example to .env and fill in your values")
@@ -71,8 +71,8 @@ func checkCredentials() {
 		if projectAPIKey == "" {
 			projectAPIKey = promptForInput("Enter your PostHog project API key (starts with phc_): ")
 		}
-		if personalAPIKey == "" {
-			personalAPIKey = promptForInput("Enter your PostHog secret API key (starts with phx_): ")
+		if secretKey == "" {
+			secretKey = promptForInput("Enter your PostHog secret API key (starts with phx_): ")
 		}
 	} else {
 		fmt.Println("✅ PostHog credentials loaded successfully!")
@@ -102,27 +102,27 @@ func runBasicCaptureExamples() {
 
 func runCaptureWithFeatureFlagsExamples() {
 	printExampleSection("CAPTURE WITH FEATURE FLAGS EXAMPLES")
-	TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint)
+	TestCaptureWithSendFeatureFlagOption(projectAPIKey, secretKey, endpoint)
 }
 
 func runFeatureFlagEvaluationExamples() {
 	printExampleSection("FEATURE FLAG EVALUATION EXAMPLES")
-	TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint)
+	TestIsFeatureEnabled(projectAPIKey, secretKey, endpoint)
 }
 
 func runAdvancedFeatureFlagsExamples() {
 	printExampleSection("ADVANCED FEATURE FLAGS (SendFeatureFlagsOptions) EXAMPLES")
-	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint)
+	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, secretKey, endpoint)
 }
 
 func runFlagDependenciesExamples() {
 	printExampleSection("FLAG DEPENDENCIES EXAMPLES")
-	TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint)
+	TestFlagDependencies(projectAPIKey, secretKey, endpoint)
 }
 
 func runETagPollingExample() {
 	printExampleSection("ETAG POLLING TEST")
-	TestETagPolling(projectAPIKey, personalAPIKey, endpoint)
+	TestETagPolling(projectAPIKey, secretKey, endpoint)
 }
 
 func printExampleSection(title string) {
@@ -138,18 +138,18 @@ func runAllExamples() {
 	TestCapture(projectAPIKey, endpoint)
 
 	fmt.Printf("\n%s CAPTURE WITH FEATURE FLAGS %s\n", strings.Repeat("🔸", 15), strings.Repeat("🔸", 15))
-	TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint)
+	TestCaptureWithSendFeatureFlagOption(projectAPIKey, secretKey, endpoint)
 
 	fmt.Printf("\n%s FEATURE FLAG EVALUATION %s\n", strings.Repeat("🔸", 17), strings.Repeat("🔸", 17))
-	TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint)
+	TestIsFeatureEnabled(projectAPIKey, secretKey, endpoint)
 	TestErrorTrackingThroughEnqueueing(projectAPIKey, endpoint)
 	TestErrorTrackingThroughLogHandler(projectAPIKey, endpoint)
 
 	fmt.Printf("\n%s ADVANCED FEATURE FLAGS %s\n", strings.Repeat("🔸", 18), strings.Repeat("🔸", 18))
-	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint)
+	TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, secretKey, endpoint)
 
 	fmt.Printf("\n%s FLAG DEPENDENCIES %s\n", strings.Repeat("🔸", 20), strings.Repeat("🔸", 20))
-	TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint)
+	TestFlagDependencies(projectAPIKey, secretKey, endpoint)
 }
 
 func isInteractive() bool {

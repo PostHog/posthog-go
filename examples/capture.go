@@ -66,7 +66,7 @@ func TestCapture(projectAPIKey, endpoint string) {
 	fmt.Println("✅ Basic events sent successfully!")
 }
 
-func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoint string) {
+func TestCaptureWithSendFeatureFlagOption(projectAPIKey, secretKey, endpoint string) {
 	fmt.Println("🏁 Capturing events with feature flags...")
 	fmt.Println("   This demonstrates how to automatically include feature flag states with events")
 
@@ -74,7 +74,7 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 		Interval:  30 * time.Second,
 		BatchSize: 100,
 		Verbose:   true,
-		SecretKey: personalAPIKey,
+		SecretKey: secretKey,
 		Endpoint:  endpoint,
 	})
 	defer client.Close()
@@ -115,7 +115,7 @@ func TestCaptureWithSendFeatureFlagOption(projectAPIKey, personalAPIKey, endpoin
 	fmt.Println("   ℹ️ The second event will not include feature flag information")
 }
 
-func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpoint string) {
+func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, secretKey, endpoint string) {
 	fmt.Println("🚀 Advanced feature flags with SendFeatureFlagsOptions...")
 	fmt.Println("   This demonstrates advanced feature flag evaluation with custom properties")
 
@@ -123,7 +123,7 @@ func TestCaptureWithSendFeatureFlagsOptions(projectAPIKey, personalAPIKey, endpo
 		Interval:  30 * time.Second,
 		BatchSize: 100,
 		Verbose:   true,
-		SecretKey: personalAPIKey,
+		SecretKey: secretKey,
 		Endpoint:  endpoint,
 	})
 	defer client.Close()
