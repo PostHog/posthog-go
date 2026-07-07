@@ -73,7 +73,9 @@ var (
 
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
-	ErrNoPersonalAPIKey = errors.New("no SecretKey (or PersonalApiKey) provided")
+	ErrNoSecretKey = errors.New("no SecretKey provided")
+
+	ErrNoPersonalAPIKey = ErrNoSecretKey
 
 	ErrNoDistinctID = errors.New("no distinct_id provided")
 
