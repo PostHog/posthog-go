@@ -21,7 +21,7 @@ const (
 
 	DefaultFeatureFlagRequestTimeout = 3 * time.Second
 
-	DefaultBatchSize = 250
+	DefaultBatchSize = 100
 
 	DefaultMaxAttempts = 4
 
@@ -30,6 +30,8 @@ const (
 	DefaultBatchSubmitTimeout = 100 * time.Millisecond
 
 	DefaultMaxEnqueuedRequests = 1000
+
+	DefaultMaxQueueSize = 10000
 )
 const (
 	FeatureFlagErrorErrorsWhileComputing = "errors_while_computing_flags"
@@ -80,6 +82,8 @@ var (
 	ErrNoPersonalAPIKey = ErrNoSecretKey
 
 	ErrNoDistinctID = errors.New("no distinct_id provided")
+
+	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
 	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
 )
@@ -321,6 +325,8 @@ type Config struct {
 	BeforeSend BeforeSendFunc
 
 	BatchSize int
+
+	MaxQueueSize int
 
 	Verbose bool
 

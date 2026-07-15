@@ -89,6 +89,11 @@ var (
 	// operation but was not provided.
 	ErrNoDistinctID = errors.New("no distinct_id provided")
 
+	// ErrQueueFull is returned by Enqueue/EnqueueWithContext when the in-memory
+	// message queue is full. The message is dropped (not retried) and the drop is
+	// reported only through this returned error, not through Callback.Failure.
+	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
+
 	// ErrSDKDisabled is returned when the SDK is disabled because the project API key is missing.
 	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
 )
