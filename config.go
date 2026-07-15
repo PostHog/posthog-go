@@ -162,10 +162,11 @@ type Config struct {
 	// clamped up to BatchSize so the queue can always hold at least one full batch.
 	//
 	// When the queue is full, Enqueue drops the newest message rather than blocking
-	// the caller: it returns ErrQueueFull and invokes Callback.Failure. Bulk or
-	// backfill workloads that enqueue faster than the client can upload should check
-	// the error returned by Enqueue for ErrQueueFull and throttle or retry (or raise
-	// MaxQueueSize), otherwise events are dropped, not delayed.
+	// the caller and returns ErrQueueFull (the drop is not reported via
+	// Callback.Failure). Bulk or backfill workloads that enqueue faster than the
+	// client can upload should check the error returned by Enqueue for ErrQueueFull
+	// and throttle or retry (or raise MaxQueueSize), otherwise events are dropped,
+	// not delayed.
 	MaxQueueSize int
 
 	// Verbose enables more frequent and detailed debug logging through Logger.

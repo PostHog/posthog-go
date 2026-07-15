@@ -90,8 +90,8 @@ var (
 	ErrNoDistinctID = errors.New("no distinct_id provided")
 
 	// ErrQueueFull is returned by Enqueue/EnqueueWithContext when the in-memory
-	// message queue is full. The message is dropped (not retried); Callback.Failure
-	// is invoked with this error if a Callback is configured.
+	// message queue is full. The message is dropped (not retried) and the drop is
+	// reported only through this returned error, not through Callback.Failure.
 	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
 	// ErrSDKDisabled is returned when the SDK is disabled because the project API key is missing.

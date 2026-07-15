@@ -71,11 +71,11 @@ func TestEnqueue_DropsNewestWhenQueueFull(t *testing.T) {
 	require.ErrorIs(t, err, ErrQueueFull, "Enqueue must return ErrQueueFull when the queue is full")
 	require.Len(t, c.msgs, capacity, "the dropped message must not be buffered")
 
-	require.Len(t, failures, 1, "Callback.Failure must fire exactly once for the dropped message")
-	require.ErrorIs(t, failures[0], ErrQueueFull)
-
-	require.Len(t, warnings, 1, "exactly one warning should be logged for the drop")
-	require.Contains(t, warnings[0], "queue is full")
+	// The drop is reported only through the returned error. Doing callback or log
+	// work here would run on the caller's goroutine, re-introducing the latency and
+	// re-entrancy the non-blocking drop path exists to avoid.
+	require.Empty(t, failures, "Callback.Failure must not run on the caller's Enqueue goroutine")
+	require.Empty(t, warnings, "the drop path must not log synchronously on the caller's goroutine")
 }
 
 func TestEnqueue_BuffersWhenQueueHasRoom(t *testing.T) {

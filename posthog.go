@@ -51,7 +51,8 @@ type EnqueueClient interface {
 	// Enqueue returns an error if the message could not be queued, which happens
 	// when the client is closed, the message is invalid, or the in-memory queue
 	// is full (ErrQueueFull) -- in the latter case the message is dropped rather
-	// than blocking the caller, and Callback.Failure is invoked if configured.
+	// than blocking the caller. A full-queue drop is reported only through this
+	// returned error, not through Callback.Failure.
 	//
 	// Bulk or backfill workloads that can enqueue faster than the client uploads
 	// should check the returned error for ErrQueueFull and throttle or retry (or
@@ -563,8 +564,10 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 	var ts = c.now()
 
 	// Helper to send prepared message with panic recovery. Non-blocking: if the
-	// `msgs` queue is full, the new message is dropped rather than blocking the
-	// caller, matching the posthog-python and posthog-rs SDKs.
+	// `msgs` queue is full, the new message is dropped and ErrQueueFull is returned
+	// rather than blocking the caller, matching the posthog-python and posthog-rs
+	// SDKs. The drop is reported only via the returned error -- no callback or log
+	// is invoked on the caller's goroutine, so a sustained overload stays cheap.
 	sendPrepared := func(prepared preparedMessage) {
 		defer func() {
 			// When the `msgs` channel is closed writing to it will trigger a panic.
@@ -579,8 +582,6 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		case c.msgs <- prepared:
 		default:
 			err = ErrQueueFull
-			c.Warnf("message queue is full (capacity %d), dropping the newest message", cap(c.msgs))
-			c.notifyFailure([]APIMessage{prepared.msg}, ErrQueueFull)
 		}
 	}
 

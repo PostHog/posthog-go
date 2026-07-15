@@ -46,10 +46,11 @@ func BenchmarkConcurrentEnqueue(b *testing.B) {
 			client, _ := NewWithConfig("test-key", Config{
 				Transport: NoOpTransport(),
 				Callback:  callback,
-				// Discard logs: this benchmark measures pure enqueue throughput, and
-				// the drop-on-full path would otherwise flood stderr from inside the
-				// timed loop, polluting ns/op. Drops are counted via the returned
-				// error and callback; drop-log severity is covered by unit tests.
+				// Discard logs: under sustained overload the consumer sheds batches
+				// (sendBatch backpressure) and logs from its own goroutine, which would
+				// flood stderr and skew ns/op. This benchmark measures pure enqueue
+				// throughput; stage-1 drops are counted via the returned error and
+				// stage-2 backpressure via the callback.
 				Logger: testLogger{},
 				// Uses production defaults for BatchSize, MaxEnqueuedRequests, MaxQueueSize
 			})
@@ -112,10 +113,11 @@ func BenchmarkConcurrentEnqueueWithCardinality(b *testing.B) {
 			client, _ := NewWithConfig("test-key", Config{
 				Transport: NoOpTransport(),
 				Callback:  callback,
-				// Discard logs: this benchmark measures pure enqueue throughput, and
-				// the drop-on-full path would otherwise flood stderr from inside the
-				// timed loop, polluting ns/op. Drops are counted via the returned
-				// error and callback; drop-log severity is covered by unit tests.
+				// Discard logs: under sustained overload the consumer sheds batches
+				// (sendBatch backpressure) and logs from its own goroutine, which would
+				// flood stderr and skew ns/op. This benchmark measures pure enqueue
+				// throughput; stage-1 drops are counted via the returned error and
+				// stage-2 backpressure via the callback.
 				Logger: testLogger{},
 				// Uses production defaults for BatchSize, MaxEnqueuedRequests, MaxQueueSize
 			})
