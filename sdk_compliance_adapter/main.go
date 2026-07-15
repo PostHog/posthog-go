@@ -535,12 +535,18 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 			value = flagValue
 		}
 	}
-	hasExperiment := false
+	properties := posthog.Properties{
+		"$feature_flag":          req.Key,
+		"$feature_flag_response": value,
+		"$feature/" + req.Key:    value,
+	}
+	// Only send $feature_flag_has_experiment when the server explicitly
+	// reported has_experiment on the flag's metadata; omit it when unknown.
 	if flags, ok := decoded["flags"].(map[string]interface{}); ok {
 		if flagDetail, ok := flags[req.Key].(map[string]interface{}); ok {
 			if metadata, ok := flagDetail["metadata"].(map[string]interface{}); ok {
 				if v, ok := metadata["has_experiment"].(bool); ok {
-					hasExperiment = v
+					properties["$feature_flag_has_experiment"] = v
 				}
 			}
 		}
@@ -549,12 +555,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	if err := client.Enqueue(posthog.Capture{
 		DistinctId: req.DistinctID,
 		Event:      "$feature_flag_called",
-		Properties: posthog.Properties{
-			"$feature_flag":                req.Key,
-			"$feature_flag_response":       value,
-			"$feature/" + req.Key:          value,
-			"$feature_flag_has_experiment": hasExperiment,
-		},
+		Properties: properties,
 	}); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return

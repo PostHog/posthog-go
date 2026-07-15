@@ -110,8 +110,8 @@ type FeatureFlag struct {
 	// BucketingIdentifier optionally selects the property used for hash bucketing.
 	BucketingIdentifier *string `json:"bucketing_identifier"`
 	// HasExperiment reports whether the flag is linked to an experiment.
-	// Defaults to false when the server does not send it.
-	HasExperiment bool `json:"has_experiment"`
+	// Nil when the server does not send it (older deployments).
+	HasExperiment *bool `json:"has_experiment"`
 }
 
 // Filter contains the targeting rules, variants, and payloads for a FeatureFlag.
@@ -679,7 +679,7 @@ type flagValueAndPayload struct {
 	payload          string
 	err              error
 	locallyEvaluated bool
-	hasExperiment    bool
+	hasExperiment    *bool
 }
 
 // GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
@@ -728,9 +728,9 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		// Clear local eval error — we successfully made a remote request
 		err = nil
 		// The remote response is now the source of the flag value, so it is
-		// also the source of has_experiment: reset to false and only pick it
-		// up from the response when the flag is present there.
-		hasExperiment = false
+		// also the source of has_experiment: reset to unknown and only pick
+		// it up from the response when the flag is present there.
+		hasExperiment = nil
 		if flagsResponse != nil {
 			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue

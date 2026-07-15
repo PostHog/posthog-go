@@ -445,12 +445,12 @@ func TestFlagsV4(t *testing.T) {
 		expectedVersion       int
 		expectedReason        string
 		expectedId            int
-		expectedHasExperiment bool
+		expectedHasExperiment *bool
 	}{
-		{name: "GetFeatureFlag", flagKey: "enabled-flag", expected: true, expectedVersion: 23, expectedReason: "Matched conditions set 3", expectedId: 1, expectedHasExperiment: true},
-		{name: "GetFeatureFlag", flagKey: "disabled-flag", expected: false, expectedVersion: 12, expectedReason: "No matching condition set", expectedId: 3, expectedHasExperiment: false},
-		// multi-variate-flag has no has_experiment in the fixture; absent means false.
-		{name: "GetFeatureFlag", flagKey: "multi-variate-flag", expected: "hello", expectedVersion: 42, expectedReason: "Matched conditions set 2", expectedId: 4, expectedHasExperiment: false},
+		{name: "GetFeatureFlag", flagKey: "enabled-flag", expected: true, expectedVersion: 23, expectedReason: "Matched conditions set 3", expectedId: 1, expectedHasExperiment: ptrBool(true)},
+		{name: "GetFeatureFlag", flagKey: "disabled-flag", expected: false, expectedVersion: 12, expectedReason: "No matching condition set", expectedId: 3, expectedHasExperiment: ptrBool(false)},
+		// multi-variate-flag has no has_experiment in the fixture; the property must be omitted.
+		{name: "GetFeatureFlag", flagKey: "multi-variate-flag", expected: "hello", expectedVersion: 42, expectedReason: "Matched conditions set 2", expectedId: 4, expectedHasExperiment: nil},
 	}
 
 	for _, test := range tests {
@@ -503,8 +503,12 @@ func TestFlagsV4(t *testing.T) {
 				t.Errorf("Expected $feature_flag_id for %s to be %v, got: %v", test.flagKey, test.expectedId, capturedEvent.Properties["$feature_flag_id"])
 			}
 
-			if hasExperiment, ok := capturedEvent.Properties["$feature_flag_has_experiment"].(bool); !ok || hasExperiment != test.expectedHasExperiment {
-				t.Errorf("Expected $feature_flag_has_experiment for %s to be %v, got: %v", test.flagKey, test.expectedHasExperiment, capturedEvent.Properties["$feature_flag_has_experiment"])
+			if test.expectedHasExperiment != nil {
+				if hasExperiment, ok := capturedEvent.Properties["$feature_flag_has_experiment"].(bool); !ok || hasExperiment != *test.expectedHasExperiment {
+					t.Errorf("Expected $feature_flag_has_experiment for %s to be %v, got: %v", test.flagKey, *test.expectedHasExperiment, capturedEvent.Properties["$feature_flag_has_experiment"])
+				}
+			} else if got, ok := capturedEvent.Properties["$feature_flag_has_experiment"]; ok {
+				t.Errorf("Expected $feature_flag_has_experiment for %s to be omitted, got: %v", test.flagKey, got)
 			}
 		})
 	}

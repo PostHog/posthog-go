@@ -851,7 +851,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	var variantStr string
 	var hasPayload, hasVariant bool
 	var locallyEvaluated bool
-	var hasExperiment bool
+	var hasExperiment *bool
 
 	if c.featureFlagsPoller != nil {
 		// Evaluate flag once to get both value and payload (avoids double evaluation)
@@ -904,8 +904,11 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		var properties = NewProperties().
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue).
-			Set("$feature_flag_has_experiment", hasExperiment).
 			Set("locally_evaluated", locallyEvaluated)
+
+		if hasExperiment != nil {
+			properties.Set("$feature_flag_has_experiment", *hasExperiment)
+		}
 
 		if flagConfig.DeviceId != nil {
 			properties.Set("$device_id", *flagConfig.DeviceId)
