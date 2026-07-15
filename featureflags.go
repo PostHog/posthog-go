@@ -727,6 +727,10 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		locallyEvaluated = false
 		// Clear local eval error — we successfully made a remote request
 		err = nil
+		// The remote response is now the source of the flag value, so it is
+		// also the source of has_experiment: reset to false and only pick it
+		// up from the response when the flag is present there.
+		hasExperiment = false
 		if flagsResponse != nil {
 			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue
@@ -738,7 +742,6 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 				payload = rawMessageToString(rawPayload)
 			}
 			if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
-				// The remote response is authoritative for the flag it evaluated.
 				hasExperiment = detail.Metadata.HasExperiment
 			}
 		} else {

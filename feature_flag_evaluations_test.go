@@ -731,6 +731,55 @@ func TestGetFeatureFlag_LocalEvaluation_HasExperiment(t *testing.T) {
 	}
 }
 
+func TestGetFeatureFlag_RemoteFallbackOmitsFlag_HasExperimentFalse(t *testing.T) {
+	t.Parallel()
+	// The local definition has has_experiment true but is gated on a person
+	// property the request doesn't supply, so local evaluation is inconclusive
+	// and the SDK falls back to a remote response that omits the flag. The
+	// remote response is the source of the value, so it is also the source of
+	// has_experiment: the property must be false, not the local definition's true.
+	const definitions = `{
+		"flags": [
+			{"id": 1, "key": "experiment-flag", "active": true, "has_experiment": true, "filters": {"groups": [{"properties": [{"key": "region", "operator": "exact", "value": ["USA"], "type": "person"}], "rollout_percentage": 100}]}}
+		]
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
+			w.Write([]byte(definitions))
+		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
+			w.Write([]byte(`{"featureFlags": {}}`))
+		case strings.HasPrefix(r.URL.Path, "/batch"):
+			w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, capture, _ := newEvalClient(t, server, func(c *Config) {
+		c.PersonalApiKey = "personal-key"
+	})
+	waitForFlagDefinitions(t, client)
+
+	value, err := client.GetFeatureFlag(FeatureFlagPayload{Key: "experiment-flag", DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("GetFeatureFlag error: %v", err)
+	}
+	if value != false {
+		t.Errorf("expected flag value false from remote fallback, got %v", value)
+	}
+
+	events := waitForEventCount(capture, 1, 5*time.Second)
+	event := findEvent(events, "$feature_flag_called", "experiment-flag")
+	if event == nil {
+		t.Fatal("expected $feature_flag_called for experiment-flag")
+	}
+	if event.Properties["$feature_flag_has_experiment"] != false {
+		t.Errorf("expected $feature_flag_has_experiment=false when the remote response omits the flag, got %v", event.Properties["$feature_flag_has_experiment"])
+	}
+}
+
 func TestEvaluateFlags_LocalEvaluation_HasExperiment(t *testing.T) {
 	t.Parallel()
 	server := newHasExperimentLocalServer(t)
