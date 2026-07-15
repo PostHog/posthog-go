@@ -157,6 +157,17 @@ type Config struct {
 	// it defaults to DefaultBatchSize. The API still enforces a 500KB request limit.
 	BatchSize int
 
+	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
+	// be batched and sent. If zero, it defaults to DefaultMaxQueueSize. It is
+	// clamped up to BatchSize so the queue can always hold at least one full batch.
+	//
+	// When the queue is full, Enqueue drops the newest message rather than blocking
+	// the caller: it returns ErrQueueFull and invokes Callback.Failure. Bulk or
+	// backfill workloads that enqueue faster than the client can upload should check
+	// the error returned by Enqueue for ErrQueueFull and throttle or retry (or raise
+	// MaxQueueSize), otherwise events are dropped, not delayed.
+	MaxQueueSize int
+
 	// Verbose enables more frequent and detailed debug logging through Logger.
 	Verbose bool
 
@@ -236,7 +247,7 @@ const (
 	DefaultFeatureFlagRequestTimeout = 3 * time.Second
 
 	// DefaultBatchSize is the default batch size used when Config.BatchSize is zero.
-	DefaultBatchSize = 250
+	DefaultBatchSize = 100
 
 	// DefaultMaxAttempts is the total number of capture delivery attempts (1
 	// initial + retries) used when Config.MaxRetries is unset or out of range.
@@ -256,6 +267,11 @@ const (
 	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
 	// can be queued for sending.
 	DefaultMaxEnqueuedRequests = 1000
+
+	// DefaultMaxQueueSize is the default in-memory message queue capacity used when
+	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
+	// posthog-node defaults so backend SDKs behave consistently under bursty load.
+	DefaultMaxQueueSize = 10000
 )
 
 func (c *Config) normalize() {
@@ -290,6 +306,14 @@ func (c *Config) Validate() error {
 			Reason: "negative batch sizes are not supported",
 			Field:  "BatchSize",
 			Value:  c.BatchSize,
+		}
+	}
+
+	if c.MaxQueueSize < 0 {
+		return ConfigError{
+			Reason: "negative queue sizes are not supported",
+			Field:  "MaxQueueSize",
+			Value:  c.MaxQueueSize,
 		}
 	}
 
@@ -379,6 +403,15 @@ func makeConfig(c Config) Config {
 
 	if c.BatchSize == 0 {
 		c.BatchSize = DefaultBatchSize
+	}
+
+	if c.MaxQueueSize == 0 {
+		c.MaxQueueSize = DefaultMaxQueueSize
+	}
+	// The queue must be able to hold at least one full batch, otherwise a batch
+	// could never accumulate before the queue overflows.
+	if c.MaxQueueSize < c.BatchSize {
+		c.MaxQueueSize = c.BatchSize
 	}
 
 	if c.RetryAfter == nil {

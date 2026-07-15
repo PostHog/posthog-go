@@ -49,7 +49,13 @@ type EnqueueClient interface {
 	//	client.Close()
 	//
 	// Enqueue returns an error if the message could not be queued, which happens
-	// when the client is closed or the message is invalid.
+	// when the client is closed, the message is invalid, or the in-memory queue
+	// is full (ErrQueueFull) -- in the latter case the message is dropped rather
+	// than blocking the caller, and Callback.Failure is invoked if configured.
+	//
+	// Bulk or backfill workloads that can enqueue faster than the client uploads
+	// should check the returned error for ErrQueueFull and throttle or retry (or
+	// raise Config.MaxQueueSize); otherwise events are dropped, not delayed.
 	Enqueue(Message) error
 }
 
@@ -245,10 +251,11 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	// Channel sizing:
-	// - batches queue sized by MaxEnqueuedRequests (default 1000)
-	// - msgs queue sized to hold multiple batches worth of messages
+	// - msgs queue (incoming messages) sized by MaxQueueSize (default 10000)
+	// - batches queue (prepared batches awaiting upload) sized by MaxEnqueuedRequests (default 1000)
+	// Both defaults and the MaxQueueSize >= BatchSize clamp are applied in makeConfig.
 	batchesQueueSize := config.MaxEnqueuedRequests
-	msgQueueSize := max(100, config.BatchSize*10)
+	msgQueueSize := config.MaxQueueSize
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &client{
@@ -555,7 +562,9 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 
 	var ts = c.now()
 
-	// Helper to send prepared message with panic recovery
+	// Helper to send prepared message with panic recovery. Non-blocking: if the
+	// `msgs` queue is full, the new message is dropped rather than blocking the
+	// caller, matching the posthog-python and posthog-rs SDKs.
 	sendPrepared := func(prepared preparedMessage) {
 		defer func() {
 			// When the `msgs` channel is closed writing to it will trigger a panic.
@@ -566,7 +575,13 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 				err = ErrClosed
 			}
 		}()
-		c.msgs <- prepared
+		select {
+		case c.msgs <- prepared:
+		default:
+			err = ErrQueueFull
+			c.Warnf("message queue is full (capacity %d), dropping the newest message", cap(c.msgs))
+			c.notifyFailure([]APIMessage{prepared.msg}, ErrQueueFull)
+		}
 	}
 
 	switch m := msg.(type) {

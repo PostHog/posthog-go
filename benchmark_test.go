@@ -46,7 +46,12 @@ func BenchmarkConcurrentEnqueue(b *testing.B) {
 			client, _ := NewWithConfig("test-key", Config{
 				Transport: NoOpTransport(),
 				Callback:  callback,
-				// Uses production defaults for BatchSize, MaxEnqueuedRequests
+				// Discard logs: this benchmark measures pure enqueue throughput, and
+				// the drop-on-full path would otherwise flood stderr from inside the
+				// timed loop, polluting ns/op. Drops are counted via the returned
+				// error and callback; drop-log severity is covered by unit tests.
+				Logger: testLogger{},
+				// Uses production defaults for BatchSize, MaxEnqueuedRequests, MaxQueueSize
 			})
 			defer client.Close()
 
@@ -61,9 +66,18 @@ func BenchmarkConcurrentEnqueue(b *testing.B) {
 			})
 			b.StopTimer()
 
-			// Enqueue errors indicate channel full - fail immediately
-			if enqueueErrors.Load() > 0 {
-				b.Fatalf("Benchmark invalid: %d enqueue errors (msgs channel full)", enqueueErrors.Load())
+			// Enqueue drops the newest message (rather than blocking) once the msgs
+			// channel is full, so a sustained high-concurrency producer burst can
+			// outrun the single consumer loop. This is the expected overload ceiling,
+			// not an invalid measurement, so report the drop rate as a tracked metric
+			// instead of failing. (Under the previous blocking Enqueue this manifested
+			// as hidden caller latency rather than drops.)
+			drops := enqueueErrors.Load()
+			if b.N > 0 {
+				b.ReportMetric(float64(drops)/float64(b.N)*100, "drop%")
+			}
+			if drops > 0 {
+				b.Logf("Note: %d enqueue drops (msgs channel full at %d goroutines)", drops, concurrency)
 			}
 			// Delivery failures indicate batches channel backpressure - report but don't fail
 			if failures := callback.FailureCount(); failures > 0 {
@@ -98,7 +112,12 @@ func BenchmarkConcurrentEnqueueWithCardinality(b *testing.B) {
 			client, _ := NewWithConfig("test-key", Config{
 				Transport: NoOpTransport(),
 				Callback:  callback,
-				// Uses production defaults for BatchSize, MaxEnqueuedRequests
+				// Discard logs: this benchmark measures pure enqueue throughput, and
+				// the drop-on-full path would otherwise flood stderr from inside the
+				// timed loop, polluting ns/op. Drops are counted via the returned
+				// error and callback; drop-log severity is covered by unit tests.
+				Logger: testLogger{},
+				// Uses production defaults for BatchSize, MaxEnqueuedRequests, MaxQueueSize
 			})
 			defer client.Close()
 
@@ -113,9 +132,18 @@ func BenchmarkConcurrentEnqueueWithCardinality(b *testing.B) {
 			})
 			b.StopTimer()
 
-			// Enqueue errors indicate channel full - fail immediately
-			if enqueueErrors.Load() > 0 {
-				b.Fatalf("Benchmark invalid: %d enqueue errors (msgs channel full)", enqueueErrors.Load())
+			// Enqueue drops the newest message (rather than blocking) once the msgs
+			// channel is full, so a sustained high-concurrency producer burst can
+			// outrun the single consumer loop. This is the expected overload ceiling,
+			// not an invalid measurement, so report the drop rate as a tracked metric
+			// instead of failing. (Under the previous blocking Enqueue this manifested
+			// as hidden caller latency rather than drops.)
+			drops := enqueueErrors.Load()
+			if b.N > 0 {
+				b.ReportMetric(float64(drops)/float64(b.N)*100, "drop%")
+			}
+			if drops > 0 {
+				b.Logf("Note: %d enqueue drops (msgs channel full at %d goroutines)", drops, concurrency)
 			}
 			// Delivery failures indicate batches channel backpressure - report but don't fail
 			if failures := callback.FailureCount(); failures > 0 {
