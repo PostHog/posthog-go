@@ -337,6 +337,9 @@ func TestIsEnabled_FiresEventWithFullMetadataAndDedupes(t *testing.T) {
 	if got := event.Properties["$feature_flag_payload"]; got != `{"foo": 1}` {
 		t.Errorf("expected $feature_flag_payload to be the raw JSON payload, got %v", got)
 	}
+	if event.Properties["$feature_flag_has_experiment"] != true {
+		t.Errorf("expected $feature_flag_has_experiment=true, got %v", event.Properties["$feature_flag_has_experiment"])
+	}
 }
 
 func TestGetFlag_FiresEventWithVariant(t *testing.T) {
@@ -362,6 +365,10 @@ func TestGetFlag_FiresEventWithVariant(t *testing.T) {
 	}
 	if event.Properties["$feature_flag_response"] != "hello" {
 		t.Errorf("expected $feature_flag_response='hello', got %v", event.Properties["$feature_flag_response"])
+	}
+	// multi-variate-flag has no has_experiment in the fixture; the property must be omitted.
+	if got, ok := event.Properties["$feature_flag_has_experiment"]; ok {
+		t.Errorf("expected $feature_flag_has_experiment to be omitted, got %v", got)
 	}
 }
 
@@ -661,6 +668,159 @@ func TestEvaluateFlags_LocalEvaluation_TagsLocallyEvaluated(t *testing.T) {
 	if event.Properties["$feature_flag_reason"] != "Evaluated locally" {
 		t.Errorf("expected $feature_flag_reason='Evaluated locally', got %v", event.Properties["$feature_flag_reason"])
 	}
+	// The local definitions fixture has no has_experiment; the property must be omitted.
+	if got, ok := event.Properties["$feature_flag_has_experiment"]; ok {
+		t.Errorf("expected $feature_flag_has_experiment to be omitted, got %v", got)
+	}
+}
+
+// hasExperimentLocalDefinitions serves local flag definitions covering the
+// three has_experiment shapes: reported true, reported false, and absent.
+const hasExperimentLocalDefinitions = `{
+	"flags": [
+		{"id": 1, "key": "experiment-flag", "active": true, "has_experiment": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}},
+		{"id": 2, "key": "plain-flag-false", "active": true, "has_experiment": false, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}},
+		{"id": 3, "key": "plain-flag-absent", "active": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}}
+	]
+}`
+
+func newHasExperimentLocalServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
+			w.Write([]byte(hasExperimentLocalDefinitions))
+		case strings.HasPrefix(r.URL.Path, "/batch"):
+			w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestGetFeatureFlag_LocalEvaluation_HasExperiment(t *testing.T) {
+	t.Parallel()
+	server := newHasExperimentLocalServer(t)
+	client, capture, _ := newEvalClient(t, server, func(c *Config) {
+		c.PersonalApiKey = "personal-key"
+	})
+	waitForFlagDefinitions(t, client)
+
+	expectations := map[string]*bool{
+		"experiment-flag":   ptrBool(true),
+		"plain-flag-false":  ptrBool(false),
+		"plain-flag-absent": nil,
+	}
+	for key := range expectations {
+		if _, err := client.GetFeatureFlag(FeatureFlagPayload{Key: key, DistinctId: "user-1"}); err != nil {
+			t.Fatalf("GetFeatureFlag(%s) error: %v", key, err)
+		}
+	}
+
+	events := waitForEventCount(capture, len(expectations), 5*time.Second)
+	assertHasExperimentProperties(t, events, expectations)
+}
+
+// assertHasExperimentProperties asserts each flag's $feature_flag_called event
+// carries $feature_flag_has_experiment with the expected value, or omits the
+// property entirely when the expectation is nil.
+func assertHasExperimentProperties(t *testing.T, events []CaptureInApi, expectations map[string]*bool) {
+	t.Helper()
+	for key, want := range expectations {
+		event := findEvent(events, "$feature_flag_called", key)
+		if event == nil {
+			t.Fatalf("expected $feature_flag_called for %s", key)
+		}
+		got, ok := event.Properties["$feature_flag_has_experiment"]
+		if want == nil {
+			if ok {
+				t.Errorf("expected $feature_flag_has_experiment to be omitted for %s, got %v", key, got)
+			}
+			continue
+		}
+		if !ok || got != *want {
+			t.Errorf("expected $feature_flag_has_experiment=%v for %s, got %v", *want, key, got)
+		}
+	}
+}
+
+func TestGetFeatureFlag_RemoteFallbackOmitsFlag_OmitsHasExperiment(t *testing.T) {
+	t.Parallel()
+	// The local definition has has_experiment true but is gated on a person
+	// property the request doesn't supply, so local evaluation is inconclusive
+	// and the SDK falls back to a remote response that omits the flag. The
+	// remote response is the source of the value, so it is also the source of
+	// has_experiment: the property must be omitted, not the local definition's true.
+	const definitions = `{
+		"flags": [
+			{"id": 1, "key": "experiment-flag", "active": true, "has_experiment": true, "filters": {"groups": [{"properties": [{"key": "region", "operator": "exact", "value": ["USA"], "type": "person"}], "rollout_percentage": 100}]}}
+		]
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
+			w.Write([]byte(definitions))
+		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
+			w.Write([]byte(`{"featureFlags": {}}`))
+		case strings.HasPrefix(r.URL.Path, "/batch"):
+			w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, capture, _ := newEvalClient(t, server, func(c *Config) {
+		c.PersonalApiKey = "personal-key"
+	})
+	waitForFlagDefinitions(t, client)
+
+	value, err := client.GetFeatureFlag(FeatureFlagPayload{Key: "experiment-flag", DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("GetFeatureFlag error: %v", err)
+	}
+	if value != false {
+		t.Errorf("expected flag value false from remote fallback, got %v", value)
+	}
+
+	events := waitForEventCount(capture, 1, 5*time.Second)
+	event := findEvent(events, "$feature_flag_called", "experiment-flag")
+	if event == nil {
+		t.Fatal("expected $feature_flag_called for experiment-flag")
+	}
+	if got, ok := event.Properties["$feature_flag_has_experiment"]; ok {
+		t.Errorf("expected $feature_flag_has_experiment to be omitted when the remote response omits the flag, got %v", got)
+	}
+}
+
+func TestEvaluateFlags_LocalEvaluation_HasExperiment(t *testing.T) {
+	t.Parallel()
+	server := newHasExperimentLocalServer(t)
+	client, capture, _ := newEvalClient(t, server, func(c *Config) {
+		c.PersonalApiKey = "personal-key"
+	})
+	waitForFlagDefinitions(t, client)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	expectations := map[string]*bool{
+		"experiment-flag":   ptrBool(true),
+		"plain-flag-false":  ptrBool(false),
+		"plain-flag-absent": nil,
+	}
+	for key := range expectations {
+		if !snap.IsEnabled(key) {
+			t.Fatalf("expected %s to be enabled locally", key)
+		}
+	}
+
+	events := waitForEventCount(capture, len(expectations), 5*time.Second)
+	assertHasExperimentProperties(t, events, expectations)
 }
 
 // silentLogger drops all log calls. Callers who want to silence

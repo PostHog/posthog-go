@@ -867,12 +867,14 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	var variantStr string
 	var hasPayload, hasVariant bool
 	var locallyEvaluated bool
+	var hasExperiment *bool
 
 	if c.featureFlagsPoller != nil {
 		// Evaluate flag once to get both value and payload (avoids double evaluation)
 		combined := c.featureFlagsPoller.GetFeatureFlagWithPayload(flagConfig)
 		flagValue = combined.value
 		locallyEvaluated = combined.locallyEvaluated
+		hasExperiment = combined.hasExperiment
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
@@ -896,6 +898,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
 			evalResult.Value = flagValue
+			hasExperiment = f.Metadata.HasExperiment
 			ps := rawMessageToString(f.Metadata.Payload)
 			if ps != "" {
 				payloadStr = ps
@@ -918,6 +921,10 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue).
 			Set("locally_evaluated", locallyEvaluated)
+
+		if hasExperiment != nil {
+			properties.Set("$feature_flag_has_experiment", *hasExperiment)
+		}
 
 		if flagConfig.DeviceId != nil {
 			properties.Set("$device_id", *flagConfig.DeviceId)
@@ -1284,6 +1291,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 		record := evaluatedFlagRecord{
 			Key:              storedFlag.Key,
 			LocallyEvaluated: true,
+			HasExperiment:    storedFlag.HasExperiment,
 			Reason:           ptrString(localReason),
 		}
 		switch v := value.(type) {
@@ -1320,9 +1328,10 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 // recordFromFlagDetail builds an evaluatedFlagRecord from a v4 FlagDetail.
 func recordFromFlagDetail(detail FlagDetail) evaluatedFlagRecord {
 	record := evaluatedFlagRecord{
-		Key:     detail.Key,
-		Enabled: detail.Enabled,
-		Variant: detail.Variant,
+		Key:           detail.Key,
+		Enabled:       detail.Enabled,
+		Variant:       detail.Variant,
+		HasExperiment: detail.Metadata.HasExperiment,
 	}
 	if detail.Failed != nil && *detail.Failed {
 		record.Enabled = false

@@ -47,6 +47,7 @@ type evaluatedFlagRecord struct {
 	Version          *int
 	Reason           *string
 	LocallyEvaluated bool
+	HasExperiment    *bool
 	Error            *string
 }
 
@@ -241,6 +242,10 @@ func (e *FeatureFlagEvaluations) recordAccess(key string) {
 		Set("$feature_flag_response", response).
 		Set("$feature/"+key, response).
 		Set("locally_evaluated", found && flag.LocallyEvaluated)
+
+	if found && flag.HasExperiment != nil {
+		properties.Set("$feature_flag_has_experiment", *flag.HasExperiment)
+	}
 
 	if e.deviceId != nil {
 		properties.Set("$device_id", *e.deviceId)
