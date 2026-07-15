@@ -21,11 +21,11 @@ func loadMainImage() mainImageInfo {
 		return mainImageInfo{}
 	}
 
-	file, err := macho.Open(exe)
+	file, closeFile, err := openMachO(exe)
 	if err != nil {
 		return mainImageInfo{}
 	}
-	defer file.Close()
+	defer closeFile()
 
 	uuid, ok := machoUUID(file)
 	if !ok {
@@ -71,6 +71,39 @@ func loadMainImage() mainImageInfo {
 		end:  end,
 		ok:   true,
 	}
+}
+
+// openMachO opens a thin Mach-O executable, or the slice matching the running
+// architecture from a universal (fat) binary such as a lipo'd release build.
+func openMachO(exe string) (*macho.File, func() error, error) {
+	file, err := macho.Open(exe)
+	if err == nil {
+		return file, file.Close, nil
+	}
+
+	fat, fatErr := macho.OpenFat(exe)
+	if fatErr != nil {
+		return nil, nil, err
+	}
+	var want macho.Cpu
+	switch runtime.GOARCH {
+	case "amd64":
+		want = macho.CpuAmd64
+	case "arm64":
+		want = macho.CpuArm64
+	case "386":
+		want = macho.Cpu386
+	default:
+		fat.Close()
+		return nil, nil, err
+	}
+	for _, arch := range fat.Arches {
+		if arch.Cpu == want {
+			return arch.File, fat.Close, nil
+		}
+	}
+	fat.Close()
+	return nil, nil, err
 }
 
 // machoUUID extracts the LC_UUID load command payload.
