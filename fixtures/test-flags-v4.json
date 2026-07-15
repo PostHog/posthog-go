@@ -20,7 +20,8 @@
         "id": 1,
         "version": 23,
         "payload": {"foo": 1},
-        "description": "This is an enabled flag"
+        "description": "This is an enabled flag",
+        "has_experiment": true
       }
     },
     "group-flag": {
@@ -50,7 +51,8 @@
       "metadata": {
         "id": 3,
         "version": 12,
-        "payload": null
+        "payload": null,
+        "has_experiment": false
       }
     },
     "multi-variate-flag": {
