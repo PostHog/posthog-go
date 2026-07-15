@@ -52,34 +52,105 @@ type DefaultStackTraceExtractor struct {
 // GetStackTrace captures the current goroutine stack in wire order (outermost
 // frame first, capture site last). The skip parameter omits leading
 // runtime.Callers frames before conversion.
+//
+// When the running executable's identity is known (see DebugImage), frames
+// are emitted as client-expanded inline groups for server-side symbolication:
+// each physical stack frame and the entries the runtime synthesizes for calls
+// inlined into it share one raw return address, with the synthesized layers
+// tagged inline. PostHog resolves that address once against uploaded debug
+// symbols and atomically replaces the whole group with its own expansion
+// (exact inline chain, source context), or keeps these runtime-resolved
+// frames verbatim when no symbols are uploaded. When the executable can't be
+// identified, frames keep the plain pre-existing shape.
 func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace {
 	pcs := make([]uintptr, 64)
 	stackCallCount := runtime.Callers(skip, pcs)
-	frames := runtime.CallersFrames(pcs[:stackCallCount])
+
+	image := mainImageFn()
 
 	traces := make([]StackFrame, 0, stackCallCount)
-	for {
-		frame, hasMore := frames.Next()
-		if frame == *new(runtime.Frame) {
-			break
+	i := 0
+	for i < stackCallCount {
+		// One physical stack frame per iteration: resolve the leaf entry,
+		// then collect the entries runtime.Callers synthesizes for its inline
+		// ancestors, anchored by the physical frame (Func != nil) sharing the
+		// same entry pc. Matching on the entry pc keeps non-Go frames (also
+		// Func == nil, but with zero or distinct entries) and recursive calls
+		// of the physical function separate.
+		leafPC := pcs[i]
+		i++
+		leaf, _ := runtime.CallersFrames([]uintptr{leafPC}).Next()
+		if leaf == (runtime.Frame{}) {
+			continue
 		}
 
-		traces = append(traces, StackFrame{
-			Filename:  frame.File,
-			LineNo:    frame.Line,
-			Function:  frame.Function,
-			InApp:     d.InAppDecider(frame),
-			Synthetic: false,
-			Platform:  "go",
-		})
-		if !hasMore {
-			break
+		group := []runtime.Frame{leaf}
+		anchored := leaf.Func != nil
+		if leaf.Func == nil && leaf.Entry != 0 {
+			for i < stackCallCount {
+				parent, _ := runtime.CallersFrames([]uintptr{pcs[i]}).Next()
+				if parent == (runtime.Frame{}) || parent.Entry != leaf.Entry {
+					break
+				}
+				i++
+				group = append(group, parent)
+				if parent.Func != nil {
+					anchored = true
+					break
+				}
+			}
+		}
+
+		covered := image.ok && uint64(leafPC) >= image.base && uint64(leafPC) < image.end
+		if !covered || !anchored {
+			// No resolvable image for this address (or the pcs buffer cut the
+			// group off from its physical frame): plain Go frames, the
+			// pre-native wire shape.
+			for _, frame := range group {
+				traces = append(traces, StackFrame{
+					Filename:  frame.File,
+					LineNo:    frame.Line,
+					Function:  frame.Function,
+					InApp:     d.InAppDecider(frame),
+					Synthetic: false,
+					Platform:  "go",
+				})
+			}
+			continue
+		}
+
+		// Client-expanded inline group. Every layer carries the group's raw
+		// leaf address: the entry whose address the server expands to the
+		// whole chain, with the server subtracting one to target the call
+		// instruction (frame.PC is already adjusted, so sending it would
+		// shift that lookup one instruction too far). The physical anchor is
+		// the group's lead; the synthesized layers are marked inline.
+		for idx, frame := range group {
+			isAnchor := idx == len(group)-1
+			stackFrame := StackFrame{
+				Filename:        frame.File,
+				LineNo:          frame.Line,
+				Function:        frame.Function,
+				InApp:           d.InAppDecider(frame),
+				Synthetic:       false,
+				Platform:        "native",
+				Lang:            "go",
+				ClientResolved:  true,
+				Inline:          !isAnchor,
+				InstructionAddr: fmt.Sprintf("0x%x", uint64(leafPC)),
+				ImageAddr:       image.image.ImageAddr,
+			}
+			if frame.Entry != 0 {
+				stackFrame.SymbolAddr = fmt.Sprintf("0x%x", uint64(frame.Entry))
+			}
+			traces = append(traces, stackFrame)
 		}
 	}
 
-	// runtime.CallersFrames yields innermost first; reverse to the canonical
-	// wire order shared across PostHog SDKs (matching NativeStackTraceExtractor):
-	// outermost (entry point) first, capture site last.
+	// The runtime yields innermost first; reverse to the canonical wire order
+	// shared across PostHog SDKs: outermost (entry point) first, capture site
+	// last. The reversal also puts each group's physical frame ahead of its
+	// inline members, the order the server-side group contract expects.
 	for i, j := 0, len(traces)-1; i < j; i, j = i+1, j-1 {
 		traces[i], traces[j] = traces[j], traces[i]
 	}
@@ -88,4 +159,14 @@ func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
 		Type:   "raw",
 		Frames: traces,
 	}
+}
+
+// GetDebugImages returns the debug images referenced by captured frames —
+// currently the main executable, when its identity could be determined.
+func (d DefaultStackTraceExtractor) GetDebugImages() []DebugImage {
+	image := mainImageFn()
+	if !image.ok {
+		return nil
+	}
+	return []DebugImage{image.image}
 }
