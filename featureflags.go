@@ -67,6 +67,9 @@ type flagsState struct {
 	cohorts      map[string]PropertyGroup
 	groups       map[string]string
 	flagsEtag    string
+	// minimalFlagCalledEvents is the server-controlled gate for minimal
+	// $feature_flag_called events, cached from the local-evaluation payload.
+	minimalFlagCalledEvents bool
 }
 
 // FeatureFlagsPoller periodically loads feature flag definitions for local evaluation.
@@ -219,6 +222,10 @@ type FeatureFlagsResponse struct {
 	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
 	// Cohorts contains cohort definitions referenced by local feature flags.
 	Cohorts map[string]PropertyGroup `json:"cohorts"`
+	// MinimalFlagCalledEvents reports whether the server enabled minimal
+	// $feature_flag_called events for this project. The server sends it only
+	// when the gate is on; absence means full events.
+	MinimalFlagCalledEvents bool `json:"minimal_flag_called_events"`
 }
 
 // DecideRequestData is the legacy wire-format request body for flag decide calls.
@@ -529,11 +536,12 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		if newEtag := res.Header.Get("ETag"); newEtag != "" && currentState != nil {
 			// Atomically swap with updated ETag
 			newState := &flagsState{
-				featureFlags: currentState.featureFlags,
-				flagsByKey:   currentState.flagsByKey,
-				cohorts:      currentState.cohorts,
-				groups:       currentState.groups,
-				flagsEtag:    newEtag,
+				featureFlags:            currentState.featureFlags,
+				flagsByKey:              currentState.flagsByKey,
+				cohorts:                 currentState.cohorts,
+				groups:                  currentState.groups,
+				flagsEtag:               newEtag,
+				minimalFlagCalledEvents: currentState.minimalFlagCalledEvents,
 			}
 			poller.state.Store(newState)
 		}
@@ -590,12 +598,21 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 	// Atomic swap of entire state
 	poller.state.Store(&flagsState{
-		featureFlags: newFlags,
-		flagsByKey:   flagsByKey,
-		cohorts:      parsedCohorts,
-		groups:       groups,
-		flagsEtag:    newEtag,
+		featureFlags:            newFlags,
+		flagsByKey:              flagsByKey,
+		cohorts:                 parsedCohorts,
+		groups:                  groups,
+		flagsEtag:               newEtag,
+		minimalFlagCalledEvents: featureFlagsResponse.MinimalFlagCalledEvents,
 	})
+}
+
+// getMinimalFlagCalledEvents reports whether the local-evaluation payload
+// enabled minimal $feature_flag_called events. False until definitions have
+// been loaded, so missing state always yields full events.
+func (poller *FeatureFlagsPoller) getMinimalFlagCalledEvents() bool {
+	state := poller.state.Load()
+	return state != nil && state.minimalFlagCalledEvents
 }
 
 // GetFeatureFlag evaluates one flag using locally loaded definitions when possible.
@@ -680,6 +697,10 @@ type flagValueAndPayload struct {
 	err              error
 	locallyEvaluated bool
 	hasExperiment    *bool
+	// minimalFlagCalledEvents carries the minimal $feature_flag_called gate
+	// from whichever source produced the value (local definitions or the
+	// remote /flags response).
+	minimalFlagCalledEvents bool
 }
 
 // GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
@@ -717,6 +738,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 
 	locallyEvaluated := err == nil && result != nil
 	hasExperiment := flag.HasExperiment
+	minimalFlagCalledEvents := poller.getMinimalFlagCalledEvents()
 
 	// Fall back to remote evaluation if local didn't produce a result
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
@@ -728,10 +750,12 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		// Clear local eval error — we successfully made a remote request
 		err = nil
 		// The remote response is now the source of the flag value, so it is
-		// also the source of has_experiment: reset to unknown and only pick
-		// it up from the response when the flag is present there.
+		// also the source of has_experiment and of the minimal-event gate:
+		// reset both and only pick them up from the response.
 		hasExperiment = nil
+		minimalFlagCalledEvents = false
 		if flagsResponse != nil {
+			minimalFlagCalledEvents = flagsResponse.MinimalFlagCalledEvents
 			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue
 			} else {
@@ -749,7 +773,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		}
 	}
 
-	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment}
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents}
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {

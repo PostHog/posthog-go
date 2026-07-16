@@ -868,6 +868,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	var hasPayload, hasVariant bool
 	var locallyEvaluated bool
 	var hasExperiment *bool
+	var minimalFlagCalledEvents bool
 
 	if c.featureFlagsPoller != nil {
 		// Evaluate flag once to get both value and payload (avoids double evaluation)
@@ -875,6 +876,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		flagValue = combined.value
 		locallyEvaluated = combined.locallyEvaluated
 		hasExperiment = combined.hasExperiment
+		minimalFlagCalledEvents = combined.minimalFlagCalledEvents
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
@@ -895,6 +897,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		evalResult = *remoteResult
 		flagValue = evalResult.Value
 		err = evalResult.Err
+		minimalFlagCalledEvents = evalResult.MinimalFlagCalledEvents
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
 			evalResult.Value = flagValue
@@ -951,7 +954,8 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			properties.Set("$feature_flag_error", errorString)
 		}
 
-		c.captureFlagCalledIfNeeded(flagConfig.DistinctId, flagConfig.Key, flagValue, flagConfig.DeviceId, properties, flagConfig.Groups)
+		minimal := shouldMinimizeFlagCalledEvent(minimalFlagCalledEvents, hasExperiment)
+		c.captureFlagCalledIfNeeded(flagConfig.DistinctId, flagConfig.Key, flagValue, flagConfig.DeviceId, properties, flagConfig.Groups, minimal)
 	}
 
 	if flagValue == nil {
@@ -996,12 +1000,13 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 // responsible for building the full properties dict; this helper only handles
 // dedup and enqueue. It is shared by the legacy per-flag evaluation path and
 // the FeatureFlagEvaluations snapshot path so both dedupe identically against
-// the same per-distinct_id LRU cache.
-func (c *client) captureFlagCalledIfNeeded(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
-	c.captureFlagCalledIfNeededWithContext(context.Background(), distinctId, key, featureFlagResponse, deviceId, properties, groups)
+// the same per-distinct_id LRU cache. When minimal is true the event is
+// serialized in the minimal $feature_flag_called shape.
+func (c *client) captureFlagCalledIfNeeded(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups, minimal bool) {
+	c.captureFlagCalledIfNeededWithContext(context.Background(), distinctId, key, featureFlagResponse, deviceId, properties, groups, minimal)
 }
 
-func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
+func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups, minimal bool) {
 	deviceIDStr := ""
 	if deviceId != nil {
 		deviceIDStr = *deviceId
@@ -1017,10 +1022,11 @@ func (c *client) captureFlagCalledIfNeededWithContext(ctx context.Context, disti
 		return
 	}
 	if err := c.EnqueueWithContext(ctx, Capture{
-		DistinctId: distinctId,
-		Event:      "$feature_flag_called",
-		Properties: properties,
-		Groups:     groups,
+		DistinctId:             distinctId,
+		Event:                  "$feature_flag_called",
+		Properties:             properties,
+		Groups:                 groups,
+		minimalFlagCalledEvent: minimal,
 	}); err == nil {
 		c.distinctIdsFeatureFlagsReported.Add(cacheKey, struct{}{})
 	}
@@ -1223,7 +1229,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 					if _, alreadyLocal := locallyEvaluated[key]; alreadyLocal {
 						continue
 					}
-					records[key] = recordFromFlagDetail(detail)
+					records[key] = recordFromFlagDetail(detail, flagsResponse.MinimalFlagCalledEvents)
 				}
 			}
 		}
@@ -1265,6 +1271,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 
 	cohorts := poller.getCohorts()
 	fallbackToRemote := false
+	minimalFlagCalledEvents := poller.getMinimalFlagCalledEvents()
 	const localReason = "Evaluated locally"
 
 	for _, storedFlag := range featureFlags {
@@ -1289,10 +1296,11 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 		}
 
 		record := evaluatedFlagRecord{
-			Key:              storedFlag.Key,
-			LocallyEvaluated: true,
-			HasExperiment:    storedFlag.HasExperiment,
-			Reason:           ptrString(localReason),
+			Key:                     storedFlag.Key,
+			LocallyEvaluated:        true,
+			HasExperiment:           storedFlag.HasExperiment,
+			MinimalFlagCalledEvents: minimalFlagCalledEvents,
+			Reason:                  ptrString(localReason),
 		}
 		switch v := value.(type) {
 		case bool:
@@ -1326,12 +1334,15 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 }
 
 // recordFromFlagDetail builds an evaluatedFlagRecord from a v4 FlagDetail.
-func recordFromFlagDetail(detail FlagDetail) evaluatedFlagRecord {
+// minimalFlagCalledEvents is the gate from the /flags response the detail
+// came from.
+func recordFromFlagDetail(detail FlagDetail, minimalFlagCalledEvents bool) evaluatedFlagRecord {
 	record := evaluatedFlagRecord{
-		Key:           detail.Key,
-		Enabled:       detail.Enabled,
-		Variant:       detail.Variant,
-		HasExperiment: detail.Metadata.HasExperiment,
+		Key:                     detail.Key,
+		Enabled:                 detail.Enabled,
+		Variant:                 detail.Variant,
+		HasExperiment:           detail.Metadata.HasExperiment,
+		MinimalFlagCalledEvents: minimalFlagCalledEvents,
 	}
 	if detail.Failed != nil && *detail.Failed {
 		record.Enabled = false
@@ -1358,8 +1369,8 @@ func ptrString(s string) *string { return &s }
 // featureFlagEvaluationsHostWithContext wires the snapshot's callbacks to this client.
 func (c *client) featureFlagEvaluationsHostWithContext(ctx context.Context) featureFlagEvaluationsHost {
 	return featureFlagEvaluationsHost{
-		captureFlagCalledIfNeeded: func(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups) {
-			c.captureFlagCalledIfNeededWithContext(ctx, distinctId, key, featureFlagResponse, deviceId, properties, groups)
+		captureFlagCalledIfNeeded: func(distinctId, key string, featureFlagResponse interface{}, deviceId *string, properties Properties, groups Groups, minimal bool) {
+			c.captureFlagCalledIfNeededWithContext(ctx, distinctId, key, featureFlagResponse, deviceId, properties, groups, minimal)
 		},
 		logger: c.Logger,
 	}
@@ -1925,6 +1936,7 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceI
 	result.EvaluatedAt = flagsResponse.EvaluatedAt
 	result.ErrorsWhileComputingFlags = flagsResponse.ErrorsWhileComputingFlags
 	result.QuotaLimited = c.isFeatureFlagsQuotaLimited(flagsResponse)
+	result.MinimalFlagCalledEvents = flagsResponse.MinimalFlagCalledEvents
 
 	if result.QuotaLimited {
 		return result
