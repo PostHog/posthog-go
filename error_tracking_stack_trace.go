@@ -79,14 +79,27 @@ func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
 		// of the physical function separate.
 		leafPC := pcs[i]
 		i++
-		leaf, _ := runtime.CallersFrames([]uintptr{leafPC}).Next()
+		expanded := runtime.CallersFrames([]uintptr{leafPC})
+		leaf, more := expanded.Next()
 		if leaf == (runtime.Frame{}) {
 			continue
 		}
 
 		group := []runtime.Frame{leaf}
+		// A single pc can expand to several frames: a cgo traceback
+		// symbolizer (runtime.SetCgoTraceback) reports inlined C frames this
+		// way. Drain them all; they stay unanchored (Entry 0) and fall through
+		// to the plain emission below.
+		for more {
+			var frame runtime.Frame
+			frame, more = expanded.Next()
+			if frame == (runtime.Frame{}) {
+				break
+			}
+			group = append(group, frame)
+		}
 		anchored := leaf.Func != nil
-		if leaf.Func == nil && leaf.Entry != 0 {
+		if len(group) == 1 && leaf.Func == nil && leaf.Entry != 0 {
 			for i < stackCallCount {
 				parent, _ := runtime.CallersFrames([]uintptr{pcs[i]}).Next()
 				if parent == (runtime.Frame{}) || parent.Entry != leaf.Entry {
