@@ -42,12 +42,16 @@ func TestOpenMachOUniversal(t *testing.T) {
 	if err := os.WriteFile(path, fat, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	universal, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer universal.Close()
 
-	file, closeFile, err := openMachO(path)
+	file, err := openMachO(universal)
 	if err != nil {
 		t.Fatalf("openMachO(universal) = %v", err)
 	}
-	defer closeFile()
 
 	if _, ok := machoUUID(file); !ok {
 		t.Error("expected LC_UUID in the selected slice")

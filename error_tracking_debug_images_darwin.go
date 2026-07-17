@@ -7,34 +7,48 @@ import (
 	"debug/macho"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
-	"reflect"
 	"runtime"
 	"strings"
 )
 
-// Snapshot the executable's identity at process start: macOS has no
-// /proc/self/exe equivalent, so reading the launch path later races with
-// deploys or self-updates replacing the file (see machoSlide). At init time
-// the file at the launch path is still the mapped binary.
+// pinnedExecutable is a handle to the binary this process was launched from,
+// opened at init before anything can replace the launch path. macOS has no
+// /proc/self/exe equivalent: reading the path later races with deploys or
+// self-updates swapping the file, which would pair this process's addresses
+// with a different build's UUID. The pinned inode always reads the mapped
+// binary; the handle is kept for the process lifetime.
+var pinnedExecutable struct {
+	file *os.File
+	path string
+}
+
 func init() {
-	go func() { _ = mainImage() }()
+	path, err := os.Executable()
+	if err != nil {
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	pinnedExecutable.file = file
+	pinnedExecutable.path = path
 }
 
 // loadMainImage inspects the running executable: its Mach-O UUID (which
 // `posthog-cli dsym upload` uses, uppercase, as the symbol set id) and its
 // runtime load address, computed from the ASLR slide of a known function.
 func loadMainImage() mainImageInfo {
-	exe, err := os.Executable()
-	if err != nil {
+	if pinnedExecutable.file == nil {
 		return mainImageInfo{}
 	}
 
-	file, closeFile, err := openMachO(exe)
+	file, err := openMachO(pinnedExecutable.file)
 	if err != nil {
 		return mainImageInfo{}
 	}
-	defer closeFile()
 
 	uuid, ok := machoUUID(file)
 	if !ok {
@@ -73,7 +87,7 @@ func loadMainImage() mainImageInfo {
 			ImageAddr:   fmt.Sprintf("0x%x", base),
 			ImageSize:   end - base,
 			ImageVmaddr: fmt.Sprintf("0x%x", textSeg.Addr),
-			CodeFile:    exe,
+			CodeFile:    pinnedExecutable.path,
 			Arch:        nativeImageArch(),
 		},
 		base: base,
@@ -82,17 +96,18 @@ func loadMainImage() mainImageInfo {
 	}
 }
 
-// openMachO opens a thin Mach-O executable, or the slice matching the running
-// architecture from a universal (fat) binary such as a lipo'd release build.
-func openMachO(exe string) (*macho.File, func() error, error) {
-	file, err := macho.Open(exe)
+// openMachO parses a thin Mach-O executable, or the slice matching the
+// running architecture from a universal (fat) binary such as a lipo'd release
+// build. The reader must stay valid for the returned file's lifetime.
+func openMachO(r io.ReaderAt) (*macho.File, error) {
+	file, err := macho.NewFile(r)
 	if err == nil {
-		return file, file.Close, nil
+		return file, nil
 	}
 
-	fat, fatErr := macho.OpenFat(exe)
+	fat, fatErr := macho.NewFatFile(r)
 	if fatErr != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var want macho.Cpu
 	switch runtime.GOARCH {
@@ -103,16 +118,14 @@ func openMachO(exe string) (*macho.File, func() error, error) {
 	case "386":
 		want = macho.Cpu386
 	default:
-		fat.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	for _, arch := range fat.Arches {
 		if arch.Cpu == want {
-			return arch.File, fat.Close, nil
+			return arch.File, nil
 		}
 	}
-	fat.Close()
-	return nil, nil, err
+	return nil, err
 }
 
 // machoUUID extracts the LC_UUID load command payload.
@@ -132,17 +145,9 @@ func machoUUID(file *macho.File) ([16]byte, bool) {
 
 // machoSlide computes the ASLR slide by comparing the runtime address of a
 // function in this package with its link-time address from the Go pclntab
-// (the Mach-O symbol table no longer carries Go function symbols).
-//
-// The path from os.Executable can point at a different build than the mapped
-// image (atomic deploy, symlink switch, self-update), which would yield a
-// plausible but wrong base and UUID. To catch that, the slide is cross-checked
-// against every physical function on the current call stack plus runtime.GC:
-// per-function slides only agree when the file matches the loaded binary's
-// layout across all of them (app, runtime, and SDK link units). A replacement
-// build that keeps every one of those entries identical is not detected —
-// full certainty would need the mapped image's own header via dyld, which
-// pure Go can't read safely.
+// (the Mach-O symbol table no longer carries Go function symbols). The pinned
+// handle guarantees the file is the mapped binary, so one reference point is
+// sound.
 func machoSlide(file *macho.File) (uint64, bool) {
 	pclntab := file.Section("__gopclntab")
 	text := file.Section("__text")
@@ -158,33 +163,7 @@ func machoSlide(file *macho.File) (uint64, bool) {
 		return 0, false
 	}
 
-	slide, ok := slideForPC(table, funcPC())
-	if !ok {
-		return 0, false
-	}
-	check, ok := slideForPC(table, reflect.ValueOf(runtime.GC).Pointer())
-	if !ok || check != slide {
-		return 0, false
-	}
-
-	pcs := make([]uintptr, 32)
-	for _, pc := range pcs[:runtime.Callers(1, pcs)] {
-		frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
-		if frame.Func == nil {
-			continue
-		}
-		check, ok := slideForPC(table, pc)
-		if !ok || check != slide {
-			return 0, false
-		}
-	}
-	return slide, true
-}
-
-// slideForPC returns the difference between a function's runtime address and
-// its link-time address in the file's pclntab.
-func slideForPC(table *gosym.Table, pc uintptr) (uint64, bool) {
-	entry := runtime.FuncForPC(pc).Entry()
+	entry := runtime.FuncForPC(funcPC()).Entry()
 	fn := table.LookupFunc(runtime.FuncForPC(entry).Name())
 	if fn == nil || uint64(entry) < fn.Entry {
 		return 0, false
