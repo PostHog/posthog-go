@@ -128,9 +128,13 @@ func machoUUID(file *macho.File) ([16]byte, bool) {
 //
 // The path from os.Executable can point at a different build than the mapped
 // image (atomic deploy, symlink switch, self-update), which would yield a
-// plausible but wrong base and UUID. Cross-checking the slide against a
-// second, unrelated function catches that: per-function slides only agree for
-// the binary actually loaded.
+// plausible but wrong base and UUID. To catch that, the slide is cross-checked
+// against every physical function on the current call stack plus runtime.GC:
+// per-function slides only agree when the file matches the loaded binary's
+// layout across all of them (app, runtime, and SDK link units). A replacement
+// build that keeps every one of those entries identical is not detected —
+// full certainty would need the mapped image's own header via dyld, which
+// pure Go can't read safely.
 func machoSlide(file *macho.File) (uint64, bool) {
 	pclntab := file.Section("__gopclntab")
 	text := file.Section("__text")
@@ -153,6 +157,18 @@ func machoSlide(file *macho.File) (uint64, bool) {
 	check, ok := slideForPC(table, reflect.ValueOf(runtime.GC).Pointer())
 	if !ok || check != slide {
 		return 0, false
+	}
+
+	pcs := make([]uintptr, 32)
+	for _, pc := range pcs[:runtime.Callers(1, pcs)] {
+		frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
+		if frame.Func == nil {
+			continue
+		}
+		check, ok := slideForPC(table, pc)
+		if !ok || check != slide {
+			return 0, false
+		}
 	}
 	return slide, true
 }
