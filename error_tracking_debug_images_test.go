@@ -43,16 +43,21 @@ func TestDebugIDFromGNUBuildID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := debugIDFromGNUBuildID(buildID), "eb985355-1cd0-2890-5a3d-85138a19cbf9"; got != want {
+	if got, want := debugIDFromGNUBuildID(buildID, true), "eb985355-1cd0-2890-5a3d-85138a19cbf9"; got != want {
 		t.Errorf("debugIDFromGNUBuildID() = %q, want %q", got, want)
 	}
 
+	// Big-endian ELF files keep the GUID fields unswapped, matching symbolic.
+	if got, want := debugIDFromGNUBuildID(buildID, false), "555398eb-d01c-9028-5a3d-85138a19cbf9"; got != want {
+		t.Errorf("debugIDFromGNUBuildID(BE) = %q, want %q", got, want)
+	}
+
 	// Short build ids are zero-padded to 16 bytes
-	if got, want := debugIDFromGNUBuildID([]byte{0xab, 0xcd}), "0000cdab-0000-0000-0000-000000000000"; got != want {
+	if got, want := debugIDFromGNUBuildID([]byte{0xab, 0xcd}, true), "0000cdab-0000-0000-0000-000000000000"; got != want {
 		t.Errorf("debugIDFromGNUBuildID(short) = %q, want %q", got, want)
 	}
 
-	if got := debugIDFromGNUBuildID(nil); got != "" {
+	if got := debugIDFromGNUBuildID(nil, true); got != "" {
 		t.Errorf("debugIDFromGNUBuildID(nil) = %q, want empty", got)
 	}
 }

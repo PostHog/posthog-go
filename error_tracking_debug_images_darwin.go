@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 )
@@ -124,6 +125,12 @@ func machoUUID(file *macho.File) ([16]byte, bool) {
 // machoSlide computes the ASLR slide by comparing the runtime address of a
 // function in this package with its link-time address from the Go pclntab
 // (the Mach-O symbol table no longer carries Go function symbols).
+//
+// The path from os.Executable can point at a different build than the mapped
+// image (atomic deploy, symlink switch, self-update), which would yield a
+// plausible but wrong base and UUID. Cross-checking the slide against a
+// second, unrelated function catches that: per-function slides only agree for
+// the binary actually loaded.
 func machoSlide(file *macho.File) (uint64, bool) {
 	pclntab := file.Section("__gopclntab")
 	text := file.Section("__text")
@@ -139,12 +146,26 @@ func machoSlide(file *macho.File) (uint64, bool) {
 		return 0, false
 	}
 
-	pc := runtime.FuncForPC(funcPC()).Entry()
-	fn := table.LookupFunc(runtime.FuncForPC(pc).Name())
-	if fn == nil || uint64(pc) < fn.Entry {
+	slide, ok := slideForPC(table, funcPC())
+	if !ok {
 		return 0, false
 	}
-	return uint64(pc) - fn.Entry, true
+	check, ok := slideForPC(table, reflect.ValueOf(runtime.GC).Pointer())
+	if !ok || check != slide {
+		return 0, false
+	}
+	return slide, true
+}
+
+// slideForPC returns the difference between a function's runtime address and
+// its link-time address in the file's pclntab.
+func slideForPC(table *gosym.Table, pc uintptr) (uint64, bool) {
+	entry := runtime.FuncForPC(pc).Entry()
+	fn := table.LookupFunc(runtime.FuncForPC(entry).Name())
+	if fn == nil || uint64(entry) < fn.Entry {
+		return 0, false
+	}
+	return uint64(entry) - fn.Entry, true
 }
 
 // funcPC returns a program counter inside this package, used as the slide

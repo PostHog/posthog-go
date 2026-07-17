@@ -54,7 +54,7 @@ func loadMainImage() mainImageInfo {
 	return mainImageInfo{
 		image: DebugImage{
 			Type:        "elf",
-			DebugID:     debugIDFromGNUBuildID(buildID),
+			DebugID:     debugIDFromGNUBuildID(buildID, file.ByteOrder == binary.LittleEndian),
 			CodeID:      hex.EncodeToString(buildID),
 			ImageAddr:   fmt.Sprintf("0x%x", base),
 			ImageSize:   end - base,

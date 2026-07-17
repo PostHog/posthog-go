@@ -64,23 +64,25 @@ func mainImage() mainImageInfo {
 var mainImageFn = mainImage
 
 // debugIDFromGNUBuildID derives a debug id from a GNU build id the same way
-// the PostHog server and CLI derive it from the binary: the first 16 bytes
-// interpreted as a little-endian GUID (first three fields byte-swapped),
-// zero-padded when the build id is shorter.
-func debugIDFromGNUBuildID(buildID []byte) string {
+// the PostHog server and CLI derive it from the binary (symbolic's
+// compute_debug_id): the first 16 bytes as a GUID, zero-padded when shorter,
+// with the first three fields byte-swapped only for little-endian ELF files.
+func debugIDFromGNUBuildID(buildID []byte, littleEndian bool) string {
 	if len(buildID) == 0 {
 		return ""
 	}
 	var data [16]byte
 	copy(data[:], buildID)
-	reverse := func(b []byte) {
-		for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
-			b[i], b[j] = b[j], b[i]
+	if littleEndian {
+		reverse := func(b []byte) {
+			for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+				b[i], b[j] = b[j], b[i]
+			}
 		}
+		reverse(data[0:4])
+		reverse(data[4:6])
+		reverse(data[6:8])
 	}
-	reverse(data[0:4])
-	reverse(data[4:6])
-	reverse(data[6:8])
 	return formatUUID(data)
 }
 
