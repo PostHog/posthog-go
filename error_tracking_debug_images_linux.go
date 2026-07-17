@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -125,8 +126,23 @@ func mapsLineRange(line, exe string) (start, stop uint64, ok bool) {
 }
 
 // gnuBuildID extracts the NT_GNU_BUILD_ID note from an ELF file. Returns nil
-// when the binary carries no GNU build id.
+// when the binary carries no GNU build id. Program headers are checked first:
+// fully stripped binaries can drop the section table entirely while PT_NOTE
+// segments survive, and that's also where the loader (and symbolic, which the
+// PostHog uploader uses) looks.
 func gnuBuildID(file *elf.File) []byte {
+	for _, prog := range file.Progs {
+		if prog.Type != elf.PT_NOTE || prog.Filesz == 0 || prog.Filesz > 1<<20 {
+			continue
+		}
+		data := make([]byte, prog.Filesz)
+		if _, err := io.ReadFull(prog.Open(), data); err != nil {
+			continue
+		}
+		if id := parseGNUBuildIDNote(data, file.ByteOrder); id != nil {
+			return id
+		}
+	}
 	for _, section := range file.Sections {
 		if section.Type != elf.SHT_NOTE {
 			continue
