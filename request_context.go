@@ -515,6 +515,13 @@ func parseDebugStackFrames(stack []byte) []StackFrame {
 		})
 	}
 
+	// debug.Stack prints innermost first; reverse to the canonical wire order
+	// shared across PostHog SDKs (matching GetStackTrace): outermost (entry
+	// point) first, panic site last.
+	for i, j := 0, len(frames)-1; i < j; i, j = i+1, j-1 {
+		frames[i], frames[j] = frames[j], frames[i]
+	}
+
 	return frames
 }
 

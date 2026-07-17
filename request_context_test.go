@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -347,6 +348,34 @@ func TestEnqueueWithContext_PersonlessCaptureDefaultPropertiesCannotEnablePerson
 	properties := requireProperties(t, event)
 	require.Equal(t, false, properties[propertyProcessPersonProfile])
 	require.Equal(t, "api", properties["service"])
+}
+
+func TestParseDebugStackFramesUsesCanonicalBottomUpOrder(t *testing.T) {
+	// Regression guard for the canonical wire order on the panic-recovery
+	// path: debug.Stack prints innermost first, so without the reversal the
+	// panic site would sit at frames[0] while GetStackTrace puts it last.
+	var stack []byte
+	func() {
+		defer func() {
+			recover()
+			stack = debug.Stack()
+		}()
+		panic("boom")
+	}()
+
+	frames := parseDebugStackFrames(stack)
+	if len(frames) < 2 {
+		t.Fatalf("expected multiple frames, got %d", len(frames))
+	}
+
+	first := frames[0].Function
+	last := frames[len(frames)-1].Function
+	if !strings.Contains(last, "TestParseDebugStackFramesUsesCanonicalBottomUpOrder") {
+		t.Fatalf("expected panic-adjacent frame last, got first=%q last=%q", first, last)
+	}
+	if strings.Contains(first, "TestParseDebugStackFramesUsesCanonicalBottomUpOrder.func") {
+		t.Fatalf("panic site must not be first: first=%q", first)
+	}
 }
 
 func TestRequestContextMiddleware_CapturesPanicsWithRequestContextAndRethrows(t *testing.T) {
