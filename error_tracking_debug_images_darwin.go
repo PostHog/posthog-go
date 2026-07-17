@@ -18,7 +18,10 @@ import (
 // /proc/self/exe equivalent: reading the path later races with deploys or
 // self-updates swapping the file, which would pair this process's addresses
 // with a different build's UUID. The pinned inode always reads the mapped
-// binary; the handle is kept for the process lifetime.
+// binary; the handle is kept for the process lifetime. A swap within the
+// exec-to-init window is not detectable without dyld (cgo) and is accepted as
+// residual risk; the slide check in machoSlide rejects layout-incompatible
+// replacements.
 var pinnedExecutable struct {
 	file *os.File
 	path string
