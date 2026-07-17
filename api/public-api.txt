@@ -21,13 +21,17 @@ const (
 
 	DefaultFeatureFlagRequestTimeout = 3 * time.Second
 
-	DefaultBatchSize = 250
+	DefaultBatchSize = 100
+
+	DefaultMaxAttempts = 4
 
 	DefaultBatchUploadTimeout = 10 * time.Second
 
 	DefaultBatchSubmitTimeout = 100 * time.Millisecond
 
 	DefaultMaxEnqueuedRequests = 1000
+
+	DefaultMaxQueueSize = 10000
 )
 const (
 	FeatureFlagErrorErrorsWhileComputing = "errors_while_computing_flags"
@@ -73,9 +77,13 @@ var (
 
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
-	ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
+	ErrNoSecretKey = errors.New("no SecretKey provided")
+
+	ErrNoPersonalAPIKey = ErrNoSecretKey
 
 	ErrNoDistinctID = errors.New("no distinct_id provided")
+
+	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
 	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
 )
@@ -286,6 +294,8 @@ type Config struct {
 
 	Endpoint string
 
+	SecretKey string
+
 	PersonalApiKey string
 
 	DisableGeoIP *bool
@@ -315,6 +325,8 @@ type Config struct {
 	BeforeSend BeforeSendFunc
 
 	BatchSize int
+
+	MaxQueueSize int
 
 	Verbose bool
 
@@ -478,6 +490,7 @@ type FeatureFlag struct {
 	Filters Filter `json:"filters"`
 	EnsureExperienceContinuity *bool `json:"ensure_experience_continuity"`
 	BucketingIdentifier *string `json:"bucketing_identifier"`
+	HasExperiment *bool `json:"has_experiment"`
 }
 
 type FeatureFlagCondition struct {
@@ -606,6 +619,7 @@ type FlagMetadata struct {
 	Version int `json:"version"`
 	Payload json.RawMessage `json:"payload"`
 	Description *string `json:"description,omitempty"`
+	HasExperiment *bool `json:"has_experiment"`
 }
 
 type FlagProperty struct {

@@ -61,7 +61,7 @@ func TestBatching_SmallEventsBatchTogether(t *testing.T) {
 	// With 500KB batch limit, should fit ~100 events per batch
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:  server.URL,
-		BatchSize: 250,             // Use default
+		BatchSize: DefaultBatchSize,
 		Interval:  5 * time.Second, // Long interval - rely on Close() to flush
 	})
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestBatching_LargeEventsTriggerFlush(t *testing.T) {
 	// With 500KB batch limit, should fit ~5 events per batch
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:  server.URL,
-		BatchSize: 250, // Use default - byte limit should trigger before count
+		BatchSize: DefaultBatchSize, // byte limit should trigger before count
 		Interval:  50 * time.Millisecond,
 	})
 	require.NoError(t, err)

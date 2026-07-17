@@ -1,5 +1,28 @@
 ## Unreleased
 
+## 1.19.0
+
+### Minor Changes
+
+- 154fd08: Add a `$feature_flag_has_experiment` boolean property to `$feature_flag_called` events. The value comes from the `has_experiment` field the server reports on flag metadata (`/flags?v=2`) and on local-evaluation flag definitions. The property is only sent when the server explicitly reported `has_experiment` (true or false); it is omitted when unknown (older deployments, v3 responses, or flags missing from the response).
+
+## 1.18.0
+
+### Minor Changes
+
+- 39c72dc: Drop the newest event instead of blocking when the in-memory queue is full, and make the queue size configurable.
+
+  - `Enqueue` now returns `ErrQueueFull` when the queue is full, dropping the newest message rather than blocking the caller until space frees up. This matches posthog-python and posthog-rs. The drop is reported only through the returned error, not through `Callback.Failure`, so it stays cheap and off the callback goroutines under sustained overload. **Backfill/bulk callers**: check the error returned by `Enqueue` for `ErrQueueFull` and throttle or retry (or raise `MaxQueueSize`); otherwise events that overflow the queue are dropped, not delayed.
+  - Add `Config.MaxQueueSize` (default `DefaultMaxQueueSize` = 10000) to control the in-memory message queue capacity independently of `BatchSize`. It is clamped up to `BatchSize` so the queue always holds at least one full batch. This replaces the previous hardcoded `BatchSize * 10` sizing.
+  - Change the default `BatchSize` (`DefaultBatchSize`) from 250 to 100, aligning with posthog-python, posthog-node, and posthog-rs. Callers that set `BatchSize` explicitly are unaffected.
+
+## 1.17.5
+
+### Patch Changes
+
+- fe66557: Change the default capture delivery budget from 10 attempts to 4 (`DefaultMaxAttempts`) when `Config.MaxRetries` is unset, aligning with the cross-SDK Capture V1 parity standard (posthog-rs uses the same envelope). This affects **both** the v0 (`/batch/`) and v1 send paths, since they share the attempt budget. Callers that set `MaxRetries` explicitly are unaffected.
+- 3d8404a: Unify the capture retry backoff ceiling at 30s. `DefaultBackoff`'s cap changes from 10s to 30s (default only — override via `Config.RetryAfter`), and the Capture V1 send now clamps a server `Retry-After` to the same 30s so a hostile or buggy header cannot park a batch goroutine. `Retry-After` still acts as a minimum; the configured backoff is never truncated. This aligns the default retry behavior with posthog-rs and posthog-python.
+
 ## 1.17.4
 
 ### Patch Changes

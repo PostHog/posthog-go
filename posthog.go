@@ -49,7 +49,14 @@ type EnqueueClient interface {
 	//	client.Close()
 	//
 	// Enqueue returns an error if the message could not be queued, which happens
-	// when the client is closed or the message is invalid.
+	// when the client is closed, the message is invalid, or the in-memory queue
+	// is full (ErrQueueFull) -- in the latter case the message is dropped rather
+	// than blocking the caller. A full-queue drop is reported only through this
+	// returned error, not through Callback.Failure.
+	//
+	// Bulk or backfill workloads that can enqueue faster than the client uploads
+	// should check the returned error for ErrQueueFull and throttle or retry (or
+	// raise Config.MaxQueueSize); otherwise events are dropped, not delayed.
 	Enqueue(Message) error
 }
 
@@ -80,7 +87,7 @@ type Client interface {
 	// GetFeatureFlagResult evaluates one feature flag and returns its value and payload together.
 	// Use this instead of calling GetFeatureFlag and GetFeatureFlagPayload separately.
 	// It returns ErrFlagNotFound when the flag cannot be found or evaluated and
-	// ErrNoPersonalAPIKey when OnlyEvaluateLocally is true without PersonalApiKey.
+	// ErrNoSecretKey when OnlyEvaluateLocally is true without SecretKey.
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
 	// GetFeatureFlagPayload returns the payload for the matching flag value, or an
@@ -90,12 +97,12 @@ type Client interface {
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
 	// GetRemoteConfigPayload returns the decrypted payload for a remote config flag key.
-	// It requires Config.PersonalApiKey and returns ErrNoPersonalAPIKey when missing.
+	// It requires Config.SecretKey and returns ErrNoSecretKey when missing.
 	GetRemoteConfigPayload(string) (string, error)
 
 	// GetAllFlags evaluates all flags for a user. Returned values are booleans for
-	// boolean flags and strings for multivariate variants. It returns ErrNoPersonalAPIKey
-	// when OnlyEvaluateLocally is true without PersonalApiKey.
+	// boolean flags and strings for multivariate variants. It returns ErrNoSecretKey
+	// when OnlyEvaluateLocally is true without SecretKey.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
@@ -110,11 +117,11 @@ type Client interface {
 	// locally, EvaluateFlags returns a non-nil snapshot containing the
 	// locally-evaluated flags alongside the error so the caller can still
 	// branch on what was resolved.
-	// If OnlyEvaluateLocally is true and no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+	// If OnlyEvaluateLocally is true and no SecretKey is configured, returns ErrNoSecretKey.
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
 	// ReloadFeatureFlags forces a reload of feature flags.
-	// If no PersonalApiKey is configured, returns ErrNoPersonalAPIKey.
+	// If no SecretKey is configured, returns ErrNoSecretKey.
 	ReloadFeatureFlags() error
 
 	// CloseWithContext gracefully shuts down the client with the provided context.
@@ -224,7 +231,7 @@ func New(apiKey string) Client {
 
 // NewWithConfig creates a Client with the provided PostHog project API key and Config.
 //
-// The apiKey, Config.Endpoint, and Config.PersonalApiKey values are trimmed before use.
+// The apiKey, Config.Endpoint, Config.SecretKey, and Config.PersonalApiKey values are trimmed before use.
 // It returns a ConfigError when config contains invalid values such as negative
 // intervals or out-of-range retry settings; in that case the returned Client is nil.
 // If apiKey is empty after trimming, NewWithConfig returns a no-op client and nil error.
@@ -245,10 +252,11 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	// Channel sizing:
-	// - batches queue sized by MaxEnqueuedRequests (default 1000)
-	// - msgs queue sized to hold multiple batches worth of messages
+	// - msgs queue (incoming messages) sized by MaxQueueSize (default 10000)
+	// - batches queue (prepared batches awaiting upload) sized by MaxEnqueuedRequests (default 1000)
+	// Both defaults and the MaxQueueSize >= BatchSize clamp are applied in makeConfig.
 	batchesQueueSize := config.MaxEnqueuedRequests
-	msgQueueSize := max(100, config.BatchSize*10)
+	msgQueueSize := config.MaxQueueSize
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &client{
@@ -275,10 +283,11 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		return nil, fmt.Errorf("error creating flags client: %v", err)
 	}
 
-	if len(c.PersonalApiKey) > 0 {
+	secretKey := c.Config.effectiveSecretKey()
+	if len(secretKey) > 0 {
 		c.featureFlagsPoller, err = newFeatureFlagsPoller(
 			c.key,
-			c.Config.PersonalApiKey,
+			secretKey,
 			c.Logger,
 			c.Endpoint,
 			c.http,
@@ -554,7 +563,11 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 
 	var ts = c.now()
 
-	// Helper to send prepared message with panic recovery
+	// Helper to send prepared message with panic recovery. Non-blocking: if the
+	// `msgs` queue is full, the new message is dropped and ErrQueueFull is returned
+	// rather than blocking the caller, matching the posthog-python and posthog-rs
+	// SDKs. The drop is reported only via the returned error -- no callback or log
+	// is invoked on the caller's goroutine, so a sustained overload stays cheap.
 	sendPrepared := func(prepared preparedMessage) {
 		defer func() {
 			// When the `msgs` channel is closed writing to it will trigger a panic.
@@ -565,7 +578,11 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 				err = ErrClosed
 			}
 		}()
-		c.msgs <- prepared
+		select {
+		case c.msgs <- prepared:
+		default:
+			err = ErrQueueFull
+		}
 	}
 
 	switch m := msg.(type) {
@@ -784,7 +801,7 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, e
 func (c *client) ReloadFeatureFlags() error {
 	if c.featureFlagsPoller == nil {
 		c.warnPersonalAPIKeyMissing("ReloadFeatureFlags")
-		return ErrNoPersonalAPIKey
+		return ErrNoSecretKey
 	}
 	c.featureFlagsPoller.ForceReload()
 	return nil
@@ -838,7 +855,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	}
 	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyMissing("GetFeatureFlagResult")
-		return nil, ErrNoPersonalAPIKey
+		return nil, ErrNoSecretKey
 	}
 
 	var flagValue interface{}
@@ -850,12 +867,14 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 	var variantStr string
 	var hasPayload, hasVariant bool
 	var locallyEvaluated bool
+	var hasExperiment *bool
 
 	if c.featureFlagsPoller != nil {
 		// Evaluate flag once to get both value and payload (avoids double evaluation)
 		combined := c.featureFlagsPoller.GetFeatureFlagWithPayload(flagConfig)
 		flagValue = combined.value
 		locallyEvaluated = combined.locallyEvaluated
+		hasExperiment = combined.hasExperiment
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
@@ -879,6 +898,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		if f, ok := flagValue.(FlagDetail); ok {
 			flagValue = f.GetValue()
 			evalResult.Value = flagValue
+			hasExperiment = f.Metadata.HasExperiment
 			ps := rawMessageToString(f.Metadata.Payload)
 			if ps != "" {
 				payloadStr = ps
@@ -901,6 +921,10 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			Set("$feature_flag", flagConfig.Key).
 			Set("$feature_flag_response", flagValue).
 			Set("locally_evaluated", locallyEvaluated)
+
+		if hasExperiment != nil {
+			properties.Set("$feature_flag_has_experiment", *hasExperiment)
+		}
 
 		if flagConfig.DeviceId != nil {
 			properties.Set("$device_id", *flagConfig.DeviceId)
@@ -1068,7 +1092,7 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 	}
 	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyMissing("GetAllFlags")
-		return nil, ErrNoPersonalAPIKey
+		return nil, ErrNoSecretKey
 	}
 
 	var flagsValue map[string]interface{}
@@ -1166,7 +1190,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, payload)
 	} else if payload.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyMissing("EvaluateFlags")
-		return noopFeatureFlagEvaluations, ErrNoPersonalAPIKey
+		return noopFeatureFlagEvaluations, ErrNoSecretKey
 	}
 
 	var requestId string
@@ -1267,6 +1291,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 		record := evaluatedFlagRecord{
 			Key:              storedFlag.Key,
 			LocallyEvaluated: true,
+			HasExperiment:    storedFlag.HasExperiment,
 			Reason:           ptrString(localReason),
 		}
 		switch v := value.(type) {
@@ -1303,9 +1328,10 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 // recordFromFlagDetail builds an evaluatedFlagRecord from a v4 FlagDetail.
 func recordFromFlagDetail(detail FlagDetail) evaluatedFlagRecord {
 	record := evaluatedFlagRecord{
-		Key:     detail.Key,
-		Enabled: detail.Enabled,
-		Variant: detail.Variant,
+		Key:           detail.Key,
+		Enabled:       detail.Enabled,
+		Variant:       detail.Variant,
+		HasExperiment: detail.Metadata.HasExperiment,
 	}
 	if detail.Failed != nil && *detail.Failed {
 		record.Enabled = false
@@ -1762,7 +1788,7 @@ func (c *client) debugf(format string, args ...interface{}) {
 }
 
 func (c *client) warnPersonalAPIKeyMissing(method string) {
-	c.Warnf("PostHog personal_api_key is not configured; %s requires a PersonalApiKey.", method)
+	c.Warnf("PostHog secret key is not configured; %s requires a SecretKey.", method)
 }
 
 func (c *client) Errorf(format string, args ...interface{}) {
@@ -1796,7 +1822,7 @@ func (c *client) getFeatureVariants(distinctId string, groups Groups, personProp
 func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups, personProperties Properties, groupProperties map[string]Properties, options *SendFeatureFlagsOptions) (map[string]interface{}, error) {
 	if c.featureFlagsPoller == nil {
 		c.warnPersonalAPIKeyMissing("Capture.SendFeatureFlags")
-		return nil, ErrNoPersonalAPIKey
+		return nil, ErrNoSecretKey
 	}
 
 	var deviceId *string
@@ -1822,9 +1848,10 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 		return "", fmt.Errorf("parsing URL: %v", err)
 	}
 
-	if c.PersonalApiKey == "" {
+	secretKey := c.Config.effectiveSecretKey()
+	if secretKey == "" {
 		c.warnPersonalAPIKeyMissing("GetRemoteConfigPayload")
-		return "", ErrNoPersonalAPIKey
+		return "", ErrNoSecretKey
 	}
 
 	q := parsedURL.Query()
@@ -1836,7 +1863,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 		return "", fmt.Errorf("creating request: %v", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.PersonalApiKey)
+	req.Header.Set("Authorization", "Bearer "+secretKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "posthog-go/"+Version)
 

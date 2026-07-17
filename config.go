@@ -70,10 +70,19 @@ type Config struct {
 	// If empty, it defaults to DefaultEndpoint.
 	Endpoint string
 
-	// PersonalApiKey enables local feature flag evaluation, remote config payloads,
-	// and lower-latency flag APIs. If empty, feature flag methods fall back to the
-	// /flags endpoint unless the method requires local-only behavior.
-	// See https://posthog.com/docs/api/overview for how to create a personal API key.
+	// SecretKey is the credential used for local feature flag evaluation, remote
+	// config payloads, and lower-latency flag APIs. It accepts either a Personal
+	// API Key (phx_...) or a Project Secret API Key (phs_...). If empty, feature
+	// flag methods fall back to the /flags endpoint unless the method requires
+	// local-only behavior. When both SecretKey and PersonalApiKey are set,
+	// SecretKey takes precedence.
+	// See https://posthog.com/docs/api/overview for how to create these keys.
+	SecretKey string
+
+	// PersonalApiKey is a deprecated alias for SecretKey. It is still honored for
+	// backwards compatibility but SecretKey is preferred.
+	//
+	// Deprecated: use SecretKey instead.
 	PersonalApiKey string
 
 	// DisableGeoIP controls whether event and feature flag requests include
@@ -100,7 +109,7 @@ type Config struct {
 	Interval time.Duration
 
 	// DefaultFeatureFlagsPollingInterval is the interval for reloading local feature
-	// flag definitions when PersonalApiKey is configured. If zero, it defaults to
+	// flag definitions when SecretKey is configured. If zero, it defaults to
 	// DefaultFeatureFlagsPollingInterval.
 	DefaultFeatureFlagsPollingInterval time.Duration
 
@@ -148,6 +157,18 @@ type Config struct {
 	// it defaults to DefaultBatchSize. The API still enforces a 500KB request limit.
 	BatchSize int
 
+	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
+	// be batched and sent. If zero, it defaults to DefaultMaxQueueSize. It is
+	// clamped up to BatchSize so the queue can always hold at least one full batch.
+	//
+	// When the queue is full, Enqueue drops the newest message rather than blocking
+	// the caller and returns ErrQueueFull (the drop is not reported via
+	// Callback.Failure). Bulk or backfill workloads that enqueue faster than the
+	// client can upload should check the error returned by Enqueue for ErrQueueFull
+	// and throttle or retry (or raise MaxQueueSize), otherwise events are dropped,
+	// not delayed.
+	MaxQueueSize int
+
 	// Verbose enables more frequent and detailed debug logging through Logger.
 	Verbose bool
 
@@ -156,7 +177,7 @@ type Config struct {
 	RetryAfter func(int) time.Duration
 
 	// MaxRetries is the maximum number of retries after the first send attempt.
-	// It must be in [0,9]. If nil, it defaults to 9 retries (10 total attempts).
+	// It must be in [0,9]. If nil, it defaults to 3 retries (4 total attempts).
 	MaxRetries *int
 
 	// ShutdownTimeout is the maximum time Close waits for in-flight messages to be
@@ -227,7 +248,13 @@ const (
 	DefaultFeatureFlagRequestTimeout = 3 * time.Second
 
 	// DefaultBatchSize is the default batch size used when Config.BatchSize is zero.
-	DefaultBatchSize = 250
+	DefaultBatchSize = 100
+
+	// DefaultMaxAttempts is the total number of capture delivery attempts (1
+	// initial + retries) used when Config.MaxRetries is unset or out of range.
+	// Chosen to match the cross-SDK Capture V1 parity standard (posthog-rs
+	// defaults to the same envelope). Applies to both the v0 and v1 send paths.
+	DefaultMaxAttempts = 4
 
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
 	// events to the /batch/ endpoint.
@@ -241,11 +268,25 @@ const (
 	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
 	// can be queued for sending.
 	DefaultMaxEnqueuedRequests = 1000
+
+	// DefaultMaxQueueSize is the default in-memory message queue capacity used when
+	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
+	// posthog-node defaults so backend SDKs behave consistently under bursty load.
+	DefaultMaxQueueSize = 10000
 )
 
 func (c *Config) normalize() {
 	c.Endpoint = strings.TrimSpace(c.Endpoint)
+	c.SecretKey = strings.TrimSpace(c.SecretKey)
 	c.PersonalApiKey = strings.TrimSpace(c.PersonalApiKey)
+}
+
+// effectiveSecretKey prefers SecretKey and falls back to the deprecated PersonalApiKey.
+func (c *Config) effectiveSecretKey() string {
+	if c.SecretKey != "" {
+		return c.SecretKey
+	}
+	return c.PersonalApiKey
 }
 
 // Validate verifies that fields that don't have zero-values are set to valid values,
@@ -266,6 +307,14 @@ func (c *Config) Validate() error {
 			Reason: "negative batch sizes are not supported",
 			Field:  "BatchSize",
 			Value:  c.BatchSize,
+		}
+	}
+
+	if c.MaxQueueSize < 0 {
+		return ConfigError{
+			Reason: "negative queue sizes are not supported",
+			Field:  "MaxQueueSize",
+			Value:  c.MaxQueueSize,
 		}
 	}
 
@@ -357,6 +406,15 @@ func makeConfig(c Config) Config {
 		c.BatchSize = DefaultBatchSize
 	}
 
+	if c.MaxQueueSize == 0 {
+		c.MaxQueueSize = DefaultMaxQueueSize
+	}
+	// The queue must be able to hold at least one full batch, otherwise a batch
+	// could never accumulate before the queue overflows.
+	if c.MaxQueueSize < c.BatchSize {
+		c.MaxQueueSize = c.BatchSize
+	}
+
 	if c.RetryAfter == nil {
 		c.RetryAfter = DefaultBackoff().Duration
 	}
@@ -368,7 +426,7 @@ func makeConfig(c Config) Config {
 	if c.MaxRetries != nil && 0 <= *c.MaxRetries && *c.MaxRetries <= 9 {
 		c.maxAttempts = 1 + *c.MaxRetries
 	} else {
-		c.maxAttempts = 10
+		c.maxAttempts = DefaultMaxAttempts
 	}
 
 	// Note: ShutdownTimeout == 0 means wait indefinitely (backward compatible).

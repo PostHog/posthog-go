@@ -756,6 +756,37 @@ func TestV1SendRetryAfterHonored(t *testing.T) {
 	}
 }
 
+func TestRetryDelayV1(t *testing.T) {
+	const base = 100 * time.Millisecond
+	res := func(d time.Duration, has bool) *v1Result {
+		return &v1Result{retryAfter: d, hasRetryAfter: has}
+	}
+	// Configured backoff is a constant `base`; Retry-After is a minimum, not a
+	// replacement, and is clamped to defaultMaxBackoff (the configured backoff
+	// itself is never truncated).
+	cases := []struct {
+		name string
+		res  *v1Result
+		want time.Duration
+	}{
+		{"no_response_uses_configured", nil, base},
+		{"no_retry_after_uses_configured", res(0, false), base},
+		{"larger_retry_after_wins", res(5*time.Second, true), 5 * time.Second},
+		{"smaller_retry_after_ignored", res(10*time.Millisecond, true), base},
+		{"retry_after_at_ceiling", res(defaultMaxBackoff, true), defaultMaxBackoff},
+		{"retry_after_above_ceiling_clamped", res(90*time.Second, true), defaultMaxBackoff},
+		{"absurd_retry_after_clamped", res(1000*time.Hour, true), defaultMaxBackoff},
+	}
+	c := &client{Config: Config{RetryAfter: func(int) time.Duration { return base }}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := c.retryDelayV1(0, tc.res); got != tc.want {
+				t.Errorf("retryDelayV1 = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestV1SendMultiEventExhaustion(t *testing.T) {
 	cb := &recordingCallback{}
 	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {

@@ -20,14 +20,20 @@ func NewBackoff(base time.Duration, factor uint8, jitter float64, cap time.Durat
 	return &Backoff{base, factor, jitter, cap}
 }
 
+// defaultMaxBackoff is the single ceiling for capture retry waits: it caps the
+// default exponential backoff and clamps a server Retry-After to the same value.
+// Keeps the max retry wait bounded and unifies the default with posthog-rs /
+// posthog-python (all 30s).
+const defaultMaxBackoff = 30 * time.Second
+
 // DefaultBackoff creates a Backoff with the SDK's default retry policy:
 //
 //	base: 100 milliseconds
 //	factor: 2
 //	jitter: 0
-//	cap: 10 seconds
+//	cap: 30 seconds
 func DefaultBackoff() *Backoff {
-	return NewBackoff(time.Millisecond*100, 2, 0, time.Second*10)
+	return NewBackoff(time.Millisecond*100, 2, 0, defaultMaxBackoff)
 }
 
 // Duration returns the backoff interval for the given attempt.

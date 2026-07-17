@@ -26,6 +26,29 @@ func TestConfigValidateTrimsWhitespaceSensitiveFields(t *testing.T) {
 	require.Equal(t, "test-personal-key", c.PersonalApiKey)
 }
 
+func TestConfigEffectiveSecretKey(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config Config
+		want   string
+	}{
+		{"neither", Config{}, ""},
+		{"personal only", Config{PersonalApiKey: "phx_personal"}, "phx_personal"},
+		{"secret only", Config{SecretKey: "phs_secret"}, "phs_secret"},
+		{"secret precedence", Config{SecretKey: "phs_secret", PersonalApiKey: "phx_personal"}, "phs_secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.config.effectiveSecretKey())
+		})
+	}
+}
+
+func TestConfigValidateTrimsSecretKey(t *testing.T) {
+	c := Config{SecretKey: " \tphs_secret\n "}
+	require.NoError(t, c.Validate())
+	require.Equal(t, "phs_secret", c.SecretKey)
+}
+
 func TestMakeConfigDefaultsWhitespaceEndpoint(t *testing.T) {
 	got := makeConfig(Config{Endpoint: " \n\t "})
 	require.Equal(t, DefaultEndpoint, got.Endpoint)
@@ -51,19 +74,19 @@ func TestConfig_MaxRetries(t *testing.T) {
 	c := Config{}
 	require.NoError(t, c.Validate())
 	got := makeConfig(c)
-	require.Equal(t, 10, got.maxAttempts)
+	require.Equal(t, DefaultMaxAttempts, got.maxAttempts)
 
 	c.MaxRetries = Ptr[int](-1)
 	require.ErrorContains(t, c.Validate(),
 		"posthog.NewWithConfig: max retries out of range [0,9] (posthog.Config.MaxRetries: -1)")
 	got = makeConfig(c)
-	require.Equal(t, 10, got.maxAttempts)
+	require.Equal(t, DefaultMaxAttempts, got.maxAttempts)
 
 	c.MaxRetries = Ptr[int](10)
 	require.ErrorContains(t, c.Validate(),
 		"posthog.NewWithConfig: max retries out of range [0,9] (posthog.Config.MaxRetries: 10)")
 	got = makeConfig(c)
-	require.Equal(t, 10, got.maxAttempts)
+	require.Equal(t, DefaultMaxAttempts, got.maxAttempts)
 
 	c.MaxRetries = Ptr[int](5)
 	require.NoError(t, c.Validate())
@@ -85,6 +108,45 @@ func TestConfigInvalidBatchSize(t *testing.T) {
 	} else if e.Field != "BatchSize" || e.Value.(int) != -1 {
 		t.Error("invalid field error reported:", e)
 	}
+}
+
+func TestMakeConfigBatchSizeDefault(t *testing.T) {
+	require.Equal(t, 100, DefaultBatchSize, "backend SDKs share a BatchSize default of 100")
+	require.Equal(t, DefaultBatchSize, makeConfig(Config{}).BatchSize)
+}
+
+func TestMakeConfigMaxQueueSize(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		batchSize    int
+		maxQueueSize int
+		want         int
+	}{
+		{"defaults", 0, 0, DefaultMaxQueueSize},
+		{"explicit override honored", 1, 42, 42},
+		{"clamped up to explicit BatchSize", 500, 10, 500},
+		{"clamped up to BatchSize larger than default", 20000, 0, 20000},
+		{"equal to BatchSize is left untouched", 100, 100, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := makeConfig(Config{BatchSize: tc.batchSize, MaxQueueSize: tc.maxQueueSize})
+			require.Equal(t, tc.want, got.MaxQueueSize)
+			require.GreaterOrEqual(t, got.MaxQueueSize, got.BatchSize,
+				"the queue must always hold at least one full batch")
+		})
+	}
+}
+
+func TestConfigInvalidMaxQueueSize(t *testing.T) {
+	c := Config{MaxQueueSize: -1}
+
+	err := c.Validate()
+	require.Error(t, err)
+
+	e, ok := err.(ConfigError)
+	require.True(t, ok, "expected a ConfigError, got %T", err)
+	require.Equal(t, "MaxQueueSize", e.Field)
+	require.Equal(t, -1, e.Value.(int))
 }
 
 func TestConfigBoolDefaults(t *testing.T) {

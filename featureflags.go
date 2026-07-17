@@ -109,6 +109,9 @@ type FeatureFlag struct {
 	EnsureExperienceContinuity *bool `json:"ensure_experience_continuity"`
 	// BucketingIdentifier optionally selects the property used for hash bucketing.
 	BucketingIdentifier *string `json:"bucketing_identifier"`
+	// HasExperiment reports whether the flag is linked to an experiment.
+	// Nil when the server does not send it (older deployments).
+	HasExperiment *bool `json:"has_experiment"`
 }
 
 // Filter contains the targeting rules, variants, and payloads for a FeatureFlag.
@@ -676,6 +679,7 @@ type flagValueAndPayload struct {
 	payload          string
 	err              error
 	locallyEvaluated bool
+	hasExperiment    *bool
 }
 
 // GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
@@ -712,6 +716,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 	}
 
 	locallyEvaluated := err == nil && result != nil
+	hasExperiment := flag.HasExperiment
 
 	// Fall back to remote evaluation if local didn't produce a result
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
@@ -722,6 +727,10 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		locallyEvaluated = false
 		// Clear local eval error — we successfully made a remote request
 		err = nil
+		// The remote response is now the source of the flag value, so it is
+		// also the source of has_experiment: reset to unknown and only pick
+		// it up from the response when the flag is present there.
+		hasExperiment = nil
 		if flagsResponse != nil {
 			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue
@@ -732,12 +741,15 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 			if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
 				payload = rawMessageToString(rawPayload)
 			}
+			if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
+				hasExperiment = detail.Metadata.HasExperiment
+			}
 		} else {
 			result = false
 		}
 	}
 
-	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated}
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment}
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {

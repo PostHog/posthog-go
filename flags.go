@@ -71,6 +71,9 @@ type FlagMetadata struct {
 	Payload json.RawMessage `json:"payload"`
 	// Description is the feature flag description, when returned by the API.
 	Description *string `json:"description,omitempty"`
+	// HasExperiment reports whether the flag is linked to an experiment.
+	// Nil when the server does not send it (older deployments).
+	HasExperiment *bool `json:"has_experiment"`
 }
 
 // GetValue returns the variant string when Variant is set; otherwise it returns Enabled.

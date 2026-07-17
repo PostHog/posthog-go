@@ -75,13 +75,24 @@ var (
 	// limit.
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
-	// ErrNoPersonalAPIKey is returned when PersonalApiKey is required for the
-	// requested operation but was not configured.
-	ErrNoPersonalAPIKey = errors.New("no PersonalAPIKey provided")
+	// ErrNoSecretKey is returned when a SecretKey is required for the requested
+	// operation but was not configured.
+	ErrNoSecretKey = errors.New("no SecretKey provided")
+
+	// ErrNoPersonalAPIKey is a deprecated alias for ErrNoSecretKey. It refers to
+	// the same error value, so errors.Is checks against either name still match.
+	//
+	// Deprecated: use ErrNoSecretKey.
+	ErrNoPersonalAPIKey = ErrNoSecretKey
 
 	// ErrNoDistinctID is returned when distinct_id is required for the requested
 	// operation but was not provided.
 	ErrNoDistinctID = errors.New("no distinct_id provided")
+
+	// ErrQueueFull is returned by Enqueue/EnqueueWithContext when the in-memory
+	// message queue is full. The message is dropped (not retried) and the drop is
+	// reported only through this returned error, not through Callback.Failure.
+	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
 	// ErrSDKDisabled is returned when the SDK is disabled because the project API key is missing.
 	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")

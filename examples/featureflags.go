@@ -8,12 +8,12 @@ import (
 	"github.com/posthog/posthog-go"
 )
 
-func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
+func TestIsFeatureEnabled(projectAPIKey, secretKey, endpoint string) {
 	client, err := posthog.NewWithConfig(projectAPIKey, posthog.Config{
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            true,
-		PersonalApiKey:                     personalAPIKey,
+		SecretKey:                          secretKey,
 		Endpoint:                           endpoint,
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,
@@ -90,7 +90,7 @@ func TestIsFeatureEnabled(projectAPIKey, personalAPIKey, endpoint string) {
 	fmt.Println("   - GetRemoteConfigPayload(): Returns encrypted payload data")
 }
 
-func TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint string) {
+func TestFlagDependencies(projectAPIKey, secretKey, endpoint string) {
 	fmt.Println("🔗 Testing flag dependencies with local evaluation...")
 	fmt.Println("   This demonstrates pure flag evaluation with no events sent")
 	fmt.Println("   Flag structure: 'test-flag-dependency' depends on 'beta-feature' being enabled")
@@ -108,7 +108,7 @@ func TestFlagDependencies(projectAPIKey, personalAPIKey, endpoint string) {
 		Interval:                           30 * time.Second,
 		BatchSize:                          100,
 		Verbose:                            false, // Disable verbose logging for cleaner output
-		PersonalApiKey:                     personalAPIKey,
+		SecretKey:                          secretKey,
 		Endpoint:                           endpoint,
 		DefaultFeatureFlagsPollingInterval: 5 * time.Second,
 		FeatureFlagRequestTimeout:          3 * time.Second,
