@@ -13,6 +13,14 @@ import (
 	"strings"
 )
 
+// Snapshot the executable's identity at process start: macOS has no
+// /proc/self/exe equivalent, so reading the launch path later races with
+// deploys or self-updates replacing the file (see machoSlide). At init time
+// the file at the launch path is still the mapped binary.
+func init() {
+	go func() { _ = mainImage() }()
+}
+
 // loadMainImage inspects the running executable: its Mach-O UUID (which
 // `posthog-cli dsym upload` uses, uppercase, as the symbol set id) and its
 // runtime load address, computed from the ASLR slide of a known function.
