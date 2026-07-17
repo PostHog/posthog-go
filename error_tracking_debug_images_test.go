@@ -140,6 +140,48 @@ func TestExceptionAPIfyIncludesDebugImages(t *testing.T) {
 	}
 }
 
+func TestExceptionApifyEventIncludesDebugImages(t *testing.T) {
+	stubMainImage(t, coveringImage())
+	exception := defaultCaptureSite()
+
+	ev := exception.apifyEvent()
+	images, ok := ev.properties["$debug_images"].([]DebugImage)
+	if !ok || len(images) != 1 {
+		t.Fatalf("expected $debug_images in v1 properties, got %v", ev.properties["$debug_images"])
+	}
+
+	// And absent (not an empty array) when there are none.
+	exception.DebugImages = nil
+	if _, present := exception.apifyEvent().properties["$debug_images"]; present {
+		t.Error("expected no $debug_images key without images")
+	}
+}
+
+func TestPanicFallbackStackTraceCarriesDebugImages(t *testing.T) {
+	stubMainImage(t, coveringImage())
+
+	// Unparseable panic stack: falls back to the default extractor, which
+	// emits native frames, so the images must come along.
+	stacktrace, images := stackTraceFromDebugStack([]byte("not a panic stack"))
+	if stacktrace == nil || len(stacktrace.Frames) == 0 {
+		t.Fatal("expected fallback frames")
+	}
+	if len(images) != 1 {
+		t.Errorf("expected debug images with the extractor fallback, got %v", images)
+	}
+
+	// Parseable stack: frames come from the panic text with no addresses, so
+	// no images are attached.
+	goroutineStack := []byte("goroutine 1 [running]:\npanic({0x0, 0x0})\n\t/goroot/src/runtime/panic.go:770 +0x1\nmain.crash(...)\n\t/app/main.go:10 +0x1\nmain.main()\n\t/app/main.go:5 +0x2\n")
+	stacktrace, images = stackTraceFromDebugStack(goroutineStack)
+	if stacktrace == nil || len(stacktrace.Frames) == 0 {
+		t.Fatal("expected parsed frames")
+	}
+	if images != nil {
+		t.Errorf("expected no debug images for parsed panic frames, got %v", images)
+	}
+}
+
 func TestSlogHandlerAttachesDebugImages(t *testing.T) {
 	stubMainImage(t, coveringImage())
 

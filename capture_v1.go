@@ -356,6 +356,9 @@ func (msg Exception) apifyEvent() apiEvent {
 	if msg.ExceptionFingerprint != nil {
 		myProperties.Set("$exception_fingerprint", msg.ExceptionFingerprint)
 	}
+	if len(msg.DebugImages) > 0 {
+		myProperties.Set("$debug_images", msg.DebugImages)
+	}
 
 	return apiEvent{
 		event:      "$exception",

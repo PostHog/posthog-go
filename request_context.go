@@ -456,6 +456,7 @@ func capturePanic(ctx context.Context, client EnqueueClient, panicValue interfac
 		statusCode = http.StatusInternalServerError
 	}
 
+	stacktrace, debugImages := stackTraceFromDebugStack(panicStack)
 	exception := Exception{
 		Properties: NewProperties().
 			Set(propertyResponseStatusCode, statusCode).
@@ -463,23 +464,27 @@ func capturePanic(ctx context.Context, client EnqueueClient, panicValue interfac
 		ExceptionList: []ExceptionItem{{
 			Type:       "panic",
 			Value:      fmt.Sprint(panicValue),
-			Stacktrace: stackTraceFromDebugStack(panicStack),
+			Stacktrace: stacktrace,
 		}},
+		DebugImages: debugImages,
 	}
 
 	_ = enqueueWithContext(ctx, client, exception)
 }
 
-func stackTraceFromDebugStack(stack []byte) *ExceptionStacktrace {
+func stackTraceFromDebugStack(stack []byte) (*ExceptionStacktrace, []DebugImage) {
 	frames := parseDebugStackFrames(stack)
 	if len(frames) == 0 {
-		return DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}.GetStackTrace(4)
+		// The extractor fallback can emit "native" frames, which need the
+		// referenced debug images alongside them.
+		extractor := DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}
+		return extractor.GetStackTrace(4), extractor.GetDebugImages()
 	}
 
 	return &ExceptionStacktrace{
 		Type:   "raw",
 		Frames: frames,
-	}
+	}, nil
 }
 
 func parseDebugStackFrames(stack []byte) []StackFrame {
