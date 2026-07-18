@@ -268,16 +268,9 @@ func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, 
 // properties APIfy assembles, minus $lib/$lib_version (the PostHog-Sdk-Info
 // header is the authoritative SDK identity in v1).
 func (msg Capture) apifyEvent() apiEvent {
-	var myProperties Properties
-	if msg.minimalFlagCalledEvent {
-		myProperties = baseV1Props(msg.IsServer, false).
-			Merge(minimalFlagCalledEventProperties(msg.Properties)).
-			mergeDefaults(getSystemContext().ToProperties())
-	} else {
-		myProperties = baseV1Props(msg.IsServer, false).
-			Merge(msg.Properties).
-			mergeDefaults(getSystemContext().ToProperties())
-	}
+	myProperties := baseV1Props(msg.IsServer, false).
+		Merge(msg.selectedProperties()).
+		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Groups != nil {
 		myProperties.Set("$groups", msg.Groups)

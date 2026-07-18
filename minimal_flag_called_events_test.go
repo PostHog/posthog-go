@@ -397,6 +397,39 @@ func TestMinimalFlagCalledEvent_V1LiftsSessionId(t *testing.T) {
 	}
 }
 
+// TestMinimalFlagCalledEventProperties_KeepsExactlyAllowlist locks the full
+// minimalFlagCalledEventAllowlist contract in one place. The expected list is
+// hardcoded rather than derived from minimalFlagCalledEventAllowlist itself,
+// so shrinking the allowlist shrinks only the input here and this test still
+// catches the regression.
+func TestMinimalFlagCalledEventProperties_KeepsExactlyAllowlist(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"$feature_flag", "$feature_flag_response", "$feature_flag_has_experiment",
+		"$feature_flag_id", "$feature_flag_version", "$feature_flag_reason",
+		"$feature_flag_request_id", "$feature_flag_evaluated_at", "$feature_flag_error",
+		"locally_evaluated", "$groups", propertyProcessPersonProfile, propertyGeoipDisable,
+		propertyIsServer, propertySessionID, propertyWindowID, "$device_id",
+	}
+	props := NewProperties()
+	for _, key := range want {
+		props.Set(key, "kept")
+	}
+	props.Set("custom_prop", "junk").Set("$feature/plain-flag", true).Set("app_version", "1.2.3")
+
+	minimal := minimalFlagCalledEventProperties(props)
+	got := make([]string, 0, len(minimal))
+	for k := range minimal {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(wantSorted)
+	if !reflect.DeepEqual(got, wantSorted) {
+		t.Errorf("expected exactly allowlist keys %v, got %v", wantSorted, got)
+	}
+}
+
 // minimalEventsFallbackDefinitions returns definitions whose only flag is
 // gated on a person property the request does not supply, so local evaluation
 // is inconclusive and the SDK falls back to a remote /flags request.
@@ -483,14 +516,16 @@ func TestFetchNewFeatureFlags_304PreservesMinimalGate(t *testing.T) {
 	t.Parallel()
 	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			requestCount++
-			w.Header().Set("ETag", `"gate-etag"`)
-			if requestCount == 1 {
-				w.Write([]byte(minimalEventsLocalDefinitions(true)))
-			} else {
-				w.WriteHeader(http.StatusNotModified)
-			}
+		if !strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			t.Errorf("unexpected request to %s", r.URL.Path)
+			return
+		}
+		requestCount++
+		w.Header().Set("ETag", `"gate-etag"`)
+		if requestCount == 1 {
+			w.Write([]byte(minimalEventsLocalDefinitions(true)))
+		} else {
+			w.WriteHeader(http.StatusNotModified)
 		}
 	}))
 	t.Cleanup(server.Close)

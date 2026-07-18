@@ -120,7 +120,9 @@ type Capture struct {
 	// minimalFlagCalledEvent marks a $feature_flag_called event for the minimal
 	// shape: serialization keeps only the allowlisted evaluation properties and
 	// skips system context. It is set only when the server enabled
-	// minimal_flag_called_events and the flag has no linked experiment.
+	// minimal_flag_called_events and the flag has no linked experiment. This is
+	// the resolved per-event decision (shouldMinimizeFlagCalledEvent's output),
+	// distinct from the plural minimalFlagCalledEvents gate that decision reads.
 	minimalFlagCalledEvent bool
 }
 
@@ -193,6 +195,9 @@ var minimalFlagCalledEventAllowlist = []string{
 	"$feature_flag_evaluated_at",
 	"$feature_flag_error",
 	"locally_evaluated",
+	// $groups is listed for cross-SDK contract parity even though it currently
+	// has no effect here: APIfy/apifyEvent set it from Capture.Groups after
+	// this allowlist runs, not from a raw "$groups" key in Properties.
 	"$groups",
 	propertyProcessPersonProfile,
 	propertyGeoipDisable,
@@ -222,23 +227,25 @@ func shouldMinimizeFlagCalledEvent(minimalFlagCalledEvents bool, hasExperiment *
 	return minimalFlagCalledEvents && hasExperiment != nil && !*hasExperiment
 }
 
+// selectedProperties returns the source properties for serialization: the
+// allowlisted minimal subset when minimalFlagCalledEvent is set, or the full
+// set otherwise.
+func (msg Capture) selectedProperties() Properties {
+	if msg.minimalFlagCalledEvent {
+		return minimalFlagCalledEventProperties(msg.Properties)
+	}
+	return msg.Properties
+}
+
 // APIfy converts a Capture message into the PostHog batch API representation.
 func (msg Capture) APIfy() APIMessage {
 	libraryVersion := getVersion()
 
-	var myProperties Properties
-	if msg.minimalFlagCalledEvent {
-		myProperties = minimalFlagCalledEventProperties(msg.Properties).
-			Set("$lib", SDKName).
-			Set("$lib_version", libraryVersion).
-			Merge(getSystemContext().ToProperties())
-	} else {
-		myProperties = Properties{}.
-			Merge(msg.Properties).
-			Set("$lib", SDKName).
-			Set("$lib_version", libraryVersion).
-			Merge(getSystemContext().ToProperties())
-	}
+	myProperties := Properties{}.
+		Merge(msg.selectedProperties()).
+		Set("$lib", SDKName).
+		Set("$lib_version", libraryVersion).
+		Merge(getSystemContext().ToProperties())
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
