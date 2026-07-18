@@ -271,7 +271,8 @@ func (msg Capture) apifyEvent() apiEvent {
 	var myProperties Properties
 	if msg.minimalFlagCalledEvent {
 		myProperties = baseV1Props(msg.IsServer, false).
-			Merge(minimalFlagCalledEventProperties(msg.Properties))
+			Merge(minimalFlagCalledEventProperties(msg.Properties)).
+			mergeDefaults(getSystemContext().ToProperties())
 	} else {
 		myProperties = baseV1Props(msg.IsServer, false).
 			Merge(msg.Properties).

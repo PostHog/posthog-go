@@ -171,13 +171,17 @@ type CaptureInApi struct {
 
 // minimalFlagCalledEventAllowlist lists the only event properties kept on a
 // minimal $feature_flag_called event, per the cross-SDK contract. Everything
-// else — Config.DefaultEventProperties, request-context properties, and
-// system context included — is stripped so the minimal shape stays
-// predictable. $geoip_disable is kept because, like $process_person_profile,
-// it is a processing-control sentinel: stripping it would silently re-enable
-// GeoIP enrichment for events from clients that disabled it. $session_id,
+// else — Config.DefaultEventProperties and request-context properties
+// included — is stripped so the minimal shape stays predictable.
+// $geoip_disable is kept because, like $process_person_profile, it is a
+// processing-control sentinel: stripping it would silently re-enable GeoIP
+// enrichment for events from clients that disabled it. $session_id,
 // $window_id, and $device_id are linkage identifiers the contract preserves.
-// $is_server is kept so server-event classification still works.
+// $is_server is kept so server-event classification still works. System
+// context ($os, $os_version, $os_distro, $go_version) isn't filtered through
+// this allowlist — APIfy merges it into minimal events the same way it does
+// for full events, since those are cheap, low-cardinality dimensions kept for
+// platform/runtime breakdowns on flag-call debugging.
 var minimalFlagCalledEventAllowlist = []string{
 	"$feature_flag",
 	"$feature_flag_response",
@@ -226,7 +230,8 @@ func (msg Capture) APIfy() APIMessage {
 	if msg.minimalFlagCalledEvent {
 		myProperties = minimalFlagCalledEventProperties(msg.Properties).
 			Set("$lib", SDKName).
-			Set("$lib_version", libraryVersion)
+			Set("$lib_version", libraryVersion).
+			Merge(getSystemContext().ToProperties())
 	} else {
 		myProperties = Properties{}.
 			Merge(msg.Properties).

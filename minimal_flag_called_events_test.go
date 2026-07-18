@@ -101,7 +101,10 @@ func newMinimalEventsLocalServer(t *testing.T, definitions string) *httptest.Ser
 }
 
 // assertExactPropertyKeys asserts the event carries exactly the expected
-// property keys — the strict-allowlist guarantee of the minimal shape.
+// property keys — the strict-allowlist guarantee of the minimal shape. want
+// need not include system context ($os, $os_version, $os_distro,
+// $go_version): those survive minimization and are appended automatically so
+// the assertion stays host-agnostic (e.g. $os_distro is Linux-only).
 func assertExactPropertyKeys(t *testing.T, event *CaptureInApi, want []string) {
 	t.Helper()
 	got := make([]string, 0, len(event.Properties))
@@ -110,6 +113,9 @@ func assertExactPropertyKeys(t *testing.T, event *CaptureInApi, want []string) {
 	}
 	sort.Strings(got)
 	wantSorted := append([]string(nil), want...)
+	for k := range getSystemContext().ToProperties() {
+		wantSorted = append(wantSorted, k)
+	}
 	sort.Strings(wantSorted)
 	if !reflect.DeepEqual(got, wantSorted) {
 		t.Errorf("expected exactly property keys %v, got %v", wantSorted, got)
@@ -356,6 +362,10 @@ func TestMinimalFlagCalledEvent_V1WireShape(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{"$feature_flag", "$feature_flag_has_experiment", "$feature_flag_response", "$is_server", "locally_evaluated"}
+	for k := range getSystemContext().ToProperties() {
+		want = append(want, k)
+	}
+	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("expected exactly property keys %v, got %v", want, got)
 	}
