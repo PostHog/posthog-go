@@ -77,6 +77,9 @@ type featureFlagEvaluationResult struct {
 	RequestID                 *string
 	EvaluatedAt               *int64
 	FlagDetail                *FlagDetail
+	// MinimalFlagCalledEvents carries the minimal $feature_flag_called gate
+	// from the /flags response that produced this result.
+	MinimalFlagCalledEvents bool
 }
 
 // classifyError determines the error type string for a given error.

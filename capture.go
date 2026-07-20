@@ -117,6 +117,13 @@ type Capture struct {
 	// IsServer controls whether the event includes the $is_server property.
 	// Enqueue overwrites it from Config.GetIsServer.
 	IsServer bool
+	// minimalFlagCalledEvent marks a $feature_flag_called event for the minimal
+	// shape: serialization keeps only the allowlisted evaluation properties and
+	// skips system context. It is set only when the server enabled
+	// minimal_flag_called_events and the flag has no linked experiment. This is
+	// the resolved per-event decision (shouldMinimizeFlagCalledEvent's output),
+	// distinct from the plural minimalFlagCalledEvents gate that decision reads.
+	minimalFlagCalledEvent bool
 }
 
 func (msg Capture) internal() {
@@ -164,12 +171,78 @@ type CaptureInApi struct {
 	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 
+// minimalFlagCalledEventAllowlist lists the only event properties kept on a
+// minimal $feature_flag_called event, per the cross-SDK contract. Everything
+// else — Config.DefaultEventProperties and request-context properties
+// included — is stripped so the minimal shape stays predictable.
+// $geoip_disable is kept because, like $process_person_profile, it is a
+// processing-control sentinel: stripping it would silently re-enable GeoIP
+// enrichment for events from clients that disabled it. $session_id,
+// $window_id, and $device_id are linkage identifiers the contract preserves.
+// $is_server is kept so server-event classification still works. System
+// context ($os, $os_version, $os_distro, $go_version) isn't filtered through
+// this allowlist — APIfy merges it into minimal events the same way it does
+// for full events, since those are cheap, low-cardinality dimensions kept for
+// platform/runtime breakdowns on flag-call debugging.
+var minimalFlagCalledEventAllowlist = []string{
+	"$feature_flag",
+	"$feature_flag_response",
+	"$feature_flag_has_experiment",
+	"$feature_flag_id",
+	"$feature_flag_version",
+	"$feature_flag_reason",
+	"$feature_flag_request_id",
+	"$feature_flag_evaluated_at",
+	"$feature_flag_error",
+	"locally_evaluated",
+	// $groups is listed for cross-SDK contract parity even though it currently
+	// has no effect here: APIfy/apifyEvent set it from Capture.Groups after
+	// this allowlist runs, not from a raw "$groups" key in Properties.
+	"$groups",
+	propertyProcessPersonProfile,
+	propertyGeoipDisable,
+	propertyIsServer,
+	propertySessionID,
+	propertyWindowID,
+	"$device_id",
+}
+
+// minimalFlagCalledEventProperties builds a fresh property set containing only
+// the allowlisted minimal $feature_flag_called properties present in props.
+func minimalFlagCalledEventProperties(props Properties) Properties {
+	minimal := NewProperties()
+	for _, key := range minimalFlagCalledEventAllowlist {
+		if value, ok := props[key]; ok {
+			minimal[key] = value
+		}
+	}
+	return minimal
+}
+
+// shouldMinimizeFlagCalledEvent reports whether a $feature_flag_called event
+// should use the minimal shape: the server-controlled gate must be on and the
+// flag must be known to have no linked experiment. Any missing signal keeps
+// the full event shape.
+func shouldMinimizeFlagCalledEvent(minimalFlagCalledEvents bool, hasExperiment *bool) bool {
+	return minimalFlagCalledEvents && hasExperiment != nil && !*hasExperiment
+}
+
+// selectedProperties returns the source properties for serialization: the
+// allowlisted minimal subset when minimalFlagCalledEvent is set, or the full
+// set otherwise.
+func (msg Capture) selectedProperties() Properties {
+	if msg.minimalFlagCalledEvent {
+		return minimalFlagCalledEventProperties(msg.Properties)
+	}
+	return msg.Properties
+}
+
 // APIfy converts a Capture message into the PostHog batch API representation.
 func (msg Capture) APIfy() APIMessage {
 	libraryVersion := getVersion()
 
 	myProperties := Properties{}.
-		Merge(msg.Properties).
+		Merge(msg.selectedProperties()).
 		Set("$lib", SDKName).
 		Set("$lib_version", libraryVersion).
 		Merge(getSystemContext().ToProperties())

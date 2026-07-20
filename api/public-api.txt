@@ -195,6 +195,7 @@ type Capture struct {
 	SendFeatureFlags SendFeatureFlagsValue
 	Flags *FeatureFlagEvaluations
 	IsServer bool
+
 }
 
 func (msg Capture) APIfy() APIMessage
@@ -277,6 +278,7 @@ type CommonResponseFields struct {
 	RequestId string `json:"requestId"`
 	EvaluatedAt *int64 `json:"evaluatedAt"`
 	ErrorsWhileComputingFlags bool `json:"errorsWhileComputingFlags"`
+	MinimalFlagCalledEvents bool `json:"minimalFlagCalledEvents"`
 }
 
 type CompressionMode uint8
@@ -578,6 +580,7 @@ type FeatureFlagsResponse struct {
 	Flags []FeatureFlag `json:"flags"`
 	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
 	Cohorts map[string]PropertyGroup `json:"cohorts"`
+	MinimalFlagCalledEvents bool `json:"minimal_flag_called_events"`
 }
 
 type FieldError struct {

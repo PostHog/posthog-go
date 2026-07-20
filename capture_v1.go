@@ -269,7 +269,7 @@ func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, 
 // header is the authoritative SDK identity in v1).
 func (msg Capture) apifyEvent() apiEvent {
 	myProperties := baseV1Props(msg.IsServer, false).
-		Merge(msg.Properties).
+		Merge(msg.selectedProperties()).
 		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Groups != nil {

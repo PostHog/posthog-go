@@ -137,6 +137,10 @@ type CommonResponseFields struct {
 	EvaluatedAt *int64 `json:"evaluatedAt"`
 	// ErrorsWhileComputingFlags reports whether the server had errors computing any flags.
 	ErrorsWhileComputingFlags bool `json:"errorsWhileComputingFlags"`
+	// MinimalFlagCalledEvents reports whether the server enabled minimal
+	// $feature_flag_called events for this project. The server sends it only
+	// when the gate is on; absence means full events.
+	MinimalFlagCalledEvents bool `json:"minimalFlagCalledEvents"`
 }
 
 // UnmarshalJSON implements custom unmarshaling to handle both v3 and v4 formats
