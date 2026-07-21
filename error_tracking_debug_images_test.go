@@ -63,8 +63,8 @@ func TestDebugIDFromGNUBuildID(t *testing.T) {
 }
 
 func TestNativeImageArch(t *testing.T) {
-	arch := nativeImageArch()
-	if arch == "amd64" || arch == "arm64" {
+	// amd64 is Go-only vocabulary; arm64 is already the shared spelling.
+	if arch := nativeImageArch(); arch == "amd64" || arch == "aarch64" {
 		t.Errorf("nativeImageArch() = %q, want shared vocabulary", arch)
 	}
 }
@@ -91,8 +91,8 @@ func TestRealDebugImages(t *testing.T) {
 	if len(image.DebugID) < 36 {
 		t.Errorf("image.DebugID = %q, want uuid-shaped", image.DebugID)
 	}
-	if image.Arch == "amd64" || image.Arch == "arm64" {
-		t.Errorf("image.Arch = %q, want shared vocabulary (x86_64/aarch64)", image.Arch)
+	if image.Arch == "amd64" || image.Arch == "aarch64" {
+		t.Errorf("image.Arch = %q, want shared vocabulary (x86_64/arm64)", image.Arch)
 	}
 
 	base, err := strconv.ParseUint(strings.TrimPrefix(image.ImageAddr, "0x"), 16, 64)

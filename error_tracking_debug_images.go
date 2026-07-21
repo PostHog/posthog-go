@@ -92,13 +92,12 @@ func formatUUID(data [16]byte) string {
 }
 
 // nativeImageArch maps GOARCH to the architecture vocabulary shared by the
-// other PostHog SDKs and debug formats.
+// other PostHog SDKs ("arm64" is already the shared spelling — posthog-rs
+// normalizes aarch64 to it).
 func nativeImageArch() string {
 	switch runtime.GOARCH {
 	case "amd64":
 		return "x86_64"
-	case "arm64":
-		return "aarch64"
 	case "386":
 		return "x86"
 	default:
