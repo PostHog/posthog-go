@@ -159,18 +159,21 @@ func gnuBuildID(file *elf.File) []byte {
 }
 
 // parseGNUBuildIDNote walks ELF note records; their header fields use the
-// file's own byte order.
+// file's own byte order. All size arithmetic happens in uint64: aligning a
+// near-max uint32 size would wrap, slip past the bounds check, and panic on
+// the slice below — and this parser must never crash the host process, even
+// on a malformed note.
 func parseGNUBuildIDNote(data []byte, byteOrder binary.ByteOrder) []byte {
 	const gnuBuildIDType = 3
 	for len(data) >= 12 {
-		nameSize := byteOrder.Uint32(data[0:4])
-		descSize := byteOrder.Uint32(data[4:8])
+		nameSize := uint64(byteOrder.Uint32(data[0:4]))
+		descSize := uint64(byteOrder.Uint32(data[4:8]))
 		noteType := byteOrder.Uint32(data[8:12])
 		data = data[12:]
 
 		alignedName := (nameSize + 3) &^ 3
 		alignedDesc := (descSize + 3) &^ 3
-		if uint64(len(data)) < uint64(alignedName)+uint64(alignedDesc) {
+		if uint64(len(data)) < alignedName+alignedDesc {
 			return nil
 		}
 		name := data[:nameSize]

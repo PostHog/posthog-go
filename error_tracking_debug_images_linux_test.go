@@ -64,6 +64,29 @@ func TestGNUBuildIDFromProgramHeader(t *testing.T) {
 	}
 }
 
+// TestParseGNUBuildIDNoteMalformed feeds note headers whose sizes are crafted
+// to wrap 32-bit alignment arithmetic; the parser must return nil rather than
+// panic, since it runs inside the host application's capture path.
+func TestParseGNUBuildIDNoteMalformed(t *testing.T) {
+	le := binary.LittleEndian
+	malformed := [][2]uint32{
+		{0xfffffffe, 0},          // namesz aligns to 0 in uint32
+		{0, 0xfffffffe},          // descsz aligns to 0 in uint32
+		{0xffffffff, 0xffffffff}, // both wrap
+		{16, 0},                  // sizes larger than the payload
+	}
+	for _, sizes := range malformed {
+		note := make([]byte, 16)
+		le.PutUint32(note[0:4], sizes[0])
+		le.PutUint32(note[4:8], sizes[1])
+		le.PutUint32(note[8:12], 3)
+		if got := parseGNUBuildIDNote(note, le); got != nil {
+			t.Errorf("parseGNUBuildIDNote(namesz=%#x, descsz=%#x) = %x, want nil",
+				sizes[0], sizes[1], got)
+		}
+	}
+}
+
 func TestMapsLineRange(t *testing.T) {
 	tests := []struct {
 		name  string
