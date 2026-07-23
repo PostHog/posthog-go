@@ -368,6 +368,21 @@ type ConfigError struct {
 
 func (e ConfigError) Error() string
 
+type DebugImage struct {
+	Type string `json:"type"`
+	DebugID string `json:"debug_id"`
+	CodeID string `json:"code_id,omitempty"`
+	ImageAddr string `json:"image_addr"`
+	ImageSize uint64 `json:"image_size,omitempty"`
+	ImageVmaddr string `json:"image_vmaddr,omitempty"`
+	CodeFile string `json:"code_file,omitempty"`
+	Arch string `json:"arch"`
+}
+
+type DebugImageProvider interface {
+	GetDebugImages() []DebugImage
+}
+
 type DecideRequestData struct {
 	ApiKey string `json:"api_key"`
 	DistinctId string `json:"distinct_id"`
@@ -385,7 +400,10 @@ type DefaultStackTraceExtractor struct {
 	InAppDecider InAppDecider
 }
 
+func (d DefaultStackTraceExtractor) GetDebugImages() []DebugImage
+
 func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
+
 
 type DescriptionExtractor interface {
 	ExtractDescription(r slog.Record) string
@@ -420,6 +438,7 @@ type Exception struct {
 	Uuid string
 
 	DistinctId string
+	DebugImages []DebugImage
 	Timestamp time.Time
 	Properties Properties
 	DisableGeoIP bool
@@ -456,6 +475,7 @@ type ExceptionInApiProperties struct {
 	IsServer *bool `json:"$is_server,omitempty"`
 	DistinctId string `json:"distinct_id"`
 	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
+	DebugImages []DebugImage `json:"$debug_images,omitempty"`
 	ExceptionList []ExceptionItem `json:"$exception_list"`
 	ExceptionFingerprint *string `json:"$exception_fingerprint,omitempty"`
 
@@ -876,6 +896,12 @@ type StackFrame struct {
 	InApp bool `json:"in_app"`
 	Synthetic bool `json:"synthetic"`
 	Platform string `json:"platform"`
+	Lang string `json:"lang,omitempty"`
+	InstructionAddr string `json:"instruction_addr,omitempty"`
+	SymbolAddr string `json:"symbol_addr,omitempty"`
+	ImageAddr string `json:"image_addr,omitempty"`
+	ClientResolved bool `json:"client_resolved,omitempty"`
+	Inline bool `json:"inline,omitempty"`
 }
 
 type StackTraceExtractor interface {

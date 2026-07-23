@@ -396,6 +396,7 @@ func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {
 			}},
 		},
 	}}
+	originalImages := []DebugImage{{Type: "macho", DebugID: "original-debug-id"}}
 
 	client, err := NewWithConfig("test-api-key", Config{
 		Endpoint:  server.URL,
@@ -413,6 +414,7 @@ func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {
 			exception.ExceptionList[0].Stacktrace.Type = "hook"
 			exception.ExceptionList[0].Stacktrace.Frames[0].Filename = "hook.go"
 			exception.ExceptionList[0].Stacktrace.Frames[0].LineNo = 2
+			exception.DebugImages[0].DebugID = "hook-debug-id"
 			exception.Properties["hook_ran"] = true
 			return exception
 		},
@@ -425,6 +427,7 @@ func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {
 		Properties:           NewProperties(),
 		ExceptionList:        originalList,
 		ExceptionFingerprint: &fingerprint,
+		DebugImages:          originalImages,
 	}))
 
 	message := firstMessage(t, readBatch(t, body))
@@ -439,6 +442,7 @@ func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {
 	require.Equal(t, "raw", originalList[0].Stacktrace.Type)
 	require.Equal(t, "original.go", originalList[0].Stacktrace.Frames[0].Filename)
 	require.Equal(t, 1, originalList[0].Stacktrace.Frames[0].LineNo)
+	require.Equal(t, "original-debug-id", originalImages[0].DebugID)
 }
 
 func TestBeforeSendReceivesTypedMessagesBeforeAPIfy(t *testing.T) {

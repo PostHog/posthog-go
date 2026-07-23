@@ -2,7 +2,9 @@ package posthog
 
 import (
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -220,5 +222,101 @@ func TestDefaultStackTraceExtractor_CanonicalWireOrder(t *testing.T) {
 
 	if got := traces.Frames[len(traces.Frames)-1].Function; got != "runtime.Callers" {
 		t.Errorf("last frame should be the innermost capture site: got=%q want=%q", got, "runtime.Callers")
+	}
+}
+
+//go:noinline
+func groupedCapture(ex DefaultStackTraceExtractor) *ExceptionStacktrace {
+	return ex.GetStackTrace(0)
+}
+
+// groupedLeaf is cheap enough for the compiler to inline into its caller; the
+// runtime then synthesizes a separate pcs entry for it within groupedParent's
+// physical frame, which the extractor must emit as one marked inline group.
+func groupedLeaf(ex DefaultStackTraceExtractor, value int) (*ExceptionStacktrace, int) {
+	st := groupedCapture(ex)
+	return st, value * 2
+}
+
+//go:noinline
+func groupedParent(ex DefaultStackTraceExtractor, value int) *ExceptionStacktrace {
+	st, _ := groupedLeaf(ex, value)
+	return st
+}
+
+func TestDefaultStackTraceExtractor_GroupedInlineFrames(t *testing.T) {
+	stubMainImage(t, coveringImage())
+	extractor := DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}
+
+	frames := groupedParent(extractor, len(t.Name())).Frames
+
+	var leaf, parent *StackFrame
+	for i := range frames {
+		if strings.Contains(frames[i].Function, "groupedLeaf") {
+			leaf = &frames[i]
+		}
+		if strings.Contains(frames[i].Function, "groupedParent") {
+			parent = &frames[i]
+		}
+	}
+	if leaf == nil || parent == nil {
+		t.Fatal("expected both groupedLeaf and groupedParent frames on the wire")
+	}
+	if parent.InstructionAddr != leaf.InstructionAddr {
+		t.Skip("groupedLeaf was not inlined by this toolchain")
+	}
+
+	// The inlined call is preserved as a group member: it carries the physical
+	// frame's raw address and the inline marker, while the physical frame leads
+	// the group unmarked (canonical order puts the lead before its members).
+	if !leaf.Inline {
+		t.Error("inlined frame should carry the inline marker")
+	}
+	if parent.Inline {
+		t.Error("the physical frame anchoring the group must not be marked inline")
+	}
+	for i := range frames {
+		if &frames[i] == parent && (i+1 >= len(frames) || &frames[i+1] != leaf) {
+			t.Error("group lead should immediately precede its inline member on the wire")
+		}
+	}
+	for name, frame := range map[string]*StackFrame{"leaf": leaf, "parent": parent} {
+		if frame.Platform != "native" || frame.Lang != "go" || !frame.ClientResolved {
+			t.Errorf("%s frame not marked as client-resolved native: %+v", name, frame)
+		}
+		if frame.ImageAddr != coveringImage().image.ImageAddr {
+			t.Errorf("%s frame ImageAddr = %q", name, frame.ImageAddr)
+		}
+	}
+
+	hexAddr := regexp.MustCompile(`^0x[0-9a-f]+$`)
+	for i, frame := range frames {
+		if !hexAddr.MatchString(frame.InstructionAddr) {
+			t.Errorf("frame[%d].InstructionAddr = %q, want hex", i, frame.InstructionAddr)
+		}
+	}
+}
+
+// Without a resolvable image, output must keep the plain pre-native shape:
+// no addresses, no markers, platform "go".
+func TestDefaultStackTraceExtractor_PlainFramesWithoutImage(t *testing.T) {
+	stubMainImage(t, mainImageInfo{})
+	extractor := DefaultStackTraceExtractor{InAppDecider: SimpleInAppDecider}
+
+	frames := groupedParent(extractor, len(t.Name())).Frames
+	if len(frames) == 0 {
+		t.Fatal("expected frames")
+	}
+	for i, frame := range frames {
+		if frame.Platform != "go" {
+			t.Errorf("frame[%d].Platform = %q, want go", i, frame.Platform)
+		}
+		if frame.Lang != "" || frame.InstructionAddr != "" || frame.SymbolAddr != "" ||
+			frame.ImageAddr != "" || frame.ClientResolved || frame.Inline {
+			t.Errorf("frame[%d] carries native fields without an image: %+v", i, frame)
+		}
+	}
+	if extractor.GetDebugImages() != nil {
+		t.Error("expected no debug images without a resolvable image")
 	}
 }

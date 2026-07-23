@@ -466,6 +466,10 @@ func isolateBeforeSendMessage(msg Message) Message {
 		m.Properties = cloneMessageProperties(m.Properties)
 		m.ExceptionList = cloneExceptionList(m.ExceptionList)
 		m.ExceptionFingerprint = cloneExceptionFingerprint(m.ExceptionFingerprint)
+		// DebugImage is a flat value struct, so copying the slice is a deep clone.
+		if m.DebugImages != nil {
+			m.DebugImages = append([]DebugImage(nil), m.DebugImages...)
+		}
 		return m
 	}
 	return msg

@@ -21,6 +21,9 @@ type Exception struct {
 	// DistinctId identifies the user or entity associated with the exception.
 	// When using EnqueueWithContext, this can be inherited from RequestContext.
 	DistinctId string
+	// DebugImages lists the binary images referenced by "native" stack
+	// frames, sent as $debug_images for server-side symbolication.
+	DebugImages []DebugImage
 	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
 	Timestamp time.Time
 	// Properties are custom event properties flattened into the exception event.
@@ -80,8 +83,27 @@ type StackFrame struct {
 	InApp bool `json:"in_app"`
 	// Synthetic reports whether the frame was synthesized by instrumentation.
 	Synthetic bool `json:"synthetic"`
-	// Platform identifies the runtime platform; Go frames use "go".
+	// Platform identifies the runtime platform; plain Go frames use "go",
+	// frames with raw addresses for server-side symbolication use "native".
 	Platform string `json:"platform"`
+	// Lang is a display-language hint for "native" frames; Go frames use "go".
+	Lang string `json:"lang,omitempty"`
+	// InstructionAddr is the raw return address for the frame's physical
+	// group, as hex. The server symbolicates it against uploaded debug
+	// symbols.
+	InstructionAddr string `json:"instruction_addr,omitempty"`
+	// SymbolAddr is the start address of the enclosing function, as hex.
+	SymbolAddr string `json:"symbol_addr,omitempty"`
+	// ImageAddr is the load address of the image containing the instruction.
+	ImageAddr string `json:"image_addr,omitempty"`
+	// ClientResolved reports that Function, Filename, and LineNo were
+	// resolved in-process from the Go runtime's symbol table.
+	ClientResolved bool `json:"client_resolved,omitempty"`
+	// Inline marks a frame the runtime synthesized for a call inlined into
+	// the preceding physical frame, which carries the same InstructionAddr.
+	// The server resolves the group's address once and either replaces the
+	// whole group with its own expansion or keeps the client frames verbatim.
+	Inline bool `json:"inline,omitempty"`
 }
 
 // ExceptionInApi is the wire-format payload produced from an Exception message.
@@ -117,6 +139,8 @@ type ExceptionInApiProperties struct {
 	DistinctId string `json:"distinct_id"`
 	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
 	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
+	// DebugImages is sent as $debug_images when "native" frames are present.
+	DebugImages []DebugImage `json:"$debug_images,omitempty"`
 	// ExceptionList is sent as $exception_list.
 	ExceptionList []ExceptionItem `json:"$exception_list"`
 	// ExceptionFingerprint is sent as $exception_fingerprint when provided.
@@ -230,6 +254,7 @@ func (msg Exception) APIfy() APIMessage {
 			IsServer:             isServer,
 			DistinctId:           msg.DistinctId,
 			DisableGeoIP:         msg.DisableGeoIP,
+			DebugImages:          msg.DebugImages,
 			ExceptionList:        msg.ExceptionList,
 			ExceptionFingerprint: msg.ExceptionFingerprint,
 			Custom:               msg.Properties,
@@ -260,5 +285,6 @@ func NewDefaultException(
 				Stacktrace: defaultStackTrace.GetStackTrace(3),
 			},
 		},
+		DebugImages: defaultStackTrace.GetDebugImages(),
 	}
 }
