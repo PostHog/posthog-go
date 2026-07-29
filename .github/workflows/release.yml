@@ -187,6 +187,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
+          REJECTION_EMOJI: 🚫
         run: |
           RESPONSE=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals")
           REJECTED=$(echo "$RESPONSE" | jq '[.[] | select(.state == "rejected")] | length')
@@ -196,11 +197,11 @@ jobs:
             if [ -n "$COMMENT" ]; then
               {
                 echo 'message<<EOF'
-                echo "🚫 Release was rejected: $COMMENT"
+                echo "$REJECTION_EMOJI Release was rejected: $COMMENT"
                 echo 'EOF'
               } >> "$GITHUB_OUTPUT"
             else
-              echo "message=🚫 Release was rejected." >> "$GITHUB_OUTPUT"
+              echo "message=$REJECTION_EMOJI Release was rejected." >> "$GITHUB_OUTPUT"
             fi
           else
             echo "was_rejected=false" >> "$GITHUB_OUTPUT"
