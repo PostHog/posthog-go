@@ -68,8 +68,17 @@ jobs:
           go-version: ${{ matrix.go-version }}
 
       - name: Test
-        # Go 1.21 test binaries need an explicit GNU build ID for debug-image coverage.
-        run: go test -count=1 -timeout=5m -ldflags='-B 0x555398ebd01c9028' ./...
+        run: go test -count=1 -timeout=5m ./...
+
+      - name: Test debug-image discovery
+        if: matrix.go-version == '1.21'
+        env:
+          BUILD_ID_SEED: ${{ github.sha }}-${{ github.job }}-${{ matrix.go-version }}
+        run: |
+          build_id=$(printf '%s' "$BUILD_ID_SEED" | sha256sum | cut -c1-16)
+          output=$(go test -v -count=1 -timeout=1m -run '^TestRealDebugImages$' -ldflags="-B 0x${build_id}" .)
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -q -- '--- PASS: TestRealDebugImages'
 
   race:
     name: Race tests (Go ${{ matrix.go-version }})
@@ -89,8 +98,17 @@ jobs:
           go-version: ${{ matrix.go-version }}
 
       - name: Race tests
-        # Go 1.21 test binaries need an explicit GNU build ID for debug-image coverage.
-        run: go test -race -count=1 -timeout=5m -ldflags='-B 0x555398ebd01c9028' ./...
+        run: go test -race -count=1 -timeout=5m ./...
+
+      - name: Race-test debug-image discovery
+        if: matrix.go-version == '1.21'
+        env:
+          BUILD_ID_SEED: ${{ github.sha }}-${{ github.job }}-${{ matrix.go-version }}
+        run: |
+          build_id=$(printf '%s' "$BUILD_ID_SEED" | sha256sum | cut -c1-16)
+          output=$(go test -v -race -count=1 -timeout=1m -run '^TestRealDebugImages$' -ldflags="-B 0x${build_id}" .)
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -q -- '--- PASS: TestRealDebugImages'
 
   vet:
     name: Go vet (Go ${{ matrix.go-version }})
