@@ -14,9 +14,8 @@ on:
 jobs:
   compliance:
     name: PostHog SDK compliance tests (capture v0)
-    # Pinned to the 0.10.0 release commit of the reusable workflow + harness
-    # image version so v0/v1 runs are reproducible.
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@02c049e529001d02f37a534745678e057d371fb0
+    # Keep the harness image version pinned separately so v0/v1 runs are reproducible.
+    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@eea2a62aa490b1bfa2e2b3488fc0042b89cfa5ed
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
       adapter-context: "."
@@ -25,7 +24,7 @@ jobs:
 
   compliance-v1:
     name: PostHog SDK compliance tests (capture v1)
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@02c049e529001d02f37a534745678e057d371fb0
+    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@eea2a62aa490b1bfa2e2b3488fc0042b89cfa5ed
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile.v1"
       adapter-context: "."
