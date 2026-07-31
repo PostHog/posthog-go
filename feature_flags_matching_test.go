@@ -299,6 +299,124 @@ func TestMatchPropertyContains(t *testing.T) {
 	}
 }
 
+func TestMatchPropertyStartsWith(t *testing.T) {
+	property := FlagProperty{
+		Key:      "key",
+		Value:    "Val",
+		Operator: "starts_with",
+	}
+
+	for _, val := range []interface{}{"value", "VALUE", "vaLue4"} {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.True(t, isMatch, "expected %v to match", val)
+	}
+
+	for _, val := range []interface{}{"prevalue", "Alakazam", 123} {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.False(t, isMatch, "expected %v not to match", val)
+	}
+
+	// Numeric property values are stringified before matching.
+	numericProperty := FlagProperty{
+		Key:      "key",
+		Value:    "3",
+		Operator: "starts_with",
+	}
+
+	isMatch, err := matchProperty(numericProperty, NewProperties().Set("key", 323))
+	require.NoError(t, err)
+	require.True(t, isMatch)
+
+	isMatch, err = matchProperty(numericProperty, NewProperties().Set("key", 123))
+	require.NoError(t, err)
+	require.False(t, isMatch)
+
+	negatedProperty := FlagProperty{
+		Key:      "key",
+		Value:    "Val",
+		Operator: "not_starts_with",
+	}
+
+	for _, val := range []interface{}{"value", "VALUE"} {
+		isMatch, err := matchProperty(negatedProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.False(t, isMatch, "expected %v not to match", val)
+	}
+
+	for _, val := range []interface{}{"prevalue", "Alakazam"} {
+		isMatch, err := matchProperty(negatedProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.True(t, isMatch, "expected %v to match", val)
+	}
+
+	_, err = matchProperty(property, NewProperties().Set("key2", "value"))
+	var inconclusiveErr *InconclusiveMatchError
+	require.ErrorAs(t, err, &inconclusiveErr)
+}
+
+func TestMatchPropertyEndsWith(t *testing.T) {
+	property := FlagProperty{
+		Key:      "key",
+		Value:    "lUe",
+		Operator: "ends_with",
+	}
+
+	for _, val := range []interface{}{"value", "VALUE", "343tfvalue"} {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.True(t, isMatch, "expected %v to match", val)
+	}
+
+	for _, val := range []interface{}{"value2", "Alakazam", 123} {
+		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.False(t, isMatch, "expected %v not to match", val)
+	}
+
+	// Numeric property values are stringified before matching.
+	numericProperty := FlagProperty{
+		Key:      "key",
+		Value:    "3",
+		Operator: "ends_with",
+	}
+
+	for _, val := range []interface{}{323, 13, "3"} {
+		isMatch, err := matchProperty(numericProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.True(t, isMatch, "expected %v to match", val)
+	}
+
+	for _, val := range []interface{}{321, "3val"} {
+		isMatch, err := matchProperty(numericProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.False(t, isMatch, "expected %v not to match", val)
+	}
+
+	negatedProperty := FlagProperty{
+		Key:      "key",
+		Value:    "lUe",
+		Operator: "not_ends_with",
+	}
+
+	for _, val := range []interface{}{"value", "VALUE"} {
+		isMatch, err := matchProperty(negatedProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.False(t, isMatch, "expected %v not to match", val)
+	}
+
+	for _, val := range []interface{}{"value2", "Alakazam"} {
+		isMatch, err := matchProperty(negatedProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.True(t, isMatch, "expected %v to match", val)
+	}
+
+	_, err := matchProperty(property, NewProperties().Set("key2", "value"))
+	var inconclusiveErr *InconclusiveMatchError
+	require.ErrorAs(t, err, &inconclusiveErr)
+}
+
 func TestMatchPropertyDateComparison(t *testing.T) {
 	t.Run("RFC3339 dates", func(t *testing.T) {
 		// Test is_date_before

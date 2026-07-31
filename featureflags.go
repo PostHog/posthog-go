@@ -1376,6 +1376,22 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 		return !strings.Contains(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
 	}
 
+	if operator == "starts_with" {
+		return strings.HasPrefix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+	}
+
+	if operator == "not_starts_with" {
+		return !strings.HasPrefix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+	}
+
+	if operator == "ends_with" {
+		return strings.HasSuffix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+	}
+
+	if operator == "not_ends_with" {
+		return !strings.HasSuffix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+	}
+
 	if operator == "regex" {
 		r, err := getOrCompileRegex(valueToString(value))
 		// invalid regex
