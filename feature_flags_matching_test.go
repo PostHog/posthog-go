@@ -351,9 +351,26 @@ func TestMatchPropertyStartsWith(t *testing.T) {
 		require.True(t, isMatch, "expected %v to match", val)
 	}
 
-	_, err = matchProperty(property, NewProperties().Set("key2", "value"))
+	// The negated operator is the exact inverse across numeric values too.
+	negatedNumericProperty := FlagProperty{
+		Key:      "key",
+		Value:    "3",
+		Operator: "not_starts_with",
+	}
+
+	isMatch, err = matchProperty(negatedNumericProperty, NewProperties().Set("key", 323))
+	require.NoError(t, err)
+	require.False(t, isMatch)
+
+	isMatch, err = matchProperty(negatedNumericProperty, NewProperties().Set("key", 123))
+	require.NoError(t, err)
+	require.True(t, isMatch)
+
 	var inconclusiveErr *InconclusiveMatchError
-	require.ErrorAs(t, err, &inconclusiveErr)
+	for _, missing := range []Properties{NewProperties().Set("key2", "value"), NewProperties()} {
+		_, err = matchProperty(property, missing)
+		require.ErrorAs(t, err, &inconclusiveErr)
+	}
 }
 
 func TestMatchPropertyEndsWith(t *testing.T) {
@@ -412,9 +429,30 @@ func TestMatchPropertyEndsWith(t *testing.T) {
 		require.True(t, isMatch, "expected %v to match", val)
 	}
 
-	_, err := matchProperty(property, NewProperties().Set("key2", "value"))
+	// The negated operator is the exact inverse across numeric values too.
+	negatedNumericProperty := FlagProperty{
+		Key:      "key",
+		Value:    "3",
+		Operator: "not_ends_with",
+	}
+
+	for _, val := range []interface{}{323, 13, "3"} {
+		isMatch, err := matchProperty(negatedNumericProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.False(t, isMatch, "expected %v not to match", val)
+	}
+
+	for _, val := range []interface{}{321, "3val"} {
+		isMatch, err := matchProperty(negatedNumericProperty, NewProperties().Set("key", val))
+		require.NoError(t, err)
+		require.True(t, isMatch, "expected %v to match", val)
+	}
+
 	var inconclusiveErr *InconclusiveMatchError
-	require.ErrorAs(t, err, &inconclusiveErr)
+	for _, missing := range []Properties{NewProperties().Set("key2", "value"), NewProperties()} {
+		_, err := matchProperty(property, missing)
+		require.ErrorAs(t, err, &inconclusiveErr)
+	}
 }
 
 func TestMatchPropertyDateComparison(t *testing.T) {
