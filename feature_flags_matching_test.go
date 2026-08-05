@@ -366,6 +366,17 @@ func TestMatchPropertyStartsWith(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, isMatch)
 
+	// A nil value stringifies to "<nil>" (matching icontains), so the
+	// negated operator matches it — unlike Python, where None is false
+	// for all four operators.
+	isMatch, err = matchProperty(property, NewProperties().Set("key", nil))
+	require.NoError(t, err)
+	require.False(t, isMatch)
+
+	isMatch, err = matchProperty(negatedProperty, NewProperties().Set("key", nil))
+	require.NoError(t, err)
+	require.True(t, isMatch)
+
 	var inconclusiveErr *InconclusiveMatchError
 	for _, missing := range []Properties{NewProperties().Set("key2", "value"), NewProperties()} {
 		_, err = matchProperty(property, missing)
@@ -447,6 +458,17 @@ func TestMatchPropertyEndsWith(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, isMatch, "expected %v to match", val)
 	}
+
+	// A nil value stringifies to "<nil>" (matching icontains), so the
+	// negated operator matches it — unlike Python, where None is false
+	// for all four operators.
+	isMatch, err := matchProperty(property, NewProperties().Set("key", nil))
+	require.NoError(t, err)
+	require.False(t, isMatch)
+
+	isMatch, err = matchProperty(negatedProperty, NewProperties().Set("key", nil))
+	require.NoError(t, err)
+	require.True(t, isMatch)
 
 	var inconclusiveErr *InconclusiveMatchError
 	for _, missing := range []Properties{NewProperties().Set("key2", "value"), NewProperties()} {
