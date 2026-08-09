@@ -196,6 +196,59 @@ func TestEvaluateFlags_ReturnsSnapshotWithSingleRequest(t *testing.T) {
 	}
 }
 
+func TestIsEnabled_ReturnsCallerDefaultOnMiss(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	if snap.IsEnabled("no-such-flag") {
+		t.Error("expected unknown flag with no default to return false")
+	}
+	if !snap.IsEnabled("no-such-flag", true) {
+		t.Error("expected unknown flag to return the caller-supplied default of true")
+	}
+	if snap.IsEnabled("no-such-flag", false) {
+		t.Error("expected unknown flag to return the caller-supplied default of false")
+	}
+}
+
+func TestIsEnabled_RealValueWinsOverCallerDefault(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	// disabled-flag resolves to a real value of false; the caller-supplied
+	// default of true must not override it.
+	if snap.IsEnabled("disabled-flag", true) {
+		t.Error("expected a real false value to win over a caller-supplied default of true")
+	}
+	if !snap.IsEnabled("enabled-flag", false) {
+		t.Error("expected a real true value to win over a caller-supplied default of false")
+	}
+}
+
+func TestIsEnabled_NilSnapshotReturnsCallerDefault(t *testing.T) {
+	var snap *FeatureFlagEvaluations
+	if snap.IsEnabled("any-flag") {
+		t.Error("expected nil snapshot with no default to return false")
+	}
+	if !snap.IsEnabled("any-flag", true) {
+		t.Error("expected nil snapshot to return the caller-supplied default of true")
+	}
+}
+
 func TestEvaluateFlagsWithContext_UsesRequestContextDistinctId(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")

@@ -66,19 +66,33 @@ type featureFlagEvaluationsHost struct {
 }
 
 // IsEnabled reports whether the flag is enabled for this snapshot's user.
-// Unknown flags return false. The first call for a given key fires
+// Unknown flags return defaultValue if provided, or false otherwise. A flag
+// that resolved to a real value (including false or a variant) always wins
+// over defaultValue. The first call for a given key fires
 // $feature_flag_called with full evaluation metadata; subsequent calls with
 // the same response are deduped against the client's per-distinct_id cache.
-func (e *FeatureFlagEvaluations) IsEnabled(key string) bool {
+//
+// defaultValue is variadic to keep existing calls source-compatible; only
+// the first value passed is used.
+func (e *FeatureFlagEvaluations) IsEnabled(key string, defaultValue ...bool) bool {
 	if e == nil {
-		return false
+		return resolveIsEnabledDefault(defaultValue)
 	}
 	flag, ok := e.flags[key]
 	e.recordAccess(key)
 	if !ok {
-		return false
+		return resolveIsEnabledDefault(defaultValue)
 	}
 	return flag.Enabled
+}
+
+// resolveIsEnabledDefault returns the caller-supplied default from an
+// IsEnabled variadic default slice, or false when none was supplied.
+func resolveIsEnabledDefault(defaultValue []bool) bool {
+	if len(defaultValue) > 0 {
+		return defaultValue[0]
+	}
+	return false
 }
 
 // GetFlag returns the value of the flag: a string for multivariate flags,
