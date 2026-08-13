@@ -115,6 +115,7 @@ jobs:
           body: ${{ steps.generate-pr-details.outputs.body }}
 
       - name: Output pull request result
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
         shell: bash
         env:
           PACKAGE_NAME: ${{ github.event.inputs.package_name }}
@@ -124,6 +125,7 @@ jobs:
           echo "PostHog pull request for $PACKAGE_NAME version $PACKAGE_VERSION ready: $PR_URL"
 
       - name: Update pull request metadata
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ steps.upgrader.outputs.token }}
           PR_BODY: ${{ steps.generate-pr-details.outputs.body }}
@@ -136,6 +138,7 @@ jobs:
             --body "$PR_BODY"
 
       - name: Enable automerge
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ steps.upgrader.outputs.token }}
           PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
@@ -145,6 +148,7 @@ jobs:
           fi
 
       - name: Assign reviewers
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ steps.upgrader.outputs.token }}
           PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
