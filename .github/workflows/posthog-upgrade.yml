@@ -1,0 +1,180 @@
+name: "PostHog Upgrade"
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        type: choice
+        description: "Package name to upgrade"
+        required: true
+        options:
+          - posthog-go
+      package_version:
+        description: "Package version to upgrade to"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  posthog-upgrade:
+    name: Upgrade PostHog Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get upgrader token
+        id: upgrader
+        uses: getsentry/action-github-app-token@5c1e90706fe007857338ac1bfbd7a4177db2f789 # v4.0.0
+        with:
+          app_id: ${{ secrets.GH_APP_POSTHOG_JS_UPGRADER_APP_ID }}
+          private_key: ${{ secrets.GH_APP_POSTHOG_JS_UPGRADER_PRIVATE_KEY }}
+
+      - name: Check out main repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: "PostHog/posthog"
+          token: ${{ steps.upgrader.outputs.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: bin/hobby-installer/go.mod
+          cache-dependency-path: bin/hobby-installer/go.sum
+
+      - name: Install new package version in main repo
+        shell: bash
+        working-directory: bin/hobby-installer
+        env:
+          RETRY_TIMES: 20
+          RETRY_WAIT_SECONDS: 5
+          PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 "$RETRY_TIMES"); do
+            if go get "github.com/posthog/posthog-go@v${PACKAGE_VERSION}"; then
+              break
+            fi
+            if [ "$i" -eq "$RETRY_TIMES" ]; then
+              exit 1
+            fi
+            sleep "$RETRY_WAIT_SECONDS"
+          done
+          go mod tidy
+
+      - name: Generate pull request details
+        id: generate-pr-details
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
+          PACKAGE_NAME: ${{ github.event.inputs.package_name }}
+          PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
+        run: |
+          TITLE_PREFIX="chore(deps): Update ${PACKAGE_NAME} to "
+          PR_TITLE="${TITLE_PREFIX}${PACKAGE_VERSION}"
+          EXISTING_BRANCH=$(gh pr list \
+            --repo PostHog/posthog \
+            --state open \
+            --limit 100 \
+            --json title,headRefName,headRepositoryOwner \
+            --jq ".[] | select(.title | startswith(\"${TITLE_PREFIX}\")) | select(.headRepositoryOwner.login == \"PostHog\") | .headRefName" | head -n 1)
+
+          if [ -n "$EXISTING_BRANCH" ]; then
+            BRANCH_NAME="$EXISTING_BRANCH"
+          else
+            BRANCH_NAME="${PACKAGE_NAME}-upgrade"
+          fi
+
+          {
+            echo "branch_name=$BRANCH_NAME"
+            echo "title=$PR_TITLE"
+            echo 'body<<EOF'
+            echo '## Changes'
+            echo
+            echo "$PACKAGE_NAME version $PACKAGE_VERSION has been released. This updates PostHog to use it."
+            echo
+            echo "[GitHub releases](https://github.com/PostHog/posthog-go/releases) • [Go package](https://pkg.go.dev/github.com/posthog/posthog-go@v${PACKAGE_VERSION})"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create main repo pull request
+        id: main-repo-pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        env:
+          HUSKY: "0"
+        with:
+          token: ${{ steps.upgrader.outputs.token }}
+          # PostHog/posthog requires signed commits, so the bump has to be
+          # committed through the GitHub API rather than pushed with git.
+          # This works only because the token above comes from a GitHub App.
+          sign-commits: true
+          commit-message: ${{ steps.generate-pr-details.outputs.title }}
+          branch: ${{ steps.generate-pr-details.outputs.branch_name }}
+          delete-branch: true
+          title: ${{ steps.generate-pr-details.outputs.title }}
+          body: ${{ steps.generate-pr-details.outputs.body }}
+
+      - name: Output pull request result
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{ github.event.inputs.package_name }}
+          PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
+          PR_URL: ${{ steps.main-repo-pr.outputs.pull-request-url }}
+        run: |
+          echo "PostHog pull request for $PACKAGE_NAME version $PACKAGE_VERSION ready: $PR_URL"
+
+      - name: Update pull request metadata
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
+          PR_BODY: ${{ steps.generate-pr-details.outputs.body }}
+          PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
+          PR_TITLE: ${{ steps.generate-pr-details.outputs.title }}
+        run: |
+          gh pr edit "$PR_NUMBER" \
+            --repo PostHog/posthog \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY"
+
+      - name: Enable automerge
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
+          PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
+        run: |
+          if [ "$(gh pr view "$PR_NUMBER" --repo PostHog/posthog --json autoMergeRequest --jq '.autoMergeRequest != null')" = "false" ]; then
+            gh pr merge "$PR_NUMBER" --repo PostHog/posthog --auto --squash
+          fi
+
+      - name: Assign reviewers
+        if: steps.main-repo-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
+          PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
+        run: |
+          gh pr edit "$PR_NUMBER" --repo PostHog/posthog --add-reviewer PostHog/client-libraries-approvers --add-reviewer PostHog/team-client-libraries
+
+      # https://us.posthog.com/project/11213/functions/019ae9c0-03ee-0000-2f32-971f64be8ffe
+      - name: Send failure event to PostHog
+        if: ${{ failure() }}
+        continue-on-error: true
+        uses: PostHog/posthog-github-action@9a6a19d360820ab4d95ecc4a5a7564062c895f84 # v1.3.0
+        with:
+          posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
+          event: "posthog-sdk-github-release-workflow-failure"
+          properties: >-
+            {
+              "commitSha": "${{ github.sha }}",
+              "jobStatus": "${{ job.status }}",
+              "ref": "${{ github.ref }}",
+              "repository": "${{ github.repository }}",
+              "sdk": "posthog-go",
+              "targetRepository": "PostHog/posthog",
+              "jobName": "posthog-upgrade",
+              "packageName": "${{ github.event.inputs.package_name }}",
+              "packageVersion": "${{ github.event.inputs.package_version || 'unknown' }}",
+              "actionUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "alertText": ":warning: Downstream PostHog/posthog dependency bump failed for ${{ github.event.inputs.package_name }}@${{ github.event.inputs.package_version }}",
+              "alertContext": "This is the monorepo upgrade workflow, not a posthog-go release failure."
+            }

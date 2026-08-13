@@ -143,6 +143,23 @@ jobs:
           CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
           gh release create "v${NEW_VERSION}" --target main --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
+      - name: Dispatch posthog upgrade for posthog-go
+        if: steps.commit-version-bump.outputs.commit-hash != ''
+        env:
+          PACKAGE_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -f -sS -X POST \
+               -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               https://api.github.com/repos/posthog/posthog-go/actions/workflows/posthog-upgrade.yml/dispatches \
+               -d "$(jq -n \
+                 --arg ref "main" \
+                 --arg package_name "posthog-go" \
+                 --arg package_version "$PACKAGE_VERSION" \
+                 '{ref: $ref, inputs: {package_name: $package_name, package_version: $package_version}}' \
+               )"
+
       - name: Send failure event to PostHog
         if: failure()
         continue-on-error: true
