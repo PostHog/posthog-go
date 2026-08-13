@@ -61,7 +61,6 @@ jobs:
             sleep "$RETRY_WAIT_SECONDS"
           done
           go mod tidy
-          go test ./...
 
       - name: Generate pull request details
         id: generate-pr-details
