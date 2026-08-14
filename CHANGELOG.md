@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.23.1
+
+### Patch Changes
+
+- ec8f6c0: Normalize event timestamps to the equivalent UTC instant before serializing legacy batch and Capture V1 payloads.
+
 ## 1.23.0
 
 ### Minor Changes
