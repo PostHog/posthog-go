@@ -19,7 +19,8 @@ type GroupIdentify struct {
 
 	// DistinctId is accepted for compatibility but the wire payload uses a generated group distinct ID.
 	DistinctId string
-	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
+	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
 	// Properties are sent as the $group_set properties for the group.
 	Properties Properties
@@ -48,7 +49,7 @@ type GroupIdentifyInApi struct {
 	Library string `json:"library"`
 	// LibraryVersion is the SDK version sent to the batch API.
 	LibraryVersion string `json:"library_version"`
-	// Timestamp is the event timestamp sent to the batch API.
+	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
 
 	// Event is always $groupidentify for GroupIdentify messages.
@@ -84,7 +85,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 		Event:          "$groupidentify",
 		Properties:     myProperties,
 		DistinctId:     distinctId,
-		Timestamp:      msg.Timestamp,
+		Timestamp:      msg.Timestamp.UTC(),
 		Library:        SDKName,
 		LibraryVersion: getVersion(),
 	}

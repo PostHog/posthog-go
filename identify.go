@@ -19,7 +19,8 @@ type Identify struct {
 
 	// DistinctId is the user distinct ID whose person profile should be updated.
 	DistinctId string
-	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
+	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
 	// Properties are sent as the $set person properties for DistinctId.
 	Properties Properties
@@ -53,7 +54,7 @@ type IdentifyInApi struct {
 	Library string `json:"library"`
 	// LibraryVersion is the SDK version sent to the batch API.
 	LibraryVersion string `json:"library_version"`
-	// Timestamp is the event timestamp sent to the batch API.
+	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
 
 	// Event is always $identify for Identify messages.
@@ -87,7 +88,7 @@ func (msg Identify) APIfy() APIMessage {
 		Event:          "$identify",
 		Library:        SDKName,
 		LibraryVersion: getVersion(),
-		Timestamp:      msg.Timestamp,
+		Timestamp:      msg.Timestamp.UTC(),
 		DistinctId:     msg.DistinctId,
 
 		Properties: myProperties,

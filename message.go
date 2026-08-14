@@ -62,12 +62,13 @@ type Message interface {
 }
 
 // Returns the time value passed as first argument, unless it's the zero-value,
-// in that case the default value passed as second argument is returned.
+// in that case the default value passed as second argument is returned. The
+// result is normalized to UTC while preserving the instant.
 func makeTimestamp(t time.Time, def time.Time) time.Time {
 	if t == (time.Time{}) {
-		return def
+		return def.UTC()
 	}
-	return t
+	return t.UTC()
 }
 
 // makeUUID returns the UUID passed as first argument if non-empty and valid,

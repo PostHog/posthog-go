@@ -24,7 +24,8 @@ type Exception struct {
 	// DebugImages lists the binary images referenced by "native" stack
 	// frames, sent as $debug_images for server-side symbolication.
 	DebugImages []DebugImage
-	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
+	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
 	// Properties are custom event properties flattened into the exception event.
 	Properties Properties
@@ -117,7 +118,7 @@ type ExceptionInApi struct {
 	Library string `json:"library"`
 	// LibraryVersion is the SDK version sent to the batch API.
 	LibraryVersion string `json:"library_version"`
-	// Timestamp is the event timestamp sent to the batch API.
+	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
 	// Event is always $exception for Exception messages.
 	Event string `json:"event"`
@@ -246,7 +247,7 @@ func (msg Exception) APIfy() APIMessage {
 		Event:          "$exception",
 		Library:        SDKName,
 		LibraryVersion: libVersion,
-		Timestamp:      msg.Timestamp,
+		Timestamp:      msg.Timestamp.UTC(),
 		Properties: ExceptionInApiProperties{
 			sysContext:           getSystemContext(),
 			Lib:                  SDKName,
@@ -264,7 +265,8 @@ func (msg Exception) APIfy() APIMessage {
 
 // NewDefaultException builds an Exception with a default stack trace.
 //
-// The timestamp parameter becomes Exception.Timestamp, distinctID becomes
+// The timestamp parameter becomes Exception.Timestamp; UTC is preferred, and
+// Enqueue converts non-UTC values to the equivalent UTC instant. distinctID becomes
 // Exception.DistinctId, title becomes the first ExceptionItem.Type, and
 // description becomes the first ExceptionItem.Value. The returned Exception is
 // ready to pass to Client.Enqueue. Build Exception manually if you need custom

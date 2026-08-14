@@ -21,7 +21,8 @@ type Alias struct {
 	Alias string
 	// DistinctId is the existing user distinct ID that Alias should resolve to.
 	DistinctId string
-	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
+	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
 	// DisableGeoIP controls whether this alias event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
@@ -69,7 +70,7 @@ type AliasInApi struct {
 	Library string `json:"library"`
 	// LibraryVersion is the SDK version sent to the batch API.
 	LibraryVersion string `json:"library_version"`
-	// Timestamp is the event timestamp sent to the batch API.
+	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
 
 	// Properties contains alias-specific event properties.
@@ -94,7 +95,7 @@ func (msg Alias) APIfy() APIMessage {
 		Event:          "$create_alias",
 		Library:        SDKName,
 		LibraryVersion: libraryVersion,
-		Timestamp:      msg.Timestamp,
+		Timestamp:      msg.Timestamp.UTC(),
 		Properties: AliasInApiProperties{
 			sysContext:   getSystemContext(),
 			DistinctId:   msg.DistinctId,
