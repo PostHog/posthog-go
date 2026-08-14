@@ -72,6 +72,7 @@ type recordedRequest struct {
 	attempt   string
 	requestId string
 	timestamp string
+	createdAt string
 	auth      string
 	encoding  string
 	uuids     []string
@@ -110,6 +111,7 @@ func (s *v1TestServer) handler(t *testing.T) http.HandlerFunc {
 			attempt:   r.Header.Get("PostHog-Attempt"),
 			requestId: r.Header.Get("PostHog-Request-Id"),
 			timestamp: r.Header.Get("PostHog-Request-Timestamp"),
+			createdAt: env.CreatedAt,
 			auth:      r.Header.Get("Authorization"),
 			encoding:  r.Header.Get("Content-Encoding"),
 			uuids:     uuids,
@@ -249,7 +251,10 @@ func TestV1SendHeadersAndAllOk(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
+	now := time.Date(2025, time.April, 6, 7, 8, 9, 0, time.FixedZone("UTC+5", 5*60*60))
+	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
+		cfg.now = func() time.Time { return now }
+	})
 	c.sendV1(v1Batch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
@@ -266,8 +271,12 @@ func TestV1SendHeadersAndAllOk(t *testing.T) {
 	if r.requestId == "" {
 		t.Error("PostHog-Request-Id missing")
 	}
-	if _, err := time.Parse(time.RFC3339, r.timestamp); err != nil {
-		t.Errorf("PostHog-Request-Timestamp %q not RFC3339: %v", r.timestamp, err)
+	const wantTimestamp = "2025-04-06T02:08:09Z"
+	if r.timestamp != wantTimestamp {
+		t.Errorf("PostHog-Request-Timestamp = %q, want %q", r.timestamp, wantTimestamp)
+	}
+	if r.createdAt != wantTimestamp {
+		t.Errorf("created_at = %q, want %q", r.createdAt, wantTimestamp)
 	}
 	if s, f := cb.counts(); s != 1 || f != 0 {
 		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)

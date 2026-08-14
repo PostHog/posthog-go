@@ -96,7 +96,8 @@ type Capture struct {
 	DistinctId string
 	// Event is the event name to capture. It must be non-empty.
 	Event string
-	// Timestamp is the event timestamp. If zero, Enqueue uses the current time.
+	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
+	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
 	// Properties are event properties. Enqueue merges request context properties
 	// and Config.DefaultEventProperties into this map before sending.
@@ -155,7 +156,7 @@ type CaptureInApi struct {
 	// Deprecated: PostHog reads SDK version from Properties["$lib_version"], so
 	// this top-level field is no longer serialized.
 	LibraryVersion string `json:"-"`
-	// Timestamp is the event timestamp sent to the batch API.
+	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
 
 	// DistinctId identifies the user or entity for the event.
@@ -260,7 +261,7 @@ func (msg Capture) APIfy() APIMessage {
 		Uuid:             msg.Uuid,
 		Library:          SDKName,
 		LibraryVersion:   libraryVersion,
-		Timestamp:        msg.Timestamp,
+		Timestamp:        msg.Timestamp.UTC(),
 		DistinctId:       msg.DistinctId,
 		Event:            msg.Event,
 		Properties:       myProperties,

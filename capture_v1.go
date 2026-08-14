@@ -231,7 +231,7 @@ func buildV1Event(e apiEvent, logger Logger) eventPayload {
 		Event:      e.event,
 		Uuid:       e.uuid,
 		DistinctId: e.distinctId,
-		Timestamp:  e.timestamp,
+		Timestamp:  e.timestamp.UTC(),
 		SessionId:  sessionId,
 		WindowId:   windowId,
 		Options:    options,
