@@ -1,0 +1,173 @@
+{
+  "created_at": "2009-11-10T23:00:00Z",
+  "batch": [
+    {
+      "event": "snapshot-capture",
+      "uuid": "00000000-0000-0000-0000-000000000021",
+      "distinct_id": "user-21",
+      "timestamp": "2025-01-02T03:04:05Z",
+      "session_id": "session-21",
+      "window_id": "window-21",
+      "options": {
+        "cookieless_mode": false,
+        "disable_skew_correction": true,
+        "process_person_profile": false,
+        "product_tour_id": "tour-21"
+      },
+      "properties": {
+        "$geoip_disable": true,
+        "$go_version": "IGNORED",
+        "$groups": {
+          "company": "acme"
+        },
+        "$is_server": true,
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "plan": "enterprise"
+      }
+    },
+    {
+      "event": "$identify",
+      "uuid": "00000000-0000-0000-0000-000000000022",
+      "distinct_id": "user-22",
+      "timestamp": "2025-01-02T03:04:06Z",
+      "options": {},
+      "properties": {
+        "$geoip_disable": true,
+        "$go_version": "IGNORED",
+        "$is_server": true,
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "$set": {
+          "email": "user-22@example.com",
+          "verified": false
+        }
+      }
+    },
+    {
+      "event": "$groupidentify",
+      "uuid": "00000000-0000-0000-0000-000000000023",
+      "distinct_id": "$company_acme",
+      "timestamp": "2025-01-02T03:04:07Z",
+      "options": {},
+      "properties": {
+        "$geoip_disable": true,
+        "$go_version": "IGNORED",
+        "$group_key": "acme",
+        "$group_set": {
+          "name": "Acme, Inc.",
+          "tags": [
+            "server",
+            "snapshot"
+          ]
+        },
+        "$group_type": "company",
+        "$is_server": true,
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED"
+      }
+    },
+    {
+      "event": "$create_alias",
+      "uuid": "00000000-0000-0000-0000-000000000024",
+      "distinct_id": "user-24",
+      "timestamp": "2025-01-02T03:04:08Z",
+      "options": {},
+      "properties": {
+        "$geoip_disable": true,
+        "$go_version": "IGNORED",
+        "$is_server": true,
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "alias": "anonymous-24"
+      }
+    },
+    {
+      "event": "$exception",
+      "uuid": "00000000-0000-0000-0000-000000000025",
+      "distinct_id": "user-25",
+      "timestamp": "2025-01-02T03:04:09Z",
+      "options": {},
+      "properties": {
+        "$exception_list": [
+          {
+            "type": "SnapshotError",
+            "value": "synthetic exception"
+          }
+        ],
+        "$geoip_disable": true,
+        "$go_version": "IGNORED",
+        "$is_server": true,
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "request_id": "request-25"
+      }
+    },
+    {
+      "event": "$exception",
+      "uuid": "00000000-0000-0000-0000-000000000014",
+      "distinct_id": "exception-user",
+      "timestamp": "2025-08-12T09:10:11Z",
+      "options": {},
+      "properties": {
+        "$debug_images": [
+          {
+            "arch": "arm64",
+            "code_file": "/srv/app/server",
+            "code_id": "0123456789abcdef",
+            "debug_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "image_addr": "0x400000",
+            "image_size": 4096,
+            "image_vmaddr": "0x0",
+            "type": "elf"
+          }
+        ],
+        "$exception_fingerprint": "fingerprint-server-snapshot",
+        "$exception_list": [
+          {
+            "mechanism": {
+              "handled": false,
+              "synthetic": true
+            },
+            "stacktrace": {
+              "frames": [
+                {
+                  "client_resolved": true,
+                  "filename": "/srv/app/handler.go",
+                  "function": "example.com/app.Handle",
+                  "image_addr": "0x400000",
+                  "in_app": true,
+                  "inline": true,
+                  "instruction_addr": "0x401234",
+                  "lang": "go",
+                  "lineno": 42,
+                  "platform": "native",
+                  "symbol_addr": "0x401000",
+                  "synthetic": false
+                }
+              ],
+              "type": "raw"
+            },
+            "type": "SyntheticError",
+            "value": "deterministic failure"
+          }
+        ],
+        "$geoip_disable": false,
+        "$go_version": "IGNORED",
+        "$is_server": false,
+        "$lib": "custom-lib",
+        "$lib_version": "custom-version",
+        "$os": "custom-os",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "custom_property": "custom-value",
+        "distinct_id": "custom-distinct-id"
+      }
+    }
+  ]
+}

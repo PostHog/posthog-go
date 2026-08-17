@@ -1,0 +1,24 @@
+{
+  "api_key": "Csyjlnlun3OzyNJAafdlv",
+  "batch": [
+    {
+      "distinct_id": "capture-user",
+      "event": "property-precedence",
+      "properties": {
+        "$geoip_disable": true,
+        "$go_version": "IGNORED",
+        "$is_server": true,
+        "$lib": "posthog-go",
+        "$lib_version": "1.0.0",
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "collision": "default-value",
+        "default_only": "default-value",
+        "event_only": "event-value"
+      },
+      "timestamp": "2009-11-10T23:00:00Z",
+      "uuid": "00000000-0000-0000-0000-000000000013"
+    }
+  ]
+}

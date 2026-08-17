@@ -1,0 +1,27 @@
+{
+  "api_key": "phc_snapshot_project_key",
+  "device_id": "device-31",
+  "distinct_id": "user-31",
+  "flag_keys_to_evaluate": [
+    "server-snapshot",
+    "beta-api"
+  ],
+  "geoip_disable": true,
+  "group_properties": {
+    "company": {
+      "plan": "enterprise",
+      "seats": 42
+    },
+    "project": {
+      "active": true
+    }
+  },
+  "groups": {
+    "company": "acme",
+    "project": "snapshot"
+  },
+  "person_properties": {
+    "email": "user-31@example.com",
+    "staff": false
+  }
+}
