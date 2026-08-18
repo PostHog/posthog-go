@@ -19,7 +19,6 @@ import (
 
 	json "github.com/goccy/go-json"
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -412,6 +411,18 @@ func fixture(name string) string {
 	return string(b)
 }
 
+func assertJSONEqual(t *testing.T, expected, actual string) {
+	t.Helper()
+
+	var expectedJSON, actualJSON interface{}
+	require.NoError(t, json.Unmarshal([]byte(expected), &expectedJSON))
+	require.NoError(t, json.Unmarshal([]byte(actual), &actualJSON))
+
+	if diff := cmp.Diff(expectedJSON, actualJSON); diff != "" {
+		t.Errorf("payload mismatch (-expected +actual):\n%s", diff)
+	}
+}
+
 func assertPayloadEqual(t *testing.T, expected, actual string) {
 	t.Helper()
 
@@ -421,9 +432,9 @@ func assertPayloadEqual(t *testing.T, expected, actual string) {
 	require.NoError(t, json.Unmarshal([]byte(expected), &expectedJSON))
 	require.NoError(t, json.Unmarshal([]byte(actual), &actualJSON))
 
-	batch, ok := actualJSON["batch"].([]interface{})
-	require.True(t, ok, "actual JSON missing 'batch' array")
-	for i, item := range batch {
+	batch, ok := expectedJSON["batch"].([]interface{})
+	require.True(t, ok, "expected JSON missing 'batch' array")
+	for _, item := range batch {
 		event, ok := item.(map[string]interface{})
 		if !ok {
 			continue
@@ -432,24 +443,19 @@ func assertPayloadEqual(t *testing.T, expected, actual string) {
 		if !ok {
 			continue
 		}
-		for key := range sysCtx {
-			if _, exists := props[key]; !exists {
-				t.Errorf("batch[%d] missing %s in properties", i, key)
+		for _, key := range []string{"$os", "$os_version", "$os_distro", "$go_version"} {
+			if props[key] != "IGNORED" {
+				continue
+			}
+			if value, exists := sysCtx[key]; exists {
+				props[key] = value
+			} else {
+				delete(props, key)
 			}
 		}
 	}
 
-	knownSysCtxKeys := map[string]struct{}{
-		"$os":         {},
-		"$os_version": {},
-		"$os_distro":  {},
-		"$go_version": {},
-	}
-	opt := cmpopts.IgnoreMapEntries(func(k string, v interface{}) bool {
-		_, ok := knownSysCtxKeys[k]
-		return ok
-	})
-	if diff := cmp.Diff(expectedJSON, actualJSON, opt); diff != "" {
+	if diff := cmp.Diff(expectedJSON, actualJSON); diff != "" {
 		t.Errorf("payload mismatch (-expected +actual):\n%s", diff)
 	}
 }
@@ -534,6 +540,61 @@ func TestCaptureNoProperties(t *testing.T) {
 	})
 }
 
+func completeExceptionSnapshot() Exception {
+	completeFingerprint := "fingerprint-server-snapshot"
+	handled, synthetic := false, true
+	return Exception{
+		Uuid:       "00000000-0000-0000-0000-000000000014",
+		DistinctId: "exception-user",
+		Timestamp:  time.Date(2025, 8, 12, 9, 10, 11, 0, time.UTC),
+		Properties: Properties{
+			"$lib":                   "custom-lib",
+			"$lib_version":           "custom-version",
+			"$is_server":             false,
+			"distinct_id":            "custom-distinct-id",
+			"$geoip_disable":         false,
+			"$debug_images":          "custom-debug-images",
+			"$exception_list":        "custom-exception-list",
+			"$exception_fingerprint": "custom-fingerprint",
+			"$os":                    "custom-os",
+			"custom_property":        "custom-value",
+		},
+		DebugImages: []DebugImage{{
+			Type:        "elf",
+			DebugID:     "01234567-89ab-cdef-0123-456789abcdef",
+			CodeID:      "0123456789abcdef",
+			ImageAddr:   "0x400000",
+			ImageSize:   4096,
+			ImageVmaddr: "0x0",
+			CodeFile:    "/srv/app/server",
+			Arch:        "arm64",
+		}},
+		ExceptionList: []ExceptionItem{{
+			Type:      "SyntheticError",
+			Value:     "deterministic failure",
+			Mechanism: &ExceptionMechanism{Handled: &handled, Synthetic: &synthetic},
+			Stacktrace: &ExceptionStacktrace{
+				Type: "raw",
+				Frames: []StackFrame{{
+					Filename:        "/srv/app/handler.go",
+					LineNo:          42,
+					Function:        "example.com/app.Handle",
+					InApp:           true,
+					Synthetic:       false,
+					Platform:        "native",
+					Lang:            "go",
+					InstructionAddr: "0x401234",
+					SymbolAddr:      "0x401000",
+					ImageAddr:       "0x400000",
+					ClientResolved:  true,
+					Inline:          true,
+				}},
+			},
+		}},
+		ExceptionFingerprint: &completeFingerprint,
+	}
+}
+
 func TestEnqueue(t *testing.T) {
 	exception := Exception{
 		Uuid:         "00000000-0000-0000-0000-000000000004",
@@ -560,6 +621,7 @@ func TestEnqueue(t *testing.T) {
 			},
 		},
 	}
+	completeException := completeExceptionSnapshot()
 	f, tv := false, true
 	tests := map[string]struct {
 		ref          string
@@ -633,9 +695,55 @@ func TestEnqueue(t *testing.T) {
 			&tv,
 		},
 
+		"capture-property-precedence": {
+			strings.TrimSpace(fixture("test-enqueue-capture-property-precedence.json")),
+			Capture{
+				Uuid:       "00000000-0000-0000-0000-000000000013",
+				Event:      "property-precedence",
+				DistinctId: "capture-user",
+				Properties: Properties{
+					"collision":      "event-value",
+					"event_only":     "event-value",
+					"$lib":           "event-lib",
+					"$lib_version":   "event-version",
+					"$is_server":     false,
+					"$geoip_disable": false,
+					"$os":            "event-os",
+					"$os_version":    "event-os-version",
+					"$go_version":    "event-go-version",
+				},
+				SendFeatureFlags: SendFeatureFlags(false),
+			},
+			&tv,
+		},
+
+		"capture-zero-values": {
+			strings.TrimSpace(fixture("test-enqueue-capture-zero-values.json")),
+			Capture{
+				Uuid:       "00000000-0000-0000-0000-000000000012",
+				Event:      "zero-values",
+				DistinctId: "capture-user",
+				Properties: Properties{
+					"nil_value":    nil,
+					"empty_string": "",
+					"false_value":  false,
+					"empty_array":  []string{},
+					"empty_object": Properties{},
+				},
+				SendFeatureFlags: SendFeatureFlags(false),
+			},
+			&f,
+		},
+
 		"exception": {
 			strings.TrimSpace(fixture("test-enqueue-exception.json")),
 			exception,
+			&tv,
+		},
+
+		"exception-complete": {
+			strings.TrimSpace(fixture("test-enqueue-exception-complete.json")),
+			completeException,
 			&tv,
 		},
 
@@ -689,18 +797,33 @@ func TestEnqueue(t *testing.T) {
 		},
 	}
 
+	defaultEventProperties := map[string]Properties{
+		"capture-property-precedence": {
+			"collision":      "default-value",
+			"default_only":   "default-value",
+			"$lib":           "default-lib",
+			"$lib_version":   "default-version",
+			"$is_server":     false,
+			"$geoip_disable": false,
+			"$os":            "default-os",
+		},
+	}
+	isServer := map[string]*bool{"capture-zero-values": &f}
+
 	body, server := mockServer()
 	defer server.Close()
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			client, _ := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
-				Endpoint:     server.URL,
-				Verbose:      true,
-				Logger:       toLogger(t),
-				BatchSize:    1,
-				now:          mockTime,
-				DisableGeoIP: test.disableGeoIP,
+				Endpoint:               server.URL,
+				Verbose:                true,
+				Logger:                 toLogger(t),
+				BatchSize:              1,
+				now:                    mockTime,
+				DisableGeoIP:           test.disableGeoIP,
+				IsServer:               isServer[name],
+				DefaultEventProperties: defaultEventProperties[name],
 			})
 			defer client.Close()
 
@@ -710,6 +833,179 @@ func TestEnqueue(t *testing.T) {
 			}
 
 			assertPayloadEqual(t, test.ref, string(<-body))
+		})
+	}
+}
+
+func TestEnqueueCaptureV1EventFamily(t *testing.T) {
+	const apiKey = "phc_snapshot_project_key"
+	body := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != captureV1Path {
+			t.Errorf("capture path = %q, want %q", r.URL.Path, captureV1Path)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer "+apiKey; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read capture body: %v", err)
+		}
+		body <- payload
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":{
+			"00000000-0000-0000-0000-000000000021":{"result":"ok"},
+			"00000000-0000-0000-0000-000000000022":{"result":"ok"},
+			"00000000-0000-0000-0000-000000000023":{"result":"ok"},
+			"00000000-0000-0000-0000-000000000024":{"result":"ok"},
+			"00000000-0000-0000-0000-000000000025":{"result":"ok"},
+			"00000000-0000-0000-0000-000000000014":{"result":"ok"}
+		}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig(apiKey, Config{
+		Endpoint:    server.URL,
+		CaptureMode: CaptureModeAnalyticsV1,
+		BatchSize:   6,
+		now:         mockTime,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	timestamp := time.Date(2025, time.January, 2, 3, 4, 5, 0, time.UTC)
+	messages := []Message{
+		Capture{
+			Uuid:       "00000000-0000-0000-0000-000000000021",
+			Event:      "snapshot-capture",
+			DistinctId: "user-21",
+			Timestamp:  timestamp,
+			Groups:     Groups{"company": "acme"},
+			Properties: Properties{
+				"plan":                       "enterprise",
+				propertyCookielessMode:       false,
+				propertyIgnoreSentAt:         true,
+				propertyProductTourId:        "tour-21",
+				propertyProcessPersonProfile: false,
+				propertySessionID:            "session-21",
+				propertyWindowID:             "window-21",
+			},
+			SendFeatureFlags: SendFeatureFlags(false),
+		},
+		Identify{
+			Uuid:       "00000000-0000-0000-0000-000000000022",
+			DistinctId: "user-22",
+			Timestamp:  timestamp.Add(time.Second),
+			Properties: Properties{"email": "user-22@example.com", "verified": false},
+		},
+		GroupIdentify{
+			Uuid:      "00000000-0000-0000-0000-000000000023",
+			Type:      "company",
+			Key:       "acme",
+			Timestamp: timestamp.Add(2 * time.Second),
+			Properties: Properties{
+				"name": "Acme, Inc.",
+				"tags": []string{"server", "snapshot"},
+			},
+		},
+		Alias{
+			Uuid:       "00000000-0000-0000-0000-000000000024",
+			DistinctId: "user-24",
+			Alias:      "anonymous-24",
+			Timestamp:  timestamp.Add(3 * time.Second),
+		},
+		Exception{
+			Uuid:       "00000000-0000-0000-0000-000000000025",
+			DistinctId: "user-25",
+			Timestamp:  timestamp.Add(4 * time.Second),
+			Properties: Properties{"request_id": "request-25"},
+			ExceptionList: []ExceptionItem{{
+				Type:  "SnapshotError",
+				Value: "synthetic exception",
+			}},
+		},
+		completeExceptionSnapshot(),
+	}
+	for _, message := range messages {
+		require.NoError(t, client.Enqueue(message))
+	}
+
+	select {
+	case payload := <-body:
+		assertPayloadEqual(t, strings.TrimSpace(fixture("test-enqueue-capture-v1.json")), string(payload))
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for request")
+	}
+}
+
+func TestFlagsRequestSnapshots(t *testing.T) {
+	deviceID := "device-31"
+	tests := []struct {
+		name             string
+		fixture          string
+		distinctID       string
+		deviceID         *string
+		groups           Groups
+		personProperties Properties
+		groupProperties  map[string]Properties
+		disableGeoIP     bool
+		flagKeys         []string
+	}{
+		{
+			name:             "complete",
+			fixture:          "test-enqueue-flags-request.json",
+			distinctID:       "user-31",
+			deviceID:         &deviceID,
+			groups:           Groups{"company": "acme", "project": "snapshot"},
+			personProperties: Properties{"email": "user-31@example.com", "staff": false},
+			groupProperties: map[string]Properties{
+				"company": {"plan": "enterprise", "seats": 42},
+				"project": {"active": true},
+			},
+			disableGeoIP: true,
+			flagKeys:     []string{"server-snapshot", "beta-api"},
+		},
+		{
+			name:       "zero-values",
+			fixture:    "test-enqueue-flags-request-zero-values.json",
+			distinctID: "user-32",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := make(chan []byte, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/flags/" {
+					t.Errorf("flags path = %q, want /flags/", r.URL.Path)
+				}
+				if got := r.URL.Query().Get("v"); got != "2" {
+					t.Errorf("flags version = %q, want 2", got)
+				}
+				payload, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read flags body: %v", err)
+				}
+				body <- payload
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"featureFlags":{},"featureFlagPayloads":{}}`))
+			}))
+			defer server.Close()
+
+			flagsClient, err := newFlagsClient("phc_snapshot_project_key", server.URL, http.Client{}, time.Second, toLogger(t), Ptr(0))
+			require.NoError(t, err)
+			_, err = flagsClient.makeFlagsRequest(
+				test.distinctID,
+				test.deviceID,
+				test.groups,
+				test.personProperties,
+				test.groupProperties,
+				test.disableGeoIP,
+				test.flagKeys,
+			)
+			require.NoError(t, err)
+
+			assertJSONEqual(t, strings.TrimSpace(fixture(test.fixture)), string(<-body))
 		})
 	}
 }

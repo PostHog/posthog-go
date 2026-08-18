@@ -1,0 +1,67 @@
+{
+  "api_key": "Csyjlnlun3OzyNJAafdlv",
+  "batch": [
+    {
+      "event": "$exception",
+      "library": "posthog-go",
+      "library_version": "1.0.0",
+      "properties": {
+        "$debug_images": [
+          {
+            "arch": "arm64",
+            "code_file": "/srv/app/server",
+            "code_id": "0123456789abcdef",
+            "debug_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "image_addr": "0x400000",
+            "image_size": 4096,
+            "image_vmaddr": "0x0",
+            "type": "elf"
+          }
+        ],
+        "$exception_fingerprint": "fingerprint-server-snapshot",
+        "$exception_list": [
+          {
+            "mechanism": {
+              "handled": false,
+              "synthetic": true
+            },
+            "stacktrace": {
+              "frames": [
+                {
+                  "client_resolved": true,
+                  "filename": "/srv/app/handler.go",
+                  "function": "example.com/app.Handle",
+                  "image_addr": "0x400000",
+                  "in_app": true,
+                  "inline": true,
+                  "instruction_addr": "0x401234",
+                  "lang": "go",
+                  "lineno": 42,
+                  "platform": "native",
+                  "symbol_addr": "0x401000",
+                  "synthetic": false
+                }
+              ],
+              "type": "raw"
+            },
+            "type": "SyntheticError",
+            "value": "deterministic failure"
+          }
+        ],
+        "$geoip_disable": true,
+        "$go_version": "IGNORED",
+        "$is_server": true,
+        "$lib": "posthog-go",
+        "$lib_version": "1.0.0",
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "custom_property": "custom-value",
+        "distinct_id": "exception-user"
+      },
+      "timestamp": "2025-08-12T09:10:11Z",
+      "type": "exception",
+      "uuid": "00000000-0000-0000-0000-000000000014"
+    }
+  ]
+}

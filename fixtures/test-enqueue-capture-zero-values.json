@@ -1,0 +1,24 @@
+{
+  "api_key": "Csyjlnlun3OzyNJAafdlv",
+  "batch": [
+    {
+      "distinct_id": "capture-user",
+      "event": "zero-values",
+      "properties": {
+        "$go_version": "IGNORED",
+        "$lib": "posthog-go",
+        "$lib_version": "1.0.0",
+        "$os": "IGNORED",
+        "$os_distro": "IGNORED",
+        "$os_version": "IGNORED",
+        "empty_array": [],
+        "empty_object": {},
+        "empty_string": "",
+        "false_value": false,
+        "nil_value": null
+      },
+      "timestamp": "2009-11-10T23:00:00Z",
+      "uuid": "00000000-0000-0000-0000-000000000012"
+    }
+  ]
+}
