@@ -930,7 +930,12 @@ func TestEnqueueCaptureV1EventFamily(t *testing.T) {
 		require.NoError(t, client.Enqueue(message))
 	}
 
-	assertPayloadEqual(t, strings.TrimSpace(fixture("test-enqueue-capture-v1.json")), string(<-body))
+	select {
+	case payload := <-body:
+		assertPayloadEqual(t, strings.TrimSpace(fixture("test-enqueue-capture-v1.json")), string(payload))
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for request")
+	}
 }
 
 func TestFlagsRequestSnapshots(t *testing.T) {
