@@ -579,6 +579,84 @@ func TestEvaluateFlags_ForwardsFlagKeys(t *testing.T) {
 	}
 }
 
+func TestEvaluateFlags_MissingRequestedLocalFlagFallsBackRemotely(t *testing.T) {
+	t.Parallel()
+	var remoteCalls atomic.Int32
+	remoteRequests := make(chan FlagsRequestData, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions") || strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
+			w.Write([]byte(fixture("feature_flag/test-multiple-flags-valid.json")))
+		case strings.HasPrefix(r.URL.Path, "/flags"):
+			remoteCalls.Add(1)
+			var request FlagsRequestData
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode /flags request: %v", err)
+			}
+			remoteRequests <- request
+			w.Write([]byte(`{
+				"flags": {
+					"beta-feature": {"key": "beta-feature", "enabled": false, "metadata": {"id": 1, "version": 1}},
+					"remote-only": {"key": "remote-only", "enabled": true, "metadata": {"id": 2, "version": 1}},
+					"unrequested": {"key": "unrequested", "enabled": true, "metadata": {"id": 3, "version": 1}}
+				}
+			}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, _, _ := newEvalClient(t, server, func(c *Config) {
+		c.PersonalApiKey = "personal-key"
+	})
+	waitForFlagDefinitions(t, client)
+
+	flagKeys := []string{"beta-feature", "remote-only"}
+	localSnapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{
+		DistinctId:          "user-1",
+		FlagKeys:            flagKeys,
+		OnlyEvaluateLocally: true,
+	})
+	if err != nil {
+		t.Fatalf("local-only EvaluateFlags error: %v", err)
+	}
+	if got := localSnapshot.Keys(); len(got) != 1 || got[0] != "beta-feature" {
+		t.Fatalf("expected only the locally resolved flag, got %v", got)
+	}
+	if got := remoteCalls.Load(); got != 0 {
+		t.Fatalf("local-only evaluation made %d /flags requests", got)
+	}
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{
+		DistinctId: "user-1",
+		FlagKeys:   flagKeys,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+	if got := remoteCalls.Load(); got != 1 {
+		t.Fatalf("expected one /flags fallback, got %d", got)
+	}
+	request := <-remoteRequests
+	if len(request.FlagKeysToEvaluate) != 2 || request.FlagKeysToEvaluate[0] != "beta-feature" || request.FlagKeysToEvaluate[1] != "remote-only" {
+		t.Fatalf("expected the original requested keys, got %v", request.FlagKeysToEvaluate)
+	}
+	if got := snapshot.Keys(); len(got) != 2 || got[0] != "beta-feature" || got[1] != "remote-only" {
+		t.Fatalf("expected the snapshot to stay scoped to requested keys, got %v", got)
+	}
+	if !snapshot.IsEnabled("beta-feature") {
+		t.Fatal("expected the locally resolved beta-feature value to override the remote value")
+	}
+	if !snapshot.flags["beta-feature"].LocallyEvaluated {
+		t.Fatal("expected beta-feature to remain locally evaluated")
+	}
+	if !snapshot.IsEnabled("remote-only") {
+		t.Fatal("expected remote-only to be filled by /flags")
+	}
+	if snapshot.flags["remote-only"].LocallyEvaluated {
+		t.Fatal("expected remote-only to be marked as remotely evaluated")
+	}
+}
+
 func TestEvaluateFlags_EmptyDistinctId_NoEvents(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

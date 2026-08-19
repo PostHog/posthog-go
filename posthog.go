@@ -1229,7 +1229,16 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 			errorsWhileComputing = flagsResponse.ErrorsWhileComputingFlags
 			quotaLimited = c.isFeatureFlagsQuotaLimited(flagsResponse)
 			if !quotaLimited {
+				requestedFlagKeys := make(map[string]struct{}, len(payload.FlagKeys))
+				for _, key := range payload.FlagKeys {
+					requestedFlagKeys[key] = struct{}{}
+				}
 				for key, detail := range flagsResponse.Flags {
+					if len(requestedFlagKeys) > 0 {
+						if _, requested := requestedFlagKeys[key]; !requested {
+							continue
+						}
+					}
 					if _, alreadyLocal := locallyEvaluated[key]; alreadyLocal {
 						continue
 					}
@@ -1269,8 +1278,10 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 	}
 
 	flagKeyFilter := map[string]struct{}{}
+	missingFlagKeys := map[string]struct{}{}
 	for _, k := range payload.FlagKeys {
 		flagKeyFilter[k] = struct{}{}
+		missingFlagKeys[k] = struct{}{}
 	}
 
 	cohorts := poller.getCohorts()
@@ -1283,6 +1294,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 			if _, ok := flagKeyFilter[storedFlag.Key]; !ok {
 				continue
 			}
+			delete(missingFlagKeys, storedFlag.Key)
 		}
 		value, err := poller.computeFlagLocally(
 			storedFlag,
@@ -1334,7 +1346,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 		locallyEvaluated[storedFlag.Key] = struct{}{}
 	}
 
-	return fallbackToRemote
+	return fallbackToRemote || len(missingFlagKeys) > 0
 }
 
 // recordFromFlagDetail builds an evaluatedFlagRecord from a v4 FlagDetail.
