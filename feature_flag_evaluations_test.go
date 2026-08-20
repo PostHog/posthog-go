@@ -657,6 +657,45 @@ func TestEvaluateFlags_MissingRequestedLocalFlagFallsBackRemotely(t *testing.T) 
 	}
 }
 
+func TestEvaluateFlags_MissingRequestedFlagAbsentRemotelyRequestsEachCall(t *testing.T) {
+	t.Parallel()
+	var remoteCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions") || strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
+			w.Write([]byte(fixture("feature_flag/test-multiple-flags-valid.json")))
+		case strings.HasPrefix(r.URL.Path, "/flags"):
+			remoteCalls.Add(1)
+			w.Write([]byte(`{"flags": {}}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, _, _ := newEvalClient(t, server, func(c *Config) {
+		c.PersonalApiKey = "personal-key"
+		c.DefaultFeatureFlagsPollingInterval = time.Hour
+	})
+	waitForFlagDefinitions(t, client)
+
+	payload := EvaluateFlagsPayload{
+		DistinctId: "user-1",
+		FlagKeys:   []string{"never-defined"},
+	}
+	for i := 0; i < 2; i++ {
+		snapshot, err := client.EvaluateFlags(payload)
+		if err != nil {
+			t.Fatalf("EvaluateFlags call %d error: %v", i+1, err)
+		}
+		if got := snapshot.Keys(); len(got) != 0 {
+			t.Fatalf("expected missing flag to stay absent, got %v", got)
+		}
+	}
+
+	if got := remoteCalls.Load(); got != 2 {
+		t.Fatalf("EvaluateFlags does not cache snapshots; expected one /flags request per call, got %d", got)
+	}
+}
+
 func TestEvaluateFlags_EmptyDistinctId_NoEvents(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
