@@ -1163,97 +1163,15 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 		return poller.matchParsedPropertyGroup(groupType, propertyGroup.ParsedValues, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
 	}
 
-	values := propertyGroup.Values
-	if len(values) == 0 {
+	if len(propertyGroup.Values) == 0 {
 		// empty groups are no-ops, always match
 		return true, nil
 	}
 
-	errorMatchingLocally := false
-
-	for _, value := range values {
-		switch prop := value.(type) {
-		case map[string]any:
-			if _, ok := prop["values"]; ok {
-				// PropertyGroup
-				matches, err := poller.matchPropertyGroup(PropertyGroup{
-					Type:   getSafeProp[string](prop, "type"),
-					Values: getSafeProp[[]any](prop, "values"),
-				}, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
-				if err != nil {
-					if isServerEvalError(err) {
-						return false, err
-					} else if isInconclusiveError(err) {
-						errorMatchingLocally = true
-					} else {
-						return false, err
-					}
-				}
-
-				if groupType == "AND" {
-					if !matches {
-						return false, nil
-					}
-				} else {
-					if matches {
-						return true, nil
-					}
-				}
-			} else {
-				// FlagProperty
-				var matches bool
-				var err error
-				flagProperty := FlagProperty{
-					Key:             getSafeProp[string](prop, "key"),
-					Operator:        getSafeProp[string](prop, "operator"),
-					Value:           getSafeProp[any](prop, "value"),
-					Type:            getSafeProp[string](prop, "type"),
-					Negation:        getSafeProp[bool](prop, "negation"),
-					DependencyChain: getSafeProp[[]string](prop, "dependency_chain"),
-				}
-				if prop["type"] == "cohort" {
-					matches, err = poller.matchCohort(flagProperty, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
-				} else if prop["type"] == "flag" {
-					matches, err = poller.evaluateFlagDependency(flagProperty, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts)
-				} else {
-					matches, err = matchProperty(flagProperty, properties)
-				}
-
-				if err != nil {
-					if isServerEvalError(err) {
-						return false, err
-					} else if isInconclusiveError(err) {
-						errorMatchingLocally = true
-					} else {
-						return false, err
-					}
-				}
-
-				negation := flagProperty.Negation
-				if groupType == "AND" {
-					if !matches && !negation {
-						return false, nil
-					}
-					if matches && negation {
-						return false, nil
-					}
-				} else {
-					if matches && !negation {
-						return true, nil
-					}
-					if !matches && negation {
-						return true, nil
-					}
-				}
-			}
-		}
-	}
-
-	if errorMatchingLocally {
-		return false, errCohortPropertyValue
-	}
-
-	return groupType == "AND", nil
+	// Raw values are a compatibility fallback. Convert them to the same typed
+	// representation used by production cohorts so evaluation has one code path.
+	parsedGroup := preParsePG(propertyGroup)
+	return poller.matchParsedPropertyGroup(groupType, parsedGroup.ParsedValues, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
 }
 
 // matchParsedPropertyGroup evaluates pre-parsed property values without per-evaluation
