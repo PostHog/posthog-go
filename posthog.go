@@ -113,9 +113,11 @@ type Client interface {
 	// on the snapshot fire deduped $feature_flag_called events; GetFlagPayload
 	// does not.
 	//
-	// If the remote /flags request fails after some flags were resolved
-	// locally, EvaluateFlags returns a non-nil snapshot containing the
-	// locally-evaluated flags alongside the error so the caller can still
+	// If FlagKeys contains a key missing from loaded local definitions,
+	// EvaluateFlags includes it in the remote /flags fallback unless
+	// OnlyEvaluateLocally is true. If the remote request fails after some flags
+	// were resolved locally, EvaluateFlags returns a non-nil snapshot containing
+	// the locally-evaluated flags alongside the error so the caller can still
 	// branch on what was resolved.
 	// If OnlyEvaluateLocally is true and no SecretKey is configured, returns ErrNoSecretKey.
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
@@ -1139,16 +1141,18 @@ type EvaluateFlagsPayload struct {
 	PersonProperties Properties
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
 	GroupProperties map[string]Properties
-	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
+	// OnlyEvaluateLocally prevents fallback to remote /flags requests. Flags
+	// that cannot be resolved from loaded local definitions are omitted.
 	OnlyEvaluateLocally bool
 	// DisableGeoIP, when non-nil, overrides the client-level DisableGeoIP for
 	// this evaluation only.
 	DisableGeoIP *bool
-	// FlagKeys, when non-empty, trims the network call by asking the server
-	// to evaluate only the named flags (sent as flag_keys_to_evaluate).
-	// This is server-side filtering; use FeatureFlagEvaluations.Only to do
-	// client-side filtering of which flags are attached to events from an
-	// existing snapshot.
+	// FlagKeys, when non-empty, restricts local evaluation, the remote request,
+	// and the returned snapshot to the named flags. A requested key missing from
+	// loaded local definitions triggers a /flags fallback unless
+	// OnlyEvaluateLocally is true. EvaluateFlags does not cache snapshots, so a
+	// key that does not exist remotely can trigger a request on each call.
+	// Use FeatureFlagEvaluations.Only to filter an existing snapshot in memory.
 	FlagKeys []string
 }
 
@@ -1229,7 +1233,16 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 			errorsWhileComputing = flagsResponse.ErrorsWhileComputingFlags
 			quotaLimited = c.isFeatureFlagsQuotaLimited(flagsResponse)
 			if !quotaLimited {
+				requestedFlagKeys := make(map[string]struct{}, len(payload.FlagKeys))
+				for _, key := range payload.FlagKeys {
+					requestedFlagKeys[key] = struct{}{}
+				}
 				for key, detail := range flagsResponse.Flags {
+					if len(requestedFlagKeys) > 0 {
+						if _, requested := requestedFlagKeys[key]; !requested {
+							continue
+						}
+					}
 					if _, alreadyLocal := locallyEvaluated[key]; alreadyLocal {
 						continue
 					}
@@ -1269,8 +1282,10 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 	}
 
 	flagKeyFilter := map[string]struct{}{}
+	missingFlagKeys := map[string]struct{}{}
 	for _, k := range payload.FlagKeys {
 		flagKeyFilter[k] = struct{}{}
+		missingFlagKeys[k] = struct{}{}
 	}
 
 	cohorts := poller.getCohorts()
@@ -1283,6 +1298,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 			if _, ok := flagKeyFilter[storedFlag.Key]; !ok {
 				continue
 			}
+			delete(missingFlagKeys, storedFlag.Key)
 		}
 		value, err := poller.computeFlagLocally(
 			storedFlag,
@@ -1334,7 +1350,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 		locallyEvaluated[storedFlag.Key] = struct{}{}
 	}
 
-	return fallbackToRemote
+	return fallbackToRemote || len(missingFlagKeys) > 0
 }
 
 // recordFromFlagDetail builds an evaluatedFlagRecord from a v4 FlagDetail.
