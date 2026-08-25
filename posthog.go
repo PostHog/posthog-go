@@ -1182,6 +1182,10 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 		return noopFeatureFlagEvaluations, ErrNoDistinctID
 	}
 
+	if payload.Groups == nil {
+		payload.Groups = Groups{}
+	}
+
 	if payload.FlagKeys != nil && len(payload.FlagKeys) == 0 {
 		return &FeatureFlagEvaluations{
 			host:       host,
@@ -1193,9 +1197,6 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 		}, nil
 	}
 
-	if payload.Groups == nil {
-		payload.Groups = Groups{}
-	}
 	if payload.PersonProperties == nil {
 		payload.PersonProperties = NewProperties()
 	}

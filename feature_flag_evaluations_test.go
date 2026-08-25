@@ -605,6 +605,9 @@ func TestEvaluateFlags_ExplicitEmptyFlagKeysSkipsEvaluation(t *testing.T) {
 	if got := fs.callCount(); got != 0 {
 		t.Fatalf("expected no /flags request, got %d", got)
 	}
+	if evaluation.snapshot.groups == nil || len(evaluation.snapshot.groups) != 0 {
+		t.Fatalf("expected groups to be normalized to an empty map, got %#v", evaluation.snapshot.groups)
+	}
 }
 
 func TestEvaluateFlags_ForwardsFlagKeys(t *testing.T) {
