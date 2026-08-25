@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.24.1
+
+### Patch Changes
+
+- 3d250c5: Return an empty feature flag snapshot without evaluating flags when `FlagKeys` is an explicit empty slice.
+
 ## 1.24.0
 
 ### Minor Changes
