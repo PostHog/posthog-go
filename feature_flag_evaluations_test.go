@@ -287,6 +287,47 @@ func TestEvaluateFlags_NoEventsUntilAccessed(t *testing.T) {
 	}
 }
 
+func TestIsEnabled_MissingFlagReturnsCallerDefault(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	if snap.IsEnabled("missing-flag") {
+		t.Error("expected missing-flag to resolve to false with no default supplied")
+	}
+	if !snap.IsEnabled("missing-flag", true) {
+		t.Error("expected missing-flag to resolve to the caller-supplied default of true")
+	}
+	if snap.IsEnabled("missing-flag", false) {
+		t.Error("expected missing-flag to resolve to the caller-supplied default of false")
+	}
+	// A flag that has a value always wins over the caller-supplied default.
+	if !snap.IsEnabled("enabled-flag", false) {
+		t.Error("expected a known flag's own value to win over the caller-supplied default")
+	}
+	if snap.IsEnabled("disabled-flag", true) {
+		t.Error("expected a known flag's own value to win over the caller-supplied default")
+	}
+}
+
+func TestIsEnabled_NilSnapshotReturnsCallerDefault(t *testing.T) {
+	t.Parallel()
+	var snap *FeatureFlagEvaluations
+
+	if snap.IsEnabled("any-flag") {
+		t.Error("expected nil snapshot to resolve to false with no default supplied")
+	}
+	if !snap.IsEnabled("any-flag", true) {
+		t.Error("expected nil snapshot to resolve to the caller-supplied default of true")
+	}
+}
+
 func TestIsEnabled_FiresEventWithFullMetadataAndDedupes(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
