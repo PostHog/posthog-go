@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.24.0
+
+### Minor Changes
+
+- 150f03e: Fall back to `/flags` when a requested flag is missing from loaded local definitions. This changes the earlier behavior where the key was omitted without a request.
+
 ## 1.23.1
 
 ### Patch Changes
