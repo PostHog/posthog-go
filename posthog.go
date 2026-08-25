@@ -1147,9 +1147,10 @@ type EvaluateFlagsPayload struct {
 	// DisableGeoIP, when non-nil, overrides the client-level DisableGeoIP for
 	// this evaluation only.
 	DisableGeoIP *bool
-	// FlagKeys, when non-empty, restricts local evaluation, the remote request,
-	// and the returned snapshot to the named flags. A requested key missing from
-	// loaded local definitions triggers a /flags fallback unless
+	// FlagKeys restricts local evaluation, the remote request, and the returned
+	// snapshot to the named flags. Nil evaluates all flags, while an explicitly
+	// empty slice returns an empty snapshot without evaluating flags. A requested
+	// key missing from loaded local definitions triggers a /flags fallback unless
 	// OnlyEvaluateLocally is true. EvaluateFlags does not cache snapshots, so a
 	// key that does not exist remotely can trigger a request on each call.
 	// Use FeatureFlagEvaluations.Only to filter an existing snapshot in memory.
@@ -1184,6 +1185,18 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 	if payload.Groups == nil {
 		payload.Groups = Groups{}
 	}
+
+	if payload.FlagKeys != nil && len(payload.FlagKeys) == 0 {
+		return &FeatureFlagEvaluations{
+			host:       host,
+			distinctId: payload.DistinctId,
+			deviceId:   payload.DeviceId,
+			groups:     payload.Groups,
+			flags:      map[string]evaluatedFlagRecord{},
+			accessed:   map[string]struct{}{},
+		}, nil
+	}
+
 	if payload.PersonProperties == nil {
 		payload.PersonProperties = NewProperties()
 	}

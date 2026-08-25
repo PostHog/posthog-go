@@ -554,16 +554,73 @@ func TestCaptureWithFlags_AttachesPropertiesNoExtraRequest(t *testing.T) {
 	}
 }
 
+func TestEvaluateFlags_ExplicitEmptyFlagKeysSkipsEvaluation(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	configuredClient, _, _ := newEvalClient(t, fs.server)
+	concreteClient := configuredClient.(*client)
+	initialFetchFinished := make(chan bool)
+	clientWithBlockedPoller := &client{
+		Config:  concreteClient.Config,
+		decider: concreteClient.decider,
+		featureFlagsPoller: &FeatureFlagsPoller{
+			firstFeatureFlagRequestFinished: initialFetchFinished,
+		},
+	}
+
+	type evaluationResult struct {
+		snapshot *FeatureFlagEvaluations
+		err      error
+	}
+	result := make(chan evaluationResult, 1)
+	go func() {
+		snapshot, err := clientWithBlockedPoller.EvaluateFlags(EvaluateFlagsPayload{
+			DistinctId: "user-1",
+			FlagKeys:   []string{},
+		})
+		result <- evaluationResult{snapshot: snapshot, err: err}
+	}()
+
+	var evaluation evaluationResult
+	select {
+	case evaluation = <-result:
+		close(initialFetchFinished)
+	case <-time.After(time.Second):
+		// Unblock a regressed implementation before failing the test.
+		close(initialFetchFinished)
+		evaluation = <-result
+		t.Fatalf("explicit empty flag keys consulted local definitions; error: %v, /flags calls: %d", evaluation.err, fs.callCount())
+	}
+
+	if evaluation.err != nil {
+		t.Fatalf("EvaluateFlags error: %v", evaluation.err)
+	}
+	if evaluation.snapshot == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+	if keys := evaluation.snapshot.Keys(); len(keys) != 0 {
+		t.Fatalf("expected empty snapshot, got keys %v", keys)
+	}
+	if got := fs.callCount(); got != 0 {
+		t.Fatalf("expected no /flags request, got %d", got)
+	}
+	if evaluation.snapshot.groups == nil || len(evaluation.snapshot.groups) != 0 {
+		t.Fatalf("expected groups to be normalized to an empty map, got %#v", evaluation.snapshot.groups)
+	}
+}
+
 func TestEvaluateFlags_ForwardsFlagKeys(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
 
 	client, _, _ := newEvalClient(t, fs.server)
 
-	if _, err := client.EvaluateFlags(EvaluateFlagsPayload{
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{
 		DistinctId: "user-1",
 		FlagKeys:   []string{"enabled-flag", "disabled-flag"},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("EvaluateFlags error: %v", err)
 	}
 
@@ -576,6 +633,9 @@ func TestEvaluateFlags_ForwardsFlagKeys(t *testing.T) {
 	}
 	if parsed.FlagKeysToEvaluate[0] != "enabled-flag" || parsed.FlagKeysToEvaluate[1] != "disabled-flag" {
 		t.Errorf("unexpected flag keys: %v", parsed.FlagKeysToEvaluate)
+	}
+	if keys := snapshot.Keys(); len(keys) != 2 || keys[0] != "disabled-flag" || keys[1] != "enabled-flag" {
+		t.Errorf("expected snapshot scoped to requested flags, got %v", keys)
 	}
 }
 
