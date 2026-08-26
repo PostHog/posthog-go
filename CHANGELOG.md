@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.24.2
+
+### Patch Changes
+
+- 360bc8d: Align local `is_set` and `is_not_set` evaluation with partial property context.
+
 ## 1.24.1
 
 ### Patch Changes
