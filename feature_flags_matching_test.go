@@ -26,6 +26,50 @@ func TestMatchPropertyValue(t *testing.T) {
 
 }
 
+func TestMatchPropertyPresenceOperators(t *testing.T) {
+	values := []struct {
+		name  string
+		value interface{}
+	}{
+		{name: "nil", value: nil},
+		{name: "false", value: false},
+		{name: "zero", value: 0},
+		{name: "empty string", value: ""},
+		{name: "empty slice", value: []interface{}{}},
+		{name: "empty map", value: map[string]interface{}{}},
+	}
+	operators := []struct {
+		name     string
+		expected bool
+	}{
+		{name: "is_set", expected: true},
+		{name: "is_not_set", expected: false},
+	}
+
+	for _, value := range values {
+		t.Run(value.name, func(t *testing.T) {
+			properties := NewProperties().Set("key", value.value)
+			for _, operator := range operators {
+				t.Run(operator.name, func(t *testing.T) {
+					isMatch, err := matchProperty(FlagProperty{Key: "key", Operator: operator.name}, properties)
+					require.NoError(t, err)
+					require.Equal(t, operator.expected, isMatch)
+				})
+			}
+		})
+	}
+
+	for _, operator := range operators {
+		t.Run("missing/"+operator.name, func(t *testing.T) {
+			isMatch, err := matchProperty(FlagProperty{Key: "key", Operator: operator.name}, NewProperties())
+			require.False(t, isMatch)
+			require.ErrorIs(t, err, errMissingPropertyValue)
+			var inconclusiveErr *InconclusiveMatchError
+			require.ErrorAs(t, err, &inconclusiveErr)
+		})
+	}
+}
+
 func TestMatchPropertyInvalidOperator(t *testing.T) {
 	property := FlagProperty{
 		Key:      "Browser",
