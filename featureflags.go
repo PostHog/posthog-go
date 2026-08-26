@@ -1159,21 +1159,11 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	override_value := properties[key]
 
 	if operator == "exact" {
-		switch t := value.(type) {
-		case []interface{}:
-			return contains(t, override_value), nil
-		default:
-			return value == override_value, nil
-		}
+		return exactMatch(value, override_value), nil
 	}
 
 	if operator == "is_not" {
-		switch t := value.(type) {
-		case []interface{}:
-			return !contains(t, override_value), nil
-		default:
-			return value != override_value, nil
-		}
+		return !exactMatch(value, override_value), nil
 	}
 
 	if operator == "is_set" {
@@ -1760,13 +1750,24 @@ func interfaceToFloat(val interface{}) (float64, error) {
 	return i, nil
 }
 
-func contains(s []interface{}, e interface{}) bool {
-	for _, a := range s {
-		if a == e {
-			return true
+// exactMatch reports whether override_value matches value for the "exact"
+// operator: equal to value for a scalar, or contained in value for a list.
+// The comparison is case-insensitive and made after string coercion, matching
+// the icontains/starts_with operators in this file and the exact operator in
+// the reference SDKs (e.g. posthog-python's str_iequals). Plain Go "=="
+// was case-sensitive and type-strict, so e.g. exact "US" did not match a "us"
+// property value and exact 1 did not match a "1" property value.
+func exactMatch(value interface{}, override_value interface{}) bool {
+	overrideStr := valueToString(override_value)
+	if list, ok := value.([]interface{}); ok {
+		for _, item := range list {
+			if strings.EqualFold(valueToString(item), overrideStr) {
+				return true
+			}
 		}
+		return false
 	}
-	return false
+	return strings.EqualFold(valueToString(value), overrideStr)
 }
 
 func containsVariant(variantList []FlagVariant, key string) bool {
