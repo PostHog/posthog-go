@@ -23,7 +23,8 @@
           {
             "mechanism": {
               "handled": false,
-              "synthetic": true
+              "synthetic": true,
+              "exception_id": 0
             },
             "stacktrace": {
               "frames": [

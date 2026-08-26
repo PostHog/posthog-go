@@ -349,9 +349,16 @@ func (msg Alias) apifyEvent() apiEvent {
 // ExceptionInApiProperties marshal precedence).
 func (msg Exception) apifyEvent() apiEvent {
 	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
-		Merge(msg.Properties).
+		Merge(canonicalExceptionCustomProperties(msg.Properties)).
 		mergeDefaults(getSystemContext().ToProperties()).
-		Set("$exception_list", msg.ExceptionList)
+		Set("$exception_list", canonicalExceptionList(msg.ExceptionList))
+
+	if level := normalizeExceptionLevel(msg.Level); level != "" {
+		myProperties.Set("$exception_level", level)
+	}
+	if msg.Source != "" {
+		myProperties.Set("$exception_source", msg.Source)
+	}
 
 	if msg.ExceptionFingerprint != nil {
 		myProperties.Set("$exception_fingerprint", msg.ExceptionFingerprint)

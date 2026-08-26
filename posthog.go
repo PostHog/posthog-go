@@ -436,6 +436,14 @@ func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
 				synthetic := *item.Mechanism.Synthetic
 				mechanism.Synthetic = &synthetic
 			}
+			if item.Mechanism.ExceptionID != nil {
+				exceptionID := *item.Mechanism.ExceptionID
+				mechanism.ExceptionID = &exceptionID
+			}
+			if item.Mechanism.ParentID != nil {
+				parentID := *item.Mechanism.ParentID
+				mechanism.ParentID = &parentID
+			}
 			item.Mechanism = &mechanism
 		}
 		if item.Stacktrace != nil {

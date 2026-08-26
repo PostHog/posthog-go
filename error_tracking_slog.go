@@ -2,7 +2,9 @@ package posthog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 )
 
@@ -70,10 +72,13 @@ func (h *SlogCaptureHandler) Handle(ctx context.Context, r slog.Record) error {
 	ex := Exception{
 		DistinctId: distinctID,
 		Timestamp:  r.Time,
+		Level:      slogExceptionLevel(r.Level),
+		Source:     "go.slog",
 		ExceptionList: []ExceptionItem{
 			{
-				Type:       r.Message,
+				Type:       h.exceptionType(r),
 				Value:      h.cfg.descriptionExtractor.ExtractDescription(r),
+				Mechanism:  &ExceptionMechanism{Type: "logger", Handled: Ptr(true), Synthetic: Ptr(false)},
 				Stacktrace: h.cfg.stackTraceExtractor.GetStackTrace(h.cfg.skip),
 			},
 		},
@@ -86,6 +91,35 @@ func (h *SlogCaptureHandler) Handle(ctx context.Context, r slog.Record) error {
 	_ = enqueueWithContext(ctx, h.client, ex) // ignore enqueue error to keep logging safe
 
 	return err
+}
+
+func slogExceptionLevel(level slog.Level) string {
+	switch {
+	case level >= slog.LevelError:
+		return "error"
+	case level >= slog.LevelWarn:
+		return "warning"
+	case level >= slog.LevelInfo:
+		return "info"
+	default:
+		return "debug"
+	}
+}
+
+func (h *SlogCaptureHandler) exceptionType(record slog.Record) string {
+	if extractor, ok := h.cfg.descriptionExtractor.(ErrorExtractor); ok {
+		if err := extractor.extractError(record); err != nil {
+			typeOf := reflect.TypeOf(err)
+			if typeOf.Kind() == reflect.Ptr {
+				typeOf = typeOf.Elem()
+			}
+			return typeOf.Name()
+		}
+	}
+	if record.Message != "" {
+		return "LogError"
+	}
+	return fmt.Sprintf("slog.Level(%d)", record.Level)
 }
 
 // WithAttrs returns a handler with attrs applied to the wrapped handler.
@@ -148,6 +182,15 @@ type ErrorExtractor struct {
 
 // ExtractDescription returns the first matching error string from the slog record or Fallback.
 func (e ErrorExtractor) ExtractDescription(r slog.Record) string {
+	found := e.extractError(r)
+	if found != nil {
+		return found.Error()
+	}
+
+	return e.Fallback
+}
+
+func (e ErrorExtractor) extractError(r slog.Record) error {
 	var found error
 
 	normalisedKeys := make([]string, len(e.ErrorKeys))
@@ -166,11 +209,7 @@ func (e ErrorExtractor) ExtractDescription(r slog.Record) string {
 		}
 		return true
 	})
-	if found != nil {
-		return found.Error()
-	}
-
-	return e.Fallback
+	return found
 }
 
 func (e ErrorExtractor) errorFromValue(v slog.Value) error {

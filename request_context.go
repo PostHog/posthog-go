@@ -458,12 +458,14 @@ func capturePanic(ctx context.Context, client EnqueueClient, panicValue interfac
 
 	stacktrace, debugImages := stackTraceFromDebugStack(panicStack)
 	exception := Exception{
+		Level:  "error",
+		Source: "go.http_recover_middleware",
 		Properties: NewProperties().
-			Set(propertyResponseStatusCode, statusCode).
-			Set(propertyExceptionSource, "panic"),
+			Set(propertyResponseStatusCode, statusCode),
 		ExceptionList: []ExceptionItem{{
 			Type:       "panic",
 			Value:      fmt.Sprint(panicValue),
+			Mechanism:  &ExceptionMechanism{Type: "middleware", Handled: Ptr(true), Synthetic: Ptr(true)},
 			Stacktrace: stacktrace,
 		}},
 		DebugImages: debugImages,
