@@ -33,7 +33,6 @@ var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
 // InconclusiveMatchError structs on every evaluation of flags with missing properties.
 var (
 	errMissingPropertyValue     = &InconclusiveMatchError{"Can't match properties without a given property value"}
-	errOperatorIsNotSet         = &InconclusiveMatchError{"Can't match properties with operator is_not_set"}
 	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
 	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
 	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
@@ -1154,7 +1153,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	if operator == "is_not_set" {
-		return false, errOperatorIsNotSet
+		return false, nil
 	}
 
 	override_value := properties[key]
