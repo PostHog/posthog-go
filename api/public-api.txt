@@ -532,7 +532,7 @@ func (e *FeatureFlagEvaluations) GetFlag(key string) interface{}
 
 func (e *FeatureFlagEvaluations) GetFlagPayload(key string) string
 
-func (e *FeatureFlagEvaluations) IsEnabled(key string) bool
+func (e *FeatureFlagEvaluations) IsEnabled(key string, defaultValue ...bool) bool
 
 func (e *FeatureFlagEvaluations) Keys() []string
 
