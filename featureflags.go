@@ -1171,27 +1171,27 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	if operator == "icontains" {
-		return strings.Contains(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_icontains" {
-		return !strings.Contains(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return !strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "starts_with" {
-		return strings.HasPrefix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_starts_with" {
-		return !strings.HasPrefix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return !strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "ends_with" {
-		return strings.HasSuffix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_ends_with" {
-		return !strings.HasSuffix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return !strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "regex" {
@@ -1752,22 +1752,30 @@ func interfaceToFloat(val interface{}) (float64, error) {
 
 // exactMatch reports whether override_value matches value for the "exact"
 // operator: equal to value for a scalar, or contained in value for a list.
-// The comparison is case-insensitive and made after string coercion, matching
-// the icontains/starts_with operators in this file and the exact operator in
-// the reference SDKs (e.g. posthog-python's str_iequals). Plain Go "=="
-// was case-sensitive and type-strict, so e.g. exact "US" did not match a "us"
-// property value and exact 1 did not match a "1" property value.
+// The flags service stringifies both values and applies Unicode lowercasing
+// before comparing them. This intentionally differs from EqualFold for cases
+// such as capital sigma and final sigma.
 func exactMatch(value interface{}, override_value interface{}) bool {
-	overrideStr := valueToString(override_value)
+	overrideStr := strings.ToLower(valueToString(override_value))
 	if list, ok := value.([]interface{}); ok {
 		for _, item := range list {
-			if strings.EqualFold(valueToString(item), overrideStr) {
+			if strings.ToLower(valueToString(item)) == overrideStr {
 				return true
 			}
 		}
 		return false
 	}
-	return strings.EqualFold(valueToString(value), overrideStr)
+	return strings.ToLower(valueToString(value)) == overrideStr
+}
+
+func asciiLower(value string) string {
+	lowered := []byte(value)
+	for i, character := range lowered {
+		if character >= 'A' && character <= 'Z' {
+			lowered[i] = character + ('a' - 'A')
+		}
+	}
+	return string(lowered)
 }
 
 func containsVariant(variantList []FlagVariant, key string) bool {

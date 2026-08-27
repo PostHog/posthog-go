@@ -172,19 +172,55 @@ func TestMatchPropertyExactCaseInsensitiveAndCoerced(t *testing.T) {
 	}
 	require.True(t, exact("US", "us"))
 	require.True(t, exact("Value", "value"))
+	require.True(t, exact("Ä", "ä"))
 	require.True(t, exact(1, "1"))
 	require.True(t, exact("1", 1))
 	require.False(t, exact("US", "CA"))
+	require.False(t, exact("Σ", "ς"))
+	require.False(t, exact("ß", "ss"))
 
-	require.True(t, exact([]interface{}{"US", "CA"}, "us"))
-	require.False(t, exact([]interface{}{"US", "CA"}, "gb"))
+	require.True(t, exact([]interface{}{"US", "Ä"}, "ä"))
+	require.False(t, exact([]interface{}{"US", "Σ"}, "ς"))
 
 	isNot, err := matchProperty(FlagProperty{Key: "k", Value: "US", Operator: "is_not"}, NewProperties().Set("k", "us"))
 	require.NoError(t, err)
 	require.False(t, isNot)
-	isNot, err = matchProperty(FlagProperty{Key: "k", Value: "US", Operator: "is_not"}, NewProperties().Set("k", "gb"))
+	isNot, err = matchProperty(FlagProperty{Key: "k", Value: "Σ", Operator: "is_not"}, NewProperties().Set("k", "ς"))
 	require.NoError(t, err)
 	require.True(t, isNot)
+}
+
+func TestMatchPropertyStringOperatorsUseASCIICaseFolding(t *testing.T) {
+	tests := []struct {
+		operator string
+		filter   string
+		actual   string
+		expected bool
+	}{
+		{operator: "icontains", filter: "VALUE", actual: "a-value-b", expected: true},
+		{operator: "not_icontains", filter: "VALUE", actual: "a-value-b", expected: false},
+		{operator: "starts_with", filter: "VALUE", actual: "value-b", expected: true},
+		{operator: "not_starts_with", filter: "VALUE", actual: "value-b", expected: false},
+		{operator: "ends_with", filter: "VALUE", actual: "a-value", expected: true},
+		{operator: "not_ends_with", filter: "VALUE", actual: "a-value", expected: false},
+		{operator: "icontains", filter: "ä", actual: "Ä", expected: false},
+		{operator: "not_icontains", filter: "ä", actual: "Ä", expected: true},
+		{operator: "starts_with", filter: "ä", actual: "Äbc", expected: false},
+		{operator: "not_starts_with", filter: "ä", actual: "Äbc", expected: true},
+		{operator: "ends_with", filter: "ä", actual: "bcÄ", expected: false},
+		{operator: "not_ends_with", filter: "ä", actual: "bcÄ", expected: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.operator+"/"+test.filter, func(t *testing.T) {
+			matched, err := matchProperty(
+				FlagProperty{Key: "k", Value: test.filter, Operator: test.operator},
+				NewProperties().Set("k", test.actual),
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.expected, matched)
+		})
+	}
 }
 
 func TestMatchPropertyNumber(t *testing.T) {
