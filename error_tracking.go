@@ -146,6 +146,9 @@ type ExceptionInApiProperties struct {
 	ExceptionList []ExceptionItem `json:"$exception_list"`
 	// ExceptionFingerprint is sent as $exception_fingerprint when provided.
 	ExceptionFingerprint *string `json:"$exception_fingerprint,omitempty"`
+	// ReleaseId is sent as $release_id when POSTHOG_RELEASE_ID is set, so the server resolves the
+	// exception's release by a direct id lookup. Only exception events carry it.
+	ReleaseId *string `json:"$release_id,omitempty"`
 
 	// Custom is flattened into the wire "properties" on marshal.
 	// Typed fields win on collision.
@@ -258,6 +261,7 @@ func (msg Exception) APIfy() APIMessage {
 			DebugImages:          msg.DebugImages,
 			ExceptionList:        msg.ExceptionList,
 			ExceptionFingerprint: msg.ExceptionFingerprint,
+			ReleaseId:            releaseIDFromEnv(),
 			Custom:               msg.Properties,
 		},
 	}

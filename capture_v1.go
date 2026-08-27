@@ -359,6 +359,10 @@ func (msg Exception) apifyEvent() apiEvent {
 	if len(msg.DebugImages) > 0 {
 		myProperties.Set("$debug_images", msg.DebugImages)
 	}
+	// The release id from POSTHOG_RELEASE_ID, if set (see error_tracking.go APIfy for the v0 path).
+	if releaseID := releaseIDFromEnv(); releaseID != nil {
+		myProperties.Set("$release_id", *releaseID)
+	}
 
 	return apiEvent{
 		event:      "$exception",
