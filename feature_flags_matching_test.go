@@ -161,6 +161,32 @@ func TestMatchPropertySliceExact(t *testing.T) {
 	require.False(t, isMatch)
 }
 
+func TestMatchPropertyExactCaseInsensitiveAndCoerced(t *testing.T) {
+	// "exact"/"is_not" match case-insensitively and after string coercion, like
+	// the icontains/starts_with operators here and the reference SDKs. Plain Go
+	// "==" made them case- and type-sensitive, so these used to be wrong.
+	exact := func(value, override interface{}) bool {
+		m, err := matchProperty(FlagProperty{Key: "k", Value: value, Operator: "exact"}, NewProperties().Set("k", override))
+		require.NoError(t, err)
+		return m
+	}
+	require.True(t, exact("US", "us"))
+	require.True(t, exact("Value", "value"))
+	require.True(t, exact(1, "1"))
+	require.True(t, exact("1", 1))
+	require.False(t, exact("US", "CA"))
+
+	require.True(t, exact([]interface{}{"US", "CA"}, "us"))
+	require.False(t, exact([]interface{}{"US", "CA"}, "gb"))
+
+	isNot, err := matchProperty(FlagProperty{Key: "k", Value: "US", Operator: "is_not"}, NewProperties().Set("k", "us"))
+	require.NoError(t, err)
+	require.False(t, isNot)
+	isNot, err = matchProperty(FlagProperty{Key: "k", Value: "US", Operator: "is_not"}, NewProperties().Set("k", "gb"))
+	require.NoError(t, err)
+	require.True(t, isNot)
+}
+
 func TestMatchPropertyNumber(t *testing.T) {
 	property := FlagProperty{
 		Key:      "Number",
