@@ -95,7 +95,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup pnpm and Node.js
-        uses: pnpm/setup@5d160c5bc68a09337ad0d5654e237e03253b5879 # v1
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
         with:
           # pnpm/setup installs runtimes via pnpm runtime, which requires pnpm >=11.1.0.
           version: 11.7.0
