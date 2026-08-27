@@ -173,9 +173,12 @@ func TestMatchPropertyExactCaseInsensitiveAndCoerced(t *testing.T) {
 	require.True(t, exact("US", "us"))
 	require.True(t, exact("Value", "value"))
 	require.True(t, exact("Ä", "ä"))
+	require.True(t, exact("İ", "i\u0307"))
+	require.True(t, exact("ΟΣ", "ος"))
 	require.True(t, exact(1, "1"))
 	require.True(t, exact("1", 1))
 	require.False(t, exact("US", "CA"))
+	require.False(t, exact("İ", "i"))
 	require.False(t, exact("Σ", "ς"))
 	require.False(t, exact("ß", "ss"))
 

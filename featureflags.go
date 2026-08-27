@@ -19,6 +19,8 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -1756,16 +1758,21 @@ func interfaceToFloat(val interface{}) (float64, error) {
 // before comparing them. This intentionally differs from EqualFold for cases
 // such as capital sigma and final sigma.
 func exactMatch(value interface{}, override_value interface{}) bool {
-	overrideStr := strings.ToLower(valueToString(override_value))
+	overrideStr := unicodeLower(valueToString(override_value))
 	if list, ok := value.([]interface{}); ok {
 		for _, item := range list {
-			if strings.ToLower(valueToString(item)) == overrideStr {
+			if unicodeLower(valueToString(item)) == overrideStr {
 				return true
 			}
 		}
 		return false
 	}
-	return strings.ToLower(valueToString(value)) == overrideStr
+	return unicodeLower(valueToString(value)) == overrideStr
+}
+
+func unicodeLower(value string) string {
+	// Casers may be stateful and cannot be shared between evaluator goroutines.
+	return cases.Lower(language.Und).String(value)
 }
 
 func asciiLower(value string) string {
