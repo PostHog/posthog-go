@@ -1,0 +1,238 @@
+package posthogotel
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/proto"
+)
+
+// recordSpan starts and ends a span with the given name and attribute keys,
+// then returns the resulting ReadOnlySpan.
+func recordSpan(t *testing.T, name string, attrKeys ...string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	attrs := make([]attribute.KeyValue, len(attrKeys))
+	for i, key := range attrKeys {
+		attrs[i] = attribute.String(key, "value")
+	}
+	_, span := provider.Tracer("test").Start(context.Background(), name)
+	span.SetAttributes(attrs...)
+	span.End()
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("expected 1 recorded span, got %d", len(ended))
+	}
+	return ended[0]
+}
+
+func TestIsAISpan(t *testing.T) {
+	cases := []struct {
+		name     string
+		spanName string
+		attrKeys []string
+		want     bool
+	}{
+		{"name gen_ai prefix", "gen_ai.chat", nil, true},
+		{"name llm prefix", "llm.request", nil, true},
+		{"name ai prefix", "ai.completion", nil, true},
+		{"name traceloop prefix", "traceloop.workflow", nil, true},
+		{"attribute key prefix", "handler", []string{"gen_ai.system"}, true},
+		{"non-ai name and attributes", "http.request", []string{"http.method"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			span := recordSpan(t, tc.spanName, tc.attrKeys...)
+			if got := IsAISpan(span); got != tc.want {
+				t.Errorf("IsAISpan(%q) = %v, want %v", tc.spanName, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewSpanProcessorRejectsEmptyAPIKey(t *testing.T) {
+	if _, err := NewSpanProcessor(context.Background(), "  "); err != errEmptyAPIKey {
+		t.Errorf("expected errEmptyAPIKey, got %v", err)
+	}
+}
+
+func TestNewExporterRejectsEmptyAPIKey(t *testing.T) {
+	if _, err := NewExporter(context.Background(), ""); err != errEmptyAPIKey {
+		t.Errorf("expected errEmptyAPIKey, got %v", err)
+	}
+}
+
+// otlpServer records the export requests it receives.
+type otlpServer struct {
+	server *httptest.Server
+	mu     sync.Mutex
+	auth   string
+	path   string
+	names  []string
+	calls  int
+}
+
+func newOTLPServer(t *testing.T) *otlpServer {
+	t.Helper()
+	s := &otlpServer{}
+	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		req := &coltracepb.ExportTraceServiceRequest{}
+		if err := proto.Unmarshal(body, req); err != nil {
+			t.Errorf("failed to decode OTLP request: %v", err)
+		}
+		s.mu.Lock()
+		s.calls++
+		s.auth = r.Header.Get("Authorization")
+		s.path = r.URL.Path
+		for _, rs := range req.GetResourceSpans() {
+			for _, ss := range rs.GetScopeSpans() {
+				for _, span := range ss.GetSpans() {
+					s.names = append(s.names, span.GetName())
+				}
+			}
+		}
+		s.mu.Unlock()
+
+		resp, _ := proto.Marshal(&coltracepb.ExportTraceServiceResponse{})
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(resp)
+	}))
+	t.Cleanup(s.server.Close)
+	return s
+}
+
+func (s *otlpServer) snapshot() (calls int, auth, path string, names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls, s.auth, s.path, append([]string(nil), s.names...)
+}
+
+// emitSpans sends one AI span and one non-AI span through the provider.
+func emitSpans(provider *sdktrace.TracerProvider) {
+	tracer := provider.Tracer("test")
+	_, ai := tracer.Start(context.Background(), "gen_ai.chat")
+	ai.End()
+	_, other := tracer.Start(context.Background(), "http.request")
+	other.End()
+}
+
+func TestSpanProcessorExportsOnlyAISpans(t *testing.T) {
+	server := newOTLPServer(t)
+
+	processor, err := NewSpanProcessor(context.Background(), "phc_test", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewSpanProcessor: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	emitSpans(provider)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.ForceFlush(ctx); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	_, auth, path, names := server.snapshot()
+	if want := "Bearer phc_test"; auth != want {
+		t.Errorf("Authorization = %q, want %q", auth, want)
+	}
+	if want := ingestPath; path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if len(names) != 1 || names[0] != "gen_ai.chat" {
+		t.Errorf("exported span names = %v, want [gen_ai.chat]", names)
+	}
+}
+
+func TestSpanProcessorDropsNonAISpansWithoutRequest(t *testing.T) {
+	server := newOTLPServer(t)
+
+	processor, err := NewSpanProcessor(context.Background(), "phc_test", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewSpanProcessor: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+
+	_, span := provider.Tracer("test").Start(context.Background(), "http.request")
+	span.End()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.ForceFlush(ctx); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	if calls, _, _, _ := server.snapshot(); calls != 0 {
+		t.Errorf("expected no export request, got %d", calls)
+	}
+}
+
+func TestExporterExportsOnlyAISpans(t *testing.T) {
+	server := newOTLPServer(t)
+
+	exporter, err := NewExporter(context.Background(), "phc_test", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+	emitSpans(provider)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	_, _, path, names := server.snapshot()
+	if want := ingestPath; path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if len(names) != 1 || names[0] != "gen_ai.chat" {
+		t.Errorf("exported span names = %v, want [gen_ai.chat]", names)
+	}
+}
+
+func TestExporterExportSpansSkipsRequestWhenNoAISpans(t *testing.T) {
+	server := newOTLPServer(t)
+
+	exporter, err := NewExporter(context.Background(), "phc_test", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	defer exporter.Shutdown(context.Background())
+
+	span := recordSpan(t, "http.request")
+	if err := exporter.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{span}); err != nil {
+		t.Fatalf("ExportSpans: %v", err)
+	}
+
+	if calls, _, _, _ := server.snapshot(); calls != 0 {
+		t.Errorf("expected no export request, got %d", calls)
+	}
+}
+
+func TestWithHostFallsBackToDefault(t *testing.T) {
+	if got := newConfig(WithHost("  ")).host; got != DefaultHost {
+		t.Errorf("host = %q, want default %q", got, DefaultHost)
+	}
+	if got := newConfig(WithHost("https://eu.i.posthog.com/")).host; got != "https://eu.i.posthog.com" {
+		t.Errorf("host = %q, want trailing slash trimmed", got)
+	}
+}
