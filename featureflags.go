@@ -1215,32 +1215,18 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	if operator == "not_regex" {
-		var pattern string
-
-		if valueString, ok := value.(string); ok {
-			pattern = valueString
-		} else if valueInt, ok := value.(int); ok {
-			pattern = strconv.Itoa(valueInt)
-		} else {
-			return false, errors.New("regex expression not allowed")
-		}
-
-		r, err := getOrCompileRegex(pattern)
+		// Mirror the "regex" branch above: coerce both sides with valueToString
+		// so all property/flag value types are handled. The previous manual
+		// string/int type switch errored on other types, most notably float64,
+		// which is what JSON numbers deserialize to, so not_regex failed on a
+		// numeric property value even though regex handled it.
+		r, err := getOrCompileRegex(valueToString(value))
 		// invalid regex
 		if err != nil {
 			return false, nil
 		}
 
-		var match bool
-		if valueString, ok := override_value.(string); ok {
-			match = r.MatchString(valueString)
-		} else if valueInt, ok := override_value.(int); ok {
-			match = r.MatchString(strconv.Itoa(valueInt))
-		} else {
-			return false, errors.New("value type not supported")
-		}
-
-		return !match, nil
+		return !r.MatchString(valueToString(override_value)), nil
 	}
 
 	if operator == "gt" {

@@ -309,6 +309,20 @@ func TestMatchPropertyRegex(t *testing.T) {
 	}
 }
 
+func TestMatchPropertyNotRegexHandlesAllValueTypes(t *testing.T) {
+	// not_regex must coerce like regex does. JSON numbers arrive as float64,
+	// which the old manual type switch rejected with an error even though
+	// regex handled it.
+	for _, ov := range []interface{}{"123", 123, 123.0, float64(123)} {
+		m, err := matchProperty(FlagProperty{Key: "k", Value: "^1", Operator: "not_regex"}, NewProperties().Set("k", ov))
+		require.NoError(t, err)
+		require.False(t, m) // "123" matches ^1, so not_regex is false
+	}
+	m, err := matchProperty(FlagProperty{Key: "k", Value: "^9", Operator: "not_regex"}, NewProperties().Set("k", 123.0))
+	require.NoError(t, err)
+	require.True(t, m) // "123" does not match ^9
+}
+
 func TestMatchPropertyContains(t *testing.T) {
 	shouldMatch := []interface{}{"value", "value2", "value3", "value4", "343tfvalue5"}
 
