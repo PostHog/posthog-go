@@ -42,4 +42,12 @@ OpenTelemetry and emits `gen_ai.*` spans on the global tracer provider. Register
 the PostHog span processor on that provider before you run the agent, and the
 agent's `gen_ai.*` spans reach PostHog with no further code.
 
+Those spans carry the generation's model, token counts, latency, and finish
+reason. They do **not** carry prompt and response message content: ADK Go emits
+message bodies as OpenTelemetry **log records** (event names
+`gen_ai.system.message`, `gen_ai.user.message`, and `gen_ai.choice`), gated
+behind the `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` environment
+variable, not as span attributes. This bridge forwards spans only, so prompt and
+response fields stay empty for ADK Go generations.
+
 See [`example/`](example) for a runnable program.
