@@ -330,6 +330,41 @@ func TestExporterExportsOnlyAISpans(t *testing.T) {
 	}
 }
 
+func TestExporterKeepsBatchesWithinEndpointLimit(t *testing.T) {
+	server := newOTLPServer(t)
+
+	exporter, err := NewExporter(context.Background(), "phc_test", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	// WithBatcher uses the SDK default batch size (512), so without chunking the
+	// exporter would hand more than the endpoint's limit to a single request.
+	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+
+	const total = 2*maxSpansPerRequest + 5
+	tracer := provider.Tracer("test")
+	for i := 0; i < total; i++ {
+		_, span := tracer.Start(context.Background(), "gen_ai.chat")
+		span.End()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	_, _, _, names := server.snapshot()
+	if len(names) != total {
+		t.Errorf("exported %d spans, want %d", len(names), total)
+	}
+	for i, n := range server.batchSizes() {
+		if n > maxSpansPerRequest {
+			t.Errorf("request %d carried %d spans, exceeds endpoint limit %d", i, n, maxSpansPerRequest)
+		}
+	}
+}
+
 func TestExporterExportSpansSkipsRequestWhenNoAISpans(t *testing.T) {
 	server := newOTLPServer(t)
 

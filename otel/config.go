@@ -79,12 +79,51 @@ func validateHost(host string) error {
 }
 
 // newOTLPExporter builds an OTLP/HTTP exporter that targets the PostHog AI
-// observability endpoint with the project API key as a bearer token.
+// observability endpoint with the project API key as a bearer token. The
+// exporter is wrapped so that no single request exceeds maxSpansPerRequest,
+// which protects both public entry points regardless of the batch size of the
+// span processor that feeds them.
 func newOTLPExporter(ctx context.Context, apiKey string, cfg config) (sdktrace.SpanExporter, error) {
-	return otlptracehttp.New(ctx,
+	exporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpointURL(cfg.host+ingestPath),
 		otlptracehttp.WithHeaders(map[string]string{
 			"Authorization": "Bearer " + apiKey,
 		}),
 	)
+	if err != nil {
+		return nil, err
+	}
+	return &chunkingExporter{inner: exporter, limit: maxSpansPerRequest}, nil
+}
+
+// chunkingExporter splits each ExportSpans batch into requests of at most limit
+// spans. The PostHog AI observability endpoint rejects larger requests with a
+// non-retryable HTTP 400 that discards the whole batch, and nothing below this
+// module splits a batch: the OTLP exporter turns whatever slice it receives
+// into exactly one request. Chunking here caps every request for both the
+// SpanProcessor and the caller-supplied Exporter path.
+type chunkingExporter struct {
+	inner sdktrace.SpanExporter
+	limit int
+}
+
+var _ sdktrace.SpanExporter = (*chunkingExporter)(nil)
+
+// ExportSpans forwards spans to the inner exporter in slices of at most limit.
+func (e *chunkingExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	for start := 0; start < len(spans); start += e.limit {
+		end := start + e.limit
+		if end > len(spans) {
+			end = len(spans)
+		}
+		if err := e.inner.ExportSpans(ctx, spans[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Shutdown shuts down the inner exporter.
+func (e *chunkingExporter) Shutdown(ctx context.Context) error {
+	return e.inner.Shutdown(ctx)
 }
