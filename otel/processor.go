@@ -22,7 +22,11 @@ func NewSpanProcessor(ctx context.Context, apiKey string, opts ...Option) (*Span
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, errEmptyAPIKey
 	}
-	exporter, err := newOTLPExporter(ctx, apiKey, newConfig(opts...))
+	cfg, err := newConfig(opts...)
+	if err != nil {
+		return nil, err
+	}
+	exporter, err := newOTLPExporter(ctx, apiKey, cfg)
 	if err != nil {
 		return nil, err
 	}

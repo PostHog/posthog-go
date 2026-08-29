@@ -21,7 +21,11 @@ func NewExporter(ctx context.Context, apiKey string, opts ...Option) (*Exporter,
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, errEmptyAPIKey
 	}
-	inner, err := newOTLPExporter(ctx, apiKey, newConfig(opts...))
+	cfg, err := newConfig(opts...)
+	if err != nil {
+		return nil, err
+	}
+	inner, err := newOTLPExporter(ctx, apiKey, cfg)
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package posthogotel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -349,10 +350,54 @@ func TestExporterExportSpansSkipsRequestWhenNoAISpans(t *testing.T) {
 }
 
 func TestWithHostFallsBackToDefault(t *testing.T) {
-	if got := newConfig(WithHost("  ")).host; got != DefaultHost {
-		t.Errorf("host = %q, want default %q", got, DefaultHost)
+	cfg, err := newConfig(WithHost("  "))
+	if err != nil {
+		t.Fatalf("newConfig: %v", err)
 	}
-	if got := newConfig(WithHost("https://eu.i.posthog.com/")).host; got != "https://eu.i.posthog.com" {
-		t.Errorf("host = %q, want trailing slash trimmed", got)
+	if cfg.host != DefaultHost {
+		t.Errorf("host = %q, want default %q", cfg.host, DefaultHost)
+	}
+	cfg, err = newConfig(WithHost("https://eu.i.posthog.com/"))
+	if err != nil {
+		t.Fatalf("newConfig: %v", err)
+	}
+	if cfg.host != "https://eu.i.posthog.com" {
+		t.Errorf("host = %q, want trailing slash trimmed", cfg.host)
+	}
+}
+
+func TestNewConfigRejectsInvalidHost(t *testing.T) {
+	invalid := []string{
+		"us.i.posthog.com",        // missing scheme
+		"https://a b.example.com", // space in host
+		"https://ex.com:port",     // invalid port
+		"http://[::1",             // malformed host
+		"ftp://example.com",       // wrong scheme
+		"https://",                // no hostname
+	}
+	for _, host := range invalid {
+		if _, err := newConfig(WithHost(host)); !errors.Is(err, errInvalidHost) {
+			t.Errorf("newConfig(WithHost(%q)) err = %v, want errInvalidHost", host, err)
+		}
+	}
+
+	valid := []string{
+		"https://us.i.posthog.com",
+		"https://eu.i.posthog.com/",
+		"http://localhost:8000",
+	}
+	for _, host := range valid {
+		if _, err := newConfig(WithHost(host)); err != nil {
+			t.Errorf("newConfig(WithHost(%q)) err = %v, want nil", host, err)
+		}
+	}
+}
+
+func TestConstructorsRejectInvalidHost(t *testing.T) {
+	if _, err := NewSpanProcessor(context.Background(), "phc_test", WithHost("us.i.posthog.com")); !errors.Is(err, errInvalidHost) {
+		t.Errorf("NewSpanProcessor err = %v, want errInvalidHost", err)
+	}
+	if _, err := NewExporter(context.Background(), "phc_test", WithHost("us.i.posthog.com")); !errors.Is(err, errInvalidHost) {
+		t.Errorf("NewExporter err = %v, want errInvalidHost", err)
 	}
 }
