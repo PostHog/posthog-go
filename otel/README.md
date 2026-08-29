@@ -26,7 +26,17 @@ if err != nil {
 }
 provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
 otel.SetTracerProvider(provider)
-defer provider.Shutdown(ctx)
+
+// Flush buffered spans on shutdown. Use a fresh context, not one that is
+// already canceled (for example from signal.NotifyContext): the SDK skips
+// the final export on a canceled context and silently drops queued spans.
+defer func() {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown tracer provider: %v", err)
+	}
+}()
 ```
 
 Use `WithHost` for a host other than PostHog US cloud, for example
