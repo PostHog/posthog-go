@@ -26,7 +26,10 @@ func NewSpanProcessor(ctx context.Context, apiKey string, opts ...Option) (*Span
 	if err != nil {
 		return nil, err
 	}
-	return &SpanProcessor{inner: sdktrace.NewBatchSpanProcessor(exporter)}, nil
+	return &SpanProcessor{inner: sdktrace.NewBatchSpanProcessor(
+		exporter,
+		sdktrace.WithMaxExportBatchSize(maxSpansPerRequest),
+	)}, nil
 }
 
 // OnStart does no work. Filtering happens in OnEnd, once the span is complete.

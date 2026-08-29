@@ -74,12 +74,13 @@ func TestNewExporterRejectsEmptyAPIKey(t *testing.T) {
 
 // otlpServer records the export requests it receives.
 type otlpServer struct {
-	server *httptest.Server
-	mu     sync.Mutex
-	auth   string
-	path   string
-	names  []string
-	calls  int
+	server  *httptest.Server
+	mu      sync.Mutex
+	auth    string
+	path    string
+	names   []string
+	calls   int
+	perCall []int
 }
 
 func newOTLPServer(t *testing.T) *otlpServer {
@@ -95,13 +96,16 @@ func newOTLPServer(t *testing.T) *otlpServer {
 		s.calls++
 		s.auth = r.Header.Get("Authorization")
 		s.path = r.URL.Path
+		count := 0
 		for _, rs := range req.GetResourceSpans() {
 			for _, ss := range rs.GetScopeSpans() {
 				for _, span := range ss.GetSpans() {
 					s.names = append(s.names, span.GetName())
+					count++
 				}
 			}
 		}
+		s.perCall = append(s.perCall, count)
 		s.mu.Unlock()
 
 		resp, _ := proto.Marshal(&coltracepb.ExportTraceServiceResponse{})
@@ -116,6 +120,14 @@ func (s *otlpServer) snapshot() (calls int, auth, path string, names []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls, s.auth, s.path, append([]string(nil), s.names...)
+}
+
+// batchSizes returns the number of spans carried by each export request, in
+// the order the requests arrived.
+func (s *otlpServer) batchSizes() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int(nil), s.perCall...)
 }
 
 // emitSpans sends one AI span and one non-AI span through the provider.
@@ -181,6 +193,45 @@ func TestSpanProcessorDropsNonAISpansWithoutRequest(t *testing.T) {
 
 	if calls, _, _, _ := server.snapshot(); calls != 0 {
 		t.Errorf("expected no export request, got %d", calls)
+	}
+}
+
+func TestSpanProcessorKeepsBatchesWithinEndpointLimit(t *testing.T) {
+	server := newOTLPServer(t)
+
+	processor, err := NewSpanProcessor(context.Background(), "phc_test", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewSpanProcessor: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+
+	// Emit more AI spans than the endpoint accepts in a single request. With the
+	// SDK default batch size (512) they would be sent as one oversized request
+	// that the endpoint rejects with a non-retryable 400.
+	const total = 2*maxSpansPerRequest + 5
+	tracer := provider.Tracer("test")
+	for i := 0; i < total; i++ {
+		_, span := tracer.Start(context.Background(), "gen_ai.chat")
+		span.End()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.ForceFlush(ctx); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	_, _, _, names := server.snapshot()
+	if len(names) != total {
+		t.Errorf("exported %d spans, want %d", len(names), total)
+	}
+	for i, n := range server.batchSizes() {
+		if n > maxSpansPerRequest {
+			t.Errorf("request %d carried %d spans, exceeds endpoint limit %d", i, n, maxSpansPerRequest)
+		}
 	}
 }
 

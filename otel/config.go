@@ -15,6 +15,12 @@ const (
 
 	// ingestPath is the PostHog AI observability OTLP endpoint path.
 	ingestPath = "/i/v0/ai/otel"
+
+	// maxSpansPerRequest is the maximum number of AI spans the PostHog AI
+	// observability endpoint accepts in a single OTLP request. Larger requests
+	// are rejected with a non-retryable HTTP 400 and the whole batch is lost, so
+	// batches must be capped at this limit.
+	maxSpansPerRequest = 100
 )
 
 // errEmptyAPIKey is returned when the project API key is missing.
