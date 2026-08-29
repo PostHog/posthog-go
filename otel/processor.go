@@ -40,6 +40,7 @@ func (p *SpanProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 	if !IsAISpan(s) {
 		return
 	}
+	warnIfPostHogAIGateway(s)
 	p.inner.OnEnd(s)
 }
 

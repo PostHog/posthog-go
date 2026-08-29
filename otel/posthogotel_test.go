@@ -1,10 +1,13 @@
 package posthogotel
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +58,72 @@ func TestIsAISpan(t *testing.T) {
 			span := recordSpan(t, tc.spanName, tc.attrKeys...)
 			if got := IsAISpan(span); got != tc.want {
 				t.Errorf("IsAISpan(%q) = %v, want %v", tc.spanName, got, tc.want)
+			}
+		})
+	}
+}
+
+// recordSpanWithAttr records a span carrying a single string attribute.
+func recordSpanWithAttr(t *testing.T, name, key, value string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	_, span := provider.Tracer("test").Start(context.Background(), name)
+	span.SetAttributes(attribute.String(key, value))
+	span.End()
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("expected 1 recorded span, got %d", len(ended))
+	}
+	return ended[0]
+}
+
+func TestIsPostHogAIGatewayURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"gateway.us.posthog.com", true},
+		{"https://gateway.us.posthog.com/v1", true},
+		{"GATEWAY.US.POSTHOG.COM", true},
+		{"ai-gateway.eu.posthog.com", true},
+		{"gateway.us.posthog.com/v1/chat", true},
+		{"api.openai.com", false},
+		{"https://us.i.posthog.com", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := isPostHogAIGatewayURL(tc.in); got != tc.want {
+			t.Errorf("isPostHogAIGatewayURL(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestWarnIfPostHogAIGateway(t *testing.T) {
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	cases := []struct {
+		name     string
+		attrKey  string
+		attrVal  string
+		wantWarn bool
+	}{
+		{"server.address gateway host", "server.address", "gateway.us.posthog.com", true},
+		{"url.full gateway host", "url.full", "https://ai-gateway.eu.posthog.com/v1/chat", true},
+		{"non-gateway server.address", "server.address", "api.openai.com", false},
+		{"gateway host on unrelated attribute", "http.url", "gateway.us.posthog.com", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			span := recordSpanWithAttr(t, "gen_ai.chat", tc.attrKey, tc.attrVal)
+			warnIfPostHogAIGateway(span)
+			warned := strings.Contains(buf.String(), "PostHog AI Gateway")
+			if warned != tc.wantWarn {
+				t.Errorf("warned = %v, want %v (log=%q)", warned, tc.wantWarn, buf.String())
 			}
 		})
 	}
