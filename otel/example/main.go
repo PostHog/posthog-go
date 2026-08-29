@@ -58,6 +58,19 @@ func main() {
 	}()
 
 	runAgentTurn(ctx)
+
+	// ForceFlush blocks until the queued span is exported and surfaces any
+	// export error. Shutdown alone would not: the batch span processor returns
+	// only context errors from Shutdown, so a rejected export (for example a bad
+	// API key or host) never reaches its return value. Return on failure so the
+	// deferred Shutdown still runs, and report success only once the export is
+	// actually confirmed.
+	flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := provider.ForceFlush(flushCtx); err != nil {
+		log.Printf("send AI span to PostHog: %v", err)
+		return
+	}
 	log.Println("sent AI span to PostHog")
 }
 
