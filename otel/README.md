@@ -16,28 +16,36 @@ go get github.com/posthog/posthog-go/otel
 
 ## Usage
 
-`SpanProcessor` is the recommended integration. Register it on your
-`TracerProvider`:
+`SpanProcessor` is the recommended integration. Register it on the
+`*sdktrace.TracerProvider` your application already owns — rather than replacing
+the global provider with a new one — so your resource, sampler, and existing
+exporters are kept and tracers already handed out (such as ADK Go's) route
+through it:
 
 ```go
 processor, err := posthogotel.NewSpanProcessor(ctx, "phc_your_project_api_key")
 if err != nil {
 	log.Fatal(err)
 }
-provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
-otel.SetTracerProvider(provider)
 
-// Flush buffered spans on shutdown. Use a fresh context, not one that is
-// already canceled (for example from signal.NotifyContext): the SDK skips
-// the final export on a canceled context and silently drops queued spans.
+// provider is your existing *sdktrace.TracerProvider.
+provider.RegisterSpanProcessor(processor)
+
+// Shut down the processor — not your provider — to flush its buffered spans.
+// Use a fresh context, not one that is already canceled (for example from
+// signal.NotifyContext): the SDK skips the final export on a canceled context
+// and silently drops queued spans.
 defer func() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := provider.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown tracer provider: %v", err)
+	if err := processor.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown posthog processor: %v", err)
 	}
 }()
 ```
+
+If you don't already have a `TracerProvider`, create one and register the
+processor on it, as [`example/`](example) does.
 
 Use `WithHost` for a host other than PostHog US cloud, for example
 `posthogotel.WithHost("https://eu.i.posthog.com")`.
