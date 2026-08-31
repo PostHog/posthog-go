@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.24.4
+
+### Patch Changes
+
+- c3270b6: Align local feature flag property matching with the flags service, including boolean-array precedence, canonical JSON stringification, and operator-specific case folding.
+
 ## 1.24.3
 
 ### Patch Changes
