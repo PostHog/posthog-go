@@ -5,8 +5,10 @@
 // its agents with OpenTelemetry and emits gen_ai.* spans on the OpenTelemetry
 // global tracer provider. Register the PostHog span processor on that provider
 // before you run the agent, and the agent's gen_ai.* spans reach PostHog with
-// no further code. This example emits one representative gen_ai.* span in place
-// of a live agent so that it runs without model credentials.
+// no further code. This example emits one synthetic gen_ai.* generation with
+// representative model, message, token, and response attributes in place of a
+// live agent so that it runs without model credentials and is easy to inspect
+// in the PostHog UI.
 //
 // Run it with:
 //
@@ -25,6 +27,7 @@ import (
 	posthogotel "github.com/posthog/posthog-go/otel"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -47,7 +50,16 @@ func main() {
 	}
 
 	// Register the processor on the global tracer provider that ADK Go uses.
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	// The resource attributes make the synthetic example easy to identify in
+	// PostHog without affecting how real instrumented applications are wired.
+	resource := sdkresource.NewWithAttributes("",
+		attribute.String("service.name", "posthog-go-otel-example"),
+		attribute.String("posthog.distinct_id", "posthog-go-otel-example"),
+	)
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithResource(resource),
+		sdktrace.WithSpanProcessor(processor),
+	)
 	otel.SetTracerProvider(provider)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -57,7 +69,7 @@ func main() {
 		}
 	}()
 
-	runAgentTurn(ctx)
+	traceID, runID := runAgentTurn(ctx)
 
 	// ForceFlush blocks until the queued span is exported and surfaces any
 	// export error. Shutdown alone would not: the batch span processor returns
@@ -71,21 +83,35 @@ func main() {
 		log.Printf("send AI span to PostHog: %v", err)
 		return
 	}
-	log.Println("sent AI span to PostHog")
+	log.Printf("sent AI span to PostHog (trace_id=%s, example.run_id=%s)", traceID, runID)
 }
 
-// runAgentTurn emits one gen_ai.* span that mirrors what an instrumented agent
-// records for a single model call. ADK Go produces spans like this on its own.
-func runAgentTurn(ctx context.Context) {
+// runAgentTurn emits one synthetic gen_ai.* generation with enough attributes
+// to validate the conversation, model, provider, token, latency, and trace views.
+// ADK Go emits its own gen_ai.* spans, but currently emits message content as log
+// records rather than the span attributes used here.
+func runAgentTurn(ctx context.Context) (traceID, runID string) {
 	tracer := otel.Tracer("posthog-go/otel/example")
-	_, span := tracer.Start(ctx, "gen_ai.chat gpt-4o")
-	defer span.End()
+	_, span := tracer.Start(ctx, "chat posthog-go OTel example")
 
+	runID = time.Now().UTC().Format("20060102T150405.000000000Z")
 	span.SetAttributes(
-		attribute.String("gen_ai.system", "openai"),
-		attribute.String("gen_ai.request.model", "gpt-4o"),
 		attribute.String("gen_ai.operation.name", "chat"),
-		attribute.Int("gen_ai.usage.input_tokens", 12),
-		attribute.Int("gen_ai.usage.output_tokens", 8),
+		attribute.String("gen_ai.provider.name", "openai"),
+		attribute.String("gen_ai.request.model", "gpt-4o-mini"),
+		attribute.String("gen_ai.response.model", "gpt-4o-mini-2024-07-18"),
+		attribute.String("gen_ai.response.id", "chatcmpl-posthog-go-example"),
+		attribute.StringSlice("gen_ai.response.finish_reasons", []string{"stop"}),
+		attribute.String("gen_ai.input.messages", `[{"role":"system","content":"Answer concisely."},{"role":"user","content":"What is PostHog?"}]`),
+		attribute.String("gen_ai.output.messages", `[{"role":"assistant","content":"PostHog is an open-source product analytics platform."}]`),
+		attribute.Int("gen_ai.usage.input_tokens", 18),
+		attribute.Int("gen_ai.usage.output_tokens", 11),
+		attribute.String("server.address", "api.openai.com"),
+		attribute.String("example.run_id", runID),
 	)
+
+	// Make latency visible in the UI without calling an external model.
+	time.Sleep(50 * time.Millisecond)
+	span.End()
+	return span.SpanContext().TraceID().String(), runID
 }
