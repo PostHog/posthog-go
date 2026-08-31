@@ -142,6 +142,25 @@ func TestNewExporterRejectsEmptyAPIKey(t *testing.T) {
 	}
 }
 
+func TestExporterTrimsAPIKeyWhitespace(t *testing.T) {
+	server := newOTLPServer(t)
+	exporter, err := NewExporter(context.Background(), "  phc_test\n", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	defer exporter.Shutdown(context.Background())
+
+	span := recordSpan(t, "gen_ai.chat")
+	if err := exporter.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{span}); err != nil {
+		t.Fatalf("ExportSpans: %v", err)
+	}
+
+	_, auth, _, _ := server.snapshot()
+	if want := "Bearer phc_test"; auth != want {
+		t.Errorf("Authorization = %q, want %q", auth, want)
+	}
+}
+
 // otlpServer records the export requests it receives.
 type otlpServer struct {
 	server  *httptest.Server

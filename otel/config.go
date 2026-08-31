@@ -84,6 +84,7 @@ func validateHost(host string) error {
 // which protects both public entry points regardless of the batch size of the
 // span processor that feeds them.
 func newOTLPExporter(ctx context.Context, apiKey string, cfg config) (sdktrace.SpanExporter, error) {
+	apiKey = strings.TrimSpace(apiKey)
 	exporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpointURL(cfg.host+ingestPath),
 		otlptracehttp.WithHeaders(map[string]string{
