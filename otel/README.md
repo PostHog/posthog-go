@@ -8,50 +8,21 @@ name or any attribute key starts with `gen_ai.`, `llm.`, `ai.`, or
 PostHog `/i/v0/ai/otel` endpoint with the project API key as a bearer token.
 
 This is a separate Go module, so the core `posthog-go` SDK does not depend on
-OpenTelemetry. Add it on its own:
-
-```bash
-go get github.com/posthog/posthog-go/otel
-```
+OpenTelemetry.
 
 ## Usage
 
 `SpanProcessor` is the recommended integration. Register it on the
-`*sdktrace.TracerProvider` your application already owns — rather than replacing
-the global provider with a new one — so your resource, sampler, and existing
+`TracerProvider` your application already owns — rather than replacing the
+global provider with a new one — so your resource, sampler, and existing
 exporters are kept and tracers already handed out (such as ADK Go's) route
-through it:
-
-```go
-processor, err := posthogotel.NewSpanProcessor(ctx, "phc_your_project_api_key")
-if err != nil {
-	log.Fatal(err)
-}
-
-// provider is your existing *sdktrace.TracerProvider.
-provider.RegisterSpanProcessor(processor)
-
-// Shut down the processor — not your provider — to flush its buffered spans.
-// Use a fresh context, not one that is already canceled (for example from
-// signal.NotifyContext): the SDK skips the final export on a canceled context
-// and silently drops queued spans.
-defer func() {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := processor.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown posthog processor: %v", err)
-	}
-}()
-```
+through it. Shut down the processor with a fresh context to flush its buffered
+spans without shutting down the application-owned provider.
 
 If you don't already have a `TracerProvider`, create one and register the
-processor on it, as [`example/`](example) does.
-
-Use `WithHost` for a host other than PostHog US cloud, for example
-`posthogotel.WithHost("https://eu.i.posthog.com")`.
-
-For a framework that accepts only a span exporter, use `NewExporter` instead and
-pair it with your own batch span processor.
+processor on it, as [`example/`](example) does. Use `WithHost` for a host other
+than PostHog US cloud. For a framework that accepts only a span exporter, use
+`NewExporter` instead and pair it with your own batch span processor.
 
 ## Google Agent Development Kit (ADK) for Go
 
