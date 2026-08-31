@@ -2,12 +2,21 @@ package posthog
 
 import (
 	"errors"
+	"math"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type exactNamedString string
+
+type exactMarshaledString struct{}
+
+func (exactMarshaledString) MarshalJSON() ([]byte, error) {
+	return []byte(`"pro"`), nil
+}
 
 func TestMatchPropertyValue(t *testing.T) {
 	property := FlagProperty{
@@ -172,19 +181,166 @@ func TestMatchPropertyExactCaseInsensitiveAndCoerced(t *testing.T) {
 	}
 	require.True(t, exact("US", "us"))
 	require.True(t, exact("Value", "value"))
+	require.True(t, exact("Ä", "ä"))
+	require.True(t, exact("İ", "i\u0307"))
+	require.True(t, exact("ΟΣ", "ος"))
 	require.True(t, exact(1, "1"))
 	require.True(t, exact("1", 1))
 	require.False(t, exact("US", "CA"))
+	require.False(t, exact("İ", "i"))
+	require.False(t, exact("Σ", "ς"))
+	require.False(t, exact("ß", "ss"))
 
-	require.True(t, exact([]interface{}{"US", "CA"}, "us"))
-	require.False(t, exact([]interface{}{"US", "CA"}, "gb"))
+	require.True(t, exact([]interface{}{"US", "Ä"}, "ä"))
+	require.False(t, exact([]interface{}{"US", "Σ"}, "ς"))
 
 	isNot, err := matchProperty(FlagProperty{Key: "k", Value: "US", Operator: "is_not"}, NewProperties().Set("k", "us"))
 	require.NoError(t, err)
 	require.False(t, isNot)
-	isNot, err = matchProperty(FlagProperty{Key: "k", Value: "US", Operator: "is_not"}, NewProperties().Set("k", "gb"))
+	isNot, err = matchProperty(FlagProperty{Key: "k", Value: "Σ", Operator: "is_not"}, NewProperties().Set("k", "ς"))
 	require.NoError(t, err)
 	require.True(t, isNot)
+}
+
+func TestMatchPropertyExactUsesBackendBooleanPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		filter   interface{}
+		actual   interface{}
+		expected bool
+	}{
+		{name: "false matches arbitrary falsey string", filter: false, actual: "banana", expected: true},
+		{name: "false string matches zero", filter: "false", actual: 0, expected: true},
+		{name: "boolean parsing uses lowercase not case folding", filter: "falſe", actual: false, expected: false},
+		{name: "false array matches null", filter: []interface{}{"false"}, actual: nil, expected: true},
+		{name: "mixed boolean array is aggregate false", filter: []interface{}{"true", "false"}, actual: "pro", expected: true},
+		{name: "mixed boolean array does not use any", filter: []interface{}{"true", "false"}, actual: "true", expected: false},
+		{name: "empty array is aggregate true for boolean", filter: []interface{}{}, actual: true, expected: true},
+		{name: "empty array is aggregate true for string", filter: []interface{}{}, actual: "TRUE", expected: true},
+		{name: "empty array is aggregate true for empty array", filter: []interface{}{}, actual: []interface{}{}, expected: true},
+		{name: "empty array is aggregate true for true array", filter: []interface{}{}, actual: []interface{}{true}, expected: true},
+		{name: "typed boolean array uses aggregate truthiness", filter: true, actual: []bool{true}, expected: true},
+		{name: "ordinary arrays still use any", filter: []interface{}{"FREE", "PRO"}, actual: "pro", expected: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exact, err := matchProperty(
+				FlagProperty{Key: "k", Value: test.filter, Operator: "exact"},
+				NewProperties().Set("k", test.actual),
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.expected, exact)
+
+			isNot, err := matchProperty(
+				FlagProperty{Key: "k", Value: test.filter, Operator: "is_not"},
+				NewProperties().Set("k", test.actual),
+			)
+			require.NoError(t, err)
+			require.Equal(t, !test.expected, isNot)
+		})
+	}
+}
+
+func TestMatchPropertyExactUsesBackendJSONRepresentation(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter string
+		actual interface{}
+	}{
+		{name: "null", filter: "null", actual: nil},
+		{name: "array", filter: "[1,2]", actual: []interface{}{1, 2}},
+		{name: "typed integer array", filter: "[1,2]", actual: []int{1, 2}},
+		{name: "typed large integer map", filter: `{"a":9007199254740993}`, actual: map[string]int64{"a": 9007199254740993}},
+		{name: "sorted object", filter: `{"a":2,"b":1}`, actual: map[string]interface{}{"b": 1, "a": 2}},
+		{name: "integer", filter: "323", actual: 323},
+		{name: "integral float", filter: "323.0", actual: float64(323)},
+		{name: "negative zero", filter: "-0.0", actual: math.Copysign(0, -1)},
+		{name: "small exponent", filter: "1e-7", actual: 1e-7},
+		{name: "large exponent", filter: "1e+16", actual: 1e16},
+		{name: "fixed small decimal", filter: "0.00001", actual: 1e-5},
+		{name: "fixed decimal", filter: "0.000099", actual: 9.9e-5},
+		{name: "nested values", filter: `[{"a":1},1e-7]`, actual: []interface{}{map[string]interface{}{"a": 1}, 1e-7}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			matched, err := matchProperty(
+				FlagProperty{Key: "k", Value: test.filter, Operator: "exact"},
+				NewProperties().Set("k", test.actual),
+			)
+			require.NoError(t, err)
+			require.True(t, matched)
+		})
+	}
+}
+
+func TestMatchPropertyExactFallsBackForAmbiguousFilterNumbers(t *testing.T) {
+	for _, filter := range []interface{}{
+		float64(323),
+		[]interface{}{float64(323)},
+		map[string]interface{}{"a": float64(1)},
+		[]interface{}{map[string]interface{}{"a": float64(1)}},
+	} {
+		matched, err := matchProperty(
+			FlagProperty{Key: "k", Value: filter, Operator: "exact"},
+			NewProperties().Set("k", "323"),
+		)
+		require.False(t, matched)
+		var inconclusiveErr *InconclusiveMatchError
+		require.ErrorAs(t, err, &inconclusiveErr)
+	}
+
+	matched, err := matchProperty(
+		FlagProperty{Key: "k", Value: "323", Operator: "exact"},
+		NewProperties().Set("k", float64(323)),
+	)
+	require.NoError(t, err)
+	require.False(t, matched, "a runtime float retains its .0 when the filter spelling is known")
+}
+
+func TestMatchPropertyExactNormalizesNamedAndMarshaledStrings(t *testing.T) {
+	for _, actual := range []interface{}{exactNamedString("pro"), exactMarshaledString{}} {
+		matched, err := matchProperty(
+			FlagProperty{Key: "k", Value: "pro", Operator: "exact"},
+			NewProperties().Set("k", actual),
+		)
+		require.NoError(t, err)
+		require.True(t, matched)
+	}
+}
+
+func TestMatchPropertyStringOperatorsUseASCIICaseFolding(t *testing.T) {
+	tests := []struct {
+		operator string
+		filter   string
+		actual   string
+		expected bool
+	}{
+		{operator: "icontains", filter: "VALUE", actual: "a-value-b", expected: true},
+		{operator: "not_icontains", filter: "VALUE", actual: "a-value-b", expected: false},
+		{operator: "starts_with", filter: "VALUE", actual: "value-b", expected: true},
+		{operator: "not_starts_with", filter: "VALUE", actual: "value-b", expected: false},
+		{operator: "ends_with", filter: "VALUE", actual: "a-value", expected: true},
+		{operator: "not_ends_with", filter: "VALUE", actual: "a-value", expected: false},
+		{operator: "icontains", filter: "ä", actual: "Ä", expected: false},
+		{operator: "not_icontains", filter: "ä", actual: "Ä", expected: true},
+		{operator: "starts_with", filter: "ä", actual: "Äbc", expected: false},
+		{operator: "not_starts_with", filter: "ä", actual: "Äbc", expected: true},
+		{operator: "ends_with", filter: "ä", actual: "bcÄ", expected: false},
+		{operator: "not_ends_with", filter: "ä", actual: "bcÄ", expected: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.operator+"/"+test.filter, func(t *testing.T) {
+			matched, err := matchProperty(
+				FlagProperty{Key: "k", Value: test.filter, Operator: test.operator},
+				NewProperties().Set("k", test.actual),
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.expected, matched)
+		})
+	}
 }
 
 func TestMatchPropertyNumber(t *testing.T) {

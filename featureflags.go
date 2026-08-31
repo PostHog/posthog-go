@@ -9,9 +9,12 @@ import (
 	"fmt"
 
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +22,8 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -34,6 +39,7 @@ var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
 var (
 	errMissingPropertyValue     = &InconclusiveMatchError{"Can't match properties without a given property value"}
 	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+	errAmbiguousExactNumber     = &InconclusiveMatchError{"Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float"}
 	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
 	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
 )
@@ -1158,12 +1164,15 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 
 	override_value := properties[key]
 
-	if operator == "exact" {
-		return exactMatch(value, override_value), nil
-	}
-
-	if operator == "is_not" {
-		return !exactMatch(value, override_value), nil
+	if operator == "exact" || operator == "is_not" {
+		matched, err := exactMatch(value, override_value)
+		if err != nil {
+			return false, err
+		}
+		if operator == "is_not" {
+			return !matched, nil
+		}
+		return matched, nil
 	}
 
 	if operator == "is_set" {
@@ -1171,27 +1180,27 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	if operator == "icontains" {
-		return strings.Contains(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_icontains" {
-		return !strings.Contains(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return !strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "starts_with" {
-		return strings.HasPrefix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_starts_with" {
-		return !strings.HasPrefix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return !strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "ends_with" {
-		return strings.HasSuffix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_ends_with" {
-		return !strings.HasSuffix(strings.ToLower(valueToString(override_value)), strings.ToLower(valueToString(value))), nil
+		return !strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "regex" {
@@ -1750,24 +1759,158 @@ func interfaceToFloat(val interface{}) (float64, error) {
 	return i, nil
 }
 
-// exactMatch reports whether override_value matches value for the "exact"
-// operator: equal to value for a scalar, or contained in value for a list.
-// The comparison is case-insensitive and made after string coercion, matching
-// the icontains/starts_with operators in this file and the exact operator in
-// the reference SDKs (e.g. posthog-python's str_iequals). Plain Go "=="
-// was case-sensitive and type-strict, so e.g. exact "US" did not match a "us"
-// property value and exact 1 did not match a "1" property value.
-func exactMatch(value interface{}, override_value interface{}) bool {
-	overrideStr := valueToString(override_value)
+// exactMatch mirrors the flags service's exact operator, including its
+// boolean-array precedence. Integral float64 filter values are inconclusive
+// because JSON decoding collapses integer and floating-point number kinds.
+func exactMatch(value interface{}, overrideValue interface{}) (bool, error) {
+	if isTruthyOrFalsyPropertyValue(value) {
+		return isTruthyPropertyValue(value) == isTruthyPropertyValue(overrideValue), nil
+	}
+
 	if list, ok := value.([]interface{}); ok {
+		hadAmbiguousNumber := false
+		overrideStr := unicodeLower(exactValueToString(overrideValue))
 		for _, item := range list {
-			if strings.EqualFold(valueToString(item), overrideStr) {
-				return true
+			if containsAmbiguousExactNumber(item) {
+				hadAmbiguousNumber = true
+				continue
 			}
+			if unicodeLower(exactValueToString(item)) == overrideStr {
+				return true, nil
+			}
+		}
+		if hadAmbiguousNumber {
+			return false, errAmbiguousExactNumber
+		}
+		return false, nil
+	}
+
+	if containsAmbiguousExactNumber(value) {
+		return false, errAmbiguousExactNumber
+	}
+	return unicodeLower(exactValueToString(value)) == unicodeLower(exactValueToString(overrideValue)), nil
+}
+
+func isTruthyOrFalsyPropertyValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return true
+	case string:
+		lowered := unicodeLower(typed)
+		return lowered == "true" || lowered == "false"
+	case []interface{}:
+		for _, item := range typed {
+			if !isTruthyOrFalsyPropertyValue(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		if array, ok := normalizeJSONArray(value); ok {
+			return isTruthyOrFalsyPropertyValue(array)
 		}
 		return false
 	}
-	return strings.EqualFold(valueToString(value), overrideStr)
+}
+
+func isTruthyPropertyValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return unicodeLower(typed) == "true"
+	case []interface{}:
+		for _, item := range typed {
+			if !isTruthyPropertyValue(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		if array, ok := normalizeJSONArray(value); ok {
+			return isTruthyPropertyValue(array)
+		}
+		return false
+	}
+}
+
+func normalizeJSONArray(value interface{}) ([]interface{}, bool) {
+	decoded, ok := normalizeJSONValue(value)
+	if !ok {
+		return nil, false
+	}
+	array, ok := decoded.([]interface{})
+	return array, ok
+}
+
+func normalizeJSONValue(value interface{}) (interface{}, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var decoded interface{}
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func containsAmbiguousExactNumber(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+
+	reflected := reflect.ValueOf(value)
+	for reflected.Kind() == reflect.Interface || reflected.Kind() == reflect.Pointer {
+		if reflected.IsNil() {
+			return false
+		}
+		reflected = reflected.Elem()
+	}
+
+	switch reflected.Kind() {
+	case reflect.Float64:
+		floatValue := reflected.Float()
+		return !math.IsNaN(floatValue) && !math.IsInf(floatValue, 0) && math.Trunc(floatValue) == floatValue
+	case reflect.Array, reflect.Slice:
+		for index := 0; index < reflected.Len(); index++ {
+			if containsAmbiguousExactNumber(reflected.Index(index).Interface()) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iterator := reflected.MapRange()
+		for iterator.Next() {
+			if containsAmbiguousExactNumber(iterator.Value().Interface()) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for index := 0; index < reflected.NumField(); index++ {
+			field := reflected.Field(index)
+			if field.CanInterface() && containsAmbiguousExactNumber(field.Interface()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unicodeLower(value string) string {
+	// Casers may be stateful and cannot be shared between evaluator goroutines.
+	return cases.Lower(language.Und).String(value)
+}
+
+func asciiLower(value string) string {
+	lowered := []byte(value)
+	for i, character := range lowered {
+		if character >= 'A' && character <= 'Z' {
+			lowered[i] = character + ('a' - 'A')
+		}
+	}
+	return string(lowered)
 }
 
 func containsVariant(variantList []FlagVariant, key string) bool {
@@ -1825,6 +1968,145 @@ func valueToString(v interface{}) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+// exactValueToString mirrors serde_json::Value::to_string for representable JSON
+// values, except that top-level strings remain unquoted like the flags service helper.
+func exactValueToString(value interface{}) string {
+	if value != nil && reflect.ValueOf(value).Kind() == reflect.String {
+		return reflect.ValueOf(value).String()
+	}
+
+	if !isDirectCanonicalValue(value) {
+		if normalized, ok := normalizeJSONValue(value); ok {
+			if stringValue, ok := normalized.(string); ok {
+				return stringValue
+			}
+			if stringValue, ok := canonicalJSONValue(normalized); ok {
+				return stringValue
+			}
+		}
+	}
+
+	if stringValue, ok := canonicalJSONValue(value); ok {
+		return stringValue
+	}
+	return fmt.Sprint(value)
+}
+
+func isDirectCanonicalValue(value interface{}) bool {
+	switch value.(type) {
+	case nil, string, bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, json.Number,
+		[]interface{}, map[string]interface{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalJSONValue(value interface{}) (string, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return "null", true
+	case string:
+		encoded, err := json.MarshalNoEscape(typed)
+		return string(encoded), err == nil
+	case bool:
+		return strconv.FormatBool(typed), true
+	case int:
+		return strconv.Itoa(typed), true
+	case int8:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int16:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int32:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int64:
+		return strconv.FormatInt(typed, 10), true
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint64:
+		return strconv.FormatUint(typed, 10), true
+	case float32:
+		return serdeFloatString(float64(typed), 32)
+	case float64:
+		return serdeFloatString(typed, 64)
+	case json.Number:
+		number := typed.String()
+		if !strings.ContainsAny(number, ".eE") {
+			return number, true
+		}
+		floatValue, err := typed.Float64()
+		if err != nil {
+			return "", false
+		}
+		return serdeFloatString(floatValue, 64)
+	case []interface{}:
+		values := make([]string, len(typed))
+		for index, item := range typed {
+			encoded, ok := canonicalJSONValue(item)
+			if !ok {
+				return "", false
+			}
+			values[index] = encoded
+		}
+		return "[" + strings.Join(values, ",") + "]", true
+	case map[string]interface{}:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		values := make([]string, 0, len(keys))
+		for _, key := range keys {
+			encodedKey, _ := json.MarshalNoEscape(key)
+			encodedValue, ok := canonicalJSONValue(typed[key])
+			if !ok {
+				return "", false
+			}
+			values = append(values, string(encodedKey)+":"+encodedValue)
+		}
+		return "{" + strings.Join(values, ",") + "}", true
+	default:
+		decoded, ok := normalizeJSONValue(value)
+		if !ok {
+			return "", false
+		}
+		return canonicalJSONValue(decoded)
+	}
+}
+
+func serdeFloatString(value float64, bitSize int) (string, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "", false
+	}
+
+	absolute := math.Abs(value)
+	if absolute != 0 && (absolute < 1e-6 || absolute >= 1e16) {
+		formatted := strconv.FormatFloat(value, 'e', -1, bitSize)
+		exponentIndex := strings.LastIndexByte(formatted, 'e')
+		exponent, err := strconv.Atoi(formatted[exponentIndex+1:])
+		if err != nil {
+			return "", false
+		}
+		return formatted[:exponentIndex] + "e" + fmt.Sprintf("%+d", exponent), true
+	}
+
+	formatted := strconv.FormatFloat(value, 'f', -1, bitSize)
+	if math.Trunc(value) == value {
+		formatted += ".0"
+	}
+	return formatted, true
 }
 
 func variantToString(v interface{}) string {
