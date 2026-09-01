@@ -324,6 +324,28 @@ func TestSpanProcessorKeepsBatchesWithinEndpointLimit(t *testing.T) {
 	}
 }
 
+func TestExporterWarnsIfPostHogAIGateway(t *testing.T) {
+	server := newOTLPServer(t)
+	exporter, err := NewExporter(context.Background(), "phc_test", WithHost(server.server.URL))
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	defer exporter.Shutdown(context.Background())
+
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	span := recordSpanWithAttr(t, "gen_ai.chat", "server.address", "gateway.us.posthog.com")
+	if err := exporter.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{span}); err != nil {
+		t.Fatalf("ExportSpans: %v", err)
+	}
+	if !strings.Contains(buf.String(), "PostHog AI Gateway") {
+		t.Errorf("expected gateway warning, got %q", buf.String())
+	}
+}
+
 func TestExporterExportsOnlyAISpans(t *testing.T) {
 	server := newOTLPServer(t)
 

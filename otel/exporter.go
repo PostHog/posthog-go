@@ -39,6 +39,9 @@ func (e *Exporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpa
 	if len(aiSpans) == 0 {
 		return nil
 	}
+	for _, span := range aiSpans {
+		warnIfPostHogAIGateway(span)
+	}
 	return e.inner.ExportSpans(ctx, aiSpans)
 }
 
