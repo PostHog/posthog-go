@@ -321,6 +321,18 @@ func TestMatchPropertyNotRegexHandlesAllValueTypes(t *testing.T) {
 	m, err := matchProperty(FlagProperty{Key: "k", Value: "^9", Operator: "not_regex"}, NewProperties().Set("k", 123.0))
 	require.NoError(t, err)
 	require.True(t, m) // "123" does not match ^9
+
+	// A nil property value must not be coerced to Go's "<nil>" string. Like the
+	// server (posthog-python only allows None for "is_not"), a regex operator
+	// yields no-match for a null property.
+	m, err = matchProperty(FlagProperty{Key: "k", Value: "^1", Operator: "not_regex"}, NewProperties().Set("k", nil))
+	require.NoError(t, err)
+	require.False(t, m)
+	// Regression guard: a pattern that would match the literal "<nil>" must not
+	// sneak through for a null property.
+	m, err = matchProperty(FlagProperty{Key: "k", Value: "^<nil>$", Operator: "not_regex"}, NewProperties().Set("k", nil))
+	require.NoError(t, err)
+	require.False(t, m)
 }
 
 func TestMatchPropertyContains(t *testing.T) {

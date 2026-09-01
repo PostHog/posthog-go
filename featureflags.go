@@ -1215,6 +1215,13 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	}
 
 	if operator == "not_regex" {
+		// A nil property value never matches a regex operator. The server and
+		// posthog-python list only "is_not" in NONE_VALUES_ALLOWED_OPERATORS, so
+		// a null property yields no-match there rather than being coerced to the
+		// Go-specific "<nil>" string (which would spuriously satisfy not_regex).
+		if override_value == nil {
+			return false, nil
+		}
 		// Mirror the "regex" branch above: coerce both sides with valueToString
 		// so all property/flag value types are handled. The previous manual
 		// string/int type switch errored on other types, most notably float64,
