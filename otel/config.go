@@ -35,6 +35,8 @@ var errInvalidHost = errors.New("posthogotel: host must be an absolute http or h
 // config holds the resolved settings for the exporter and the span processor.
 type config struct {
 	host string
+	// endpoint is the resolved OTLP URL, host joined with ingestPath.
+	endpoint string
 }
 
 // Option configures the exporter or the span processor.
@@ -56,26 +58,35 @@ func newConfig(opts ...Option) (config, error) {
 		opt(&c)
 	}
 	c.host = strings.TrimRight(c.host, "/")
-	if err := validateHost(c.host); err != nil {
+	endpoint, err := resolveEndpoint(c.host)
+	if err != nil {
 		return config{}, err
 	}
+	c.endpoint = endpoint
 	return c, nil
 }
 
-// validateHost rejects a host that otlptracehttp.WithEndpointURL would silently
-// discard. On a parse failure it keeps its localhost defaults, so spans go
-// nowhere while the request still carries the API key; a scheme-less host such
-// as "us.i.posthog.com" parses but yields an empty endpoint. Requiring an
-// absolute http or https URL with a hostname turns both into an upfront error.
-func validateHost(host string) error {
+// resolveEndpoint builds the OTLP URL for host and rejects a host that
+// otlptracehttp.WithEndpointURL would silently discard. On a parse failure it
+// keeps its localhost defaults, so spans go nowhere while the request still
+// carries the API key; a scheme-less host such as "us.i.posthog.com" parses but
+// yields an empty endpoint. Requiring an absolute http or https URL with a
+// hostname turns both into an upfront error.
+//
+// ingestPath is joined rather than concatenated. A host that carries a query or
+// fragment, such as "https://us.i.posthog.com?region=eu", would concatenate into
+// a URL whose path is empty, and the exporter would then fall back to the OTLP
+// default "/v1/traces" and send every AI span, with the API key attached, to a
+// path PostHog does not serve.
+func resolveEndpoint(host string) (string, error) {
 	u, err := url.Parse(host)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errInvalidHost, err)
+		return "", fmt.Errorf("%w: %v", errInvalidHost, err)
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return errInvalidHost
+		return "", errInvalidHost
 	}
-	return nil
+	return u.JoinPath(ingestPath).String(), nil
 }
 
 // newOTLPExporter builds an OTLP/HTTP exporter that targets the PostHog AI
@@ -86,7 +97,7 @@ func validateHost(host string) error {
 func newOTLPExporter(ctx context.Context, apiKey string, cfg config) (sdktrace.SpanExporter, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	exporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpointURL(cfg.host+ingestPath),
+		otlptracehttp.WithEndpointURL(cfg.endpoint),
 		otlptracehttp.WithHeaders(map[string]string{
 			"Authorization": "Bearer " + apiKey,
 		}),

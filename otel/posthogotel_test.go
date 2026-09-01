@@ -457,14 +457,28 @@ func TestNewConfigRejectsInvalidHost(t *testing.T) {
 		}
 	}
 
-	valid := []string{
-		"https://us.i.posthog.com",
-		"https://eu.i.posthog.com/",
-		"http://localhost:8000",
+	valid := []struct {
+		host         string
+		wantEndpoint string
+	}{
+		{"https://us.i.posthog.com", "https://us.i.posthog.com" + ingestPath},
+		{"https://eu.i.posthog.com/", "https://eu.i.posthog.com" + ingestPath},
+		{"http://localhost:8000", "http://localhost:8000" + ingestPath},
+		// A host carrying a query or fragment must still resolve to ingestPath.
+		// Concatenating would leave the path empty, and the OTLP exporter would
+		// fall back to its "/v1/traces" default.
+		{"https://us.i.posthog.com?region=eu", "https://us.i.posthog.com" + ingestPath + "?region=eu"},
+		{"https://us.i.posthog.com#frag", "https://us.i.posthog.com" + ingestPath + "#frag"},
+		{"https://proxy.example.com/posthog", "https://proxy.example.com/posthog" + ingestPath},
 	}
-	for _, host := range valid {
-		if _, err := newConfig(WithHost(host)); err != nil {
-			t.Errorf("newConfig(WithHost(%q)) err = %v, want nil", host, err)
+	for _, tc := range valid {
+		cfg, err := newConfig(WithHost(tc.host))
+		if err != nil {
+			t.Errorf("newConfig(WithHost(%q)) err = %v, want nil", tc.host, err)
+			continue
+		}
+		if cfg.endpoint != tc.wantEndpoint {
+			t.Errorf("newConfig(WithHost(%q)).endpoint = %q, want %q", tc.host, cfg.endpoint, tc.wantEndpoint)
 		}
 	}
 }
@@ -475,5 +489,30 @@ func TestConstructorsRejectInvalidHost(t *testing.T) {
 	}
 	if _, err := NewExporter(context.Background(), "phc_test", WithHost("us.i.posthog.com")); !errors.Is(err, errInvalidHost) {
 		t.Errorf("NewExporter err = %v, want errInvalidHost", err)
+	}
+}
+
+func TestExporterTargetsIngestPathForHostWithQuery(t *testing.T) {
+	server := newOTLPServer(t)
+
+	// The OTLP exporter silently falls back to "/v1/traces" when the endpoint
+	// URL has no path, so assert the request the server actually receives.
+	exporter, err := NewExporter(context.Background(), "phc_test", WithHost(server.server.URL+"?region=eu"))
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	defer exporter.Shutdown(context.Background())
+
+	span := recordSpan(t, "gen_ai.chat")
+	if err := exporter.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{span}); err != nil {
+		t.Fatalf("ExportSpans: %v", err)
+	}
+
+	calls, _, path, _ := server.snapshot()
+	if calls != 1 {
+		t.Fatalf("export requests = %d, want 1", calls)
+	}
+	if path != ingestPath {
+		t.Errorf("path = %q, want %q", path, ingestPath)
 	}
 }

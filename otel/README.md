@@ -24,6 +24,16 @@ processor on it, as [`example/`](example) does. Use `WithHost` for a host other
 than PostHog US cloud. For a framework that accepts only a span exporter, use
 `NewExporter` instead and pair it with your own batch span processor.
 
+## Failed generations
+
+PostHog decides that a generation failed from the OpenTelemetry span status, so set the
+status to the error code when a model call fails. Recording the error on the span is not
+enough on its own: in OpenTelemetry for Go that only adds an exception event and leaves
+the span status unset, so the failed generation reaches PostHog looking successful with an
+empty response. The Python and JavaScript instrumentation sets the status for you, which
+is why this step is specific to Go. Once the status is set, PostHog fills in the error
+message and HTTP status from the recorded exception event.
+
 ## Google Agent Development Kit (ADK) for Go
 
 [ADK Go](https://google.golang.org/adk) instruments its agents with
