@@ -163,9 +163,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+          RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
           CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
-          gh release create "v${NEW_VERSION}" --target main --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
+          gh release create "v${NEW_VERSION}" --target "$RELEASE_COMMIT" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
       - name: Dispatch posthog upgrade for posthog-go
         if: steps.commit-version-bump.outputs.commit-hash != ''
