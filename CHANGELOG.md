@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.25.0
+
+### Minor Changes
+
+- 897a0b4: Add the OpenTelemetry bridge for AI observability as an independently installable nested Go module.
+
 ## 1.24.4
 
 ### Patch Changes
