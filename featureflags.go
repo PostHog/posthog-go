@@ -75,6 +75,9 @@ type flagsState struct {
 	// minimalFlagCalledEvents is the server-controlled gate for minimal
 	// $feature_flag_called events, cached from the local-evaluation payload.
 	minimalFlagCalledEvents bool
+	// definitions is the payload these fields were decoded from, republished to the
+	// cache provider on 304 responses.
+	definitions FlagDefinitionCacheData
 }
 
 // FeatureFlagsPoller periodically loads feature flag definitions for local evaluation.
@@ -84,7 +87,15 @@ type FeatureFlagsPoller struct {
 	// After the request the channel get closed.
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
+	shutdownDone                    chan bool
 	forceReload                     chan bool
+
+	// ctx covers polling work; cancel aborts it when shutdown outlives its deadline.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// shutdownCtx is the deadline handed to the cache provider's Shutdown. Written
+	// before shutdown is closed, read by the polling goroutine after it observes that.
+	shutdownCtx context.Context
 
 	// state holds all flag-related data using atomic pointer for lock-free reads
 	state atomic.Pointer[flagsState]
@@ -95,12 +106,13 @@ type FeatureFlagsPoller struct {
 	// Logger receives poller warnings and errors.
 	Logger Logger
 	// Endpoint is the PostHog API host used by the poller.
-	Endpoint     string
-	http         http.Client
-	nextPollTick func() time.Duration
-	flagTimeout  time.Duration
-	decider      decider
-	disableGeoIP bool
+	Endpoint      string
+	http          http.Client
+	nextPollTick  func() time.Duration
+	flagTimeout   time.Duration
+	decider       decider
+	disableGeoIP  bool
+	cacheProvider FlagDefinitionCacheProvider
 }
 
 // FeatureFlag is a feature flag definition returned by the local evaluation endpoint.
@@ -461,6 +473,7 @@ func newFeatureFlagsPoller(
 	flagTimeout time.Duration,
 	decider decider,
 	disableGeoIP bool,
+	cacheProvider FlagDefinitionCacheProvider,
 ) (*FeatureFlagsPoller, error) {
 	localEvaluationEndpoint := "/flags/definitions"
 	localEvalURL, err := url.Parse(endpoint + localEvaluationEndpoint)
@@ -472,10 +485,14 @@ func newFeatureFlagsPoller(
 		nextPollTick = func() time.Duration { return pollingInterval }
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	poller := FeatureFlagsPoller{
 		firstFeatureFlagRequestFinished: make(chan bool),
 		shutdown:                        make(chan bool),
+		shutdownDone:                    make(chan bool),
 		forceReload:                     make(chan bool),
+		ctx:                             ctx,
+		cancel:                          cancel,
 		personalApiKey:                  personalApiKey,
 		projectApiKey:                   projectApiKey,
 		localEvalUrl:                    localEvalURL,
@@ -486,6 +503,7 @@ func newFeatureFlagsPoller(
 		flagTimeout:                     flagTimeout,
 		decider:                         decider,
 		disableGeoIP:                    disableGeoIP,
+		cacheProvider:                   cacheProvider,
 	}
 
 	go poller.run()
@@ -493,6 +511,8 @@ func newFeatureFlagsPoller(
 }
 
 func (poller *FeatureFlagsPoller) run() {
+	defer close(poller.shutdownDone)
+
 	poller.fetchNewFeatureFlags()
 	close(poller.firstFeatureFlagRequestFinished)
 
@@ -502,6 +522,7 @@ func (poller *FeatureFlagsPoller) run() {
 		case <-poller.shutdown:
 			close(poller.forceReload)
 			timer.Stop()
+			poller.shutdownCacheProvider(poller.shutdownCtx)
 			return
 		case <-poller.forceReload:
 			timer.Stop()
@@ -512,10 +533,178 @@ func (poller *FeatureFlagsPoller) run() {
 	}
 }
 
-// fetchNewFeatureFlags fetches the latest feature flag definitions from the PostHog API
-// These are used for local evaluation of feature flags and should not be confused with
-// the feature flags fetched from the flags API.
+// fetchNewFeatureFlags refreshes the local feature flag definitions used for local
+// evaluation. These should not be confused with the feature flags fetched from the
+// flags API.
 func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
+	if poller.cacheProvider == nil {
+		poller.fetchFlagDefinitions(false)
+		return
+	}
+
+	shouldFetch, err := poller.cacheProvider.ShouldFetchFlagDefinitions(poller.ctx)
+	if poller.shuttingDown() {
+		return
+	}
+	if err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider ShouldFetchFlagDefinitions failed, fetching from the API: %s", err)
+		shouldFetch = true
+	}
+
+	if !shouldFetch {
+		if poller.loadFlagDefinitionsFromCache() {
+			return
+		}
+
+		if poller.shuttingDown() || poller.state.Load() != nil {
+			return
+		}
+
+		// Without definitions local evaluation is impossible, so fetch anyway.
+		poller.Logger.Debugf("[FEATURE FLAGS] No definitions cached or in memory, fetching from the API")
+	}
+
+	poller.fetchFlagDefinitions(shouldFetch)
+}
+
+// shuttingDown reports whether polling work was cancelled by a shutdown that
+// outlived its deadline. No provider call may start after that.
+func (poller *FeatureFlagsPoller) shuttingDown() bool {
+	return poller.ctx.Err() != nil
+}
+
+// loadFlagDefinitionsFromCache applies cached definitions and reports whether any
+// were loaded.
+func (poller *FeatureFlagsPoller) loadFlagDefinitionsFromCache() bool {
+	data, err := poller.cacheProvider.GetFlagDefinitions(poller.ctx)
+	if err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider GetFlagDefinitions failed: %s", err)
+		return false
+	}
+	if data == nil {
+		return false
+	}
+	if !hasFlagsField(*data) {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider returned definitions without flags, treating as a miss")
+		return false
+	}
+	decoded, err := decodeFlagDefinitions(*data)
+	if err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider returned unusable flag definitions: %s", err)
+		return false
+	}
+
+	// The ETag is dropped: a later conditional request must not be answered with 304
+	// against an ETag whose payload this instance no longer holds.
+	poller.applyFlagDefinitions(*data, decoded, "")
+	poller.Logger.Debugf("[FEATURE FLAGS] Loaded %d flag definitions from the external cache", len(decoded.flags))
+	return true
+}
+
+// hasFlagsField distinguishes a cached payload with an explicit flags array, even an
+// empty one, from a provider that deserialized a document without one.
+func hasFlagsField(data FlagDefinitionCacheData) bool {
+	return data.Flags != nil
+}
+
+// flagDefinitions is the evaluator's view of a FlagDefinitionCacheData payload.
+type flagDefinitions struct {
+	flags   []FeatureFlag
+	cohorts map[string]PropertyGroup
+}
+
+// decodeFlagDefinitions decodes the raw payload into the evaluator model, rejecting
+// payloads that would crash preprocessing. Absent flags decode to an empty set, as the
+// API may answer that way for a project without flags.
+func decodeFlagDefinitions(data FlagDefinitionCacheData) (flagDefinitions, error) {
+	decoded := flagDefinitions{flags: make([]FeatureFlag, 0, len(data.Flags))}
+
+	for i, raw := range data.Flags {
+		var flag FeatureFlag
+		if err := json.Unmarshal(raw, &flag); err != nil {
+			return flagDefinitions{}, fmt.Errorf("flags[%d]: %w", i, err)
+		}
+		if err := validateVariants(flag); err != nil {
+			return flagDefinitions{}, err
+		}
+		decoded.flags = append(decoded.flags, flag)
+	}
+
+	if len(data.Cohorts) > 0 {
+		decoded.cohorts = make(map[string]PropertyGroup, len(data.Cohorts))
+		for id, raw := range data.Cohorts {
+			var cohort PropertyGroup
+			if err := json.Unmarshal(raw, &cohort); err != nil {
+				return flagDefinitions{}, fmt.Errorf("cohorts[%s]: %w", id, err)
+			}
+			decoded.cohorts[id] = cohort
+		}
+	}
+	return decoded, nil
+}
+
+// validateVariants rejects the one shape known to panic during preprocessing.
+func validateVariants(flag FeatureFlag) error {
+	if flag.Filters.Multivariate == nil {
+		return nil
+	}
+	for _, variant := range flag.Filters.Multivariate.Variants {
+		if variant.RolloutPercentage == nil {
+			return fmt.Errorf("flag %q has variant %q without a rollout percentage", flag.Key, variant.Key)
+		}
+	}
+	return nil
+}
+
+// applyFlagDefinitions precomputes the evaluation lookups and atomically swaps in the
+// new state.
+func (poller *FeatureFlagsPoller) applyFlagDefinitions(data FlagDefinitionCacheData, decoded flagDefinitions, etag string) {
+	preDecodePayloads(decoded.flags)
+
+	groups := data.GroupTypeMapping
+	if groups == nil {
+		groups = map[string]string{}
+	}
+
+	poller.state.Store(&flagsState{
+		featureFlags:            decoded.flags,
+		flagsByKey:              buildFlagsByKey(decoded.flags),
+		cohorts:                 preParseCohortValues(decoded.cohorts),
+		groups:                  groups,
+		flagsEtag:               etag,
+		minimalFlagCalledEvents: data.MinimalFlagCalledEvents,
+		definitions:             data,
+	})
+}
+
+// publishFlagDefinitions stores definitions in the cache provider.
+func (poller *FeatureFlagsPoller) publishFlagDefinitions(data FlagDefinitionCacheData) {
+	if poller.shuttingDown() {
+		return
+	}
+	if err := poller.cacheProvider.OnFlagDefinitionsReceived(poller.ctx, data); err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider OnFlagDefinitionsReceived failed: %s", err)
+	}
+}
+
+// shutdownCacheProvider releases the cache provider.
+func (poller *FeatureFlagsPoller) shutdownCacheProvider(ctx context.Context) {
+	if poller.cacheProvider == nil {
+		return
+	}
+
+	if err := poller.cacheProvider.Shutdown(ctx); err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider Shutdown failed: %s", err)
+	}
+}
+
+// fetchFlagDefinitions fetches the latest feature flag definitions from the PostHog API.
+// When publish is true, a successful response is also stored in the cache provider.
+func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
+	if poller.shuttingDown() {
+		return
+	}
+
 	personalApiKey := poller.personalApiKey
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
 
@@ -528,7 +717,9 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 	res, cancel, err := poller.localEvaluationFlags(headers, currentEtag)
 	if err != nil {
-		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		if !poller.shuttingDown() {
+			poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		}
 		return
 	}
 	defer cancel()
@@ -547,8 +738,14 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 				groups:                  currentState.groups,
 				flagsEtag:               newEtag,
 				minimalFlagCalledEvents: currentState.minimalFlagCalledEvents,
+				definitions:             currentState.definitions,
 			}
 			poller.state.Store(newState)
+		}
+		// Republished so that a cache entry with a TTL does not expire while the
+		// definitions keep coming back unchanged.
+		if publish && currentState != nil {
+			poller.publishFlagDefinitions(currentState.definitions)
 		}
 		return
 	}
@@ -576,40 +773,23 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
-	var featureFlagsResponse FeatureFlagsResponse
-	if err = json.Unmarshal(resBody, &featureFlagsResponse); err != nil {
+	var data FlagDefinitionCacheData
+	if err = json.Unmarshal(resBody, &data); err != nil {
 		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
 		return
 	}
-	newFlags := append(make([]FeatureFlag, 0, len(featureFlagsResponse.Flags)), featureFlagsResponse.Flags...)
-
-	// Pre-decode payloads once at load time (avoids per-evaluation json unquoting)
-	preDecodePayloads(newFlags)
-
-	// Pre-build flagsByKey index for O(1) lookup during evaluation
-	flagsByKey := buildFlagsByKey(newFlags)
-
-	// Store new ETag from response (clear if server stops sending)
-	newEtag := res.Header.Get("ETag")
-
-	// Build new groups map
-	groups := map[string]string{}
-	if featureFlagsResponse.GroupTypeMapping != nil {
-		groups = *featureFlagsResponse.GroupTypeMapping
+	decoded, err := decodeFlagDefinitions(data)
+	if err != nil {
+		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
+		return
 	}
 
-	// Pre-parse cohort values into typed structs (avoids per-evaluation reconstruction)
-	parsedCohorts := preParseCohortValues(featureFlagsResponse.Cohorts)
+	// Store new ETag from response (clear if server stops sending)
+	poller.applyFlagDefinitions(data, decoded, res.Header.Get("ETag"))
 
-	// Atomic swap of entire state
-	poller.state.Store(&flagsState{
-		featureFlags:            newFlags,
-		flagsByKey:              flagsByKey,
-		cohorts:                 parsedCohorts,
-		groups:                  groups,
-		flagsEtag:               newEtag,
-		minimalFlagCalledEvents: featureFlagsResponse.MinimalFlagCalledEvents,
-	})
+	if publish {
+		poller.publishFlagDefinitions(data)
+	}
 }
 
 // getMinimalFlagCalledEvents reports whether the local-evaluation payload
@@ -2299,7 +2479,7 @@ func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header, etag
 }
 
 func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestData []byte, headers http.Header, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(poller.ctx, timeout)
 
 	req, err := http.NewRequestWithContext(ctx, method, reqUrl, bytes.NewReader(requestData))
 	if err != nil {
@@ -2331,8 +2511,21 @@ func (poller *FeatureFlagsPoller) ForceReload() {
 	poller.forceReload <- true
 }
 
-func (poller *FeatureFlagsPoller) shutdownPoller() {
+// shutdownPoller stops the polling goroutine, which releases the cache provider on
+// its way out so that Shutdown never overlaps another provider call. Once ctx is
+// done, in-flight polling work is cancelled and the goroutine is awaited, mirroring
+// how CloseWithContext cancels and then waits for the client loop.
+func (poller *FeatureFlagsPoller) shutdownPoller(ctx context.Context) {
+	poller.shutdownCtx = ctx
 	close(poller.shutdown)
+
+	select {
+	case <-poller.shutdownDone:
+	case <-ctx.Done():
+		poller.Logger.Warnf("[FEATURE FLAGS] Polling did not stop before the shutdown deadline, cancelling: %s", ctx.Err())
+		poller.cancel()
+		<-poller.shutdownDone
+	}
 }
 
 // getFeatureFlagVariants is a helper function to get the feature flag variants for
