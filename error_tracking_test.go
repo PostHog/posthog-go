@@ -62,7 +62,7 @@ func TestException_Validate(t *testing.T) {
 				Value: "",
 			},
 		},
-		"error: item missing Value": {
+		"valid: runtime supplied an empty Value": {
 			msg: Exception{
 				DistinctId: "user-123",
 				Timestamp:  now,
@@ -70,11 +70,7 @@ func TestException_Validate(t *testing.T) {
 					{Type: "Foo", Value: ""},
 				},
 			},
-			expectedError: FieldError{
-				Type:  "posthog.Exception",
-				Name:  "Value",
-				Value: "",
-			},
+			expectedError: nil,
 		},
 		"valid: full nested structure": {
 			msg: Exception{
@@ -115,6 +111,37 @@ func TestException_Validate(t *testing.T) {
 				t.Errorf("expected error:\n%v \ngot:\n%v", tc.expectedError, err)
 			}
 		})
+	}
+}
+
+func TestException_APIfy_CanonicalMetadata(t *testing.T) {
+	handled := true
+	synthetic := false
+	exception := Exception{
+		DistinctId: "user-123",
+		Level:      "warn",
+		Source:     "go.slog",
+		ExceptionList: []ExceptionItem{
+			{Type: "Outer", Value: "outer", Mechanism: &ExceptionMechanism{Type: "logger", Handled: &handled, Synthetic: &synthetic}},
+			{Type: "Inner", Value: "inner", Mechanism: &ExceptionMechanism{Source: "unwrap"}},
+		},
+	}
+
+	props := exceptionWireProps(t, exception)
+	if props["$exception_level"] != "warning" || props["$exception_source"] != "go.slog" {
+		t.Fatalf("unexpected event metadata: %v", props)
+	}
+	list := props["$exception_list"].([]interface{})
+	outer := list[0].(map[string]interface{})["mechanism"].(map[string]interface{})
+	inner := list[1].(map[string]interface{})["mechanism"].(map[string]interface{})
+	if outer["exception_id"] != float64(0) || outer["type"] != "logger" || outer["handled"] != true {
+		t.Fatalf("unexpected outer mechanism: %v", outer)
+	}
+	if inner["exception_id"] != float64(1) || inner["parent_id"] != float64(0) || inner["type"] != "chained" || inner["source"] != "unwrap" {
+		t.Fatalf("unexpected inner mechanism: %v", inner)
+	}
+	if _, present := inner["handled"]; present {
+		t.Fatalf("nested handled state must remain unknown: %v", inner)
 	}
 }
 

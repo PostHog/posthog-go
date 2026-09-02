@@ -402,7 +402,12 @@ func TestRequestContextMiddleware_CapturesPanicsWithRequestContextAndRethrows(t 
 	require.Equal(t, "client-user", properties["distinct_id"])
 	require.Equal(t, "client-session", properties[propertySessionID])
 	require.Equal(t, float64(http.StatusServiceUnavailable), properties[propertyResponseStatusCode])
-	require.Equal(t, "panic", properties[propertyExceptionSource])
+	require.Equal(t, "go.http_recover_middleware", properties[propertyExceptionSource])
+	require.Equal(t, "error", properties["$exception_level"])
+	exceptionList := properties["$exception_list"].([]interface{})
+	mechanism := exceptionList[0].(map[string]interface{})["mechanism"].(map[string]interface{})
+	require.Equal(t, "middleware", mechanism["type"])
+	require.Equal(t, true, mechanism["handled"])
 	requireExceptionStackContainsFunction(t, properties, "TestRequestContextMiddleware_CapturesPanicsWithRequestContextAndRethrows")
 }
 

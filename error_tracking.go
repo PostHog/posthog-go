@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,10 @@ type Exception struct {
 	// DistinctId identifies the user or entity associated with the exception.
 	// When using EnqueueWithContext, this can be inherited from RequestContext.
 	DistinctId string
+	// Level is the capture-boundary severity. Recognized aliases are normalized on the wire.
+	Level string
+	// Source identifies the concrete integration or runtime hook that captured the exception.
+	Source string
 	// DebugImages lists the binary images referenced by "native" stack
 	// frames, sent as $debug_images for server-side symbolication.
 	DebugImages []DebugImage
@@ -56,10 +61,17 @@ type ExceptionItem struct {
 
 // ExceptionMechanism describes whether an exception was handled or synthesized.
 type ExceptionMechanism struct {
+	// Type identifies the semantic capture category (for example generic, logger, middleware, or panic).
+	Type string `json:"type,omitempty"`
 	// Handled reports whether the exception was handled by application code.
 	Handled *bool `json:"handled,omitempty"`
 	// Synthetic reports whether the exception was synthesized by instrumentation.
 	Synthetic *bool `json:"synthetic,omitempty"`
+	// Source identifies how a nested exception was reached from its parent.
+	Source string `json:"source,omitempty"`
+	// ExceptionID and ParentID encode deterministic flattened exception-tree linkage.
+	ExceptionID *int `json:"exception_id,omitempty"`
+	ParentID    *int `json:"parent_id,omitempty"`
 }
 
 // ExceptionStacktrace is a PostHog-compatible stack trace.
@@ -146,6 +158,10 @@ type ExceptionInApiProperties struct {
 	ExceptionList []ExceptionItem `json:"$exception_list"`
 	// ExceptionFingerprint is sent as $exception_fingerprint when provided.
 	ExceptionFingerprint *string `json:"$exception_fingerprint,omitempty"`
+	// ExceptionLevel is the normalized event severity.
+	ExceptionLevel string `json:"$exception_level,omitempty"`
+	// ExceptionSource is the concrete capture integration or runtime hook.
+	ExceptionSource string `json:"$exception_source,omitempty"`
 
 	// Custom is flattened into the wire "properties" on marshal.
 	// Typed fields win on collision.
@@ -171,7 +187,7 @@ func (p ExceptionInApiProperties) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 
-	for k, v := range p.Custom {
+	for k, v := range canonicalExceptionCustomProperties(p.Custom) {
 		if _, exists := merged[k]; exists {
 			continue
 		}
@@ -221,15 +237,65 @@ func (msg ExceptionItem) Validate() error {
 			Value: msg.Type,
 		}
 	}
-	if msg.Value == "" {
-		return FieldError{
-			Type:  "posthog.Exception",
-			Name:  "Value",
-			Value: msg.Value,
+	return nil
+}
+
+var exceptionLevels = map[string]string{
+	"fatal": "fatal", "critical": "fatal", "alert": "fatal", "emergency": "fatal",
+	"error": "error", "warning": "warning", "warn": "warning", "log": "log",
+	"notice": "info", "info": "info", "trace": "debug", "debug": "debug",
+}
+
+func normalizeExceptionLevel(level string) string {
+	return exceptionLevels[strings.ToLower(level)]
+}
+
+func canonicalExceptionList(items []ExceptionItem) []ExceptionItem {
+	if len(items) > 50 {
+		items = items[:50]
+	}
+	result := cloneExceptionList(items)
+	for i := range result {
+		mechanism := result[i].Mechanism
+		if mechanism == nil {
+			mechanism = &ExceptionMechanism{}
+			result[i].Mechanism = mechanism
+		}
+		id := i
+		mechanism.ExceptionID = &id
+		if i == 0 {
+			mechanism.ParentID = nil
+			mechanism.Source = ""
+			continue
+		}
+		parentID := i - 1
+		if mechanism.ParentID != nil && *mechanism.ParentID >= 0 && *mechanism.ParentID < i {
+			parentID = *mechanism.ParentID
+		}
+		mechanism.ParentID = &parentID
+		mechanism.Type = "chained"
+		mechanism.Handled = nil
+		if mechanism.Source == "" {
+			mechanism.Source = "unwrap"
 		}
 	}
+	return result
+}
 
-	return nil
+func canonicalExceptionCustomProperties(properties Properties) Properties {
+	reserved := map[string]struct{}{
+		"$exception_list": {}, "$exception_level": {}, "$exception_source": {}, "$debug_images": {},
+		"$exception_handled": {}, "$exception_types": {}, "$exception_values": {}, "$exception_sources": {},
+		"$exception_functions": {}, "$exception_fingerprint_version": {}, "$exception_fingerprint_record": {},
+		"$exception_issue_id": {}, "$exception_release": {}, "$cymbal_errors": {},
+	}
+	filtered := NewProperties()
+	for key, value := range properties {
+		if _, found := reserved[key]; !found {
+			filtered[key] = value
+		}
+	}
+	return filtered
 }
 
 // APIfy converts an Exception message into the PostHog batch API representation.
@@ -256,8 +322,10 @@ func (msg Exception) APIfy() APIMessage {
 			DistinctId:           msg.DistinctId,
 			DisableGeoIP:         msg.DisableGeoIP,
 			DebugImages:          msg.DebugImages,
-			ExceptionList:        msg.ExceptionList,
+			ExceptionList:        canonicalExceptionList(msg.ExceptionList),
 			ExceptionFingerprint: msg.ExceptionFingerprint,
+			ExceptionLevel:       normalizeExceptionLevel(msg.Level),
+			ExceptionSource:      msg.Source,
 			Custom:               msg.Properties,
 		},
 	}
@@ -280,10 +348,12 @@ func NewDefaultException(
 	return Exception{
 		DistinctId: distinctID,
 		Timestamp:  timestamp,
+		Level:      "error",
 		ExceptionList: []ExceptionItem{
 			{
 				Type:       title,
 				Value:      description,
+				Mechanism:  &ExceptionMechanism{Type: "generic", Handled: Ptr(true), Synthetic: Ptr(true)},
 				Stacktrace: defaultStackTrace.GetStackTrace(3),
 			},
 		},

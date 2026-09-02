@@ -22,7 +22,10 @@
               "type": "raw"
             },
             "type": "Exception Title",
-            "value": "Exception Description"
+            "value": "Exception Description",
+            "mechanism": {
+              "exception_id": 0
+            }
           }
         ],
         "$geoip_disable": true,

@@ -96,7 +96,10 @@
         "$exception_list": [
           {
             "type": "SnapshotError",
-            "value": "synthetic exception"
+            "value": "synthetic exception",
+            "mechanism": {
+              "exception_id": 0
+            }
           }
         ],
         "$geoip_disable": true,
@@ -132,7 +135,8 @@
           {
             "mechanism": {
               "handled": false,
-              "synthetic": true
+              "synthetic": true,
+              "exception_id": 0
             },
             "stacktrace": {
               "frames": [
