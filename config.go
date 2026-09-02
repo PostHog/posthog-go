@@ -126,6 +126,12 @@ type Config struct {
 	// polling delay. When set, it overrides DefaultFeatureFlagsPollingInterval.
 	NextFeatureFlagsPollingTick func() time.Duration
 
+	// FlagDefinitionCacheProvider shares local evaluation flag definitions with other
+	// SDK instances through an external cache. Only used when SecretKey is configured.
+	//
+	// EXPERIMENTAL: this API may change in a minor version bump.
+	FlagDefinitionCacheProvider FlagDefinitionCacheProvider
+
 	// HistoricalMigration marks captured batches as historical migration traffic.
 	// See https://posthog.com/docs/migrate for migration guidance.
 	HistoricalMigration bool

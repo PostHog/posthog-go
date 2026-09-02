@@ -31,6 +31,7 @@ This will run:
 - Feature flags example
 - Capture events example
 - Capture events with feature flag options example
+- Feature flags definition cache example
 
 ### Prerequisites
 

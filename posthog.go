@@ -298,6 +298,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.FeatureFlagRequestTimeout,
 			c.decider,
 			c.Config.GetDisableGeoIP(),
+			c.FlagDefinitionCacheProvider,
 		)
 		if err != nil {
 			return nil, err
