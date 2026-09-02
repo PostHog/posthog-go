@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,7 +20,12 @@ func newTestPoller(t *testing.T, serverURL string) *FeatureFlagsPoller {
 		t.Fatalf("Failed to parse URL: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
 	return &FeatureFlagsPoller{
+		ctx:            ctx,
+		cancel:         cancel,
 		personalApiKey: "test-personal-key",
 		projectApiKey:  "test-api-key",
 		localEvalUrl:   localEvalURL,
