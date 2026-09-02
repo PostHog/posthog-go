@@ -35,6 +35,30 @@ jobs:
       - name: Build
         run: go build .
 
+  otel-bridge:
+    name: OTel bridge (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
+        go-version: ['1.25', '1.x']
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Build, vet, and test
+        working-directory: otel
+        run: |
+          go build ./...
+          go vet ./...
+          go test -race -count=1 -timeout=5m ./...
+
   public-api:
     name: Public API
     runs-on: ubuntu-latest
