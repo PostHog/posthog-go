@@ -627,10 +627,10 @@ type Filter struct {
 }
 
 type FlagDefinitionCacheData struct {
-	Flags            []FeatureFlag            `json:"flags"`
-	GroupTypeMapping map[string]string        `json:"group_type_mapping"`
-	Cohorts          map[string]PropertyGroup `json:"cohorts"`
-	MinimalFlagCalledEvents bool `json:"minimal_flag_called_events"`
+	Flags                   []FeatureFlag            `json:"flags"`
+	GroupTypeMapping        map[string]string        `json:"group_type_mapping"`
+	Cohorts                 map[string]PropertyGroup `json:"cohorts"`
+	MinimalFlagCalledEvents bool                     `json:"minimal_flag_called_events"`
 }
 
 type FlagDefinitionCacheProvider interface {
