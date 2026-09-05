@@ -128,6 +128,8 @@ type Config struct {
 
 	// FlagDefinitionCacheProvider shares local evaluation flag definitions with other
 	// SDK instances through an external cache. Only used when SecretKey is configured.
+	// See https://posthog.com/docs/feature-flags/local-evaluation/distributed-environments
+	// for guidance.
 	//
 	// EXPERIMENTAL: this API may change in a minor version bump.
 	FlagDefinitionCacheProvider FlagDefinitionCacheProvider
