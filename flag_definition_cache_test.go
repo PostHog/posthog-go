@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +53,7 @@ type fakeFlagDefinitionCache struct {
 	getErr         error
 	publishErr     error
 	shutdownErr    error
+	onShouldFetch  func()
 	onShutdown     func(ctx context.Context) error
 
 	shouldFetchCalls int
@@ -62,9 +64,15 @@ type fakeFlagDefinitionCache struct {
 
 func (c *fakeFlagDefinitionCache) ShouldFetchFlagDefinitions(context.Context) (bool, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.shouldFetchCalls++
-	return c.shouldFetch, c.shouldFetchErr
+	onShouldFetch := c.onShouldFetch
+	shouldFetch, err := c.shouldFetch, c.shouldFetchErr
+	c.mu.Unlock()
+
+	if onShouldFetch != nil {
+		onShouldFetch()
+	}
+	return shouldFetch, err
 }
 
 func (c *fakeFlagDefinitionCache) GetFlagDefinitions(context.Context) (*FlagDefinitionCacheData, error) {
@@ -572,6 +580,109 @@ func TestFlagDefinitionCacheShutdownUsesTheCallerDeadline(t *testing.T) {
 
 	require.True(t, hasDeadline, "Shutdown was handed a context with no deadline")
 	require.Equal(t, callerDeadline, deadline, "the provider must not get its own, longer deadline")
+}
+
+func TestFlagDefinitionCacheShutdownWaitsForAnInFlightProviderCall(t *testing.T) {
+	fetching := make(chan struct{})
+	release := make(chan struct{})
+	shutdownStarted := make(chan struct{})
+
+	var inFlight atomic.Int32
+	var inFlightAtShutdown int32
+
+	provider := &fakeFlagDefinitionCache{
+		shouldFetch: true,
+		onShouldFetch: func() {
+			inFlight.Add(1)
+			defer inFlight.Add(-1)
+			close(fetching)
+			<-release
+		},
+		onShutdown: func(context.Context) error {
+			inFlightAtShutdown = inFlight.Load()
+			close(shutdownStarted)
+			return nil
+		},
+	}
+	server, _ := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
+
+	poller, err := newFeatureFlagsPoller(
+		"test-api-key",
+		"test-personal-key",
+		newDefaultLogger(false),
+		server.URL,
+		http.Client{},
+		time.Hour,
+		nil,
+		10*time.Second,
+		nil,
+		false,
+		provider,
+	)
+	require.NoError(t, err)
+
+	<-fetching
+
+	done := make(chan struct{})
+	go func() {
+		poller.shutdownPoller(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-shutdownStarted:
+		t.Fatal("Shutdown ran while a provider call was still in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdownPoller never returned")
+	}
+
+	require.Zero(t, inFlightAtShutdown, "Shutdown must not overlap another provider call")
+}
+
+func TestFlagDefinitionCacheCloseDeadlineReachesTheProvider(t *testing.T) {
+	entered := make(chan struct{})
+	provider := &fakeFlagDefinitionCache{
+		shouldFetch: true,
+		onShutdown: func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	server, _ := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
+
+	client, err := NewWithConfig("phc_test", Config{
+		Endpoint:                           server.URL,
+		SecretKey:                          "phs_test",
+		Interval:                           time.Millisecond,
+		DefaultFeatureFlagsPollingInterval: time.Hour,
+		ShutdownTimeout:                    20 * time.Millisecond,
+		FlagDefinitionCacheProvider:        provider,
+	})
+	require.NoError(t, err)
+
+	closed := make(chan error, 1)
+	go func() { closed <- client.Close() }()
+
+	select {
+	case err := <-closed:
+		require.ErrorContains(t, err, "shutdown timeout")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung on a provider that waits for its context")
+	}
+
+	select {
+	case <-entered:
+	default:
+		t.Fatal("the provider was never asked to shut down")
+	}
 }
 
 func TestFlagDefinitionCacheShutdownStopsWaitingOnADeadDeadline(t *testing.T) {
