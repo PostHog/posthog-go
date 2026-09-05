@@ -384,6 +384,19 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
+		// This evaluator has only the caller's properties, not the referenced
+		// flag's group context. Do not turn missing context into a local result.
+		// Check before the cache so repeated cohort references also fall back.
+		depFlag := flagsByKey[depFlagKey]
+		if depFlag.Active {
+			groupTargeted := depFlag.Filters.AggregationGroupTypeIndex != nil
+			for _, condition := range depFlag.Filters.Groups {
+				groupTargeted = groupTargeted || condition.AggregationGroupTypeIndex != nil
+			}
+			if groupTargeted {
+				return false, &RequiresServerEvaluationError{"Flag dependency requires group context"}
+			}
+		}
 		if _, exists := evaluationCache[depFlagKey]; exists {
 			continue
 		}
@@ -410,7 +423,11 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			// Recursively evaluate the dependency
 			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
 			if err != nil {
-				// If we can't evaluate a dependency, store nil and propagate the error
+				// Preserve server-required errors on repeated references instead of
+				// reducing them to a cached inconclusive value that cohorts can negate.
+				if isServerEvalError(err) {
+					return false, err
+				}
 				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{
 					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
