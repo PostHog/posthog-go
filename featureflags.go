@@ -402,6 +402,11 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		if !depFlag.Active {
 			evaluationCache[depFlagKey] = false
 		} else {
+			// Dependencies must preserve the same server boundary as direct evaluation.
+			if depFlag.EnsureExperienceContinuity != nil && *depFlag.EnsureExperienceContinuity {
+				evaluationCache[depFlagKey] = nil
+				return false, &InconclusiveMatchError{"Flag dependency has experience continuity enabled"}
+			}
 			// Recursively evaluate the dependency
 			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
 			if err != nil {
