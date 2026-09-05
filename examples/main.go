@@ -91,8 +91,9 @@ func showMenu() {
 	fmt.Println("4. Feature flag with SendFeatureFlagsOptions examples")
 	fmt.Println("5. Flag dependencies examples")
 	fmt.Println("6. ETag polling test (continuous, Ctrl+C to stop)")
-	fmt.Println("7. Run all examples (except ETag polling)")
-	fmt.Println("8. Exit")
+	fmt.Println("7. Distributed flag definition cache examples")
+	fmt.Println("8. Run all examples (except ETag polling)")
+	fmt.Println("9. Exit")
 }
 
 func runBasicCaptureExamples() {
@@ -125,6 +126,11 @@ func runETagPollingExample() {
 	TestETagPolling(projectAPIKey, secretKey, endpoint)
 }
 
+func runFlagDefinitionCacheExample() {
+	printExampleSection("DISTRIBUTED FLAG DEFINITION CACHE EXAMPLES")
+	TestFlagDefinitionCache(projectAPIKey, secretKey, endpoint)
+}
+
 func printExampleSection(title string) {
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Println(title)
@@ -150,6 +156,9 @@ func runAllExamples() {
 
 	fmt.Printf("\n%s FLAG DEPENDENCIES %s\n", strings.Repeat("🔸", 20), strings.Repeat("🔸", 20))
 	TestFlagDependencies(projectAPIKey, secretKey, endpoint)
+
+	fmt.Printf("\n%s FLAG DEFINITION CACHE %s\n", strings.Repeat("🔸", 19), strings.Repeat("🔸", 19))
+	TestFlagDefinitionCache(projectAPIKey, secretKey, endpoint)
 }
 
 func isInteractive() bool {
@@ -170,7 +179,7 @@ func main() {
 
 	for {
 		showMenu()
-		choice := promptForInput("\nEnter your choice (1-8): ")
+		choice := promptForInput("\nEnter your choice (1-9): ")
 
 		switch choice {
 		case "1":
@@ -188,12 +197,14 @@ func main() {
 			// ETag polling runs continuously, so exit after it returns
 			return
 		case "7":
-			runAllExamples()
+			runFlagDefinitionCacheExample()
 		case "8":
+			runAllExamples()
+		case "9":
 			fmt.Println("👋 Goodbye!")
 			return
 		default:
-			fmt.Println("❌ Invalid choice. Please select 1-8.")
+			fmt.Println("❌ Invalid choice. Please select 1-9.")
 			continue
 		}
 

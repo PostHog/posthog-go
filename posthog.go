@@ -298,6 +298,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.FeatureFlagRequestTimeout,
 			c.decider,
 			c.Config.GetDisableGeoIP(),
+			c.FlagDefinitionCacheProvider,
 		)
 		if err != nil {
 			return nil, err
@@ -1724,7 +1725,7 @@ func (c *client) loop() {
 	defer close(c.batches) // prevent any pending receives from blocking
 	defer close(c.shutdown)
 	if c.featureFlagsPoller != nil {
-		defer c.featureFlagsPoller.shutdownPoller()
+		defer c.featureFlagsPoller.shutdownPoller(c.ctx)
 	}
 
 	var batchData []json.RawMessage
