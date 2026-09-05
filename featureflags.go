@@ -85,8 +85,7 @@ type FeatureFlagsPoller struct {
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
 	forceReload                     chan bool
-	// pollLoopDone is closed when the polling goroutine has returned.
-	pollLoopDone chan struct{}
+	shutdownDone                    chan struct{}
 
 	// state holds all flag-related data using atomic pointer for lock-free reads
 	state atomic.Pointer[flagsState]
@@ -480,7 +479,7 @@ func newFeatureFlagsPoller(
 		firstFeatureFlagRequestFinished: make(chan bool),
 		shutdown:                        make(chan bool),
 		forceReload:                     make(chan bool),
-		pollLoopDone:                    make(chan struct{}),
+		shutdownDone:                    make(chan struct{}),
 		personalApiKey:                  personalApiKey,
 		projectApiKey:                   projectApiKey,
 		localEvalUrl:                    localEvalURL,
@@ -499,7 +498,7 @@ func newFeatureFlagsPoller(
 }
 
 func (poller *FeatureFlagsPoller) run() {
-	defer close(poller.pollLoopDone)
+	defer close(poller.shutdownDone)
 
 	poller.fetchNewFeatureFlags()
 	close(poller.firstFeatureFlagRequestFinished)
@@ -2447,7 +2446,7 @@ func (poller *FeatureFlagsPoller) shutdownPoller(ctx context.Context) {
 	close(poller.shutdown)
 
 	select {
-	case <-poller.pollLoopDone:
+	case <-poller.shutdownDone:
 	case <-ctx.Done():
 		poller.Logger.Warnf("[FEATURE FLAGS] Polling loop did not stop before the shutdown deadline: %s", ctx.Err())
 	}

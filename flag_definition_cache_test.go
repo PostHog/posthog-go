@@ -151,8 +151,8 @@ func newCachingTestPoller(t *testing.T, serverURL string, provider FlagDefinitio
 	poller.firstFeatureFlagRequestFinished = make(chan bool)
 	close(poller.firstFeatureFlagRequestFinished)
 
-	poller.pollLoopDone = make(chan struct{})
-	close(poller.pollLoopDone)
+	poller.shutdownDone = make(chan struct{})
+	close(poller.shutdownDone)
 
 	return poller
 }
@@ -528,7 +528,7 @@ func TestFlagDefinitionCacheShutdownReleasesProvider(t *testing.T) {
 	require.Equal(t, 1, shutdownCalls, "shutdownPoller waits for the provider to be released")
 
 	select {
-	case <-poller.pollLoopDone:
+	case <-poller.shutdownDone:
 	default:
 		t.Fatal("Shutdown ran while the polling loop was still running")
 	}
@@ -692,7 +692,7 @@ func TestFlagDefinitionCacheShutdownStopsWaitingOnADeadDeadline(t *testing.T) {
 	poller := newCachingTestPoller(t, server.URL, provider)
 	poller.shutdown = make(chan bool)
 	// A polling loop that never returns.
-	poller.pollLoopDone = make(chan struct{})
+	poller.shutdownDone = make(chan struct{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
