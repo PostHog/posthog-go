@@ -84,8 +84,8 @@ type FeatureFlagsPoller struct {
 	// After the request the channel get closed.
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
-	forceReload                     chan bool
 	shutdownDone                    chan bool
+	forceReload                     chan bool
 
 	// state holds all flag-related data using atomic pointer for lock-free reads
 	state atomic.Pointer[flagsState]
@@ -478,8 +478,8 @@ func newFeatureFlagsPoller(
 	poller := FeatureFlagsPoller{
 		firstFeatureFlagRequestFinished: make(chan bool),
 		shutdown:                        make(chan bool),
-		forceReload:                     make(chan bool),
 		shutdownDone:                    make(chan bool),
+		forceReload:                     make(chan bool),
 		personalApiKey:                  personalApiKey,
 		projectApiKey:                   projectApiKey,
 		localEvalUrl:                    localEvalURL,
