@@ -161,7 +161,7 @@ func TestFlagDefinitionCache(projectAPIKey, secretKey, endpoint string) {
 	clients := make([]posthog.Client, 0, 2)
 	caches := make([]*FileFlagCache, 0, 2)
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 2; i++ {
 		cache, err := NewFileFlagCache(dir, "my-service-production")
 		if err != nil {
 			fmt.Printf("❌ Could not create the cache provider: %v\n", err)

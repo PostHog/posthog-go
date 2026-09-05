@@ -4,9 +4,15 @@ import "context"
 
 // FlagDefinitionCacheData is the set of local evaluation data for a project.
 type FlagDefinitionCacheData struct {
+	// _ forces keyed literals so that later fields do not break implementations.
+	_ struct{}
+
 	Flags            []FeatureFlag            `json:"flags"`
 	GroupTypeMapping map[string]string        `json:"group_type_mapping"`
 	Cohorts          map[string]PropertyGroup `json:"cohorts"`
+	// MinimalFlagCalledEvents is the server-controlled gate for minimal
+	// $feature_flag_called events. Absent means false.
+	MinimalFlagCalledEvents bool `json:"minimal_flag_called_events"`
 }
 
 // FlagDefinitionCacheProvider shares feature flag definitions between SDK

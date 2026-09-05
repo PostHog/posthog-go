@@ -143,6 +143,9 @@ func newCachingTestPoller(t *testing.T, serverURL string, provider FlagDefinitio
 	poller.firstFeatureFlagRequestFinished = make(chan bool)
 	close(poller.firstFeatureFlagRequestFinished)
 
+	poller.pollLoopDone = make(chan struct{})
+	close(poller.pollLoopDone)
+
 	return poller
 }
 
@@ -163,6 +166,7 @@ func TestFlagDefinitionCacheLeaderFetchesAndPublishes(t *testing.T) {
 	require.Len(t, published[0].Flags, 2)
 	require.Equal(t, map[string]string{"0": "company"}, published[0].GroupTypeMapping)
 	require.Contains(t, published[0].Cohorts, "1")
+	require.True(t, published[0].MinimalFlagCalledEvents)
 
 	state := poller.state.Load()
 	require.NotNil(t, state)
@@ -191,7 +195,7 @@ func TestFlagDefinitionCacheFollowerReadsCacheInsteadOfAPI(t *testing.T) {
 	require.NotNil(t, state)
 	require.Len(t, state.featureFlags, 2)
 	require.Equal(t, map[string]string{"0": "company"}, state.groups)
-	require.False(t, state.minimalFlagCalledEvents, "the gate is not shared, so cached definitions fall back to full events")
+	require.True(t, state.minimalFlagCalledEvents, "the gate travels with the cached definitions")
 	require.Empty(t, state.flagsEtag, "cached definitions must not inherit an ETag")
 
 	require.Contains(t, state.flagsByKey, "cached-flag")
@@ -264,6 +268,75 @@ func TestFlagDefinitionCacheEmptyFlagsIsAHit(t *testing.T) {
 	state := poller.state.Load()
 	require.NotNil(t, state)
 	require.Empty(t, state.featureFlags)
+}
+
+func TestFlagDefinitionCacheMissingFlagsIsAMiss(t *testing.T) {
+	// What a provider that deserialized the JSON document `{}` hands back.
+	provider := &fakeFlagDefinitionCache{shouldFetch: false, cached: &FlagDefinitionCacheData{}}
+	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
+
+	poller := newCachingTestPoller(t, server.URL, provider)
+	poller.fetchNewFeatureFlags()
+
+	require.Equal(t, 1, requests(), "definitions without a flags key are unusable, so fetch instead")
+
+	state := poller.state.Load()
+	require.NotNil(t, state)
+	require.Len(t, state.featureFlags, 2)
+}
+
+func TestFlagDefinitionCacheUnusableDefinitionsKeepTheLoadedOnes(t *testing.T) {
+	malformed := FlagDefinitionCacheData{
+		Flags: []FeatureFlag{{
+			Key:    "malformed-multivariate",
+			Active: true,
+			Filters: Filter{
+				Multivariate: &Variants{Variants: []FlagVariant{{Key: "control"}}},
+			},
+		}},
+	}
+
+	provider := &fakeFlagDefinitionCache{shouldFetch: true}
+	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
+
+	poller := newCachingTestPoller(t, server.URL, provider)
+	poller.fetchNewFeatureFlags()
+	require.Equal(t, 1, requests())
+
+	provider.mu.Lock()
+	provider.shouldFetch = false
+	provider.cached = &malformed
+	provider.mu.Unlock()
+
+	require.NotPanics(t, poller.fetchNewFeatureFlags)
+
+	require.Equal(t, 1, requests(), "warm definitions are kept, so there is nothing to recover")
+	state := poller.state.Load()
+	require.NotNil(t, state)
+	require.Len(t, state.featureFlags, 2)
+	require.Contains(t, state.flagsByKey, "cached-flag")
+}
+
+func TestFlagDefinitionCacheUnusableDefinitionsFetchWithoutWarmState(t *testing.T) {
+	provider := &fakeFlagDefinitionCache{
+		shouldFetch: false,
+		cached: &FlagDefinitionCacheData{
+			Flags: []FeatureFlag{{
+				Key:     "malformed-multivariate",
+				Active:  true,
+				Filters: Filter{Multivariate: &Variants{Variants: []FlagVariant{{Key: "control"}}}},
+			}},
+		},
+	}
+	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
+
+	poller := newCachingTestPoller(t, server.URL, provider)
+	require.NotPanics(t, poller.fetchNewFeatureFlags)
+
+	require.Equal(t, 1, requests())
+	state := poller.state.Load()
+	require.NotNil(t, state)
+	require.Len(t, state.featureFlags, 2)
 }
 
 func TestFlagDefinitionCacheMissWithoutDefinitionsFetchesAnyway(t *testing.T) {
@@ -376,6 +449,7 @@ func TestFlagDefinitionCacheNotModifiedRepublishesDefinitions(t *testing.T) {
 	require.Len(t, published, 2)
 	require.Len(t, published[1].Flags, 2, "the 304 republishes the definitions in memory")
 	require.Contains(t, published[1].Cohorts, "1")
+	require.True(t, published[1].MinimalFlagCalledEvents, "the 304 republishes the gate too")
 }
 
 func TestFlagDefinitionCacheNotModifiedDoesNotPublishForFollowers(t *testing.T) {
@@ -440,10 +514,16 @@ func TestFlagDefinitionCacheShutdownReleasesProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	<-poller.firstFeatureFlagRequestFinished
-	poller.shutdownPoller()
+	poller.shutdownPoller(context.Background())
 
 	_, _, shutdownCalls, _ := provider.calls()
 	require.Equal(t, 1, shutdownCalls, "shutdownPoller waits for the provider to be released")
+
+	select {
+	case <-poller.pollLoopDone:
+	default:
+		t.Fatal("Shutdown ran while the polling loop was still running")
+	}
 }
 
 func TestFlagDefinitionCacheShutdownErrorDoesNotBlockShutdown(t *testing.T) {
@@ -455,7 +535,7 @@ func TestFlagDefinitionCacheShutdownErrorDoesNotBlockShutdown(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		poller.shutdownPoller()
+		poller.shutdownPoller(context.Background())
 		close(done)
 	}()
 
@@ -469,7 +549,7 @@ func TestFlagDefinitionCacheShutdownErrorDoesNotBlockShutdown(t *testing.T) {
 	require.Equal(t, 1, shutdownCalls)
 }
 
-func TestFlagDefinitionCacheShutdownContextCarriesADeadline(t *testing.T) {
+func TestFlagDefinitionCacheShutdownUsesTheCallerDeadline(t *testing.T) {
 	var deadline time.Time
 	var hasDeadline bool
 
@@ -484,10 +564,42 @@ func TestFlagDefinitionCacheShutdownContextCarriesADeadline(t *testing.T) {
 
 	poller := newCachingTestPoller(t, server.URL, provider)
 	poller.shutdown = make(chan bool)
-	poller.shutdownPoller()
+
+	callerDeadline := time.Now().Add(20 * time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), callerDeadline)
+	defer cancel()
+	poller.shutdownPoller(ctx)
 
 	require.True(t, hasDeadline, "Shutdown was handed a context with no deadline")
-	require.WithinDuration(t, time.Now().Add(flagDefinitionCacheShutdownTimeout), deadline, time.Minute)
+	require.Equal(t, callerDeadline, deadline, "the provider must not get its own, longer deadline")
+}
+
+func TestFlagDefinitionCacheShutdownStopsWaitingOnADeadDeadline(t *testing.T) {
+	provider := &fakeFlagDefinitionCache{shouldFetch: true}
+	server, _ := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
+
+	poller := newCachingTestPoller(t, server.URL, provider)
+	poller.shutdown = make(chan bool)
+	// A polling loop that never returns.
+	poller.pollLoopDone = make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		poller.shutdownPoller(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdownPoller kept waiting for the polling loop past the deadline")
+	}
+
+	_, _, shutdownCalls, _ := provider.calls()
+	require.Equal(t, 1, shutdownCalls)
 }
 
 func TestFlagDefinitionCacheProviderThroughClient(t *testing.T) {

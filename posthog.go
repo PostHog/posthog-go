@@ -1725,7 +1725,7 @@ func (c *client) loop() {
 	defer close(c.batches) // prevent any pending receives from blocking
 	defer close(c.shutdown)
 	if c.featureFlagsPoller != nil {
-		defer c.featureFlagsPoller.shutdownPoller()
+		defer c.featureFlagsPoller.shutdownPoller(c.ctx)
 	}
 
 	var batchData []json.RawMessage

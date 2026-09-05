@@ -64,8 +64,6 @@ func getOrCompileRegex(pattern string) (*regexp.Regexp, error) {
 	return r, nil
 }
 
-const flagDefinitionCacheShutdownTimeout = 30 * time.Second
-
 // flagsState holds the feature flag data that is atomically swapped during updates.
 // This provides lock-free reads for the common path (flag evaluation).
 type flagsState struct {
@@ -87,6 +85,8 @@ type FeatureFlagsPoller struct {
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
 	forceReload                     chan bool
+	// pollLoopDone is closed when the polling goroutine has returned.
+	pollLoopDone chan struct{}
 
 	// state holds all flag-related data using atomic pointer for lock-free reads
 	state atomic.Pointer[flagsState]
@@ -480,6 +480,7 @@ func newFeatureFlagsPoller(
 		firstFeatureFlagRequestFinished: make(chan bool),
 		shutdown:                        make(chan bool),
 		forceReload:                     make(chan bool),
+		pollLoopDone:                    make(chan struct{}),
 		personalApiKey:                  personalApiKey,
 		projectApiKey:                   projectApiKey,
 		localEvalUrl:                    localEvalURL,
@@ -498,6 +499,8 @@ func newFeatureFlagsPoller(
 }
 
 func (poller *FeatureFlagsPoller) run() {
+	defer close(poller.pollLoopDone)
+
 	poller.fetchNewFeatureFlags()
 	close(poller.firstFeatureFlagRequestFinished)
 
@@ -559,17 +562,40 @@ func (poller *FeatureFlagsPoller) loadFlagDefinitionsFromCache() bool {
 	if data == nil {
 		return false
 	}
+	if err := validateFlagDefinitions(*data); err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider returned unusable flag definitions: %s", err)
+		return false
+	}
 
 	// The ETag is dropped: a later conditional request must not be answered with 304
 	// against an ETag whose payload this instance no longer holds.
-	poller.applyFlagDefinitions(*data, "", false)
+	poller.applyFlagDefinitions(*data, "")
 	poller.Logger.Debugf("[FEATURE FLAGS] Loaded %d flag definitions from the external cache", len(data.Flags))
 	return true
 }
 
+// validateFlagDefinitions reports why cached definitions cannot be applied.
+func validateFlagDefinitions(data FlagDefinitionCacheData) error {
+	if data.Flags == nil {
+		return errors.New("flags is missing")
+	}
+
+	for _, flag := range data.Flags {
+		if flag.Filters.Multivariate == nil {
+			continue
+		}
+		for _, variant := range flag.Filters.Multivariate.Variants {
+			if variant.RolloutPercentage == nil {
+				return fmt.Errorf("flag %q has variant %q without a rollout percentage", flag.Key, variant.Key)
+			}
+		}
+	}
+	return nil
+}
+
 // applyFlagDefinitions precomputes the evaluation lookups and atomically swaps in the
 // new state.
-func (poller *FeatureFlagsPoller) applyFlagDefinitions(data FlagDefinitionCacheData, etag string, minimalFlagCalledEvents bool) {
+func (poller *FeatureFlagsPoller) applyFlagDefinitions(data FlagDefinitionCacheData, etag string) {
 	newFlags := append(make([]FeatureFlag, 0, len(data.Flags)), data.Flags...)
 	preDecodePayloads(newFlags)
 
@@ -584,7 +610,7 @@ func (poller *FeatureFlagsPoller) applyFlagDefinitions(data FlagDefinitionCacheD
 		cohorts:                 preParseCohortValues(data.Cohorts),
 		groups:                  groups,
 		flagsEtag:               etag,
-		minimalFlagCalledEvents: minimalFlagCalledEvents,
+		minimalFlagCalledEvents: data.MinimalFlagCalledEvents,
 	})
 }
 
@@ -596,13 +622,10 @@ func (poller *FeatureFlagsPoller) publishFlagDefinitions(data FlagDefinitionCach
 }
 
 // shutdownCacheProvider releases the cache provider.
-func (poller *FeatureFlagsPoller) shutdownCacheProvider() {
+func (poller *FeatureFlagsPoller) shutdownCacheProvider(ctx context.Context) {
 	if poller.cacheProvider == nil {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), flagDefinitionCacheShutdownTimeout)
-	defer cancel()
 
 	if err := poller.cacheProvider.Shutdown(ctx); err != nil {
 		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider Shutdown failed: %s", err)
@@ -650,9 +673,10 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 		// definitions keep coming back unchanged.
 		if publish && currentState != nil {
 			poller.publishFlagDefinitions(FlagDefinitionCacheData{
-				Flags:            currentState.featureFlags,
-				GroupTypeMapping: currentState.groups,
-				Cohorts:          currentState.cohorts,
+				Flags:                   currentState.featureFlags,
+				GroupTypeMapping:        currentState.groups,
+				Cohorts:                 currentState.cohorts,
+				MinimalFlagCalledEvents: currentState.minimalFlagCalledEvents,
 			})
 		}
 		return
@@ -694,13 +718,14 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 	}
 
 	data := FlagDefinitionCacheData{
-		Flags:            featureFlagsResponse.Flags,
-		GroupTypeMapping: groups,
-		Cohorts:          featureFlagsResponse.Cohorts,
+		Flags:                   featureFlagsResponse.Flags,
+		GroupTypeMapping:        groups,
+		Cohorts:                 featureFlagsResponse.Cohorts,
+		MinimalFlagCalledEvents: featureFlagsResponse.MinimalFlagCalledEvents,
 	}
 
 	// Store new ETag from response (clear if server stops sending)
-	poller.applyFlagDefinitions(data, res.Header.Get("ETag"), featureFlagsResponse.MinimalFlagCalledEvents)
+	poller.applyFlagDefinitions(data, res.Header.Get("ETag"))
 
 	if publish {
 		poller.publishFlagDefinitions(data)
@@ -2415,9 +2440,19 @@ func (poller *FeatureFlagsPoller) ForceReload() {
 	poller.forceReload <- true
 }
 
-func (poller *FeatureFlagsPoller) shutdownPoller() {
+// shutdownPoller stops the polling loop and then releases the cache provider, so
+// that no provider call is in flight when Shutdown runs. It gives up waiting when
+// ctx is done, bounding cleanup by the deadline the caller passed to Close.
+func (poller *FeatureFlagsPoller) shutdownPoller(ctx context.Context) {
 	close(poller.shutdown)
-	poller.shutdownCacheProvider()
+
+	select {
+	case <-poller.pollLoopDone:
+	case <-ctx.Done():
+		poller.Logger.Warnf("[FEATURE FLAGS] Polling loop did not stop before the shutdown deadline: %s", ctx.Err())
+	}
+
+	poller.shutdownCacheProvider(ctx)
 }
 
 // getFeatureFlagVariants is a helper function to get the feature flag variants for
