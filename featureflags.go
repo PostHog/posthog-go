@@ -339,9 +339,15 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	deviceId *string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
+	groupContext bool,
 	snapshots ...*flagsState,
 ) (bool, error) {
 	state := poller.evaluationState(snapshots)
+	// Group conditions no longer have the person's properties or bucketing ID.
+	// This must precede cache lookup, including for person-targeted dependencies.
+	if groupContext {
+		return false, &RequiresServerEvaluationError{"Flag dependency cannot use group context"}
+	}
 	// Some of these conditions should never happen, but we'll check them to be defensive.
 	if property.Value == nil {
 		return false, &InconclusiveMatchError{
@@ -1160,11 +1166,12 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 			isMatch bool
 			err     error
 		)
+		groupContext := flag.Filters.AggregationGroupTypeIndex != nil || condition.AggregationGroupTypeIndex != nil
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, state)
+				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, groupContext, state)
 			} else if prop.Type == "flag" {
-				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts, state)
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts, groupContext, state)
 			} else {
 				isMatch, err = matchProperty(prop, properties, state.propertyMatchingVersion)
 			}

@@ -54,7 +54,7 @@ func TestCohortFlagDependencyExperienceContinuity(t *testing.T) {
 				state := poller.state.Load()
 				cache := map[string]interface{}{}
 				for i := 0; i < 2; i++ {
-					got, err := poller.matchCohort(FlagProperty{Value: "c"}, nil, raw.Cohorts, state.flagsByKey, cache, "person", nil, state)
+					got, err := poller.matchCohort(FlagProperty{Value: "c"}, nil, raw.Cohorts, state.flagsByKey, cache, "person", nil, false, state)
 					if continuity {
 						if err == nil {
 							t.Errorf("raw cohort=%v; must remain inconclusive, including cached dependency", got)

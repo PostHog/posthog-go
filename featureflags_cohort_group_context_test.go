@@ -104,13 +104,85 @@ func TestCohortFlagDependencyGroupContext(t *testing.T) {
 							cache["dep"] = false
 						}
 						for i := 0; i < 2; i++ {
-							got, err := poller.matchCohort(FlagProperty{Value: "c"}, properties, cohorts, state.flagsByKey, cache, "person", nil, state)
+							got, err := poller.matchCohort(FlagProperty{Value: "c"}, properties, cohorts, state.flagsByKey, cache, "person", nil, false, state)
 							if aggregation == "person" {
 								if err != nil || got != want {
 									t.Errorf("cohort=%v err=%v; want %v", got, err, want)
 								}
 							} else if !isServerEvalError(err) {
 								t.Errorf("cohort=%v err=%v; must require server evaluation on call %d", got, err, i)
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestGroupContextPersonFlagDependency(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		for _, aggregation := range []string{"flag", "condition"} {
+			for _, shape := range []string{"direct", "cohort", "nested", "negated"} {
+				t.Run(fmt.Sprintf("v%d/%s/%s", version, aggregation, shape), func(t *testing.T) {
+					flagAggregation, conditionAggregation := `"aggregation_group_type_index":0,`, ""
+					if aggregation == "condition" {
+						flagAggregation, conditionAggregation = "", `"aggregation_group_type_index":0,`
+					}
+					leaf := `{"type":"flag","key":"dep","operator":"flag_evaluates_to","value":true,"dependency_chain":["dep"]}`
+					cohort := fmt.Sprintf(`{"type":"OR","values":[%s]}`, leaf)
+					if shape == "nested" {
+						cohort = `{"type":"AND","values":[{"type":"OR","values":[{"type":"cohort","value":"inner"}]}]}`
+					} else if shape == "negated" {
+						cohort = `{"type":"OR","values":[{"type":"flag","key":"dep","operator":"flag_evaluates_to","value":true,"negation":true,"dependency_chain":["dep"]}]}`
+					}
+					targetProperty := `{"type":"cohort","value":"c"}`
+					if shape == "direct" {
+						targetProperty = leaf
+					}
+					body := fmt.Sprintf(`{"property_matching_version":%d,"group_type_mapping":{"0":"company"},"flags":[
+					 {"key":"dep","active":true,"filters":{"groups":[{"properties":[{"type":"person","key":"plan","operator":"exact","value":"free"}]}]}},
+					 {"key":"target","active":true,"filters":{%s"groups":[{%s"properties":[%s]}]}},
+					 {"key":"property-only","active":true,"filters":{%s"groups":[{%s"properties":[{"type":"cohort","value":"properties"}]}]}}
+					],"cohorts":{"c":%s,"inner":{"type":"OR","values":[%s]},"properties":{"type":"AND","values":[{"type":"group","key":"plan","operator":"exact","value":"pro"}]}}}`, version, flagAggregation, conditionAggregation, targetProperty, flagAggregation, conditionAggregation, cohort, leaf)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.URL.Path != "/flags/definitions" {
+							t.Errorf("local-only evaluation made remote request: %s", r.URL.Path)
+							w.WriteHeader(500)
+							return
+						}
+						fmt.Fprint(w, body)
+					}))
+					defer server.Close()
+					poller := newTestPoller(t, server.URL)
+					poller.firstFeatureFlagRequestFinished = make(chan bool)
+					poller.fetchNewFeatureFlags()
+					close(poller.firstFeatureFlagRequestFinished)
+					config := FeatureFlagPayload{DistinctId: "person", PersonProperties: Properties{"plan": "free"}, Groups: Groups{"company": "acme"}, GroupProperties: map[string]Properties{"company": {"plan": "pro"}}, OnlyEvaluateLocally: true}
+					for _, key := range []string{"dep", "property-only", "target"} {
+						config.Key = key
+						got, local, err := poller.GetFeatureFlag(config)
+						if key == "target" {
+							if !isServerEvalError(err) || local {
+								t.Errorf("target=%v local=%v err=%v; must require server evaluation", got, local, err)
+							}
+						} else if err != nil || !local || got != true {
+							t.Errorf("control %s=%v local=%v err=%v; want local true", key, got, local, err)
+						}
+					}
+					var raw FeatureFlagsResponse
+					if err := json.Unmarshal([]byte(body), &raw); err != nil {
+						t.Fatal(err)
+					}
+					state := poller.state.Load()
+					for _, cohorts := range []map[string]PropertyGroup{raw.Cohorts, state.cohorts} {
+						for _, cached := range []interface{}{nil, false, true} {
+							cache := map[string]interface{}{"dep": cached}
+							for i := 0; i < 2; i++ {
+								got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], cohorts, state.flagsByKey, cache, "acme", nil, true, state)
+								if !isServerEvalError(err) {
+									t.Errorf("cohort=%v err=%v cached=%v; must require server evaluation", got, err, cached)
+								}
 							}
 						}
 					}
