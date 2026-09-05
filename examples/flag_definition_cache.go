@@ -23,6 +23,7 @@ const (
 	// Must be longer than the polling interval.
 	flagCacheLockTTL      = 30 * time.Second
 	flagCachePollInterval = 3 * time.Second
+	flagCacheInstances    = 2
 )
 
 // FileFlagCache shares flag definitions between processes on one machine through a
@@ -34,7 +35,7 @@ type FileFlagCache struct {
 }
 
 // NewFileFlagCache creates a provider for the given cache directory. Instances that
-// should share definitions pass the same directory and name.
+// share definitions pass the same directory and name.
 func NewFileFlagCache(dir, name string) (*FileFlagCache, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -56,18 +57,14 @@ func (c *FileFlagCache) ShouldFetchFlagDefinitions(_ context.Context) (bool, err
 		return false, err
 	}
 
-	switch {
-	case holder == c.instanceID:
-		// Already the leader: extend the lock.
-	case holder == "":
-	case time.Now().Before(expiry):
+	heldByAnother := holder != "" && holder != c.instanceID
+	if heldByAnother && time.Now().Before(expiry) {
 		return false, nil
 	}
 
 	return true, c.writeLock()
 }
 
-// GetFlagDefinitions returns the published definitions, or nil when there are none.
 func (c *FileFlagCache) GetFlagDefinitions(_ context.Context) (*posthog.FlagDefinitionCacheData, error) {
 	contents, err := os.ReadFile(c.cachePath())
 	if errors.Is(err, os.ErrNotExist) {
@@ -109,7 +106,6 @@ func (c *FileFlagCache) OnFlagDefinitionsReceived(_ context.Context, data postho
 	return os.Rename(tmp.Name(), c.cachePath())
 }
 
-// Shutdown releases the lock if this instance holds it.
 func (c *FileFlagCache) Shutdown(_ context.Context) error {
 	holder, _, err := c.readLock()
 	if err != nil || holder != c.instanceID {
@@ -147,7 +143,7 @@ func (c *FileFlagCache) writeLock() error {
 
 func (c *FileFlagCache) shortID() string { return c.instanceID[:8] }
 
-// TestFlagDefinitionCache runs two clients that share one flag definition cache.
+// TestFlagDefinitionCache runs several clients that share one flag definition cache.
 func TestFlagDefinitionCache(projectAPIKey, secretKey, endpoint string) {
 	dir, err := os.MkdirTemp("", "posthog-flag-cache")
 	if err != nil {
@@ -156,12 +152,12 @@ func TestFlagDefinitionCache(projectAPIKey, secretKey, endpoint string) {
 	}
 	defer os.RemoveAll(dir)
 
-	fmt.Printf("Two instances sharing the cache in %s\n\n", dir)
+	fmt.Printf("%d instances sharing the cache in %s\n\n", flagCacheInstances, dir)
 
-	clients := make([]posthog.Client, 0, 2)
-	caches := make([]*FileFlagCache, 0, 2)
+	clients := make([]posthog.Client, 0, flagCacheInstances)
+	caches := make([]*FileFlagCache, 0, flagCacheInstances)
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < flagCacheInstances; i++ {
 		cache, err := NewFileFlagCache(dir, "my-service-production")
 		if err != nil {
 			fmt.Printf("❌ Could not create the cache provider: %v\n", err)
@@ -194,7 +190,7 @@ func TestFlagDefinitionCache(projectAPIKey, secretKey, endpoint string) {
 
 	time.Sleep(2 * flagCachePollInterval)
 
-	fmt.Println("\nEvaluating a flag on both instances, entirely from the shared definitions:")
+	fmt.Println("\nEvaluating flags on every instance, entirely from the shared definitions:")
 	for i, client := range clients {
 		flags, err := client.GetAllFlags(posthog.FeatureFlagPayloadNoKey{
 			DistinctId:          "distinct-id-of-your-user",
