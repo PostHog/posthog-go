@@ -85,7 +85,7 @@ type FeatureFlagsPoller struct {
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
 	forceReload                     chan bool
-	shutdownDone                    chan struct{}
+	shutdownDone                    chan bool
 
 	// state holds all flag-related data using atomic pointer for lock-free reads
 	state atomic.Pointer[flagsState]
@@ -479,7 +479,7 @@ func newFeatureFlagsPoller(
 		firstFeatureFlagRequestFinished: make(chan bool),
 		shutdown:                        make(chan bool),
 		forceReload:                     make(chan bool),
-		shutdownDone:                    make(chan struct{}),
+		shutdownDone:                    make(chan bool),
 		personalApiKey:                  personalApiKey,
 		projectApiKey:                   projectApiKey,
 		localEvalUrl:                    localEvalURL,

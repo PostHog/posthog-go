@@ -151,7 +151,7 @@ func newCachingTestPoller(t *testing.T, serverURL string, provider FlagDefinitio
 	poller.firstFeatureFlagRequestFinished = make(chan bool)
 	close(poller.firstFeatureFlagRequestFinished)
 
-	poller.shutdownDone = make(chan struct{})
+	poller.shutdownDone = make(chan bool)
 	close(poller.shutdownDone)
 
 	return poller
@@ -692,7 +692,7 @@ func TestFlagDefinitionCacheShutdownStopsWaitingOnADeadDeadline(t *testing.T) {
 	poller := newCachingTestPoller(t, server.URL, provider)
 	poller.shutdown = make(chan bool)
 	// A polling loop that never returns.
-	poller.shutdownDone = make(chan struct{})
+	poller.shutdownDone = make(chan bool)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
