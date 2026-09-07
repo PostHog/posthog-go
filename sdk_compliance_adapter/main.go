@@ -2,133 +2,185 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/posthog/posthog-go"
 )
 
 const VERSION = "1.0.0"
 
-// captureMode selects which capture protocol this adapter process speaks. It is
-// baked at build time via the CAPTURE_MODE env var ("v1" => capture-v1, anything
-// else => legacy v0), mirroring the v0/v1 Dockerfile split. One process speaks
-// one mode and advertises it via /health capabilities.
+// Each process selects one protocol and compression codec at runtime.
 var captureMode = os.Getenv("CAPTURE_MODE")
+var compression = os.Getenv("COMPRESSION")
 
 func isV1() bool { return captureMode == "v1" }
 
-// TrackedTransport wraps http.RoundTripper to track requests
+func selectedCompression() (posthog.CompressionMode, error) {
+	switch compression {
+	case "", "gzip":
+		return posthog.CompressionGzip, nil
+	case "deflate":
+		if isV1() {
+			return posthog.CompressionDeflate, nil
+		}
+	case "br":
+		if isV1() {
+			return posthog.CompressionBrotli, nil
+		}
+	case "zstd":
+		if isV1() {
+			return posthog.CompressionZstd, nil
+		}
+	}
+	return posthog.CompressionNone, fmt.Errorf("unsupported compression profile %q for capture mode %q", compression, captureMode)
+}
+
+// TrackedTransport observes SDK requests without implementing delivery policy.
 type TrackedTransport struct {
 	base  http.RoundTripper
 	state *AdapterState
 }
 
+func decodeBody(body []byte, encoding string) ([]byte, error) {
+	var reader io.ReadCloser
+	var err error
+	switch encoding {
+	case "":
+		return body, nil
+	case "gzip":
+		reader, err = gzip.NewReader(bytes.NewReader(body))
+	case "deflate":
+		reader, err = zlib.NewReader(bytes.NewReader(body))
+	case "br":
+		return io.ReadAll(brotli.NewReader(bytes.NewReader(body)))
+	case "zstd":
+		decoder, err := zstd.NewReader(nil)
+		if err != nil {
+			return nil, err
+		}
+		defer decoder.Close()
+		return decoder.DecodeAll(body, nil)
+	default:
+		return nil, fmt.Errorf("unknown content encoding %q", encoding)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
 func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Read and restore request body to extract UUIDs
-	var bodyBytes []byte
+	var body []byte
 	if req.Body != nil {
-		bodyBytes, _ = io.ReadAll(req.Body)
-		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		var err error
+		body, err = io.ReadAll(req.Body)
+		req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	// Make the request
-	resp, err := t.base.RoundTrip(req)
-	if resp == nil {
-		return resp, err
-	}
-
-	// Parse batch to get UUIDs. The request body shape is the same for v0 and
-	// v1 ({"batch":[{"uuid":...}]}), so extraction is unchanged.
 	var batch struct {
 		Batch []struct {
 			UUID string `json:"uuid"`
 		} `json:"batch"`
 	}
+	decoded, decodeErr := decodeBody(body, req.Header.Get("Content-Encoding"))
+	if decodeErr == nil {
+		decodeErr = json.Unmarshal(decoded, &batch)
+	}
 	uuids := []string{}
-	if len(bodyBytes) > 0 {
-		json.Unmarshal(bodyBytes, &batch)
-		for _, event := range batch.Batch {
-			if event.UUID != "" {
-				uuids = append(uuids, event.UUID)
-			}
-		}
-	}
-
-	// PostHog-Attempt is 1-based and only set on the v1 path. attempt-1 is the
-	// retry index; attempt > 1 means this request is a retry.
-	attempt := 1
-	if a := req.Header.Get("PostHog-Attempt"); a != "" {
-		if n, e := strconv.Atoi(a); e == nil && n > 0 {
-			attempt = n
-		}
-	}
-
-	// For v1, a 200 no longer means "all sent": read+restore the body and count
-	// only terminal results (anything other than "retry") as sent.
-	terminal := len(batch.Batch)
-	if isV1() {
-		var respBytes []byte
-		if resp.Body != nil {
-			respBytes, _ = io.ReadAll(resp.Body)
-			resp.Body = io.NopCloser(bytes.NewBuffer(respBytes))
-		}
-		if resp.StatusCode == 200 {
-			var parsed struct {
-				Results map[string]struct {
-					Result string `json:"result"`
-				} `json:"results"`
-			}
-			terminal = 0
-			if err := json.Unmarshal(respBytes, &parsed); err == nil {
-				for _, r := range parsed.Results {
-					if r.Result != "retry" {
-						terminal++
-					}
-				}
-			} else {
-				log.Printf("[adapter] v1 response body unmarshal failed: %v (terminal=0, pending events may appear stuck)", err)
-			}
-		}
+	for _, event := range batch.Batch {
+		uuids = append(uuids, event.UUID)
 	}
 
 	t.state.mu.Lock()
+	attempt := 0
+	if strings.TrimRight(req.URL.Path, "/") == "/flags" {
+		attempt = t.state.flagsAttempt
+		t.state.flagsAttempt++
+	} else if n, err := strconv.Atoi(req.Header.Get("PostHog-Attempt")); err == nil && n > 0 {
+		attempt = n - 1
+	} else if len(uuids) > 0 {
+		key := strings.Join(uuids, ",")
+		attempt = t.state.captureAttempts[key]
+		t.state.captureAttempts[key]++
+	}
+	index := len(t.state.requestsMade)
 	t.state.requestsMade = append(t.state.requestsMade, RequestInfo{
-		TimestampMs:  time.Now().UnixMilli(),
-		StatusCode:   resp.StatusCode,
-		RetryAttempt: attempt - 1,
-		EventCount:   len(batch.Batch),
-		UUIDList:     uuids,
+		TimestampMs: time.Now().UnixMilli(), RetryAttempt: attempt,
+		EventCount: len(batch.Batch), UUIDList: uuids,
 	})
-	if attempt > 1 {
+	if attempt > 0 {
 		t.state.totalRetries++
 	}
-	if resp.StatusCode == 200 {
-		t.state.totalEventsSent += terminal
-		t.state.pendingEvents -= terminal
-		if t.state.pendingEvents < 0 {
-			t.state.pendingEvents = 0
-		}
+	if decodeErr != nil {
+		t.state.lastError = decodeErr.Error()
 	}
 	t.state.mu.Unlock()
 
+	resp, err := t.base.RoundTrip(req)
+	t.state.mu.Lock()
+	if resp != nil {
+		t.state.requestsMade[index].StatusCode = resp.StatusCode
+	}
+	if err != nil {
+		t.state.lastError = err.Error()
+	}
+	t.state.mu.Unlock()
 	return resp, err
+}
+
+// Public SDK hooks own identity and completion, including flag-called events,
+// compression, terminal failures and partial V1 batches.
+func (s *AdapterState) beforeSend(message posthog.Message) posthog.Message {
+	if capture, ok := message.(posthog.Capture); ok {
+		s.mu.Lock()
+		s.lastUUID = capture.Uuid
+		s.totalEventsCaptured++
+		s.pendingEvents++
+		s.mu.Unlock()
+	}
+	return message
+}
+
+func (s *AdapterState) Success(_ posthog.APIMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.totalEventsSent++
+	s.pendingEvents--
+}
+
+func (s *AdapterState) Failure(_ posthog.APIMessage, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingEvents--
+	s.lastError = err.Error()
 }
 
 // AdapterState tracks SDK state for test assertions
 type AdapterState struct {
 	mu                  sync.Mutex
 	client              posthog.Client
-	config              *posthog.Config
-	apiKey              string
-	host                string
+	lastUUID            string
+	flagsAttempt        int
+	captureAttempts     map[string]int
 	totalEventsCaptured int
 	totalEventsSent     int
 	totalRetries        int
@@ -147,7 +199,8 @@ type RequestInfo struct {
 }
 
 var state = &AdapterState{
-	requestsMade: []RequestInfo{},
+	requestsMade:    []RequestInfo{},
+	captureAttempts: map[string]int{},
 }
 
 // HealthResponse represents /health endpoint response
@@ -213,22 +266,30 @@ func jsonResponse(w http.ResponseWriter, data interface{}) {
 // harness mock targets. The adapter is only intended to call the harness mock
 // server, so keep the outbound network target on a small allowlist.
 func validateHarnessHost(raw string) (string, bool) {
-	switch strings.TrimRight(raw, "/") {
-	case "http://test-harness:8081":
-		return "http://test-harness:8081", true
-	case "http://localhost:8081":
-		return "http://localhost:8081", true
-	case "http://127.0.0.1:8081":
-		return "http://127.0.0.1:8081", true
+	u, err := url.Parse(strings.TrimRight(raw, "/"))
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	switch u.Hostname() {
+	case "test-harness", "localhost", "127.0.0.1", "::1":
 	default:
 		return "", false
 	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return "", false
+	}
+	return u.String(), true
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	capabilities := []string{"capture_v0", "encoding_gzip"}
 	if isV1() {
-		capabilities = []string{"capture_v1", "encoding_gzip"}
+		codec := compression
+		if codec == "" {
+			codec = "gzip"
+		}
+		capabilities = []string{"capture_v1", "encoding_" + codec}
 	}
 	response := HealthResponse{
 		SDKName:        "posthog-go",
@@ -252,29 +313,19 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state.mu.Lock()
-	oldClient := state.client
-	state.client = nil
-
-	// Reset state
-	state.totalEventsCaptured = 0
-	state.totalEventsSent = 0
-	state.totalRetries = 0
-	state.lastError = ""
-	state.requestsMade = []RequestInfo{}
-	state.pendingEvents = 0
-	state.mu.Unlock()
-
-	// Close the previous client outside state.mu. Close can wait for in-flight
-	// sends whose tracked transport also records state under the same mutex.
-	if oldClient != nil {
-		oldClient.Close()
+	codec, err := selectedCompression()
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
 	}
+	closeAndReset()
 
 	// Create new client with tracked transport
 	config := posthog.Config{
-		Endpoint:  validatedHost,
-		Transport: &TrackedTransport{base: http.DefaultTransport, state: state},
+		Endpoint:   validatedHost,
+		Transport:  &TrackedTransport{base: http.DefaultTransport, state: state},
+		BeforeSend: state.beforeSend,
+		Callback:   state,
 		// Set test-friendly defaults
 		BatchSize: 1,                     // Flush after each event by default
 		Interval:  20 * time.Millisecond, // Short interval for tests
@@ -296,7 +347,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.EnableCompression != nil {
 		if *req.EnableCompression {
-			config.Compression = posthog.CompressionGzip
+			config.Compression = codec
 		} else {
 			config.Compression = posthog.CompressionNone
 		}
@@ -316,9 +367,6 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 
 	state.mu.Lock()
 	state.client = client
-	state.config = &config
-	state.apiKey = req.APIKey
-	state.host = validatedHost
 	state.mu.Unlock()
 
 	jsonResponse(w, map[string]bool{"success": true})
@@ -371,68 +419,74 @@ func captureHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Timestamp != nil {
 		// Parse timestamp if provided
 		t, err := time.Parse(time.RFC3339, *req.Timestamp)
-		if err == nil {
-			capture.Timestamp = t
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
 		}
+		capture.Timestamp = t
 	}
 
-	// Enqueue event
+	// BeforeSend runs synchronously inside Enqueue, after SDK UUID generation.
+	state.mu.Lock()
+	state.lastUUID = ""
+	state.mu.Unlock()
 	if err := state.client.Enqueue(capture); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// Queue rejection has no delivery callback, but enrichment may have run.
+		if err == posthog.ErrQueueFull || err == posthog.ErrClosed {
+			state.mu.Lock()
+			if state.lastUUID != "" {
+				state.pendingEvents--
+			}
+			state.lastError = err.Error()
+			state.mu.Unlock()
+		}
+		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	state.mu.Lock()
-	state.totalEventsCaptured++
-	state.pendingEvents++
+	uuid := state.lastUUID
 	state.mu.Unlock()
-
-	// TODO: Get actual UUID from SDK
-	jsonResponse(w, map[string]interface{}{
-		"success": true,
-		"uuid":    "generated-uuid",
-	})
+	jsonResponse(w, map[string]interface{}{"success": true, "uuid": uuid})
 }
 
 func flushHandler(w http.ResponseWriter, r *http.Request) {
 	state.mu.Lock()
-	if state.client == nil {
-		state.mu.Unlock()
-		http.Error(w, "SDK not initialized", http.StatusBadRequest)
+	initialized := state.client != nil
+	state.mu.Unlock()
+	if !initialized {
+		jsonError(w, http.StatusBadRequest, "SDK not initialized")
 		return
 	}
-	state.mu.Unlock()
-
-	eventsFlushed := waitForPendingEvents()
-	jsonResponse(w, map[string]interface{}{
-		"success":        true,
-		"events_flushed": eventsFlushed,
-	})
+	eventsFlushed, err := waitForPendingEvents(r.Context())
+	if err != nil {
+		jsonError(w, http.StatusGatewayTimeout, err.Error())
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"success": true, "events_flushed": eventsFlushed})
 }
 
-func waitForPendingEvents() int {
+// There is no non-closing public Flush. Wait for the configured SDK interval
+// and terminal delivery callbacks, without closing/recreating the client.
+func waitForPendingEvents(ctx context.Context) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	state.mu.Lock()
-	interval := state.config.Interval
-	if interval == 0 {
-		interval = 5 * time.Second // Default
-	}
+	before := state.totalEventsSent
 	state.mu.Unlock()
-
-	// Wait only until the current queue drains, with a small cap. Most harness
-	// tests use BatchSize=1, while batch-format tests rely on the short interval
-	// above to flush partial batches. Avoid fixed sleeps per test: the compliance
-	// suite has many flushes and long retry waits of its own.
-	deadline := time.Now().Add(interval + (100 * time.Millisecond))
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		state.mu.Lock()
-		pendingEvents := state.pendingEvents
-		eventsFlushed := state.totalEventsSent
+		pending, sent := state.pendingEvents, state.totalEventsSent
 		state.mu.Unlock()
-
-		if pendingEvents == 0 || time.Now().After(deadline) {
-			return eventsFlushed
+		if pending == 0 {
+			return sent - before, nil
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return sent - before, ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -484,124 +538,29 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state.mu.Lock()
-	apiKey := state.apiKey
-	host := state.host
-	state.mu.Unlock()
-
-	personProperties := map[string]interface{}{"distinct_id": req.DistinctID}
-	for k, v := range req.PersonProperties {
-		personProperties[k] = v
-	}
-	groups := map[string]interface{}{}
-	for k, v := range req.Groups {
-		groups[k] = v
-	}
-	groupProperties := map[string]interface{}{}
-	for k, v := range req.GroupProperties {
-		groupProperties[k] = v
-	}
-	geoipDisable := false
-	if req.DisableGeoIP != nil {
-		geoipDisable = *req.DisableGeoIP
-	}
-
-	payload := map[string]interface{}{
-		"api_key":               apiKey,
-		"distinct_id":           req.DistinctID,
-		"person_properties":     personProperties,
-		"groups":                groups,
-		"group_properties":      groupProperties,
-		"geoip_disable":         geoipDisable,
-		"flag_keys_to_evaluate": []string{req.Key},
-	}
-	body, _ := json.Marshal(payload)
-	flagsURL := strings.TrimRight(host, "/") + "/flags/?v=2"
-	resp, err := postFlagsWithRetry(flagsURL, body)
-	if err != nil {
-		log.Printf("Error evaluating feature flag: %s", sanitizeForLog(err.Error()))
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer resp.Body.Close()
-	var decoded map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	value := interface{}(false)
-	if flags, ok := decoded["featureFlags"].(map[string]interface{}); ok {
-		if flagValue, ok := flags[req.Key]; ok {
-			value = flagValue
-		}
-	}
-	properties := posthog.Properties{
-		"$feature_flag":          req.Key,
-		"$feature_flag_response": value,
-		"$feature/" + req.Key:    value,
-	}
-	// Only send $feature_flag_has_experiment when the server explicitly
-	// reported has_experiment on the flag's metadata; omit it when unknown.
-	if flags, ok := decoded["flags"].(map[string]interface{}); ok {
-		if flagDetail, ok := flags[req.Key].(map[string]interface{}); ok {
-			if metadata, ok := flagDetail["metadata"].(map[string]interface{}); ok {
-				if v, ok := metadata["has_experiment"].(bool); ok {
-					properties["$feature_flag_has_experiment"] = v
-				}
-			}
-		}
-	}
-
-	if err := client.Enqueue(posthog.Capture{
-		DistinctId: req.DistinctID,
-		Event:      "$feature_flag_called",
-		Properties: properties,
-	}); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
+	groupProperties := make(map[string]posthog.Properties, len(req.GroupProperties))
+	for key, properties := range req.GroupProperties {
+		groupProperties[key] = properties
 	}
 	state.mu.Lock()
-	state.totalEventsCaptured++
-	state.pendingEvents++
+	state.flagsAttempt = 0
 	state.mu.Unlock()
-	waitForPendingEvents()
-
-	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
-	log.Printf("Evaluated feature flag")
-
-	jsonResponse(w, map[string]interface{}{
-		"success": true,
-		"value":   value,
+	// No personal API key/local evaluator is configured. Each EvaluateFlags
+	// action makes a remote request even when force_remote is false or omitted.
+	snapshot, err := client.EvaluateFlags(posthog.EvaluateFlagsPayload{
+		DistinctId:       req.DistinctID,
+		PersonProperties: req.PersonProperties,
+		Groups:           req.Groups,
+		GroupProperties:  groupProperties,
+		DisableGeoIP:     req.DisableGeoIP,
+		FlagKeys:         []string{req.Key},
 	})
-}
-
-func postFlagsWithRetry(flagsURL string, body []byte) (*http.Response, error) {
-	var lastStatus int
-	for attempt := 0; attempt < 2; attempt++ {
-		resp, err := http.Post(flagsURL, "application/json", bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-			return resp, nil
-		}
-
-		lastStatus = resp.StatusCode
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusBadGateway && resp.StatusCode != http.StatusGatewayTimeout {
-			break
-		}
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-
-	return nil, &flagsStatusError{statusCode: lastStatus}
-}
-
-type flagsStatusError struct {
-	statusCode int
-}
-
-func (e *flagsStatusError) Error() string {
-	return "flags request failed with status " + strconv.Itoa(e.statusCode)
+	value := snapshot.GetFlag(req.Key)
+	jsonResponse(w, map[string]interface{}{"success": true, "value": value})
 }
 
 // sanitizeForLog strips CR/LF characters from a string before logging, so
@@ -617,41 +576,61 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-func resetHandler(w http.ResponseWriter, r *http.Request) {
+func closeAndReset() {
 	state.mu.Lock()
 	oldClient := state.client
 	state.client = nil
-	state.apiKey = ""
-	state.host = ""
+	state.mu.Unlock()
+	// Close before clearing observations: SDK shutdown may deliver a final batch.
+	if oldClient != nil {
+		oldClient.Close()
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.lastUUID = ""
 	state.totalEventsCaptured = 0
 	state.totalEventsSent = 0
 	state.totalRetries = 0
 	state.lastError = ""
 	state.requestsMade = []RequestInfo{}
 	state.pendingEvents = 0
-	state.mu.Unlock()
+	state.flagsAttempt = 0
+	state.captureAttempts = map[string]int{}
+}
 
-	// Close outside state.mu for the same reason as initHandler.
-	if oldClient != nil {
-		oldClient.Close()
-	}
-
+func resetHandler(w http.ResponseWriter, r *http.Request) {
+	closeAndReset()
 	jsonResponse(w, map[string]bool{"success": true})
 }
 
+// The adapter has one SDK client, so lifecycle/actions are serialized. State
+// remains readable while flush waits; parallel test isolation is not advertised.
+var actionMu sync.Mutex
+
+func serial(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actionMu.Lock()
+		defer actionMu.Unlock()
+		handler(w, r)
+	}
+}
+
 func main() {
+	if _, err := selectedCompression(); err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
 	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/init", initHandler)
-	http.HandleFunc("/capture", captureHandler)
-	http.HandleFunc("/flush", flushHandler)
+	http.HandleFunc("/init", serial(initHandler))
+	http.HandleFunc("/capture", serial(captureHandler))
+	http.HandleFunc("/flush", serial(flushHandler))
 	http.HandleFunc("/state", stateHandler)
-	http.HandleFunc("/reset", resetHandler)
-	http.HandleFunc("/get_feature_flag", featureFlagHandler)
+	http.HandleFunc("/reset", serial(resetHandler))
+	http.HandleFunc("/get_feature_flag", serial(featureFlagHandler))
 
 	log.Printf("Starting PostHog Go SDK adapter on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
