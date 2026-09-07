@@ -137,6 +137,30 @@ func TestFeatureFlagHandlerUsesSDKEvaluation(t *testing.T) {
 	}
 }
 
+func TestFeatureFlagHandlerCompletesExposureBeforeReset(t *testing.T) {
+	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flags/" {
+			io.WriteString(w, `{"featureFlags":{"example":true}}`)
+			return
+		}
+		io.WriteString(w, `{}`)
+	})
+	// Keep the SDK exposure queued long enough to detect an early return from
+	// the flag action; delivery still runs on the SDK's configured interval.
+	action(t, initHandler, `{"api_key":"test-key","host":"`+server.URL+`","flush_at":100,"flush_interval_ms":100}`)
+	result := action(t, featureFlagHandler, `{"key":"example","distinct_id":"user"}`)
+	if result["value"] != true {
+		t.Fatalf("flag value = %v", result)
+	}
+	state.mu.Lock()
+	pending, sent := state.pendingEvents, state.totalEventsSent
+	state.mu.Unlock()
+	if pending != 0 || sent != 1 {
+		t.Fatalf("flag action returned before exposure completion: pending=%d sent=%d", pending, sent)
+	}
+	action(t, resetHandler, `{}`)
+}
+
 func TestFeatureFlagHandlerPreservesDefaultGeoIP(t *testing.T) {
 	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}

@@ -560,6 +560,13 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value := snapshot.GetFlag(req.Key)
+	// Complete SDK-owned exposure delivery before the harness resets its mock
+	// for the next test. Closing a still-pending client at reset would send the
+	// previous test's event into that new recording window.
+	if _, err := waitForPendingEvents(r.Context()); err != nil {
+		jsonError(w, http.StatusGatewayTimeout, err.Error())
+		return
+	}
 	jsonResponse(w, map[string]interface{}{"success": true, "value": value})
 }
 

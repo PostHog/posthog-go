@@ -47,8 +47,10 @@ and retries using UUID-keyed results.
   `time.Time`; UTC normalization, UUID generation, batching and retries remain SDK-owned.
 - Flags use `EvaluateFlags` with singleton `FlagKeys`, then snapshot `GetFlag`.
   SDK transport, response parsing, retries and deduplicated `$feature_flag_called`
-  events are exercised. No personal API key or local evaluator is configured, so
-  each action evaluates remotely regardless of `force_remote`.
+  events are exercised. Each action waits for SDK exposure delivery callbacks before
+  returning, so a subsequent mock reset cannot receive the previous action's events.
+  No personal API key or local evaluator is configured, so each action evaluates
+  remotely regardless of `force_remote`.
 - `BeforeSend` observes the SDK-generated UUID without changing the event.
   Public `Callback` notifications track successful and terminally failed events;
   the transport passively records actual attempts, including encoded bodies.
