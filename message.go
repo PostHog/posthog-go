@@ -104,7 +104,7 @@ func prepareForSend(msg Message) (json.RawMessage, APIMessage, error) {
 	apiMsg := msg.APIfy()
 	data, err := marshalAPIEvent(apiMsg)
 	if err != nil {
-		return nil, apiMsg, err
+		return nil, apiMsg, eventPropertySerializationError(err)
 	}
 	return json.RawMessage(data), apiMsg, nil
 }

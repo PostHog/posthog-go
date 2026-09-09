@@ -272,7 +272,7 @@ func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, 
 		Properties eventProperties `json:"properties"`
 	}{ev, props})
 	if err != nil {
-		return nil, apiMsg, ev.Uuid, err
+		return nil, apiMsg, ev.Uuid, eventPropertySerializationError(err)
 	}
 	return json.RawMessage(data), apiMsg, ev.Uuid, nil
 }

@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -133,6 +134,94 @@ func TestEventPropertySerializationRejectedJSON(t *testing.T) {
 					}
 					if err == nil {
 						t.Fatal("rejected JSON must still report a serialization error")
+					}
+				})
+			}
+		}
+	}
+}
+
+type errorPropertyMarshaler struct{ err error }
+
+func (m errorPropertyMarshaler) MarshalJSON() ([]byte, error) { return nil, m.err }
+
+// Compare the original serializer's concrete error chain, not only errors.As:
+// the private property adapter must not add a callback-visible wrapper, and
+// user-provided MarshalJSON error layers must remain intact.
+func TestEventPropertySerializationErrorCompatibility(t *testing.T) {
+	sentinel := errors.New("custom property serialization failed")
+	userWrapped := &json.MarshalerError{Type: reflect.TypeOf(""), Err: sentinel}
+	for _, mode := range []CaptureMode{CaptureModeLegacy, CaptureModeAnalyticsV1} {
+		for _, kind := range []string{"capture", "identify", "group", "exception"} {
+			for _, tc := range []struct {
+				name  string
+				value interface{}
+				cause error
+			}{
+				{"unsupported", func() {}, nil},
+				{"custom", errorPropertyMarshaler{sentinel}, sentinel},
+				{"custom_wrapped", errorPropertyMarshaler{userWrapped}, userWrapped},
+			} {
+				t.Run(fmt.Sprintf("%d/%s/%s", mode, kind, tc.name), func(t *testing.T) {
+					props := Properties{"invalid": tc.value}
+					var msg Message
+					switch kind {
+					case "capture":
+						msg = Capture{Event: "test", DistinctId: "test-user", Properties: props}
+					case "identify":
+						msg = Identify{DistinctId: "test-user", Properties: props}
+					case "group":
+						msg = GroupIdentify{Type: "company", Key: "test", Properties: props}
+					case "exception":
+						msg = Exception{DistinctId: "test-user", Properties: props, ExceptionList: []ExceptionItem{{Type: "Test", Value: "test"}}}
+					}
+					var baseline, actual error
+					if mode == CaptureModeAnalyticsV1 {
+						_, baseline = json.Marshal(buildV1Event(msg.apifyEvent(), nil))
+						_, _, _, actual = prepareForSendV1(msg, nil)
+					} else {
+						_, baseline = json.Marshal(msg.APIfy())
+						_, _, actual = prepareForSend(msg)
+					}
+					if baseline == nil {
+						t.Fatal("fixture must fail original serialization")
+					}
+					check := func(label string, got error) {
+						t.Helper()
+						for want := baseline; want != nil; want = errors.Unwrap(want) {
+							if reflect.TypeOf(got) != reflect.TypeOf(want) || got.Error() != want.Error() {
+								t.Errorf("%s error: got %T %v, want %T %v", label, got, got, want, want)
+								return
+							}
+							if want == tc.cause && got != tc.cause {
+								t.Errorf("%s replaced user error identity", label)
+							}
+							got = errors.Unwrap(got)
+						}
+						if got != nil {
+							t.Errorf("%s added error layer: %v", label, got)
+						}
+					}
+					check("prepare", actual)
+					failures := make(chan error, 1)
+					client, err := NewWithConfig("test-key", Config{
+						CaptureMode: mode, Transport: testTransportOK,
+						Callback: testCallback{nil, func(_ APIMessage, err error) { failures <- err }},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := client.Enqueue(msg); err != nil {
+						t.Error(err)
+					}
+					if err := client.Close(); err != nil {
+						t.Error(err)
+					}
+					select {
+					case err := <-failures:
+						check("callback", err)
+					default:
+						t.Error("failure callback not triggered")
 					}
 				})
 			}

@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"reflect"
 
 	json "github.com/goccy/go-json"
 )
@@ -124,6 +125,15 @@ func flagEventProperties(event string, values Properties) eventProperties {
 		}
 	}
 	return props
+}
+
+// Remove only the wrapper introduced by our private wire adapter. In particular,
+// keep user marshaler errors and the legacy exception metadata wrapper intact.
+func eventPropertySerializationError(err error) error {
+	if wrapped, ok := err.(*json.MarshalerError); ok && wrapped.Type == reflect.TypeOf(eventProperties{}) {
+		return wrapped.Err
+	}
+	return err
 }
 
 func marshalAPIEvent(apiMsg APIMessage) ([]byte, error) {
