@@ -175,11 +175,13 @@ func (p ExceptionInApiProperties) MarshalJSON() ([]byte, error) {
 		if _, exists := merged[k]; exists {
 			continue
 		}
-		vb, err := json.Marshal(v)
+		vb, err := marshalProperty(v)
 		if err != nil {
 			return nil, err
 		}
-		merged[k] = vb
+		if string(vb) != "null" {
+			merged[k] = vb
+		}
 	}
 
 	return json.Marshal(merged)

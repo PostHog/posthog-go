@@ -257,9 +257,22 @@ func baseV1Props(isServer bool, disableGeoIP bool) Properties {
 func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
 	ev := buildV1Event(msg.apifyEvent(), logger)
-	data, err := json.Marshal(ev)
+	props := flagEventProperties(ev.Event, ev.Properties)
+	if exception, ok := apiMsg.(ExceptionInApi); ok {
+		props.preserve = []string{"$exception_list"}
+		if exception.Properties.ExceptionFingerprint != nil {
+			props.preserve = append(props.preserve, "$exception_fingerprint")
+		}
+		if len(exception.Properties.DebugImages) > 0 {
+			props.preserve = append(props.preserve, "$debug_images")
+		}
+	}
+	data, err := json.Marshal(struct {
+		eventPayload
+		Properties eventProperties `json:"properties"`
+	}{ev, props})
 	if err != nil {
-		return nil, apiMsg, ev.Uuid, err
+		return nil, apiMsg, ev.Uuid, eventPropertySerializationError(err)
 	}
 	return json.RawMessage(data), apiMsg, ev.Uuid, nil
 }
