@@ -62,7 +62,6 @@ jobs:
     permissions:
       contents: write
       actions: write
-      id-token: write
     outputs:
       released: ${{ steps.commit-version-bump.outputs.commit-hash != '' }}
     steps:
