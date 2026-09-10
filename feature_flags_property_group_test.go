@@ -72,13 +72,13 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 	poller := &FeatureFlagsPoller{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rawResult, rawErr := poller.matchPropertyGroup(tt.group, tt.properties, nil, nil, nil, "distinct-id", nil)
+			rawResult, rawErr := poller.matchPropertyGroup(tt.group, tt.properties, nil, nil, nil, "distinct-id", nil, false)
 			require.Equal(t, tt.want, rawResult)
 			require.Equal(t, tt.wantErr, rawErr)
 
 			parsedGroup := preParsePG(tt.group)
 			require.NotEmpty(t, parsedGroup.ParsedValues)
-			parsedResult, parsedErr := poller.matchPropertyGroup(parsedGroup, tt.properties, nil, nil, nil, "distinct-id", nil)
+			parsedResult, parsedErr := poller.matchPropertyGroup(parsedGroup, tt.properties, nil, nil, nil, "distinct-id", nil, false)
 			require.Equal(t, rawResult, parsedResult)
 			require.Equal(t, rawErr, parsedErr)
 		})

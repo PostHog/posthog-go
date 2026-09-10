@@ -67,11 +67,12 @@ func getOrCompileRegex(pattern string) (*regexp.Regexp, error) {
 // flagsState holds the feature flag data that is atomically swapped during updates.
 // This provides lock-free reads for the common path (flag evaluation).
 type flagsState struct {
-	featureFlags []FeatureFlag
-	flagsByKey   map[string]FeatureFlag // pre-built index for O(1) lookup, avoids rebuilding per evaluation
-	cohorts      map[string]PropertyGroup
-	groups       map[string]string
-	flagsEtag    string
+	featureFlags            []FeatureFlag
+	flagsByKey              map[string]FeatureFlag // pre-built index for O(1) lookup, avoids rebuilding per evaluation
+	cohorts                 map[string]PropertyGroup
+	groups                  map[string]string
+	flagsEtag               string
+	propertyMatchingVersion int
 	// minimalFlagCalledEvents is the server-controlled gate for minimal
 	// $feature_flag_called events, cached from the local-evaluation payload.
 	minimalFlagCalledEvents bool
@@ -221,6 +222,9 @@ type FlagVariantMeta struct {
 
 // FeatureFlagsResponse is the wire-format response from the local evaluation endpoint.
 type FeatureFlagsResponse struct {
+	// PropertyMatchingVersion selects exact/is_not semantics; only 2 enables explicit matching.
+	// Missing versions retain legacy matching.
+	PropertyMatchingVersion int `json:"property_matching_version"`
 	// Flags contains feature flag definitions for local evaluation.
 	Flags []FeatureFlag `json:"flags"`
 	// GroupTypeMapping maps group type indexes to group type names.
@@ -335,7 +339,15 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	deviceId *string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
+	groupContext bool,
+	snapshots ...*flagsState,
 ) (bool, error) {
+	state := poller.evaluationState(snapshots)
+	// Group conditions no longer have the person's properties or bucketing ID.
+	// This must precede cache lookup, including for person-targeted dependencies.
+	if groupContext {
+		return false, &RequiresServerEvaluationError{"Flag dependency cannot use group context"}
+	}
 	// Some of these conditions should never happen, but we'll check them to be defensive.
 	if property.Value == nil {
 		return false, &InconclusiveMatchError{
@@ -378,6 +390,19 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
+		// This evaluator has only the caller's properties, not the referenced
+		// flag's group context. Do not turn missing context into a local result.
+		// Check before the cache so repeated cohort references also fall back.
+		depFlag := flagsByKey[depFlagKey]
+		if depFlag.Active {
+			groupTargeted := depFlag.Filters.AggregationGroupTypeIndex != nil
+			for _, condition := range depFlag.Filters.Groups {
+				groupTargeted = groupTargeted || condition.AggregationGroupTypeIndex != nil
+			}
+			if groupTargeted {
+				return false, &RequiresServerEvaluationError{"Flag dependency requires group context"}
+			}
+		}
 		if _, exists := evaluationCache[depFlagKey]; exists {
 			continue
 		}
@@ -396,10 +421,19 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		if !depFlag.Active {
 			evaluationCache[depFlagKey] = false
 		} else {
+			// Dependencies must preserve the same server boundary as direct evaluation.
+			if depFlag.EnsureExperienceContinuity != nil && *depFlag.EnsureExperienceContinuity {
+				evaluationCache[depFlagKey] = nil
+				return false, &InconclusiveMatchError{"Flag dependency has experience continuity enabled"}
+			}
 			// Recursively evaluate the dependency
-			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil)
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
 			if err != nil {
-				// If we can't evaluate a dependency, store nil and propagate the error
+				// Preserve server-required errors on repeated references instead of
+				// reducing them to a cached inconclusive value that cohorts can negate.
+				if isServerEvalError(err) {
+					return false, err
+				}
 				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{
 					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
@@ -547,6 +581,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 				groups:                  currentState.groups,
 				flagsEtag:               newEtag,
 				minimalFlagCalledEvents: currentState.minimalFlagCalledEvents,
+				propertyMatchingVersion: currentState.propertyMatchingVersion,
 			}
 			poller.state.Store(newState)
 		}
@@ -609,6 +644,7 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		groups:                  groups,
 		flagsEtag:               newEtag,
 		minimalFlagCalledEvents: featureFlagsResponse.MinimalFlagCalledEvents,
+		propertyMatchingVersion: featureFlagsResponse.PropertyMatchingVersion,
 	})
 }
 
@@ -624,7 +660,7 @@ func (poller *FeatureFlagsPoller) getMinimalFlagCalledEvents() bool {
 // It returns the flag value, whether that value was locally evaluated, and an error.
 // If local evaluation is inconclusive and OnlyEvaluateLocally is false, it falls back to /flags.
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
-	flag, err := poller.getFeatureFlag(flagConfig)
+	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
 
 	var result interface{}
 	locallyEvaluated := false
@@ -637,7 +673,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
-			poller.getCohorts(),
+			state.cohorts,
+			state,
 		)
 		locallyEvaluated = err == nil && result != nil
 	}
@@ -659,7 +696,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 // GetFeatureFlagPayload returns the payload for the evaluated flag value.
 // It tries local payloads first and falls back to the remote API unless OnlyEvaluateLocally is true.
 func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
-	flag, err := poller.getFeatureFlag(flagConfig)
+	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
 
 	var variant interface{}
 
@@ -671,7 +708,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
-			poller.getCohorts(),
+			state.cohorts,
+			state,
 		)
 	}
 	if err != nil {
@@ -712,7 +750,7 @@ type flagValueAndPayload struct {
 // and payload. This avoids the double evaluation that would happen when calling
 // GetFeatureFlag and GetFeatureFlagPayload separately.
 func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFlagPayload) flagValueAndPayload {
-	flag, err := poller.getFeatureFlag(flagConfig)
+	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
 
 	var result interface{}
 
@@ -724,7 +762,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
-			poller.getCohorts(),
+			state.cohorts,
+			state,
 		)
 	}
 
@@ -743,7 +782,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 
 	locallyEvaluated := err == nil && result != nil
 	hasExperiment := flag.HasExperiment
-	minimalFlagCalledEvents := poller.getMinimalFlagCalledEvents()
+	minimalFlagCalledEvents := state != nil && state.minimalFlagCalledEvents
 
 	// Fall back to remote evaluation if local didn't produce a result
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
@@ -782,30 +821,30 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
-	// Wait for initial flag fetch to complete
+	flag, _, err := poller.getFeatureFlagWithState(flagConfig)
+	return flag, err
+}
+
+// Select the flag and its matching context from one immutable definitions snapshot.
+func (poller *FeatureFlagsPoller) getFeatureFlagWithState(flagConfig FeatureFlagPayload) (FeatureFlag, *flagsState, error) {
 	<-poller.firstFeatureFlagRequestFinished
-
-	// Use pre-built index for O(1) lookup instead of linear scan
-	flagsByKey := poller.getFlagsByKey()
-	if flagsByKey == nil {
-		return FeatureFlag{}, errors.New("flags were not successfully fetched yet")
+	state := poller.state.Load()
+	if state == nil || state.flagsByKey == nil {
+		return FeatureFlag{}, state, errors.New("flags were not successfully fetched yet")
 	}
-
-	if f, ok := flagsByKey[flagConfig.Key]; ok {
-		return f, nil
-	}
-	return FeatureFlag{}, nil
+	return state.flagsByKey[flagConfig.Key], state, nil
 }
 
 // GetAllFlags evaluates every available flag for the configured user.
 // Values are bools for boolean flags or strings for multivariate variants.
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
-	featureFlags, err := poller.GetFeatureFlags()
+	state, err := poller.getLoadedState()
 	if err != nil {
 		return nil, err
 	}
+	featureFlags := state.featureFlags
 	fallbackToDecide := false
-	cohorts := poller.getCohorts()
+	cohorts := state.cohorts
 
 	// Pre-size response map to avoid rehashing as flags are added
 	response := make(map[string]interface{}, len(featureFlags))
@@ -822,6 +861,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 				flagConfig.PersonProperties,
 				flagConfig.GroupProperties,
 				cohorts,
+				state,
 			)
 			if err != nil {
 				poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
@@ -861,7 +901,9 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	personProperties Properties,
 	groupProperties map[string]Properties,
 	cohorts map[string]PropertyGroup,
+	snapshots ...*flagsState,
 ) (interface{}, error) {
+	state := poller.evaluationState(snapshots)
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
 	}
@@ -871,7 +913,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	}
 
 	// Use pre-built flagsByKey index (built once when flags are fetched, not per evaluation)
-	flagsByKey := poller.getFlagsByKey()
+	flagsByKey := state.flagsByKey
 
 	// evaluationCache is created lazily — only allocated when flag has dependencies.
 	// For simple flags (no dependencies), this avoids a map allocation per evaluation.
@@ -881,7 +923,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	}
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
-		groupType, exists := poller.getGroups()[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
+		groupType, exists := state.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
 
 		if !exists {
 			errMessage := "flag has unknown group type index"
@@ -899,7 +941,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties)
+		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
 	} else {
 		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
@@ -917,7 +959,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 				}
 			}
 		}
-		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties)
+		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
 	}
 }
 
@@ -978,11 +1020,13 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	evaluationCache map[string]interface{},
 	groups Groups,
 	groupProperties map[string]Properties,
+	snapshots ...*flagsState,
 ) (interface{}, error) {
+	state := poller.evaluationState(snapshots)
 	conditions := flag.Filters.Groups
 	bucketingId := getBucketingID(flag, distinctId, deviceId)
 	flagAggregation := flag.Filters.AggregationGroupTypeIndex
-	groupTypeMapping := poller.getGroups()
+	groupTypeMapping := state.groups
 	isInconclusive := false
 
 	for _, condition := range conditions {
@@ -1027,7 +1071,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			}
 		}
 
-		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache)
+		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache, state)
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
@@ -1114,19 +1158,22 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
+	snapshots ...*flagsState,
 ) (conditionMatchResult, error) {
+	state := poller.evaluationState(snapshots)
 	if len(condition.Properties) > 0 {
 		var (
 			isMatch bool
 			err     error
 		)
+		groupContext := flag.Filters.AggregationGroupTypeIndex != nil || condition.AggregationGroupTypeIndex != nil
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId)
+				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, groupContext, state)
 			} else if prop.Type == "flag" {
-				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts)
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts, groupContext, state)
 			} else {
-				isMatch, err = matchProperty(prop, properties)
+				isMatch, err = matchProperty(prop, properties, state.propertyMatchingVersion)
 			}
 
 			if err != nil {
@@ -1150,7 +1197,7 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	return conditionMatch, nil
 }
 
-func matchProperty(property FlagProperty, properties Properties) (bool, error) {
+func matchProperty(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {
 	key := property.Key
 	operator := property.Operator
 	value := property.Value
@@ -1165,7 +1212,7 @@ func matchProperty(property FlagProperty, properties Properties) (bool, error) {
 	override_value := properties[key]
 
 	if operator == "exact" || operator == "is_not" {
-		matched, err := exactMatch(value, override_value)
+		matched, err := exactMatch(value, override_value, matchingVersions...)
 		if err != nil {
 			return false, err
 		}
@@ -1751,15 +1798,20 @@ func interfaceToFloat(val interface{}) (float64, error) {
 	return i, nil
 }
 
-// exactMatch mirrors the flags service's exact operator, including its
-// boolean-array precedence. Integral float64 filter values are inconclusive
+// exactMatch defaults to the flags service's legacy boolean-array precedence.
+// Only version 2 uses explicit equality, retaining empty-array truthiness.
+// Integral float64 filter values are inconclusive
 // because JSON decoding collapses integer and floating-point number kinds.
-func exactMatch(value interface{}, overrideValue interface{}) (bool, error) {
-	if isTruthyOrFalsyPropertyValue(value) {
+func exactMatch(value interface{}, overrideValue interface{}, matchingVersions ...int) (bool, error) {
+	explicitMatching := len(matchingVersions) > 0 && matchingVersions[0] == 2
+	if !explicitMatching && isTruthyOrFalsyPropertyValue(value) {
 		return isTruthyPropertyValue(value) == isTruthyPropertyValue(overrideValue), nil
 	}
 
 	if list, ok := value.([]interface{}); ok {
+		if len(list) == 0 {
+			return isTruthyPropertyValue(overrideValue), nil
+		}
 		hadAmbiguousNumber := false
 		overrideStr := unicodeLower(exactValueToString(overrideValue))
 		for _, item := range list {
@@ -2147,6 +2199,14 @@ func calculateHash(key, distinctId, salt string) float64 {
 // GetFeatureFlags returns the locally loaded feature flag definitions.
 // It waits for the initial poll to complete and returns an error if flags were not loaded.
 func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
+	state, err := poller.getLoadedState()
+	if err != nil {
+		return nil, err
+	}
+	return state.featureFlags, nil
+}
+
+func (poller *FeatureFlagsPoller) getLoadedState() (*flagsState, error) {
 	// When channel is open this will block. When channel is closed it will immediately exit.
 	<-poller.firstFeatureFlagRequestFinished
 
@@ -2157,7 +2217,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
 		return nil, errors.New("flags were not successfully fetched yet")
 	}
 
-	return state.featureFlags, nil
+	return state, nil
 }
 
 // getState returns the current flags state or nil if not initialized.
@@ -2214,13 +2274,34 @@ func preParsePG(pg PropertyGroup) PropertyGroup {
 					Value:           getSafeProp[any](prop, "value"),
 					Type:            getSafeProp[string](prop, "type"),
 					Negation:        getSafeProp[bool](prop, "negation"),
-					DependencyChain: getSafeProp[[]string](prop, "dependency_chain"),
+					DependencyChain: parseDependencyChain(prop["dependency_chain"]),
 				},
 			})
 		}
 	}
 	pg.ParsedValues = parsed
 	return pg
+}
+
+// parseDependencyChain handles both typed helper inputs and JSON-decoded cohort leaves.
+// Malformed chains remain nil so dependency evaluation treats them as inconclusive.
+func parseDependencyChain(value any) []string {
+	if chain, ok := value.([]string); ok {
+		return chain
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	chain := make([]string, len(values))
+	for i, value := range values {
+		key, ok := value.(string)
+		if !ok {
+			return nil
+		}
+		chain[i] = key
+	}
+	return chain
 }
 
 // preDecodePayloads converts json.RawMessage payloads to strings once at load time,
@@ -2346,24 +2427,22 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, devi
 // $feature/<key> property for each entry and excludes false-valued flags from
 // $active_feature_flags, matching the other SDKs.
 func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (map[string]interface{}, error) {
-	var flags []FeatureFlag
+	var state *flagsState
 	if onlyEvaluateLocally {
-		// Strictly local: wait for the initial fetch and surface its error, since there
-		// is no remote path to fall back to.
-		loaded, err := poller.GetFeatureFlags()
+		var err error
+		state, err = poller.getLoadedState()
 		if err != nil {
 			return nil, err
 		}
-		flags = loaded
-	} else if state := poller.getState(); state != nil {
-		// Default path: non-blocking read of already-loaded definitions. A nil state
-		// (initial fetch not finished, or it failed) is treated as "no definitions" and
-		// falls through to the remote /flags request below, preserving prior default
-		// behavior without stalling the first capture on the local-eval fetch.
-		flags = state.featureFlags
+	} else {
+		// Capture's default path must not block on the initial definitions request.
+		state = poller.getState()
 	}
-
-	cohorts := poller.getCohorts()
+	var flags []FeatureFlag
+	var cohorts map[string]PropertyGroup
+	if state != nil {
+		flags, cohorts = state.featureFlags, state.cohorts
+	}
 	result := make(map[string]interface{}, len(flags))
 
 	// Fall back to the remote request when no definitions are loaded or any flag
@@ -2378,6 +2457,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 			personProperties,
 			groupProperties,
 			cohorts,
+			state,
 		)
 		if computeErr != nil {
 			// Any flag we can't evaluate locally — experience continuity, missing
@@ -2445,4 +2525,13 @@ func getSafeProp[T any](properties map[string]any, key string) T {
 		var defaultValue T
 		return defaultValue
 	}
+}
+
+// evaluationState preserves legacy defaults for context-free helper callers.
+// Production evaluation passes the snapshot selected with the flag and never reloads it.
+func (poller *FeatureFlagsPoller) evaluationState(snapshots []*flagsState) *flagsState {
+	if len(snapshots) > 0 && snapshots[0] != nil {
+		return snapshots[0]
+	}
+	return &flagsState{flagsByKey: poller.getFlagsByKey(), groups: poller.getGroups()}
 }
