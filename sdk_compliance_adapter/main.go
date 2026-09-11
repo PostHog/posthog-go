@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/v2"
 )
 
 const VERSION = "1.0.0"
