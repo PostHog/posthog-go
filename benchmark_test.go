@@ -231,7 +231,7 @@ func BenchmarkAPIfy(b *testing.B) {
 func BenchmarkCompressionOverhead(b *testing.B) {
 	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
 		capture := NewEventPoolWithCardinality(1, card).Next()
-		raw, _, err := prepareForSend(capture)
+		raw, _, _, err := prepareForSendV1(capture, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -263,7 +263,7 @@ func BenchmarkCompressionRatio(b *testing.B) {
 	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
 		b.Run(CardinalityName(card), func(b *testing.B) {
 			capture := NewEventPoolWithCardinality(1, card).Next()
-			raw, _, err := prepareForSend(capture)
+			raw, _, _, err := prepareForSendV1(capture, nil)
 			if err != nil {
 				b.Fatal(err)
 			}

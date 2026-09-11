@@ -29,10 +29,11 @@ func TestStress_EndToEndThroughput(t *testing.T) {
 
 				var received atomic.Int64
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					var b batch
-					json.NewDecoder(r.Body).Decode(&b)
-					received.Add(int64(len(b.Messages)))
-					w.WriteHeader(200)
+					body, _ := io.ReadAll(r.Body)
+					var b eventBatch
+					json.Unmarshal(body, &b)
+					received.Add(int64(len(b.Batch)))
+					writeCaptureOK(w, body)
 				}))
 				defer server.Close()
 
@@ -114,8 +115,9 @@ func TestStress_BatchSizeBoundaries(t *testing.T) {
 
 			var batchesReceived atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
 				batchesReceived.Add(1)
-				w.WriteHeader(200)
+				writeCaptureOK(w, body)
 			}))
 			defer server.Close()
 
@@ -181,10 +183,10 @@ func TestStress_CardinalityDistribution(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				totalBytes.Add(int64(len(body)))
-				var b batch
+				var b eventBatch
 				json.Unmarshal(body, &b)
-				received.Add(int64(len(b.Messages)))
-				w.WriteHeader(200)
+				received.Add(int64(len(b.Batch)))
+				writeCaptureOK(w, body)
 			}))
 			defer server.Close()
 
@@ -255,10 +257,11 @@ func runStressConcurrencyVolume(t *testing.T, name string, goroutines, eventsPer
 
 	var received atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -308,10 +311,10 @@ func TestStress_MixedCardinality(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		totalBytes.Add(int64(len(body)))
-		var b batch
+		var b eventBatch
 		json.Unmarshal(body, &b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -372,10 +375,11 @@ func TestStress_RapidCloseReopen(t *testing.T) {
 
 	var totalReceived atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		totalReceived.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		totalReceived.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -425,7 +429,7 @@ func TestStress_PrepareForSendUnderLoad(t *testing.T) {
 					for i := 0; i < 100; i++ {
 						capture := pool.Get(i)
 						capture.Type = "capture"
-						data, apiMsg, err := prepareForSend(capture)
+						data, apiMsg, _, err := prepareForSendV1(capture, nil)
 						if err != nil {
 							errorCount.Add(1)
 						}
@@ -441,7 +445,7 @@ func TestStress_PrepareForSendUnderLoad(t *testing.T) {
 
 			wg.Wait()
 			require.Equal(t, int64(0), errorCount.Load(),
-				"prepareForSend should never return error, non-positive size, or nil message")
+				"prepareForSendV1 should never return error, non-positive size, or nil message")
 		})
 	}
 }

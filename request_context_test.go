@@ -39,13 +39,13 @@ func TestEnqueueWithContext_AppliesRequestContextHeadersAndMetadata(t *testing.T
 	event := readSingleBatchEvent(t, body)
 	require.Equal(t, "frontend-user", event["distinct_id"])
 	properties := requireProperties(t, event)
-	require.Equal(t, "frontend-session", properties[propertySessionID])
+	require.Equal(t, "frontend-session", event["session_id"])
 	require.Equal(t, "https://example.com/api/test", properties[propertyCurrentURL])
 	require.Equal(t, http.MethodPost, properties[propertyRequestMethod])
 	require.Equal(t, "/api/test", properties[propertyRequestPath])
 	require.Equal(t, "TestAgent/1.0", properties[propertyUserAgent])
 	require.Equal(t, "10.0.0.2", properties[propertyIP])
-	require.NotContains(t, properties, propertyProcessPersonProfile)
+	require.NotContains(t, requireOptions(t, event), "process_person_profile")
 }
 
 func TestEnqueueWithContext_ExplicitCaptureValuesOverrideContext(t *testing.T) {
@@ -71,10 +71,10 @@ func TestEnqueueWithContext_ExplicitCaptureValuesOverrideContext(t *testing.T) {
 	event := readSingleBatchEvent(t, body)
 	require.Equal(t, "explicit-user", event["distinct_id"])
 	properties := requireProperties(t, event)
-	require.Equal(t, "explicit-session", properties[propertySessionID])
+	require.Equal(t, "explicit-session", event["session_id"])
 	require.Equal(t, "explicit-value", properties["shared"])
 	require.Equal(t, "context-only-value", properties["context-only"])
-	require.NotContains(t, properties, propertyProcessPersonProfile)
+	require.NotContains(t, requireOptions(t, event), "process_person_profile")
 }
 
 func TestEnqueue_MissingIdentityWithoutRequestContextReturnsDistinctIdError(t *testing.T) {
@@ -101,8 +101,7 @@ func TestEnqueueWithContext_MissingIdentityWithRequestContextCreatesPersonlessCa
 	distinctID, ok := event["distinct_id"].(string)
 	require.True(t, ok)
 	require.NoError(t, uuid.Validate(distinctID))
-	properties := requireProperties(t, event)
-	require.Equal(t, false, properties[propertyProcessPersonProfile])
+	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
 }
 
 func TestEnqueueWithContext_PersonlessCapturePreservesExplicitProcessPersonProfile(t *testing.T) {
@@ -120,8 +119,7 @@ func TestEnqueueWithContext_PersonlessCapturePreservesExplicitProcessPersonProfi
 	require.NoError(t, err)
 
 	event := readSingleBatchEvent(t, body)
-	properties := requireProperties(t, event)
-	require.Equal(t, true, properties[propertyProcessPersonProfile])
+	require.Equal(t, true, requireOptions(t, event)["process_person_profile"])
 }
 
 func TestEnqueueWithContext_PersonlessCaptureSkipsSendFeatureFlags(t *testing.T) {
@@ -175,10 +173,10 @@ func TestEnqueueWithContext_ExceptionUsesContextAndExplicitIdentity(t *testing.T
 	event := readSingleBatchEvent(t, body)
 	require.Equal(t, "$exception", event["event"])
 	properties := requireProperties(t, event)
-	require.Equal(t, "explicit-user", properties["distinct_id"])
-	require.Equal(t, "context-session", properties[propertySessionID])
+	require.Equal(t, "explicit-user", event["distinct_id"])
+	require.Equal(t, "context-session", event["session_id"])
 	require.Equal(t, "metadata", properties["request"])
-	require.NotContains(t, properties, propertyProcessPersonProfile)
+	require.NotContains(t, requireOptions(t, event), "process_person_profile")
 }
 
 func TestEnqueueWithContext_ExceptionFallsBackToRequestContext(t *testing.T) {
@@ -197,10 +195,9 @@ func TestEnqueueWithContext_ExceptionFallsBackToRequestContext(t *testing.T) {
 	require.NoError(t, err)
 
 	event := readSingleBatchEvent(t, body)
-	properties := requireProperties(t, event)
-	require.Equal(t, "context-user", properties["distinct_id"])
-	require.Equal(t, "context-session", properties[propertySessionID])
-	require.NotContains(t, properties, propertyProcessPersonProfile)
+	require.Equal(t, "context-user", event["distinct_id"])
+	require.Equal(t, "context-session", event["session_id"])
+	require.NotContains(t, requireOptions(t, event), "process_person_profile")
 }
 
 func TestEnqueue_ExceptionMissingIdentityWithoutRequestContextReturnsDistinctIdError(t *testing.T) {
@@ -224,11 +221,10 @@ func TestEnqueueWithContext_ExceptionMissingIdentityWithRequestContextCreatesPer
 	require.NoError(t, err)
 
 	event := readSingleBatchEvent(t, body)
-	properties := requireProperties(t, event)
-	distinctID, ok := properties["distinct_id"].(string)
+	distinctID, ok := event["distinct_id"].(string)
 	require.True(t, ok)
 	require.NoError(t, uuid.Validate(distinctID))
-	require.Equal(t, false, properties[propertyProcessPersonProfile])
+	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
 }
 
 func TestRequestContextMiddleware_DisableTracingHeadersPreservesMetadata(t *testing.T) {
@@ -259,8 +255,8 @@ func TestRequestContextMiddleware_DisableTracingHeadersPreservesMetadata(t *test
 	require.NotEqual(t, "header-user", distinctID)
 	require.NoError(t, uuid.Validate(distinctID))
 	properties := requireProperties(t, event)
-	require.Equal(t, false, properties[propertyProcessPersonProfile])
-	require.NotContains(t, properties, propertySessionID)
+	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
+	require.NotContains(t, event, "session_id")
 	require.Equal(t, "/api/test", properties[propertyRequestPath])
 	require.Equal(t, "TestAgent/1.0", properties[propertyUserAgent])
 	require.Equal(t, "10.0.0.2", properties[propertyIP])
@@ -286,8 +282,7 @@ func TestRequestContextMiddleware_SanitizesHeaders(t *testing.T) {
 	distinctID, ok := event["distinct_id"].(string)
 	require.True(t, ok)
 	require.NoError(t, uuid.Validate(distinctID))
-	properties := requireProperties(t, event)
-	require.Equal(t, strings.Repeat("s", maxRequestContextValueLength), properties[propertySessionID])
+	require.Equal(t, strings.Repeat("s", maxRequestContextValueLength), event["session_id"])
 }
 
 func TestRequestContextMiddleware_ConcurrentRequestsDoNotLeak(t *testing.T) {
@@ -346,7 +341,7 @@ func TestEnqueueWithContext_PersonlessCaptureDefaultPropertiesCannotEnablePerson
 
 	event := readSingleBatchEvent(t, body)
 	properties := requireProperties(t, event)
-	require.Equal(t, false, properties[propertyProcessPersonProfile])
+	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
 	require.Equal(t, "api", properties["service"])
 }
 
@@ -399,8 +394,8 @@ func TestRequestContextMiddleware_CapturesPanicsWithRequestContextAndRethrows(t 
 	event := readSingleBatchEvent(t, body)
 	require.Equal(t, "$exception", event["event"])
 	properties := requireProperties(t, event)
-	require.Equal(t, "client-user", properties["distinct_id"])
-	require.Equal(t, "client-session", properties[propertySessionID])
+	require.Equal(t, "client-user", event["distinct_id"])
+	require.Equal(t, "client-session", event["session_id"])
 	require.Equal(t, float64(http.StatusServiceUnavailable), properties[propertyResponseStatusCode])
 	require.Equal(t, "panic", properties[propertyExceptionSource])
 	requireExceptionStackContainsFunction(t, properties, "TestRequestContextMiddleware_CapturesPanicsWithRequestContextAndRethrows")
@@ -536,6 +531,18 @@ func requireProperties(t *testing.T, event map[string]interface{}) map[string]in
 	properties, ok := event["properties"].(map[string]interface{})
 	require.True(t, ok)
 	return properties
+}
+
+// The capture wire builder lifts the sentinel properties out of the properties
+// map: $session_id and $window_id become top-level event fields, and
+// $process_person_profile (and the other option sentinels) move into the
+// options object. Assertions about them must read the destination the builder
+// moved them to, so these helpers keep that mapping in one place.
+func requireOptions(t *testing.T, event map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	options, ok := event["options"].(map[string]interface{})
+	require.True(t, ok, "event is missing its options object")
+	return options
 }
 
 func requireExceptionStackContainsFunction(t *testing.T, properties map[string]interface{}, functionName string) {
