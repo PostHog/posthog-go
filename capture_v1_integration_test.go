@@ -33,13 +33,12 @@ func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
 	cb := NewUnifiedCallback(t)
 	zero := 0
 	c, err := NewWithConfig("phc_test", Config{
-		Endpoint:    srv.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		Callback:    cb,
-		MaxRetries:  &zero,
-		Logger:      quietTestLogger{t},
-		Interval:    10 * time.Millisecond,
-		BatchSize:   1,
+		Endpoint:   srv.URL,
+		Callback:   cb,
+		MaxRetries: &zero,
+		Logger:     quietTestLogger{t},
+		Interval:   10 * time.Millisecond,
+		BatchSize:  1,
 	})
 	if err != nil {
 		t.Fatalf("NewWithConfig: %v", err)
@@ -99,13 +98,12 @@ func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
 
 	cb := NewUnifiedCallback(t)
 	c, err := NewWithConfig("phc_test", Config{
-		Endpoint:    srv.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		Callback:    cb,
-		Logger:      quietTestLogger{t},
-		Interval:    10 * time.Millisecond,
-		BatchSize:   1,
-		Transport:   headerCaptureTransport{auth: &gotAuth, sdkInfo: &gotSdkInfo},
+		Endpoint:  srv.URL,
+		Callback:  cb,
+		Logger:    quietTestLogger{t},
+		Interval:  10 * time.Millisecond,
+		BatchSize: 1,
+		Transport: headerCaptureTransport{auth: &gotAuth, sdkInfo: &gotSdkInfo},
 	})
 	if err != nil {
 		t.Fatalf("NewWithConfig: %v", err)
@@ -161,14 +159,13 @@ func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 	cb := NewUnifiedCallback(t)
 	nine := 9
 	c, err := NewWithConfig("phc_test", Config{
-		Endpoint:    srv.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		Callback:    cb,
-		MaxRetries:  &nine,
-		RetryAfter:  func(int) time.Duration { return time.Millisecond },
-		Logger:      quietTestLogger{t},
-		Interval:    10 * time.Millisecond,
-		BatchSize:   3,
+		Endpoint:   srv.URL,
+		Callback:   cb,
+		MaxRetries: &nine,
+		RetryAfter: func(int) time.Duration { return time.Millisecond },
+		Logger:     quietTestLogger{t},
+		Interval:   10 * time.Millisecond,
+		BatchSize:  3,
 	})
 	if err != nil {
 		t.Fatalf("NewWithConfig: %v", err)

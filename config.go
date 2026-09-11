@@ -14,17 +14,15 @@ type CompressionMode uint8
 const (
 	// CompressionNone disables compression (default).
 	CompressionNone CompressionMode = 0
-	// CompressionGzip enables GZIP compression for batch payloads. Valid on
-	// both capture modes.
+	// CompressionGzip enables GZIP compression for batch payloads.
 	CompressionGzip CompressionMode = 1
-	// CompressionZstd enables Zstandard compression. Requires
-	// CaptureModeAnalyticsV1 (the legacy /batch/ endpoint cannot decode it).
+	// CompressionZstd enables Zstandard compression.
 	CompressionZstd CompressionMode = 2
 	// CompressionDeflate enables zlib (RFC 1950) compression, sent as
-	// Content-Encoding: deflate. Requires CaptureModeAnalyticsV1.
+	// Content-Encoding: deflate.
 	CompressionDeflate CompressionMode = 3
 	// CompressionBrotli enables Brotli compression, sent as
-	// Content-Encoding: br. Requires CaptureModeAnalyticsV1.
+	// Content-Encoding: br.
 	CompressionBrotli CompressionMode = 4
 )
 
@@ -47,18 +45,6 @@ func (m CompressionMode) String() string {
 		return fmt.Sprintf("CompressionMode(%d)", uint8(m))
 	}
 }
-
-// CaptureMode selects the capture wire protocol used for event ingestion.
-type CaptureMode uint8
-
-const (
-	// CaptureModeLegacy sends events to the legacy POST /batch/ endpoint. This
-	// is the default, so upgrading is transparent to existing callers.
-	CaptureModeLegacy CaptureMode = 0
-	// CaptureModeAnalyticsV1 opts into POST /i/v1/analytics/events (Bearer auth,
-	// per-event results, partial retry).
-	CaptureModeAnalyticsV1 CaptureMode = 1
-)
 
 // Config carries configuration options used when constructing a Client with NewWithConfig.
 //
@@ -184,7 +170,7 @@ type Config struct {
 	// sent. If zero or negative, Close waits indefinitely for backward compatibility.
 	ShutdownTimeout time.Duration
 
-	// BatchUploadTimeout is the timeout for uploading one batch to the /batch/
+	// BatchUploadTimeout is the timeout for uploading one batch to the capture
 	// endpoint. If zero, it defaults to DefaultBatchUploadTimeout.
 	BatchUploadTimeout time.Duration
 
@@ -203,11 +189,6 @@ type Config struct {
 	// compresses payloads and adds the appropriate headers/query params. If zero,
 	// it defaults to CompressionNone.
 	Compression CompressionMode
-
-	// CaptureMode selects the capture wire protocol. It defaults to
-	// CaptureModeLegacy (POST /batch/). Set CaptureModeAnalyticsV1 to opt into
-	// POST /i/v1/analytics/events.
-	CaptureMode CaptureMode
 
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
@@ -252,12 +233,12 @@ const (
 
 	// DefaultMaxAttempts is the total number of capture delivery attempts (1
 	// initial + retries) used when Config.MaxRetries is unset or out of range.
-	// Chosen to match the cross-SDK Capture V1 parity standard (posthog-rs
-	// defaults to the same envelope). Applies to both the v0 and v1 send paths.
+	// Chosen to match the cross-SDK capture parity standard (posthog-rs
+	// defaults to the same envelope).
 	DefaultMaxAttempts = 4
 
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
-	// events to the /batch/ endpoint.
+	// events to the capture endpoint.
 	DefaultBatchUploadTimeout = 10 * time.Second
 
 	// DefaultBatchSubmitTimeout is the default timeout for submitting batches
@@ -343,31 +324,13 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.Compression {
-	case CompressionNone, CompressionGzip:
-		// Valid on both legacy and v1 capture modes.
-	case CompressionZstd, CompressionDeflate, CompressionBrotli:
-		// Only the v1 endpoint decodes these; the legacy /batch/ endpoint
-		// understands gzip/lz64/base64 only, so reject them up front.
-		if c.CaptureMode != CaptureModeAnalyticsV1 {
-			return ConfigError{
-				Reason: c.Compression.String() + " compression requires CaptureModeAnalyticsV1",
-				Field:  "Compression",
-				Value:  c.Compression,
-			}
-		}
+	case CompressionNone, CompressionGzip, CompressionZstd, CompressionDeflate, CompressionBrotli:
+		// All codecs the capture endpoint decodes.
 	default:
 		return ConfigError{
 			Reason: "invalid compression mode",
 			Field:  "Compression",
 			Value:  c.Compression,
-		}
-	}
-
-	if c.CaptureMode > CaptureModeAnalyticsV1 {
-		return ConfigError{
-			Reason: "invalid capture mode",
-			Field:  "CaptureMode",
-			Value:  c.CaptureMode,
 		}
 	}
 

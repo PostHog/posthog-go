@@ -179,31 +179,24 @@ func assertConfigBoolDefaultTrue(t *testing.T, set func(*Config, *bool), get fun
 }
 
 func TestConfigCompression(t *testing.T) {
-	// gzip and none are valid on both capture modes; zstd/deflate/brotli are
-	// v1-only (legacy /batch/ cannot decode them); unknown values are rejected.
+	// Every codec the capture endpoint decodes is valid; unknown values are
+	// rejected.
 	cases := []struct {
 		name        string
 		compression CompressionMode
-		captureMode CaptureMode
 		wantErr     string // reason substring; "" means valid
 		wantValue   CompressionMode
 	}{
-		{"none legacy", CompressionNone, CaptureModeLegacy, "", 0},
-		{"none v1", CompressionNone, CaptureModeAnalyticsV1, "", 0},
-		{"gzip legacy", CompressionGzip, CaptureModeLegacy, "", 0},
-		{"gzip v1", CompressionGzip, CaptureModeAnalyticsV1, "", 0},
-		{"zstd legacy rejected", CompressionZstd, CaptureModeLegacy, "zstd compression requires CaptureModeAnalyticsV1", CompressionZstd},
-		{"zstd v1 ok", CompressionZstd, CaptureModeAnalyticsV1, "", 0},
-		{"deflate legacy rejected", CompressionDeflate, CaptureModeLegacy, "deflate compression requires CaptureModeAnalyticsV1", CompressionDeflate},
-		{"deflate v1 ok", CompressionDeflate, CaptureModeAnalyticsV1, "", 0},
-		{"brotli legacy rejected", CompressionBrotli, CaptureModeLegacy, "brotli compression requires CaptureModeAnalyticsV1", CompressionBrotli},
-		{"brotli v1 ok", CompressionBrotli, CaptureModeAnalyticsV1, "", 0},
-		{"unknown legacy", CompressionMode(255), CaptureModeLegacy, "invalid compression mode", CompressionMode(255)},
-		{"unknown v1", CompressionMode(255), CaptureModeAnalyticsV1, "invalid compression mode", CompressionMode(255)},
+		{"none", CompressionNone, "", 0},
+		{"gzip", CompressionGzip, "", 0},
+		{"zstd", CompressionZstd, "", 0},
+		{"deflate", CompressionDeflate, "", 0},
+		{"brotli", CompressionBrotli, "", 0},
+		{"unknown", CompressionMode(255), "invalid compression mode", CompressionMode(255)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := Config{Compression: tc.compression, CaptureMode: tc.captureMode}
+			c := Config{Compression: tc.compression}
 			err := c.Validate()
 			if tc.wantErr == "" {
 				require.NoError(t, err)
