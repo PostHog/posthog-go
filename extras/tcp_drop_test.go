@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/orian/flakyhttp"
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
