@@ -1,0 +1,6 @@
+{
+  "name": "posthog-go-otel",
+  "version": "1.25.1",
+  "private": true,
+  "description": "Release metadata for the PostHog Go OpenTelemetry bridge module"
+}
