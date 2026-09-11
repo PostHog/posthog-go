@@ -166,6 +166,12 @@ type Config struct {
 	// It must be in [0,9]. If nil, it defaults to 3 retries (4 total attempts).
 	MaxRetries *int
 
+	// MaxRetryBackoff caps how long a single retry waits. It bounds the default
+	// exponential backoff and clamps a server Retry-After to the same value, so
+	// a large or hostile header cannot park a batch. If zero, it defaults to
+	// DefaultMaxRetryBackoff. A custom RetryAfter is used as given.
+	MaxRetryBackoff time.Duration
+
 	// ShutdownTimeout is the maximum time Close waits for in-flight messages to be
 	// sent. If zero or negative, Close waits indefinitely for backward compatibility.
 	ShutdownTimeout time.Duration
@@ -378,8 +384,12 @@ func makeConfig(c Config) Config {
 		c.MaxQueueSize = c.BatchSize
 	}
 
+	if c.MaxRetryBackoff <= 0 {
+		c.MaxRetryBackoff = DefaultMaxRetryBackoff
+	}
+
 	if c.RetryAfter == nil {
-		c.RetryAfter = DefaultBackoff().Duration
+		c.RetryAfter = NewBackoff(defaultBackoffBase, defaultBackoffFactor, 0, c.MaxRetryBackoff).Duration
 	}
 
 	if c.now == nil {

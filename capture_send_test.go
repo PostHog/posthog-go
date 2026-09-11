@@ -769,7 +769,7 @@ func TestRetryDelay(t *testing.T) {
 		return &attemptResult{retryAfter: d, hasRetryAfter: has}
 	}
 	// Configured backoff is a constant `base`; Retry-After is a minimum, not a
-	// replacement, and is clamped to defaultMaxBackoff (the configured backoff
+	// replacement, and is clamped to DefaultMaxRetryBackoff (the configured backoff
 	// itself is never truncated).
 	cases := []struct {
 		name string
@@ -780,11 +780,13 @@ func TestRetryDelay(t *testing.T) {
 		{"no_retry_after_uses_configured", res(0, false), base},
 		{"larger_retry_after_wins", res(5*time.Second, true), 5 * time.Second},
 		{"smaller_retry_after_ignored", res(10*time.Millisecond, true), base},
-		{"retry_after_at_ceiling", res(defaultMaxBackoff, true), defaultMaxBackoff},
-		{"retry_after_above_ceiling_clamped", res(90*time.Second, true), defaultMaxBackoff},
-		{"absurd_retry_after_clamped", res(1000*time.Hour, true), defaultMaxBackoff},
+		{"retry_after_at_ceiling", res(DefaultMaxRetryBackoff, true), DefaultMaxRetryBackoff},
+		{"retry_after_above_ceiling_clamped", res(90*time.Second, true), DefaultMaxRetryBackoff},
+		{"absurd_retry_after_clamped", res(1000*time.Hour, true), DefaultMaxRetryBackoff},
 	}
-	c := &client{Config: Config{RetryAfter: func(int) time.Duration { return base }}}
+	// Through makeConfig so MaxRetryBackoff resolves to its default, as it does
+	// for any client built by NewWithConfig.
+	c := &client{Config: makeConfig(Config{RetryAfter: func(int) time.Duration { return base }})}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := c.retryDelay(0, tc.res); got != tc.want {
@@ -888,4 +890,31 @@ func containsAll(s string, substrs ...string) bool {
 		}
 	}
 	return true
+}
+
+// TestRetryDelayHonorsConfiguredCeiling pins that Config.MaxRetryBackoff, not a
+// constant, bounds a server Retry-After.
+func TestRetryDelayHonorsConfiguredCeiling(t *testing.T) {
+	withCeiling := func(ceiling time.Duration) *client {
+		cfg := makeConfig(Config{MaxRetryBackoff: ceiling})
+		return &client{Config: cfg}
+	}
+
+	res := &attemptResult{retryAfter: 10 * time.Minute, hasRetryAfter: true}
+
+	if got := withCeiling(5*time.Second).retryDelay(0, res); got != 5*time.Second {
+		t.Errorf("ceiling 5s: delay = %v, want 5s", got)
+	}
+	if got := withCeiling(2*time.Minute).retryDelay(0, res); got != 2*time.Minute {
+		t.Errorf("ceiling 2m: delay = %v, want 2m", got)
+	}
+	// Zero falls back to the documented default.
+	if got := withCeiling(0).retryDelay(0, res); got != DefaultMaxRetryBackoff {
+		t.Errorf("zero ceiling: delay = %v, want %v", got, DefaultMaxRetryBackoff)
+	}
+	// The default exponential backoff is capped by the same value.
+	c := withCeiling(250 * time.Millisecond)
+	if got := c.retryDelay(9, nil); got != 250*time.Millisecond {
+		t.Errorf("backoff cap: delay = %v, want 250ms", got)
+	}
 }
