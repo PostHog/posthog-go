@@ -1,19 +1,9 @@
 services:
-  # PostHog Go SDK adapter (capture v0)
+  # PostHog Go SDK adapter
   sdk-adapter:
     build:
       context: ..
       dockerfile: sdk_compliance_adapter/Dockerfile
-    expose:
-      - "8080"
-    networks:
-      - test-network
-
-  # PostHog Go SDK adapter (capture v1)
-  sdk-adapter-v1:
-    build:
-      context: ..
-      dockerfile: sdk_compliance_adapter/Dockerfile.v1
     expose:
       - "8080"
     networks:
