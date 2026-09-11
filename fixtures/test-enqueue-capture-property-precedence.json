@@ -11,6 +11,7 @@
         "$lib": "default-lib",
         "$lib_version": "default-version",
         "$os": "default-os",
+        "$os_distro": "IGNORED",
         "$os_version": "event-os-version",
         "collision": "default-value",
         "default_only": "default-value",
