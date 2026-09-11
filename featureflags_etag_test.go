@@ -33,6 +33,9 @@ func newTestPoller(t *testing.T, serverURL string) *FeatureFlagsPoller {
 func TestETagSupportForLocalEvaluation(t *testing.T) {
 	t.Run("stores ETag from initial response", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				w.Header().Set("ETag", `"abc123"`)
 				w.Write([]byte(`{
@@ -63,6 +66,9 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		var receivedIfNoneMatch string
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				requestCount++
 				receivedIfNoneMatch = r.Header.Get("If-None-Match")
@@ -105,6 +111,9 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		var requestCount int
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				requestCount++
 
@@ -147,6 +156,9 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		var requestCount int
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				requestCount++
 
@@ -206,6 +218,9 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		var requestCount int
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				requestCount++
 
@@ -260,6 +275,9 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		var requestCount int
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				requestCount++
 
@@ -315,6 +333,9 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		var requestCount int
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				requestCount++
 
@@ -373,6 +394,9 @@ func TestETagSupportForLocalEvaluation(t *testing.T) {
 		var firstRequestIfNoneMatch string
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				firstRequestIfNoneMatch = r.Header.Get("If-None-Match")
 				w.Header().Set("ETag", `"abc123"`)

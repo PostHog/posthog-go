@@ -23,6 +23,9 @@ import (
 func newFeatureFlagsFixtureClient(t *testing.T, fixtureName string) Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture(fixtureName)))
 	}))
 	t.Cleanup(server.Close)
@@ -36,6 +39,9 @@ func newFeatureFlagsFixtureClient(t *testing.T, fixtureName string) Client {
 func newFeatureFlagsLocalClient(t *testing.T, definitionsFixture string) Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -55,6 +61,9 @@ func newFeatureFlagsLocalClient(t *testing.T, definitionsFixture string) Client 
 
 func TestFlagPersonProperty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -97,6 +106,9 @@ func TestFlagPersonProperty(t *testing.T) {
 
 func TestFlagGroup(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			decoder := json.NewDecoder(r.Body)
 			decoder.DisallowUnknownFields()
@@ -165,6 +177,9 @@ func TestFlagGroup(t *testing.T) {
 
 func TestFlagGroupProperty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 	}))
 	defer server.Close()
@@ -215,6 +230,9 @@ func TestFlagGroupProperty(t *testing.T) {
 
 func TestComplexDefinition(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -253,6 +271,9 @@ func TestComplexDefinition(t *testing.T) {
 
 func TestFallbackToFlags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -282,6 +303,9 @@ func TestFallbackToFlags(t *testing.T) {
 
 func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte("test-flags-v3.json"))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -359,6 +383,9 @@ func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing
 
 func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -421,6 +448,9 @@ func TestFeatureFlagDefaultsDontHinderEvaluation(t *testing.T) {
 
 func TestFeatureFlagNullComeIntoPlayOnlyWhenFlagsErrorsOut(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte("{ads}"))
 	}))
 
@@ -494,6 +524,9 @@ func TestExperienceContinuityOverride(t *testing.T) {
 
 func TestGetAllFlags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -520,6 +553,9 @@ func TestGetAllFlags(t *testing.T) {
 
 func TestGetAllFlagsEmptyLocal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -552,6 +588,9 @@ func TestGetAllFlagsNoRemoteFallback(t *testing.T) {
 
 func TestGetAllFlagsOnlyLocalEvaluationSet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -585,6 +624,9 @@ func TestComputeInactiveFlagsLocally(t *testing.T) {
 
 func TestFeatureFlagWithDependencies(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-flag-with-dependencies.json")))
 		}
@@ -696,6 +738,9 @@ func TestFeatureFlagEarlyExit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fixtureFile := tt.fixture
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 					w.Write([]byte(fixture("test-flags-v3.json")))
 				} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -730,6 +775,9 @@ func TestFeatureFlagEarlyExit(t *testing.T) {
 
 func TestGetFeatureFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -804,6 +852,9 @@ func TestGetFeatureFlag(t *testing.T) {
 
 func TestGetFeatureFlagLocallyEvaluated(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -873,6 +924,9 @@ func TestGetFeatureFlagPayload(t *testing.T) {
 
 func TestGetRemoteConfigPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("test-remote-config.json")))
 	}))
 
@@ -967,6 +1021,9 @@ func assertFeatureFlagPayload(t *testing.T, client Client, request FeatureFlagPa
 
 func TestConditionsEvaluatedInOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -1042,6 +1099,9 @@ func TestCaptureIsCalled(t *testing.T) {
 
 func TestSimpleFlagConsistency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
 	}))
 	defer server.Close()
@@ -2070,6 +2130,9 @@ func TestSimpleFlagConsistency(t *testing.T) {
 
 func TestMultivariateFlagConsistency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("feature_flag/test-multivariate-flag.json")))
 	}))
 	defer server.Close()
@@ -3099,6 +3162,9 @@ func TestMultivariateFlagConsistency(t *testing.T) {
 
 func TestMultivariateFlagConsistencyPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("feature_flag/test-multivariate-flag.json")))
 	}))
 	defer server.Close()
@@ -4129,6 +4195,9 @@ func TestMultivariateFlagConsistencyPayload(t *testing.T) {
 
 func TestFlagsFetchFail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.WriteHeader(http.StatusInternalServerError)
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -4156,6 +4225,9 @@ func TestFlagsFetchFail(t *testing.T) {
 
 func TestFlagWithTimeoutExceeded(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			time.Sleep(1 * time.Second)
 			w.Write([]byte(fixture("test-flags-v3.json")))
@@ -4239,6 +4311,9 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 	var buf bytes.Buffer
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -4288,6 +4363,9 @@ func TestFetchFlagsFails(t *testing.T) {
 	// This test verifies that even in presence of HTTP errors flags continue to be fetched.
 	var called uint32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if atomic.LoadUint32(&called) == 0 {
 			// Load initial flags successfully
 			w.Write([]byte(fixture("feature_flag/test-simple-flag.json")))
@@ -4335,6 +4413,9 @@ func TestFetchFlagsFails(t *testing.T) {
 // Check link: https://github.com/PostHog/posthog/blob/0bb3ed063c37f5be280e4283a0d2a6a6683a9534/rust/feature-flags/src/api/request_handler.rs#L1412
 func TestFeatureFlagWithOverrides(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-group-props.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -4416,6 +4497,9 @@ func TestFeatureFlagWithOverrides(t *testing.T) {
 
 func TestFeatureFlagDistinctIDOverride(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-distinct-id-local.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -4479,6 +4563,9 @@ func TestFeatureFlagDistinctIDOverride(t *testing.T) {
 
 func TestFeatureFlagDeviceIDBucketingLocalEvaluation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-device-id-bucketing.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -4513,6 +4600,9 @@ func TestFeatureFlagDeviceIDBucketingLocalEvaluation(t *testing.T) {
 
 func TestFeatureFlagWithFalseVariant(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-false-variant.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
@@ -4577,6 +4667,9 @@ func TestBasicEmailPropertyMatching(t *testing.T) {
 
 func TestProductionStyleMultivariateDependencyChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		response := `{
 			"flags": [
@@ -4908,6 +5001,9 @@ func TestFallbackToAPIWhenFlagHasStaticCohortInMultiCondition(t *testing.T) {
 
 	var flagsAPICalled bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			// Return API response indicating user is in the static cohort
 			flagsAPICalled = true
@@ -4996,6 +5092,9 @@ func TestGetFeatureFlagPayloadFallbackToAPIWhenFlagHasStaticCohort(t *testing.T)
 
 	var flagsAPICalled bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			// Return API response with payload
 			flagsAPICalled = true
@@ -5067,6 +5166,9 @@ func TestGetFeatureFlagPayloadFallbackToAPIWhenFlagHasStaticCohort(t *testing.T)
 
 func TestDateBeforeOperatorAbsolute(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			response := `{
 				"flags": [

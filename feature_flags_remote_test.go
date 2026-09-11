@@ -16,6 +16,9 @@ import (
 func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("returns flag value when flag exists", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`{
 				"flags": {
 					"test-flag": {
@@ -57,6 +60,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 	t.Run("returns multivariate flag value", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`{
 				"flags": {
 					"variant-flag": {
@@ -88,6 +94,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 	t.Run("returns nil with FlagMissing when flag not in response", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`{
 				"flags": {},
 				"requestId": "req-789"
@@ -116,6 +125,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 	t.Run("returns nil with QuotaLimited when quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`{
 				"flags": {
 					"test-flag": {
@@ -150,6 +162,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 	t.Run("sets ErrorsWhileComputingFlags when server reports errors", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`{
 				"flags": {
 					"test-flag": {
@@ -181,6 +196,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 	t.Run("returns APIError with status code when server returns non-OK status", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
@@ -209,6 +227,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 	t.Run("returns APIError with status 401 for unauthorized", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.WriteHeader(http.StatusUnauthorized)
 		}))
 		defer server.Close()
@@ -233,6 +254,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 
 	t.Run("returns error when server returns invalid JSON", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`not valid json`))
 		}))
 		defer server.Close()
@@ -318,6 +342,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("passes person properties in request", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(body, &requestData); err != nil {
 				t.Errorf("Failed to parse request body: %v", err)
@@ -346,6 +373,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("preserves explicit person properties distinct_id", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(body, &requestData); err != nil {
 				t.Errorf("Failed to parse request body: %v", err)
@@ -371,6 +401,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("GetAllFlags does not duplicate distinct_id in person properties", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(body, &requestData); err != nil {
 				t.Errorf("Failed to parse request body: %v", err)
@@ -399,6 +432,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("capture enrichment fallback does not duplicate distinct_id in person properties", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags/definitions" {
 				w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
 				return
@@ -437,6 +473,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("passes groups in request", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(body, &requestData); err != nil {
 				t.Errorf("Failed to parse request body: %v", err)
@@ -462,6 +501,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("passes device_id in request when provided", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(body, &requestData); err != nil {
 				t.Errorf("Failed to parse request body: %v", err)
@@ -487,6 +529,9 @@ func TestGetFeatureFlagFromRemote(t *testing.T) {
 	t.Run("omits device_id in request when nil", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(body, &requestData); err != nil {
 				t.Errorf("Failed to parse request body: %v", err)
@@ -712,6 +757,9 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 func TestFailedFlagShouldNotReturnValue(t *testing.T) {
 	t.Run("flag with failed=true should be treated as missing", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`{
 				"flags": {
 					"test-flag": {
@@ -762,6 +810,9 @@ func TestFailedFlagShouldNotReturnValue(t *testing.T) {
 
 	t.Run("flag with failed=false should return normally", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			w.Write([]byte(`{
 				"flags": {
 					"test-flag": {

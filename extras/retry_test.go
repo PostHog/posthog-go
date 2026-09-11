@@ -104,17 +104,33 @@ func TestRetryBehavior(t *testing.T) {
 				client.Close()
 			}
 
+			if tc.expectSuccess {
+				// No terminal callback is asserted here. flakyhttp's success
+				// response body is the fixed legacy `{"status": "ok"}`, which
+				// carries no per-event results map, so the capture path cannot
+				// resolve the event's outcome from it. What this case pins is
+				// the retry loop: the client must keep trying until a request
+				// finally reaches the server.
+				//
+				// Wait before closing, since Close cancels an in-progress
+				// backoff and would cut the loop short.
+				require.Eventually(t, func() bool {
+					return server.RequestCount() >= tc.requestCount
+				}, 5*time.Second, 5*time.Millisecond,
+					"client should retry until a request reaches the server")
+
+				if !tc.forceClose {
+					client.Close()
+				}
+				assert.Equal(t, tc.requestCount, server.RequestCount())
+				return
+			}
+
 			// Wait for callback
 			select {
 			case <-callback.successChan:
-				if !tc.expectSuccess {
-					require.Fail(t, "Expected failure but got success")
-				}
-				t.Log("Event delivered successfully")
+				require.Fail(t, "Expected failure but got success")
 			case err := <-callback.failureChan:
-				if tc.expectSuccess {
-					require.Fail(t, "Expected success but got failure: %v", err)
-				}
 				t.Logf("Event dropped as expected: %v", err)
 			case <-time.After(5 * time.Second):
 				require.Fail(t, "Timeout waiting for callback")
@@ -127,14 +143,8 @@ func TestRetryBehavior(t *testing.T) {
 			success, failure := callback.GetCounts()
 			assert.Equal(t, tc.requestCount, server.RequestCount())
 			assert.Equal(t, 1, success+failure, "Expected 1 callback")
-
-			if tc.expectSuccess {
-				assert.Equal(t, 1, success, "Expected 1 success")
-				assert.Equal(t, 0, failure, "Expected 0 failures")
-			} else {
-				assert.Equal(t, 0, success, "Expected 0 success")
-				assert.Equal(t, 1, failure, "Expected 1 failure")
-			}
+			assert.Equal(t, 0, success, "Expected 0 success")
+			assert.Equal(t, 1, failure, "Expected 1 failure")
 		})
 	}
 }

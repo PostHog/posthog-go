@@ -58,35 +58,6 @@ func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
 	}
 }
 
-func TestDefaultModeRoutesToBatchEndpoint(t *testing.T) {
-	b := NewMockServerBuilder().WithBatchResponse("ok", 200)
-	srv := b.Build()
-	defer srv.Close()
-
-	cb := NewUnifiedCallback(t)
-	c, err := NewWithConfig("phc_test", Config{
-		Endpoint:  srv.URL,
-		Callback:  cb,
-		Logger:    quietTestLogger{t},
-		Interval:  10 * time.Millisecond,
-		BatchSize: 1,
-	})
-	if err != nil {
-		t.Fatalf("NewWithConfig: %v", err)
-	}
-	if err := c.Enqueue(Capture{Event: "e", DistinctId: "d"}); err != nil {
-		t.Fatalf("Enqueue: %v", err)
-	}
-	waitForCounts(t, cb, 1)
-	_ = c.Close()
-
-	for _, p := range b.GetPaths() {
-		if p == captureV1Path {
-			t.Errorf("default mode must not hit %s; paths=%v", captureV1Path, b.GetPaths())
-		}
-	}
-}
-
 func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
 	var gotAuth, gotSdkInfo string
 	var envelope eventBatch

@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"context"
+	"io"
 	"net/http"
 
 	json "github.com/goccy/go-json"
@@ -19,10 +20,11 @@ func newSlowBatchServer(t *testing.T, delay time.Duration) (*httptest.Server, *a
 	var received atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(delay)
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	t.Cleanup(server.Close)
 	return server, &received
@@ -41,11 +43,12 @@ func newBatchCounterServer(t *testing.T) (*httptest.Server, *atomic.Int64, *atom
 	var batchCount atomic.Int64
 	var totalMessages atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
 		batchCount.Add(1)
-		totalMessages.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		totalMessages.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	t.Cleanup(server.Close)
 	return server, &batchCount, &totalMessages
@@ -89,13 +92,14 @@ func TestBatching_LargeEventsTriggerFlush(t *testing.T) {
 	var mu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
 		batchCount.Add(1)
 		mu.Lock()
-		batchSizes = append(batchSizes, len(b.Messages))
+		batchSizes = append(batchSizes, len(b.Batch))
 		mu.Unlock()
-		w.WriteHeader(200)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -130,10 +134,11 @@ func TestBatching_OversizedEventRejected(t *testing.T) {
 	var failureCount atomic.Int64
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -209,12 +214,13 @@ func TestBatching_BatchCountLimit(t *testing.T) {
 	var mu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
 		mu.Lock()
-		batchSizes = append(batchSizes, len(b.Messages))
+		batchSizes = append(batchSizes, len(b.Batch))
 		mu.Unlock()
-		w.WriteHeader(200)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -293,11 +299,12 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 
 	// Create a handler with moderate latency
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		time.Sleep(20 * time.Millisecond)
 		mu.Lock()
 		batchCount++
 		mu.Unlock()
-		w.WriteHeader(200)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -341,8 +348,9 @@ func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
 
 	// Create a very slow handler to saturate workers
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		time.Sleep(500 * time.Millisecond) // Very slow backend
-		w.WriteHeader(200)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 

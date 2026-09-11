@@ -29,6 +29,9 @@ func newFlagsServer(t *testing.T, fixtureName string) *flagsServer {
 	t.Helper()
 	fs := &flagsServer{}
 	fs.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			body := new(bytes.Buffer)
 			body.ReadFrom(r.Body)
@@ -644,6 +647,9 @@ func TestEvaluateFlags_MissingRequestedLocalFlagFallsBackRemotely(t *testing.T) 
 	var remoteCalls atomic.Int32
 	remoteRequests := make(chan FlagsRequestData, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions") || strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
 			w.Write([]byte(fixture("feature_flag/test-multiple-flags-valid.json")))
@@ -721,6 +727,9 @@ func TestEvaluateFlags_MissingRequestedFlagAbsentRemotelyRequestsEachCall(t *tes
 	t.Parallel()
 	var remoteCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions") || strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
 			w.Write([]byte(fixture("feature_flag/test-multiple-flags-valid.json")))
@@ -760,6 +769,9 @@ func TestEvaluateFlags_EmptyDistinctId_NoEvents(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			calls.Add(1)
 			w.Write([]byte(fixture("test-flags-v4.json")))
@@ -799,6 +811,9 @@ func TestEvaluateFlags_LocalEvaluation_TagsLocallyEvaluated(t *testing.T) {
 	var localCalls atomic.Int32
 	var remoteCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions") || strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
 			localCalls.Add(1)
@@ -864,6 +879,9 @@ const hasExperimentLocalDefinitions = `{
 func newHasExperimentLocalServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(hasExperimentLocalDefinitions))
@@ -936,6 +954,9 @@ func TestGetFeatureFlag_RemoteFallbackOmitsFlag_OmitsHasExperiment(t *testing.T)
 		]
 	}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(definitions))
@@ -1209,6 +1230,9 @@ func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 func TestErrorsWhileComputingFlags_PropagatesToEvent(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags") {
 			w.Write([]byte(`{
 				"flags": {
@@ -1303,6 +1327,9 @@ func TestEvaluateFlags_RemoteErrorReturnsPartialLocalSnapshot(t *testing.T) {
 	// /flags request 500s. The snapshot must still carry beta-feature so the
 	// caller doesn't lose the locally-resolved work.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions") || strings.HasPrefix(r.URL.Path, "/api/feature_flag/local_evaluation"):
 			w.Write([]byte(fixture("feature_flag/test-get-all-flags-with-fallback-but-only-local-evaluation-set.json")))

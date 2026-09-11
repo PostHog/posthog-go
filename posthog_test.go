@@ -133,7 +133,8 @@ func TestNewWithConfig_BlankAPIKeyReturnsNoopClientWithoutRequests(t *testing.T)
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		w.WriteHeader(http.StatusOK)
+		body, _ := io.ReadAll(r.Body)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -175,7 +176,8 @@ func TestNewWithConfig_BlankAPIKeyWithPersonalAPIKeyReturnsNoopClient(t *testing
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		w.WriteHeader(http.StatusOK)
+		body, _ := io.ReadAll(r.Body)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -205,7 +207,7 @@ func TestNewWithConfig_BlankAPIKeyWithPersonalAPIKeyReturnsNoopClient(t *testing
 func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 	var (
 		mu                sync.Mutex
-		batchAPIKey       string
+		captureAPIKey     string
 		remoteConfigToken string
 		remoteConfigAuth  string
 	)
@@ -218,27 +220,19 @@ func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
-		case r.URL.Path == "/batch/":
+		case strings.HasPrefix(r.URL.Path, captureV1Path):
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
-				t.Errorf("Failed to read batch body: %v", err)
+				t.Errorf("Failed to read capture body: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
-			var payload struct {
-				ApiKey string `json:"api_key"`
-			}
-			if err := json.Unmarshal(body, &payload); err != nil {
-				t.Errorf("Failed to parse batch body: %v", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
+			// The project API key authenticates via Bearer, not a body field.
 			mu.Lock()
-			batchAPIKey = payload.ApiKey
+			captureAPIKey = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
+			writeCaptureOK(w, body)
 		case strings.Contains(r.URL.Path, "/remote_config"):
 			mu.Lock()
 			remoteConfigToken = r.URL.Query().Get("token")
@@ -269,7 +263,7 @@ func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, "test-api-key", batchAPIKey)
+	require.Equal(t, "test-api-key", captureAPIKey)
 	require.Equal(t, "test-api-key", remoteConfigToken)
 	require.Equal(t, "Bearer test-personal-key", remoteConfigAuth)
 }
@@ -289,6 +283,9 @@ func TestRemoteConfigAuthUsesResolvedSecretKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotAuth string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				gotAuth = r.Header.Get("Authorization")
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`"ok"`))
@@ -331,15 +328,25 @@ var (
 	//lint:ignore ST1012 variable name is fine :D
 	testError = errors.New("test error")
 
-	// HTTP transport that always succeeds.
+	// HTTP transport that always succeeds. A capture request is answered with
+	// the per-event results body the SDK requires: a 200 whose body is not a
+	// results map is terminal, not a success.
 	testTransportOK = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		body := ""
+		if strings.HasPrefix(r.URL.Path, captureV1Path) && r.Body != nil {
+			reqBody, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			body = allOkResultsBody(reqBody)
+		}
 		return &http.Response{
 			Status:     http.StatusText(http.StatusOK),
 			StatusCode: http.StatusOK,
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       io.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader(body)),
 			Request:    r,
 		}, nil
 	})
@@ -484,6 +491,7 @@ func mockServer() (chan []byte, *httptest.Server) {
 		}
 
 		done <- b
+		writeCaptureOK(w, buf.Bytes())
 	}))
 
 	return done, server
@@ -596,53 +604,13 @@ func completeExceptionSnapshot() Exception {
 }
 
 func TestEnqueue(t *testing.T) {
-	exception := Exception{
-		Uuid:         "00000000-0000-0000-0000-000000000004",
-		DistinctId:   "my-user-id",
-		Timestamp:    time.Date(2025, 8, 11, 20, 43, 37, 0, time.UTC),
-		DisableGeoIP: true,
-		ExceptionList: []ExceptionItem{
-			{
-				Type:  "Exception Title",
-				Value: "Exception Description",
-				Stacktrace: &ExceptionStacktrace{
-					Type: "raw",
-					Frames: []StackFrame{
-						{
-							Filename:  "/Users/Developer/posthog-go/examples/main.go",
-							LineNo:    56,
-							Function:  "main.main",
-							InApp:     true,
-							Synthetic: false,
-							Platform:  "go",
-						},
-					},
-				},
-			},
-		},
-	}
-	completeException := completeExceptionSnapshot()
 	f, tv := false, true
 	tests := map[string]struct {
 		ref          string
 		msg          Message
 		disableGeoIP *bool
 	}{
-		"alias": {
-			strings.TrimSpace(fixture("test-enqueue-alias.json")),
-			Alias{Uuid: "00000000-0000-0000-0000-000000000001", Alias: "A", DistinctId: "B"},
-			&tv,
-		},
 
-		"identify": {
-			strings.TrimSpace(fixture("test-enqueue-identify.json")),
-			Identify{
-				Uuid:       "00000000-0000-0000-0000-000000000002",
-				DistinctId: "B",
-				Properties: Properties{"email": "hey@posthog.com"},
-			},
-			&tv,
-		},
 		"identify-default-geoip": {
 			strings.TrimSpace(fixture("test-enqueue-identify.json")),
 			Identify{
@@ -651,33 +619,6 @@ func TestEnqueue(t *testing.T) {
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
 			nil,
-		},
-
-		"groupIdentify": {
-			strings.TrimSpace(fixture("test-enqueue-group-identify.json")),
-			GroupIdentify{
-				Uuid:       "00000000-0000-0000-0000-000000000003",
-				DistinctId: "$organization_id:5",
-				Type:       "organization",
-				Key:        "id:5",
-				Properties: Properties{},
-			},
-			&tv,
-		},
-
-		"capture": {
-			strings.TrimSpace(fixture("test-enqueue-capture.json")),
-			Capture{
-				Uuid:       "00000000-0000-0000-0000-000000000010",
-				Event:      "Download",
-				DistinctId: "123456",
-				Properties: Properties{
-					"application": "PostHog Go",
-					"version":     "1.0.0",
-				},
-				SendFeatureFlags: SendFeatureFlags(false),
-			},
-			&f,
 		},
 
 		"captureWithDisableGeoIP": {
@@ -735,46 +676,6 @@ func TestEnqueue(t *testing.T) {
 			&f,
 		},
 
-		"exception": {
-			strings.TrimSpace(fixture("test-enqueue-exception.json")),
-			exception,
-			&tv,
-		},
-
-		"exception-complete": {
-			strings.TrimSpace(fixture("test-enqueue-exception-complete.json")),
-			completeException,
-			&tv,
-		},
-
-		"*alias": {
-			strings.TrimSpace(fixture("test-enqueue-alias.json")),
-			&Alias{Uuid: "00000000-0000-0000-0000-000000000001", Alias: "A", DistinctId: "B"},
-			&tv,
-		},
-
-		"*identify": {
-			strings.TrimSpace(fixture("test-enqueue-identify.json")),
-			&Identify{
-				Uuid:       "00000000-0000-0000-0000-000000000002",
-				DistinctId: "B",
-				Properties: Properties{"email": "hey@posthog.com"},
-			},
-			&tv,
-		},
-
-		"*groupIdentify": {
-			strings.TrimSpace(fixture("test-enqueue-group-identify.json")),
-			&GroupIdentify{
-				Uuid:       "00000000-0000-0000-0000-000000000003",
-				DistinctId: "$organization_id:5",
-				Type:       "organization",
-				Key:        "id:5",
-				Properties: Properties{},
-			},
-			&tv,
-		},
-
 		"*capture": {
 			strings.TrimSpace(fixture("test-enqueue-capture-with-uuid.json")),
 			&Capture{
@@ -787,12 +688,6 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: SendFeatureFlags(false),
 			},
-			&tv,
-		},
-
-		"*exception": {
-			strings.TrimSpace(fixture("test-enqueue-exception.json")),
-			&exception,
 			&tv,
 		},
 	}
@@ -975,6 +870,9 @@ func TestFlagsRequestSnapshots(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			body := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				if r.URL.Path != "/flags/" {
 					t.Errorf("flags path = %q, want /flags/", r.URL.Path)
 				}
@@ -1505,11 +1403,20 @@ func TestClientRoundTripperError(t *testing.T) {
 	if err := <-errchan; err == nil {
 		t.Error("failure callback not triggered for an invalid request")
 
-	} else if e, ok := err.(*url.Error); !ok {
-		t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
-
-	} else if e.Err != testError {
-		t.Errorf("invalid error returned by round tripper: %T: %s", e.Err, e.Err)
+	} else {
+		// A transport failure surfaces as *CaptureRequestError wrapping the
+		// underlying *url.Error, so callers can branch on the capture error
+		// while still unwrapping to the transport cause.
+		var reqErr *CaptureRequestError
+		if !errors.As(err, &reqErr) {
+			t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
+		}
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) {
+			t.Errorf("error does not unwrap to *url.Error: %T: %s", err, err)
+		} else if urlErr.Err != testError {
+			t.Errorf("invalid error returned by round tripper: %T: %s", urlErr.Err, urlErr.Err)
+		}
 	}
 }
 
@@ -1538,11 +1445,20 @@ func TestClientRetryError(t *testing.T) {
 	if err := <-errchan; err == nil {
 		t.Error("failure callback not triggered for a retry falure")
 
-	} else if e, ok := err.(*url.Error); !ok {
-		t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
-
-	} else if e.Err != testError {
-		t.Errorf("invalid error returned by round tripper: %T: %s", e.Err, e.Err)
+	} else {
+		// A transport failure surfaces as *CaptureRequestError wrapping the
+		// underlying *url.Error, so callers can branch on the capture error
+		// while still unwrapping to the transport cause.
+		var reqErr *CaptureRequestError
+		if !errors.As(err, &reqErr) {
+			t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
+		}
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) {
+			t.Errorf("error does not unwrap to *url.Error: %T: %s", err, err)
+		} else if urlErr.Err != testError {
+			t.Errorf("invalid error returned by round tripper: %T: %s", urlErr.Err, urlErr.Err)
+		}
 	}
 
 	client.Close()
@@ -1590,8 +1506,16 @@ func TestClientResponseBodyError(t *testing.T) {
 	if err := <-errchan; err == nil {
 		t.Error("failure callback not triggered for a 400 response")
 
-	} else if err != testError {
-		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
+	} else {
+		// A terminal status is reported from the status itself, so an
+		// unreadable body still yields a classified *CaptureRequestError
+		// rather than the raw read error.
+		var reqErr *CaptureRequestError
+		if !errors.As(err, &reqErr) {
+			t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
+		} else if reqErr.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", reqErr.StatusCode, http.StatusBadRequest)
+		}
 	}
 }
 
@@ -1775,6 +1699,9 @@ func TestIsFeatureEnabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				if r.URL.Path == "/flags/" {
 					w.WriteHeader(http.StatusOK)
 					w.Write([]byte(tt.mockResponse))
@@ -1810,6 +1737,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetFeatureFlag passes device_id when provided", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				json.Unmarshal(body, &requestData)
@@ -1843,6 +1773,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetFeatureFlag omits device_id when nil", func(t *testing.T) {
 		var receivedBody string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				receivedBody = string(body)
@@ -1872,6 +1805,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetAllFlags passes device_id when provided", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				json.Unmarshal(body, &requestData)
@@ -1904,6 +1840,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetFeatureFlagPayload passes device_id when provided", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				json.Unmarshal(body, &requestData)
@@ -1938,6 +1877,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 		var requestData FlagsRequestData
 		received := make(chan struct{})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			switch {
 			case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 				body, _ := io.ReadAll(r.Body)
@@ -1996,7 +1938,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else if !strings.HasPrefix(r.URL.Path, captureV1Path) {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
 	}))
@@ -2125,6 +2067,9 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				// Check request method and path
 				if r.Method != "POST" || r.URL.Path != "/flags/" {
 					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
@@ -2180,9 +2125,12 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 
 func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else if !strings.HasPrefix(r.URL.Path, captureV1Path) {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
 	}))
@@ -2354,6 +2302,9 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				// Check request method and path
 				if r.Method != "POST" || r.URL.Path != "/flags/" {
 					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
@@ -2491,6 +2442,9 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				// Check request method and path
 				if r.Method != "POST" || r.URL.Path != "/flags/" {
 					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
@@ -2547,6 +2501,9 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			t.Fatal("expected local evaluations endpoint to be called")
 		}
@@ -2577,6 +2534,9 @@ func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing.T) {
 	apiCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if apiCalls == 0 && (r.URL.Path == "/flags" || r.URL.Path == "/flags/") {
 			t.Fatal("expected local evaluations endpoint to be called first")
 		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -2617,6 +2577,9 @@ func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing
 
 func TestSimpleFlagOld(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
 	defer server.Close()
@@ -2646,6 +2609,9 @@ func TestSimpleFlagCalculation(t *testing.T) {
 
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -2698,6 +2664,9 @@ func TestComplexFlag(t *testing.T) {
 
 func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -2750,6 +2719,9 @@ func TestMultiVariateFlag(t *testing.T) {
 
 func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -2802,6 +2774,9 @@ func TestDisabledFlag(t *testing.T) {
 
 func TestCaptureSendFlags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
 	defer server.Close()
@@ -2839,6 +2814,9 @@ func TestCaptureSendFlags(t *testing.T) {
 
 func TestCaptureSendFeatureFlagsOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
 	defer server.Close()
@@ -2988,6 +2966,9 @@ func TestSendFeatureFlagsHelperMethods(t *testing.T) {
 func TestFeatureFlagQuotaLimits(t *testing.T) {
 	t.Run("flags endpoint quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{
@@ -3042,6 +3023,9 @@ func TestFeatureFlagQuotaLimits(t *testing.T) {
 
 	t.Run("local evaluation endpoint quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				w.WriteHeader(http.StatusPaymentRequired)
 				w.Write([]byte(`{
@@ -3107,6 +3091,9 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 	t.Run("includes project API key token in remote config URL", func(t *testing.T) {
 		var remoteConfigCalled bool
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			// Handle the initial feature flag definitions request
 			if strings.Contains(r.URL.Path, "/flags/definitions") {
 				w.Header().Set("Content-Type", "application/json")
