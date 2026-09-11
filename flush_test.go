@@ -21,10 +21,10 @@ type flushingClient interface {
 	FlushWithContext(context.Context) error
 }
 
-func newFlushClient(t *testing.T, server *httptest.Server, mode posthog.CaptureMode) (posthog.Client, flushingClient) {
+func newFlushClient(t *testing.T, server *httptest.Server) (posthog.Client, flushingClient) {
 	t.Helper()
 	c, err := posthog.NewWithConfig("test-key", posthog.Config{
-		Endpoint: server.URL, CaptureMode: mode, Interval: time.Hour, BatchSize: 100,
+		Endpoint: server.URL, Interval: time.Hour, BatchSize: 100,
 		ShutdownTimeout: time.Second, RetryAfter: func(int) time.Duration { return time.Millisecond },
 	})
 	require.NoError(t, err)
@@ -64,35 +64,31 @@ func flushReply(t *testing.T, w http.ResponseWriter, r *http.Request, record ...
 }
 
 func TestFlushReusable(t *testing.T) {
-	for _, mode := range []posthog.CaptureMode{posthog.CaptureModeLegacy, posthog.CaptureModeAnalyticsV1} {
-		t.Run(fmt.Sprint(mode), func(t *testing.T) {
-			var mu sync.Mutex
-			var received []string
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				mu.Lock()
-				defer mu.Unlock()
-				received = append(received, flushReply(t, w, r)...)
-			}))
-			defer server.Close()
-			c, f := newFlushClient(t, server, mode)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			require.NoError(t, f.FlushWithContext(ctx))
-			mu.Lock()
-			require.Empty(t, received)
-			mu.Unlock()
-			for _, name := range []string{"first", "second"} {
-				require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "user", Event: name}))
-				require.NoError(t, f.FlushWithContext(ctx))
-			}
-			mu.Lock()
-			require.Equal(t, []string{"first", "second"}, received)
-			mu.Unlock()
-			require.NoError(t, f.Flush())
-			require.NoError(t, c.Close())
-			require.ErrorIs(t, f.FlushWithContext(ctx), posthog.ErrClosed)
-		})
+	var mu sync.Mutex
+	var received []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		received = append(received, flushReply(t, w, r)...)
+	}))
+	defer server.Close()
+	c, f := newFlushClient(t, server)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, f.FlushWithContext(ctx))
+	mu.Lock()
+	require.Empty(t, received)
+	mu.Unlock()
+	for _, name := range []string{"first", "second"} {
+		require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "user", Event: name}))
+		require.NoError(t, f.FlushWithContext(ctx))
 	}
+	mu.Lock()
+	require.Equal(t, []string{"first", "second"}, received)
+	mu.Unlock()
+	require.NoError(t, f.Flush())
+	require.NoError(t, c.Close())
+	require.ErrorIs(t, f.FlushWithContext(ctx), posthog.ErrClosed)
 }
 
 func TestFlushWaitsAndCancellationPreservesClient(t *testing.T) {
@@ -113,7 +109,7 @@ func TestFlushWaitsAndCancellationPreservesClient(t *testing.T) {
 	}))
 	defer server.Close()
 	defer unblock()
-	c, f := newFlushClient(t, server, posthog.CaptureModeLegacy)
+	c, f := newFlushClient(t, server)
 	require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "u", Event: "held"}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -153,7 +149,7 @@ func TestFlushConcurrentAndRetry(t *testing.T) {
 		flushReply(t, w, r)
 	}))
 	defer server.Close()
-	c, f := newFlushClient(t, server, posthog.CaptureModeLegacy)
+	c, f := newFlushClient(t, server)
 	require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "u", Event: "retry"}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -185,7 +181,7 @@ func TestFlushCancelledContextAndConcurrentEnqueue(t *testing.T) {
 		flushReply(t, w, r, func(events []string) { received.Add(int32(len(events))) })
 	}))
 	defer server.Close()
-	c, f := newFlushClient(t, server, posthog.CaptureModeLegacy)
+	c, f := newFlushClient(t, server)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, f.FlushWithContext(cancelled), context.Canceled)
@@ -245,7 +241,7 @@ func TestFlushV1PartialRetry(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, f := newFlushClient(t, server, posthog.CaptureModeAnalyticsV1)
+	c, f := newFlushClient(t, server)
 	for _, event := range []string{"accepted", "retry"} {
 		require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "u", Event: event}))
 	}
@@ -292,7 +288,7 @@ func TestFlushCycleDoesNotWaitForLaterBatches(t *testing.T) {
 	defer server.Close()
 	defer unblockFirst()
 	defer unblockSecond()
-	c, f := newFlushClient(t, server, posthog.CaptureModeLegacy)
+	c, f := newFlushClient(t, server)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "u", Event: "first"}))
@@ -333,7 +329,7 @@ func TestFlushMultipleBatchesAndConcurrentClose(t *testing.T) {
 		flushReply(t, w, r, func(events []string) { count.Add(int32(len(events))) })
 	}))
 	defer server.Close()
-	c, f := newFlushClient(t, server, posthog.CaptureModeAnalyticsV1)
+	c, f := newFlushClient(t, server)
 	for i := 0; i < 250; i++ {
 		require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "u", Event: fmt.Sprint(i)}))
 	}
@@ -362,20 +358,16 @@ func (c *flushCallbacks) Success(posthog.APIMessage)        {}
 func (c *flushCallbacks) Failure(posthog.APIMessage, error) { c.failed.Add(1) }
 
 func TestFlushPreservesTerminalFailureCallbacks(t *testing.T) {
-	for _, mode := range []posthog.CaptureMode{posthog.CaptureModeLegacy, posthog.CaptureModeAnalyticsV1} {
-		t.Run(fmt.Sprint(mode), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400) }))
-			defer server.Close()
-			callback := &flushCallbacks{}
-			c, err := posthog.NewWithConfig("test-key", posthog.Config{Endpoint: server.URL, CaptureMode: mode, Interval: time.Hour, Callback: callback})
-			require.NoError(t, err)
-			defer c.Close()
-			f := c.(flushingClient)
-			require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "u", Event: "rejected"}))
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			require.NoError(t, f.FlushWithContext(ctx))
-			require.EqualValues(t, 1, callback.failed.Load())
-		})
-	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400) }))
+	defer server.Close()
+	callback := &flushCallbacks{}
+	c, err := posthog.NewWithConfig("test-key", posthog.Config{Endpoint: server.URL, Interval: time.Hour, Callback: callback})
+	require.NoError(t, err)
+	defer c.Close()
+	f := c.(flushingClient)
+	require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "u", Event: "rejected"}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, f.FlushWithContext(ctx))
+	require.EqualValues(t, 1, callback.failed.Load())
 }

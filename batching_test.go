@@ -7,6 +7,7 @@ import (
 
 	json "github.com/goccy/go-json"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -274,16 +275,22 @@ func TestConfigBatchSubmitTimeout(t *testing.T) {
 }
 
 func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
-	c := &client{
-		Config:     Config{BatchSubmitTimeout: 5 * time.Second},
-		batches:    make(chan preparedBatch, 1),
-		deliveries: make(map[*delivery]struct{}),
-	}
-	processed := make(chan preparedBatch, 1)
-	c.capture = batchRecordingCapturer{processed: processed}
+	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultOk}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+	c := newV1TestClient(t, ts.URL, nil, 0, func(cfg *Config) {
+		cfg.BatchSubmitTimeout = 5 * time.Second
+		cfg.MaxEnqueuedRequests = 1
+	})
 	c.batches <- preparedBatch{}
 	done := make(chan bool, 1)
-	go func() { done <- c.sendBatch(preparedBatch{uuids: []string{"submitted"}}) }()
+	go func() { done <- c.sendBatch(v1Batch(t, cap1(uuidA))) }()
 	require.Eventually(t, func() bool { return c.inFlight.Load() == 1 }, time.Second, time.Millisecond)
 	select {
 	case <-done:
@@ -297,12 +304,10 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("submission did not resume when queue space became available")
 	}
-	select {
-	case batch := <-processed:
-		require.Equal(t, []string{"submitted"}, batch.uuids)
-	case <-time.After(5 * time.Second):
-		t.Fatal("accepted batch was not processed")
-	}
+	require.Eventually(t, func() bool {
+		reqs := srv.snapshot()
+		return len(reqs) == 1 && reflect.DeepEqual([]string{uuidA}, reqs[0].uuids)
+	}, 5*time.Second, time.Millisecond, "accepted batch was not processed")
 	require.Eventually(t, func() bool { return c.inFlight.Load() == 0 }, time.Second, time.Millisecond)
 	c.deliveryMu.Lock()
 	defer c.deliveryMu.Unlock()
@@ -338,13 +343,6 @@ func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
 		})
 	}
 }
-
-type batchRecordingCapturer struct {
-	capturer
-	processed chan<- preparedBatch
-}
-
-func (c batchRecordingCapturer) send(batch preparedBatch) { c.processed <- batch }
 
 // TestShutdownTimeout_DefaultWaitsForCompletion verifies that with default config
 // (ShutdownTimeout=0), Close() waits indefinitely for in-flight batches to complete.
