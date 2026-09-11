@@ -281,7 +281,7 @@ func TestConfigBatchSubmitTimeout(t *testing.T) {
 }
 
 func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		for _, u := range uuids {
 			m[u] = eventResult{Result: resultOk}
@@ -290,13 +290,13 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	}}
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
-	c := newV1TestClient(t, ts.URL, nil, 0, func(cfg *Config) {
+	c := newCaptureTestClient(t, ts.URL, nil, 0, func(cfg *Config) {
 		cfg.BatchSubmitTimeout = 5 * time.Second
 		cfg.MaxEnqueuedRequests = 1
 	})
 	c.batches <- preparedBatch{}
 	done := make(chan bool, 1)
-	go func() { done <- c.sendBatch(v1Batch(t, cap1(uuidA))) }()
+	go func() { done <- c.sendBatch(captureBatch(t, cap1(uuidA))) }()
 	require.Eventually(t, func() bool { return c.inFlight.Load() == 1 }, time.Second, time.Millisecond)
 	select {
 	case <-done:

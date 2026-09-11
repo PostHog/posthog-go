@@ -25,7 +25,7 @@ func waitForCounts(t *testing.T, cb *UnifiedCallback, total int) {
 	}
 }
 
-func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
+func TestDefaultRoutesToCaptureEndpoint(t *testing.T) {
 	b := NewMockServerBuilder()
 	srv := b.Build()
 	defer srv.Close()
@@ -50,18 +50,18 @@ func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
 	_ = c.Close()
 
 	paths := b.GetPaths()
-	if len(paths) == 0 || paths[0] != captureV1Path {
-		t.Errorf("v1 mode hit %v, want first request to %s", paths, captureV1Path)
+	if len(paths) == 0 || paths[0] != capturePath {
+		t.Errorf("capture hit %v, want first request to %s", paths, capturePath)
 	}
 	if s, f := cb.GetCounts(); s != 1 || f != 0 {
 		t.Errorf("callbacks success=%d failure=%d, want 1/0", s, f)
 	}
 }
 
-func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
+func TestIntegrationEnvelopeAndHeaders(t *testing.T) {
 	var gotAuth, gotSdkInfo string
 	var envelope eventBatch
-	srv := NewMockServerBuilder().WithCaptureV1Handler(func(body []byte) (int, string) {
+	srv := NewMockServerBuilder().WithCaptureHandler(func(body []byte) (int, string) {
 		_ = json.Unmarshal(body, &envelope)
 		return 200, allOkResultsBody(body)
 	}).Build()
@@ -97,9 +97,9 @@ func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
 	}
 }
 
-func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
+func TestIntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 	attempts := 0
-	b := NewMockServerBuilder().WithCaptureV1Handler(func(body []byte) (int, string) {
+	b := NewMockServerBuilder().WithCaptureHandler(func(body []byte) (int, string) {
 		attempts++
 		var env eventBatch
 		_ = json.Unmarshal(body, &env)
@@ -121,7 +121,7 @@ func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 				results[ev.Uuid] = eventResult{Result: resultOk}
 			}
 		}
-		out, _ := json.Marshal(captureV1Response{Results: results})
+		out, _ := json.Marshal(captureResponse{Results: results})
 		return 200, string(out)
 	})
 	srv := b.Build()

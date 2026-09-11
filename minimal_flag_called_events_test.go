@@ -344,7 +344,7 @@ func TestEvaluateFlags_GatedNoExperiment_SendsMinimalEvent(t *testing.T) {
 	}
 }
 
-func TestMinimalFlagCalledEvent_V1WireShape(t *testing.T) {
+func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 	t.Parallel()
 	msg := Capture{
 		DistinctId: "user-1",
@@ -360,7 +360,7 @@ func TestMinimalFlagCalledEvent_V1WireShape(t *testing.T) {
 		minimalFlagCalledEvent: true,
 	}
 
-	ev := buildV1Event(msg.apifyEvent(), nil)
+	ev := buildEvent(msg.apifyEvent(), nil)
 
 	got := make([]string, 0, len(ev.Properties))
 	for k := range ev.Properties {
@@ -376,11 +376,11 @@ func TestMinimalFlagCalledEvent_V1WireShape(t *testing.T) {
 		t.Errorf("expected exactly property keys %v, got %v", want, got)
 	}
 	if ev.Properties["$is_server"] != true {
-		t.Errorf("expected minimal v1 event to keep $is_server=true, got %v", ev.Properties["$is_server"])
+		t.Errorf("expected minimal event to keep $is_server=true, got %v", ev.Properties["$is_server"])
 	}
 }
 
-func TestMinimalFlagCalledEvent_V1LiftsSessionId(t *testing.T) {
+func TestMinimalFlagCalledEvent_LiftsSessionId(t *testing.T) {
 	t.Parallel()
 	msg := Capture{
 		DistinctId: "user-1",
@@ -393,7 +393,7 @@ func TestMinimalFlagCalledEvent_V1LiftsSessionId(t *testing.T) {
 		minimalFlagCalledEvent: true,
 	}
 
-	ev := buildV1Event(msg.apifyEvent(), nil)
+	ev := buildEvent(msg.apifyEvent(), nil)
 
 	if ev.SessionId != "sess-1" {
 		t.Errorf("expected $session_id to be lifted to the top-level session_id field, got %q", ev.SessionId)

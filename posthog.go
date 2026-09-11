@@ -619,7 +619,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Alias)
-		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -641,7 +641,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Identify)
-		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -662,7 +662,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(GroupIdentify)
-		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -761,7 +761,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		} else if m.Properties != nil {
 			m.IsServer = false
 		}
-		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -790,7 +790,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Exception)
-		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -1502,7 +1502,7 @@ func (c *client) processBatch() {
 		}
 	}()
 
-	c.sendV1(batch)
+	c.send(batch)
 }
 
 // sendBatch attempts to enqueue a batch for processing.

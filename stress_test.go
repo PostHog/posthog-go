@@ -429,7 +429,7 @@ func TestStress_PrepareForSendUnderLoad(t *testing.T) {
 					for i := 0; i < 100; i++ {
 						capture := pool.Get(i)
 						capture.Type = "capture"
-						data, apiMsg, _, err := prepareForSendV1(capture, nil)
+						data, apiMsg, _, err := prepareForSend(capture, nil)
 						if err != nil {
 							errorCount.Add(1)
 						}
@@ -445,7 +445,7 @@ func TestStress_PrepareForSendUnderLoad(t *testing.T) {
 
 			wg.Wait()
 			require.Equal(t, int64(0), errorCount.Load(),
-				"prepareForSendV1 should never return error, non-positive size, or nil message")
+				"prepareForSend should never return error, non-positive size, or nil message")
 		})
 	}
 }
