@@ -343,6 +343,44 @@ func TestMatchPropertyStringOperatorsUseASCIICaseFolding(t *testing.T) {
 	}
 }
 
+func TestMatchPropertyNumberStoredAsString(t *testing.T) {
+	// The flags API stores these operands as strings, so local evaluation has to read that
+	// form or it falls back to the API for a flag it could have matched itself.
+	for _, test := range []struct {
+		name     string
+		value    interface{}
+		operator string
+		override interface{}
+		expected bool
+	}{
+		{"gt matches", "5", "gt", 7, true},
+		{"gt does not match", "5", "gt", 3, false},
+		{"gte matches on equal", "5", "gte", 5, true},
+		{"lt matches", "5", "lt", 4, true},
+		{"lte matches on equal", "5", "lte", 5, true},
+		{"decimal operand", "1.5", "gt", 2, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			property := FlagProperty{Key: "Number", Value: test.value, Operator: test.operator}
+			matched, err := matchProperty(property, NewProperties().Set("Number", test.override))
+			require.NoError(t, err)
+			require.Equal(t, test.expected, matched)
+		})
+	}
+}
+
+func TestMatchPropertyNonNumericStringIsNotOrderable(t *testing.T) {
+	// ParseFloat accepts "NaN" and "Inf", and a NaN comparison is false whichever way it is
+	// asked, so accepting one would answer the condition instead of falling back.
+	for _, value := range []string{"not-a-number", "NaN", "Inf", "-Inf"} {
+		t.Run(value, func(t *testing.T) {
+			property := FlagProperty{Key: "Number", Value: value, Operator: "gt"}
+			_, err := matchProperty(property, NewProperties().Set("Number", 7))
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestMatchPropertyNumber(t *testing.T) {
 	property := FlagProperty{
 		Key:      "Number",
