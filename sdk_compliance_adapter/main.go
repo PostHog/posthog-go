@@ -17,14 +17,6 @@ import (
 
 const VERSION = "1.0.0"
 
-// captureMode selects which capture protocol this adapter process speaks. It is
-// baked at build time via the CAPTURE_MODE env var ("v1" => capture-v1, anything
-// else => legacy v0), mirroring the v0/v1 Dockerfile split. One process speaks
-// one mode and advertises it via /health capabilities.
-var captureMode = os.Getenv("CAPTURE_MODE")
-
-func isV1() bool { return captureMode == "v1" }
-
 // TrackedTransport wraps http.RoundTripper to track requests
 type TrackedTransport struct {
 	base  http.RoundTripper
@@ -45,8 +37,8 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		return resp, err
 	}
 
-	// Parse batch to get UUIDs. The request body shape is the same for v0 and
-	// v1 ({"batch":[{"uuid":...}]}), so extraction is unchanged.
+	// Parse batch to get UUIDs from the request envelope
+	// ({"batch":[{"uuid":...}]}).
 	var batch struct {
 		Batch []struct {
 			UUID string `json:"uuid"`
@@ -62,8 +54,8 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 	}
 
-	// PostHog-Attempt is 1-based and only set on the v1 path. attempt-1 is the
-	// retry index; attempt > 1 means this request is a retry.
+	// PostHog-Attempt is 1-based. attempt-1 is the retry index; attempt > 1
+	// means this request is a retry.
 	attempt := 1
 	if a := req.Header.Get("PostHog-Attempt"); a != "" {
 		if n, e := strconv.Atoi(a); e == nil && n > 0 {
@@ -71,31 +63,29 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 	}
 
-	// For v1, a 200 no longer means "all sent": read+restore the body and count
-	// only terminal results (anything other than "retry") as sent.
+	// A 200 does not mean "all sent": read+restore the body and count only
+	// terminal results (anything other than "retry") as sent.
 	terminal := len(batch.Batch)
-	if isV1() {
-		var respBytes []byte
-		if resp.Body != nil {
-			respBytes, _ = io.ReadAll(resp.Body)
-			resp.Body = io.NopCloser(bytes.NewBuffer(respBytes))
+	var respBytes []byte
+	if resp.Body != nil {
+		respBytes, _ = io.ReadAll(resp.Body)
+		resp.Body = io.NopCloser(bytes.NewBuffer(respBytes))
+	}
+	if resp.StatusCode == 200 {
+		var parsed struct {
+			Results map[string]struct {
+				Result string `json:"result"`
+			} `json:"results"`
 		}
-		if resp.StatusCode == 200 {
-			var parsed struct {
-				Results map[string]struct {
-					Result string `json:"result"`
-				} `json:"results"`
-			}
-			terminal = 0
-			if err := json.Unmarshal(respBytes, &parsed); err == nil {
-				for _, r := range parsed.Results {
-					if r.Result != "retry" {
-						terminal++
-					}
+		terminal = 0
+		if err := json.Unmarshal(respBytes, &parsed); err == nil {
+			for _, r := range parsed.Results {
+				if r.Result != "retry" {
+					terminal++
 				}
-			} else {
-				log.Printf("[adapter] v1 response body unmarshal failed: %v (terminal=0, pending events may appear stuck)", err)
 			}
+		} else {
+			log.Printf("[adapter] capture response body unmarshal failed: %v (terminal=0, pending events may appear stuck)", err)
 		}
 	}
 
@@ -176,7 +166,7 @@ type CaptureRequest struct {
 	Event      string                 `json:"event"`
 	Properties map[string]interface{} `json:"properties,omitempty"`
 	Timestamp  *string                `json:"timestamp,omitempty"`
-	// Options carries capture-v1 event options (cookieless_mode,
+	// Options carries capture event options (cookieless_mode,
 	// disable_skew_correction, process_person_profile, product_tour_id, ...).
 	// The adapter folds them back into magic event properties so the SDK lifts
 	// them onto the wire options object.
@@ -226,10 +216,10 @@ func validateHarnessHost(raw string) (string, bool) {
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	capabilities := []string{"capture_v0", "encoding_gzip"}
-	if isV1() {
-		capabilities = []string{"capture_v1", "encoding_gzip"}
-	}
+	// capture_v1 is the harness contract key that selects the
+	// capture_analytics_v1 suite; it is an external string, not an internal
+	// version marker.
+	capabilities := []string{"capture_v1", "encoding_gzip"}
 	response := HealthResponse{
 		SDKName:        "posthog-go",
 		SDKVersion:     posthog.Version,
@@ -278,10 +268,6 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		// Set test-friendly defaults
 		BatchSize: 1,                     // Flush after each event by default
 		Interval:  20 * time.Millisecond, // Short interval for tests
-	}
-
-	if isV1() {
-		config.CaptureMode = posthog.CaptureModeAnalyticsV1
 	}
 
 	// Override with request params if provided
@@ -346,7 +332,7 @@ func captureHandler(w http.ResponseWriter, r *http.Request) {
 		Properties: req.Properties,
 	}
 
-	// Fold capture-v1 options back into magic event properties; the SDK lifts
+	// Fold capture options back into magic event properties; the SDK lifts
 	// them onto the wire options object. Unknown keys get a "$" prefix.
 	if len(req.Options) > 0 {
 		if capture.Properties == nil {

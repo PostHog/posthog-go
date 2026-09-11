@@ -865,10 +865,9 @@ func TestEnqueueCaptureV1EventFamily(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig(apiKey, Config{
-		Endpoint:    server.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		BatchSize:   6,
-		now:         mockTime,
+		Endpoint:  server.URL,
+		BatchSize: 6,
+		now:       mockTime,
 	})
 	require.NoError(t, err)
 	defer client.Close()

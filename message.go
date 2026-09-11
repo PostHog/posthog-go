@@ -80,9 +80,11 @@ func makeUUID(u string) string {
 	return uuid.New().String()
 }
 
-// batch represents objects sent to the /batch/ endpoint with pre-serialized messages.
-// Messages are pre-serialized as json.RawMessage for efficient batch building -
-// json.Marshal embeds them directly without re-encoding.
+// batch is the removed legacy /batch/ request envelope. No production code
+// builds it any more; it survives only so the not-yet-ported tests still
+// compile, and is deleted in the follow-up test-migration commit.
+//
+// Deprecated: test-only scaffolding, pending removal.
 type batch struct {
 	ApiKey              string            `json:"api_key"`
 	HistoricalMigration bool              `json:"historical_migration,omitempty"`
@@ -96,10 +98,11 @@ type batch struct {
 // $feature/<key>, and $active_feature_flags instead.
 type APIMessage interface{}
 
-// prepareForSend creates the API message and serializes it to JSON.
-// Returns pre-serialized JSON for efficient batch building, the original
-// APIMessage for callbacks, and any serialization error.
-// Size is derived from len(json.RawMessage) when needed - O(1) operation.
+// prepareForSend is the removed legacy serializer. No production code calls it
+// any more; it survives only so the not-yet-ported tests still compile, and is
+// deleted in the follow-up test-migration commit. Use prepareForSendV1.
+//
+// Deprecated: test-only scaffolding, pending removal.
 func prepareForSend(msg Message) (json.RawMessage, APIMessage, error) {
 	apiMsg := msg.APIfy()
 	data, err := json.Marshal(apiMsg)

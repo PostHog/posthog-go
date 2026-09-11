@@ -1,7 +1,6 @@
 package posthog
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -138,8 +137,8 @@ type Client interface {
 type preparedMessage struct {
 	data json.RawMessage // pre-serialized JSON for batch submission
 	msg  APIMessage      // original message for callbacks
-	// uuid is the per-event UUID, used by the capture-v1 path to correlate
-	// per-event results. Empty on the legacy path.
+	// uuid is the per-event UUID, used to correlate per-event results in the
+	// capture response.
 	uuid string
 }
 
@@ -148,9 +147,8 @@ type preparedMessage struct {
 type preparedBatch struct {
 	data []json.RawMessage // pre-serialized messages for batch submission
 	msgs []APIMessage      // original messages for callbacks
-	// uuids holds the per-event UUID aligned with data/msgs, used by the
-	// capture-v1 send path to correlate per-event results. It is unused (nil)
-	// on the legacy path.
+	// uuids holds the per-event UUID aligned with data/msgs, used by the send
+	// path to correlate per-event results.
 	uuids []string
 }
 
@@ -202,10 +200,6 @@ type client struct {
 
 	// Decider for feature flag methods
 	decider decider
-
-	// capture is the wire-protocol strategy (legacy /batch/ or analytics-v1),
-	// chosen once in NewWithConfig from Config.CaptureMode.
-	capture capturer
 }
 
 type flagUser struct {
@@ -272,12 +266,6 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		cancel:                          cancel,
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
 		distinctIdsFeatureFlagsReported: reportedCache,
-	}
-
-	if config.CaptureMode == CaptureModeAnalyticsV1 {
-		c.capture = analyticsV1Capturer{c}
-	} else {
-		c.capture = legacyCapturer{c}
 	}
 
 	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger, config.FeatureFlagRequestMaxRetries)
@@ -606,7 +594,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Alias)
-		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
+		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -628,7 +616,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Identify)
-		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
+		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -649,7 +637,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(GroupIdentify)
-		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
+		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -745,7 +733,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		} else if m.Properties != nil {
 			m.IsServer = false
 		}
-		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
+		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -774,7 +762,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return nil
 		}
 		m = processed.(Exception)
-		data, apiMsg, eventUuid, serErr := c.capture.prepare(m)
+		data, apiMsg, eventUuid, serErr := prepareForSendV1(m, c.Logger)
 		if serErr != nil {
 			c.notifyFailure([]APIMessage{apiMsg}, serErr)
 			return
@@ -1483,7 +1471,7 @@ func (c *client) processBatch() {
 		}
 	}()
 
-	c.capture.send(batch)
+	c.sendV1(batch)
 }
 
 // sendBatch attempts to enqueue a batch for processing.
@@ -1537,161 +1525,6 @@ func (c *client) awaitDrain(ctx context.Context) error {
 	}
 	c.debugf("all in-flight batches completed")
 	return nil
-}
-
-// send encodes batch wrapper and performs HTTP POST with retries.
-// Messages are already pre-serialized, so only the batch wrapper is serialized here.
-func (c *client) send(pb preparedBatch) {
-	// Build batch with pre-serialized messages - only the wrapper is serialized here
-	b, err := json.Marshal(batch{
-		ApiKey:              c.key,
-		HistoricalMigration: c.HistoricalMigration,
-		Messages:            pb.data,
-	})
-
-	if err != nil {
-		c.Errorf("marshalling batch wrapper - %s", err)
-		c.notifyFailure(pb.msgs, err)
-		return
-	}
-
-	for i := 0; i < c.maxAttempts; i++ {
-		if err = c.upload(c.ctx, b); err == nil {
-			c.notifySuccess(pb.msgs)
-			return
-		}
-
-		var httpErr *httpError
-		if errors.As(err, &httpErr) && !isRetryableStatus(httpErr.statusCode) {
-			c.notifyFailure(pb.msgs, err)
-			return
-		}
-
-		// Check if context is cancelled (shutdown timeout exceeded)
-		if c.ctx.Err() != nil {
-			c.Errorf("%d messages dropped: shutdown timeout", len(pb.msgs))
-			c.notifyFailure(pb.msgs, err)
-			return
-		}
-
-		retryDelay := c.RetryAfter(i)
-		if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
-			retryDelay = httpErr.retryAfter
-		}
-
-		// Wait for retry or shutdown
-		retryTimer := time.NewTimer(retryDelay)
-		select {
-		case <-retryTimer.C:
-			// continue to next attempt
-		case <-c.quit:
-			// Shutdown initiated - stop timer and exit retry loop
-			if !retryTimer.Stop() {
-				<-retryTimer.C // Drain channel if timer already fired
-			}
-			c.notifyFailure(pb.msgs, err)
-			return
-		case <-c.ctx.Done():
-			// Context cancelled - stop timer and exit
-			if !retryTimer.Stop() {
-				<-retryTimer.C // Drain channel if timer already fired
-			}
-			c.notifyFailure(pb.msgs, err)
-			return
-		}
-	}
-
-	c.Errorf("%d messages dropped after %d attempts", len(pb.msgs), c.maxAttempts)
-	c.notifyFailure(pb.msgs, err)
-}
-
-// Upload serialized batch message.
-func (c *client) upload(ctx context.Context, b []byte) error {
-	url := c.Endpoint + "/batch/"
-	body := b
-	encoding := ""
-
-	if c.Compression == CompressionGzip {
-		compressed, err := compressGzip(b)
-		if err != nil {
-			c.Warnf("gzip compression failed; sending uncompressed - %s", err)
-		} else {
-			url += "?compression=gzip"
-			body = compressed
-			encoding = "gzip"
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		c.Errorf("creating request - %s", err)
-		return err
-	}
-
-	version := getVersion()
-
-	req.Header.Add("User-Agent", SDKName+"/"+version)
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(body)))
-	if encoding != "" {
-		req.Header.Add("Content-Encoding", encoding)
-	}
-
-	res, err := c.http.Do(req)
-	if err != nil {
-		c.Warnf("sending request - %s", err)
-		return err
-	}
-
-	defer res.Body.Close()
-	return c.report(res)
-}
-
-// Report on response body.
-func (c *client) report(res *http.Response) (err error) {
-	var body []byte
-
-	if res.StatusCode < 300 {
-		c.debugf("response %s", res.Status)
-		return
-	}
-
-	if body, err = io.ReadAll(res.Body); err != nil {
-		c.Errorf("response %d %s - %s", res.StatusCode, res.Status, err)
-		return
-	}
-
-	c.Logger.Logf("response %d %s – %s", res.StatusCode, res.Status, string(body))
-	retryAfter, hasRetryAfter := parseRetryAfter(res.Header.Get("Retry-After"), c.now())
-	return &httpError{
-		statusCode:    res.StatusCode,
-		status:        res.Status,
-		retryAfter:    retryAfter,
-		hasRetryAfter: hasRetryAfter,
-	}
-}
-
-type httpError struct {
-	statusCode    int
-	status        string
-	retryAfter    time.Duration
-	hasRetryAfter bool
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("%d %s", e.statusCode, e.status)
-}
-
-func isRetryableStatus(statusCode int) bool {
-	if statusCode >= 500 {
-		return true
-	}
-	switch statusCode {
-	case http.StatusRequestTimeout, http.StatusTooManyRequests:
-		return true
-	default:
-		return false
-	}
 }
 
 func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {
@@ -1772,9 +1605,7 @@ func (c *client) loop() {
 
 		batchData = append(batchData, prepared.data)
 		batchMsgs = append(batchMsgs, prepared.msg)
-		if c.CaptureMode == CaptureModeAnalyticsV1 {
-			batchUuids = append(batchUuids, prepared.uuid)
-		}
+		batchUuids = append(batchUuids, prepared.uuid)
 		batchSize += msgSize
 
 		if len(batchData) >= c.BatchSize {

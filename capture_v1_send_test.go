@@ -538,7 +538,6 @@ func TestV1SendCompressionCodecs(t *testing.T) {
 			defer ts.Close()
 
 			c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
-				cfg.CaptureMode = CaptureModeAnalyticsV1
 				cfg.Compression = tc.mode
 			})
 			c.sendV1(v1Batch(t, cap1(uuidA)))
@@ -581,7 +580,6 @@ func TestV1SendCompressionFailureFallsBackToUncompressed(t *testing.T) {
 	defer ts.Close()
 
 	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
-		cfg.CaptureMode = CaptureModeAnalyticsV1
 		cfg.Compression = CompressionGzip
 	})
 	c.sendV1(v1Batch(t, cap1(uuidA)))
