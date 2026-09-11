@@ -11,6 +11,8 @@ SDK usage examples and code snippets live in the official documentation so they 
 
 - [Go library docs](https://posthog.com/docs/libraries/go)
 
+Upgrading from a 1.x release? Read the [v2 migration guide](docs/migration-v2.md).
+
 ## AI observability
 
 The [`otel`](otel) module is an OpenTelemetry bridge that forwards AI spans
