@@ -1,6 +1,6 @@
 # PostHog Go
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/posthog/posthog-go.svg)](https://pkg.go.dev/github.com/posthog/posthog-go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/posthog/posthog-go/v2.svg)](https://pkg.go.dev/github.com/posthog/posthog-go/v2)
 ![min. Go Version](https://img.shields.io/github/go-mod/go-version/PostHog/posthog-go?label=min.%20Go%20version%20)
 
 Please see the main [PostHog docs](https://posthog.com/docs).

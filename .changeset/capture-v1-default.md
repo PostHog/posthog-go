@@ -4,7 +4,7 @@
 
 Capture v1 is now the only capture path. The legacy `/batch/` pipeline and the `Config.CaptureMode` switch that selected between them are removed.
 
-See [the migration guide](../docs/migration-v2.md) for the full details.
+See [the migration guide](docs/migration-v2.md) for the full details.
 
 ### Breaking changes
 

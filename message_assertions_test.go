@@ -3,6 +3,8 @@ package posthog
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type validatableMessage interface {
@@ -64,4 +66,39 @@ func assertIsServerProperty(t *testing.T, apiMsg APIMessage, wantPresent bool) {
 	if _, present := props["$is_server"]; present {
 		t.Errorf("$is_server should be absent when IsServer is false, got %v", props["$is_server"])
 	}
+}
+
+// dereferenceMessage has a hand-written arm per message type, and Enqueue falls
+// through to "custom types cannot be enqueued" if one is missing, so cover every
+// arm directly rather than through a fixture.
+func TestDereferenceMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		ptr  Message
+		want Message
+	}{
+		{"alias", &Alias{Alias: "a", DistinctId: "b"}, Alias{Alias: "a", DistinctId: "b"}},
+		{"identify", &Identify{DistinctId: "b"}, Identify{DistinctId: "b"}},
+		{"groupIdentify", &GroupIdentify{Type: "org", Key: "k"}, GroupIdentify{Type: "org", Key: "k"}},
+		{"capture", &Capture{Event: "e", DistinctId: "d"}, Capture{Event: "e", DistinctId: "d"}},
+		{"exception", &Exception{DistinctId: "d"}, Exception{DistinctId: "d"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, dereferenceMessage(tc.ptr))
+		})
+	}
+
+	t.Run("typed nil pointers become nil", func(t *testing.T) {
+		for _, msg := range []Message{
+			(*Alias)(nil), (*Identify)(nil), (*GroupIdentify)(nil), (*Capture)(nil), (*Exception)(nil),
+		} {
+			require.Nil(t, dereferenceMessage(msg))
+		}
+	})
+
+	t.Run("values pass through unchanged", func(t *testing.T) {
+		in := Capture{Event: "e", DistinctId: "d"}
+		require.Equal(t, in, dereferenceMessage(in))
+	})
 }

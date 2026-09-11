@@ -56,8 +56,14 @@ jobs:
           # A new major is a different module path, so `go get` can never
           # succeed and crossing it is a reviewed source migration. Skip cleanly
           # rather than failing on every release of that major.
-          CURRENT_PATH=$(go list -m -f '{{.Path}}' all 2>/dev/null | grep -E '^github\.com/posthog/posthog-go(/v[0-9]+)?$' | head -1)
-          CURRENT_MAJOR=$(printf '%s' "$CURRENT_PATH" | sed -nE 's|.*/v([0-9]+)$|\1|p')
+          # `|| true`: under `set -o pipefail` a non-matching grep would abort
+          # the step with no output, since go's stderr is suppressed.
+          CURRENT_PATH=$(go list -m -f '{{.Path}}' all 2>/dev/null | grep -E '^github\.com/posthog/posthog-go(/v[0-9]+)?$' | head -1 || true)
+          if [ -z "$CURRENT_PATH" ]; then
+            echo "Could not resolve the posthog-go module path from the dependency graph." >&2
+            exit 1
+          fi
+          CURRENT_MAJOR=$(printf '%s' "$CURRENT_PATH" | sed -nE 's|.*/v([0-9]+)$|\1|p' || true)
           CURRENT_MAJOR=${CURRENT_MAJOR:-1}
           NEW_MAJOR=${PACKAGE_VERSION%%.*}
 
@@ -78,8 +84,9 @@ jobs:
           fi
 
           echo "skipped=false" >> "$GITHUB_OUTPUT"
+          echo "module_path=${CURRENT_PATH}" >> "$GITHUB_OUTPUT"
           for i in $(seq 1 "$RETRY_TIMES"); do
-            if go get "github.com/posthog/posthog-go@v${PACKAGE_VERSION}"; then
+            if go get "${CURRENT_PATH}@v${PACKAGE_VERSION}"; then
               break
             fi
             if [ "$i" -eq "$RETRY_TIMES" ]; then
@@ -97,6 +104,7 @@ jobs:
           GH_TOKEN: ${{ steps.upgrader.outputs.token }}
           PACKAGE_NAME: ${{ github.event.inputs.package_name }}
           PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
+          MODULE_PATH: ${{ steps.install.outputs.module_path }}
         run: |
           TITLE_PREFIX="chore(deps): Update ${PACKAGE_NAME} to "
           PR_TITLE="${TITLE_PREFIX}${PACKAGE_VERSION}"
@@ -121,7 +129,7 @@ jobs:
             echo
             echo "$PACKAGE_NAME version $PACKAGE_VERSION has been released. This updates PostHog to use it."
             echo
-            echo "[GitHub releases](https://github.com/PostHog/posthog-go/releases) • [Go package](https://pkg.go.dev/github.com/posthog/posthog-go@v${PACKAGE_VERSION})"
+            echo "[GitHub releases](https://github.com/PostHog/posthog-go/releases) • [Go package](https://pkg.go.dev/${MODULE_PATH}@v${PACKAGE_VERSION})"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
