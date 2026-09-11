@@ -1507,14 +1507,19 @@ func TestClientResponseBodyError(t *testing.T) {
 		t.Error("failure callback not triggered for a 400 response")
 
 	} else {
-		// A terminal status is reported from the status itself, so an
-		// unreadable body still yields a classified *CaptureRequestError
-		// rather than the raw read error.
+		// A terminal status is classified from the status itself, so the
+		// caller gets a *CaptureRequestError carrying the status. It must also
+		// still unwrap to the read error that made the body unusable --
+		// otherwise "400" arrives with no explanation of why there is no
+		// error body.
 		var reqErr *CaptureRequestError
 		if !errors.As(err, &reqErr) {
 			t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
 		} else if reqErr.StatusCode != http.StatusBadRequest {
 			t.Errorf("status = %d, want %d", reqErr.StatusCode, http.StatusBadRequest)
+		}
+		if !errors.Is(err, testError) {
+			t.Errorf("error must unwrap to the body-read cause, got %#v", err)
 		}
 	}
 }
