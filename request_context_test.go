@@ -533,11 +533,8 @@ func requireProperties(t *testing.T, event map[string]interface{}) map[string]in
 	return properties
 }
 
-// The capture wire builder lifts the sentinel properties out of the properties
-// map: $session_id and $window_id become top-level event fields, and
-// $process_person_profile (and the other option sentinels) move into the
-// options object. Assertions about them must read the destination the builder
-// moved them to, so these helpers keep that mapping in one place.
+// The builder lifts sentinels out of properties: $session_id/$window_id become
+// top-level fields, the option sentinels move into options. Assert them there.
 func requireOptions(t *testing.T, event map[string]interface{}) map[string]interface{} {
 	t.Helper()
 	options, ok := event["options"].(map[string]interface{})

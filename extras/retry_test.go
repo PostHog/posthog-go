@@ -105,15 +105,9 @@ func TestRetryBehavior(t *testing.T) {
 			}
 
 			if tc.expectSuccess {
-				// No terminal callback is asserted here. flakyhttp's success
-				// response body is the fixed legacy `{"status": "ok"}`, which
-				// carries no per-event results map, so the capture path cannot
-				// resolve the event's outcome from it. What this case pins is
-				// the retry loop: the client must keep trying until a request
-				// finally reaches the server.
-				//
-				// Wait before closing, since Close cancels an in-progress
-				// backoff and would cut the loop short.
+				// Pins the retry loop, not a success callback: flakyhttp's fixed
+				// `{"status": "ok"}` body carries no per-event results to resolve.
+				// Wait before closing, since Close cancels an in-progress backoff.
 				require.Eventually(t, func() bool {
 					return server.RequestCount() >= tc.requestCount
 				}, 5*time.Second, 5*time.Millisecond,

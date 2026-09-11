@@ -79,16 +79,9 @@ func TestTCPDropRecovery(t *testing.T) {
 			})
 			require.NoError(t, err, "Failed to enqueue")
 
-			// What this test pins is the retry loop against real TCP faults:
-			// the client must keep reconnecting until the server stops dropping.
-			//
-			// It deliberately does not assert a terminal success callback.
-			// flakyhttp's success response body is the fixed legacy
-			// `{"status": "ok"}`, which carries no per-event results map, so
-			// the capture path cannot resolve the event's outcome from it.
-			//
-			// Wait for the retries to land before closing: Close cancels an
-			// in-progress backoff, so closing early would cut the loop short.
+			// Pins the retry loop, not a success callback: flakyhttp's fixed
+			// `{"status": "ok"}` body carries no per-event results to resolve.
+			// Wait before closing, since Close cancels an in-progress backoff.
 			require.Eventually(t, func() bool {
 				return server.ConnCount() >= firstFailures+1
 			}, 10*time.Second, 5*time.Millisecond,

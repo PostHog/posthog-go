@@ -53,14 +53,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Go encodes the major version in the import path, so posthog-go v2+
-          # is a different module path than the one this go.mod requires. Bumping
-          # across a major is a deliberate, human-reviewed migration (the import
-          # path changes in source too), not something this workflow can do.
-          #
-          # Detect that case and stop cleanly instead of retrying a `go get` that
-          # can never succeed: a hard failure here would recur on every release of
-          # the new major and train people to ignore the alert.
+          # A new major is a different module path, so `go get` can never
+          # succeed and crossing it is a reviewed source migration. Skip cleanly
+          # rather than failing on every release of that major.
           CURRENT_PATH=$(go list -m -f '{{.Path}}' all 2>/dev/null | grep -E '^github\.com/posthog/posthog-go(/v[0-9]+)?$' | head -1)
           CURRENT_MAJOR=$(printf '%s' "$CURRENT_PATH" | sed -nE 's|.*/v([0-9]+)$|\1|p')
           CURRENT_MAJOR=${CURRENT_MAJOR:-1}
