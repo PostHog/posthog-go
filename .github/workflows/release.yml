@@ -108,12 +108,34 @@ jobs:
       - name: Apply changesets and update version
         id: apply-changesets
         run: |
+          # The root SDK and the otel bridge are separate Go modules with
+          # separate tag namespaces (vX.Y.Z and otel/vX.Y.Z) and independent
+          # major versions, so each carries its own changesets package and is
+          # only tagged when its own version actually moves.
+          PREV_ROOT=$(node -p "require('./package.json').version")
+          PREV_OTEL=$(node -p "require('./otel/package.json').version")
+
           pnpm changeset version
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          CURRENT_VERSION=$(grep -oP 'const Version = "\K[^"]+' version.go)
-          sed -i "s/const Version = \"${CURRENT_VERSION}\"/const Version = \"${NEW_VERSION}\"/" version.go
-          echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "New version: $NEW_VERSION"
+
+          ROOT_VERSION=$(node -p "require('./package.json').version")
+          OTEL_VERSION=$(node -p "require('./otel/package.json').version")
+
+          if [ "$ROOT_VERSION" != "$PREV_ROOT" ]; then
+            sed -i "s/const Version = \"${PREV_ROOT}\"/const Version = \"${ROOT_VERSION}\"/" version.go
+            echo "root-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "root-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "$OTEL_VERSION" != "$PREV_OTEL" ]; then
+            echo "otel-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "otel-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "new-version=$ROOT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "otel-version=$OTEL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Root: $PREV_ROOT -> $ROOT_VERSION | otel: $PREV_OTEL -> $OTEL_VERSION"
 
       - name: Check for version bump changes
         id: check-changes
@@ -137,10 +159,10 @@ jobs:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
       - name: Create OTel module tag
-        if: steps.commit-version-bump.outputs.commit-hash != ''
+        if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.otel-changed == 'true'
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+          NEW_VERSION: ${{ steps.apply-changesets.outputs.otel-version }}
           RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
           TAG="otel/v${NEW_VERSION}"
@@ -158,7 +180,7 @@ jobs:
           fi
 
       - name: Create GitHub release
-        if: steps.commit-version-bump.outputs.commit-hash != ''
+        if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
@@ -168,7 +190,7 @@ jobs:
           gh release create "v${NEW_VERSION}" --target "$RELEASE_COMMIT" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
       - name: Dispatch posthog upgrade for posthog-go
-        if: steps.commit-version-bump.outputs.commit-hash != ''
+        if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'
         env:
           PACKAGE_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
