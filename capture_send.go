@@ -181,15 +181,16 @@ func (c *client) partitionResults(res *attemptResult, data []json.RawMessage, ms
 
 // retryDelay is the pure delay decision for the next attempt: the configured
 // backoff, raised to the server Retry-After when it is larger (Retry-After is a
-// minimum, not a replacement). The Retry-After is clamped to defaultMaxBackoff
-// so a hostile or buggy header can't park a batch goroutine; the configured
-// backoff itself (Config.RetryAfter) is never truncated.
+// minimum, not a replacement). The Retry-After is clamped to
+// Config.MaxRetryBackoff so a hostile or buggy header can't park a batch
+// goroutine; the configured backoff itself (Config.RetryAfter) is never
+// truncated.
 func (c *client) retryDelay(attemptIndex int, res *attemptResult) time.Duration {
 	retryDelay := c.RetryAfter(attemptIndex)
 	if res != nil && res.hasRetryAfter {
 		clamped := res.retryAfter
-		if clamped > defaultMaxBackoff {
-			clamped = defaultMaxBackoff
+		if clamped > c.MaxRetryBackoff {
+			clamped = c.MaxRetryBackoff
 		}
 		if clamped > retryDelay {
 			retryDelay = clamped

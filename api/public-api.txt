@@ -11,6 +11,9 @@ package posthog // import "github.com/posthog/posthog-go/v2"
 CONSTANTS
 
 const (
+	DefaultMaxRetryBackoff = 30 * time.Second
+)
+const (
 	SDKName = "posthog-go"
 
 	DefaultEndpoint = "https://us.i.posthog.com"
@@ -329,6 +332,8 @@ type Config struct {
 	RetryAfter func(int) time.Duration
 
 	MaxRetries *int
+
+	MaxRetryBackoff time.Duration
 
 	ShutdownTimeout time.Duration
 
