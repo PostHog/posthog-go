@@ -306,3 +306,12 @@ func NoOpTransport() http.RoundTripper {
 		}, nil
 	})
 }
+
+// captureOKTestServer is a capture endpoint that accepts everything.
+func captureOKTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		writeCaptureOK(w, body)
+	}))
+}

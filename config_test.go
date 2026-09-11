@@ -1,6 +1,9 @@
 package posthog
 
 import (
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -210,4 +213,46 @@ func TestConfigCompression(t *testing.T) {
 			require.Contains(t, configErr.Reason, tc.wantErr)
 		})
 	}
+}
+
+func TestConfigByteLimitDefaults(t *testing.T) {
+	c := makeConfig(Config{})
+	require.Equal(t, DefaultMaxEventBytes, c.MaxEventBytes)
+	require.Equal(t, DefaultMaxBatchBytes, c.MaxBatchBytes)
+
+	// Explicit values survive; the defaults only fill a zero.
+	custom := makeConfig(Config{MaxEventBytes: 8 << 20, MaxBatchBytes: 5 << 20})
+	require.Equal(t, 8<<20, custom.MaxEventBytes)
+	require.Equal(t, 5<<20, custom.MaxBatchBytes)
+}
+
+func TestConfigMaxEventBytesRejectsOversizedEvent(t *testing.T) {
+	var failures []error
+	var mu sync.Mutex
+	server := captureOKTestServer(t)
+	defer server.Close()
+
+	client, err := NewWithConfig("phc_test", Config{
+		Endpoint:      server.URL,
+		BatchSize:     1,
+		MaxEventBytes: 2000,
+		Callback: testCallback{
+			nil,
+			func(_ APIMessage, e error) { mu.Lock(); failures = append(failures, e); mu.Unlock() },
+		},
+	})
+	require.NoError(t, err)
+
+	big := NewProperties()
+	for i := 0; i < 200; i++ {
+		big.Set(fmt.Sprintf("k%03d", i), strings.Repeat("v", 50))
+	}
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "d", Event: "too-big", Properties: big}))
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "d", Event: "small"}))
+	require.NoError(t, client.Close())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, failures, 1, "only the oversized event should fail")
+	require.ErrorIs(t, failures[0], ErrMessageTooBig)
 }

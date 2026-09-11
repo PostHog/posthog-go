@@ -1592,13 +1592,13 @@ func (c *client) loop() {
 	processMessage := func(prepared preparedMessage) bool {
 		msgSize := len(prepared.data)
 
-		if msgSize > maxMessageBytes {
-			c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
+		if msgSize > c.MaxEventBytes {
+			c.Errorf("message exceeds maximum size (%d > %d)", msgSize, c.MaxEventBytes)
 			c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
 			return false
 		}
 
-		if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
+		if batchSize+msgSize > c.MaxBatchBytes && len(batchData) > 0 {
 			flushBatch()
 			resetBatch()
 		}

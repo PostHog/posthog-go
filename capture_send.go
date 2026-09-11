@@ -35,6 +35,15 @@ type attemptResult struct {
 	errResp *captureErrorResponse
 }
 
+// newRequestID mints the PostHog-Request-Id. v7 for the same reason makeUUID
+// uses it; the header only has to parse as a UUID.
+func newRequestID() string {
+	if v7, err := uuid.NewV7(); err == nil {
+		return v7.String()
+	}
+	return uuid.New().String()
+}
+
 // isRetryableStatus reports whether a non-2xx capture status should be
 // retried. 429 is terminal: the capture endpoint never emits it (billing is a
 // terminal 402), matching posthog-rs retry.rs.
@@ -52,7 +61,7 @@ func isRetryableStatus(code int) bool {
 // attempts. PostHog-Request-Id and created_at are stable across attempts;
 // PostHog-Attempt increments.
 func (c *client) send(pb preparedBatch) {
-	requestId := uuid.New().String()
+	requestId := newRequestID()
 	createdAt := c.now().UTC().Format(time.RFC3339)
 
 	pendingData := pb.data

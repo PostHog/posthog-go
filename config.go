@@ -143,6 +143,17 @@ type Config struct {
 	// it defaults to DefaultBatchSize. The API still enforces a 500KB request limit.
 	BatchSize int
 
+	// MaxEventBytes is the maximum serialized size of a single event. A larger
+	// event is rejected through Callback.Failure with ErrMessageTooBig rather
+	// than being sent. If zero, it defaults to DefaultMaxEventBytes.
+	MaxEventBytes int
+
+	// MaxBatchBytes is the maximum serialized size of one capture request. A
+	// batch is flushed early when the next event would exceed it, so this bounds
+	// request size independently of BatchSize, which bounds event count. If
+	// zero, it defaults to DefaultMaxBatchBytes.
+	MaxBatchBytes int
+
 	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
 	// be batched and sent. If zero, it defaults to DefaultMaxQueueSize. It is
 	// clamped up to BatchSize so the queue can always hold at least one full batch.
@@ -255,6 +266,14 @@ const (
 	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
 	// can be queued for sending.
 	DefaultMaxEnqueuedRequests = 1000
+
+	// DefaultMaxEventBytes is the default maximum serialized size of a single
+	// event, used when Config.MaxEventBytes is zero.
+	DefaultMaxEventBytes = 500000
+
+	// DefaultMaxBatchBytes is the default maximum serialized size of one capture
+	// request, used when Config.MaxBatchBytes is zero.
+	DefaultMaxBatchBytes = 500000
 
 	// DefaultMaxQueueSize is the default in-memory message queue capacity used when
 	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
@@ -382,6 +401,14 @@ func makeConfig(c Config) Config {
 	// could never accumulate before the queue overflows.
 	if c.MaxQueueSize < c.BatchSize {
 		c.MaxQueueSize = c.BatchSize
+	}
+
+	if c.MaxEventBytes <= 0 {
+		c.MaxEventBytes = DefaultMaxEventBytes
+	}
+
+	if c.MaxBatchBytes <= 0 {
+		c.MaxBatchBytes = DefaultMaxBatchBytes
 	}
 
 	if c.MaxRetryBackoff <= 0 {

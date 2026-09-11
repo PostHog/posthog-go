@@ -76,6 +76,12 @@ func makeUUID(u string) string {
 	if u != "" && uuid.Validate(u) == nil {
 		return u
 	}
+	// v7 is time-ordered, matching what capture generates server-side when a
+	// client omits the uuid, and what posthog-rs sends. Falls back to v4 if the
+	// clock-based path fails rather than failing the event.
+	if v7, err := uuid.NewV7(); err == nil {
+		return v7.String()
+	}
 	return uuid.New().String()
 }
 
@@ -85,8 +91,3 @@ func makeUUID(u string) string {
 // ingestion uses event plus properties such as $lib, $lib_version,
 // $feature/<key>, and $active_feature_flags instead.
 type APIMessage interface{}
-
-const (
-	maxBatchBytes   = 500000
-	maxMessageBytes = 500000
-)
