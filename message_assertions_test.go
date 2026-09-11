@@ -102,3 +102,18 @@ func TestDereferenceMessage(t *testing.T) {
 		require.Equal(t, in, dereferenceMessage(in))
 	})
 }
+
+func TestGeneratedUUIDsAreV7(t *testing.T) {
+	// Time-ordered, matching capture's server-side generation and posthog-rs.
+	// Position 14 of the canonical form holds the version nibble.
+	for name, got := range map[string]string{
+		"event uuid": makeUUID(""),
+		"request id": newRequestID(),
+	} {
+		require.Len(t, got, 36, name)
+		require.Equalf(t, byte('7'), got[14], "%s %q is not version 7", name, got)
+	}
+
+	// A caller-supplied uuid is still passed through untouched.
+	require.Equal(t, "00000000-0000-0000-0000-000000000001", makeUUID("00000000-0000-0000-0000-000000000001"))
+}
