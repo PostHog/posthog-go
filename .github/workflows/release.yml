@@ -108,10 +108,8 @@ jobs:
       - name: Apply changesets and update version
         id: apply-changesets
         run: |
-          # The root SDK and the otel bridge are separate Go modules with
-          # separate tag namespaces (vX.Y.Z and otel/vX.Y.Z) and independent
-          # major versions, so each carries its own changesets package and is
-          # only tagged when its own version actually moves.
+          # Separate Go modules with separate tag namespaces and independent
+          # majors: tag each only when its own version moves.
           PREV_ROOT=$(node -p "require('./package.json').version")
           PREV_OTEL=$(node -p "require('./otel/package.json').version")
 

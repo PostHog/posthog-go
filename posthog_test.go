@@ -328,9 +328,8 @@ var (
 	//lint:ignore ST1012 variable name is fine :D
 	testError = errors.New("test error")
 
-	// HTTP transport that always succeeds. A capture request is answered with
-	// the per-event results body the SDK requires: a 200 whose body is not a
-	// results map is terminal, not a success.
+	// HTTP transport that always succeeds. A 200 whose body is not a results
+	// map is terminal, so capture requests get a real results body.
 	testTransportOK = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		body := ""
 		if strings.HasPrefix(r.URL.Path, capturePath) && r.Body != nil {
@@ -1404,9 +1403,7 @@ func TestClientRoundTripperError(t *testing.T) {
 		t.Error("failure callback not triggered for an invalid request")
 
 	} else {
-		// A transport failure surfaces as *CaptureRequestError wrapping the
-		// underlying *url.Error, so callers can branch on the capture error
-		// while still unwrapping to the transport cause.
+		// A transport failure is a *CaptureRequestError wrapping *url.Error.
 		var reqErr *CaptureRequestError
 		if !errors.As(err, &reqErr) {
 			t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
@@ -1446,9 +1443,7 @@ func TestClientRetryError(t *testing.T) {
 		t.Error("failure callback not triggered for a retry falure")
 
 	} else {
-		// A transport failure surfaces as *CaptureRequestError wrapping the
-		// underlying *url.Error, so callers can branch on the capture error
-		// while still unwrapping to the transport cause.
+		// A transport failure is a *CaptureRequestError wrapping *url.Error.
 		var reqErr *CaptureRequestError
 		if !errors.As(err, &reqErr) {
 			t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
@@ -1507,11 +1502,8 @@ func TestClientResponseBodyError(t *testing.T) {
 		t.Error("failure callback not triggered for a 400 response")
 
 	} else {
-		// A terminal status is classified from the status itself, so the
-		// caller gets a *CaptureRequestError carrying the status. It must also
-		// still unwrap to the read error that made the body unusable --
-		// otherwise "400" arrives with no explanation of why there is no
-		// error body.
+		// Classified from the status, and must still unwrap to the read error
+		// that made the body unusable.
 		var reqErr *CaptureRequestError
 		if !errors.As(err, &reqErr) {
 			t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)

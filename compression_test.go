@@ -11,12 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Per-codec wire behavior (Content-Encoding header, body round-trip, success
-// callbacks) and the compress-failure fallback are covered end-to-end by
-// TestSendCompressionCodecs, TestSendCompressionFailureFallsBackToUncompressed
-// and TestCompressBody* in capture_v1_send_test.go. What remains here is the
-// coverage those do not provide: the documented constant values, and proof that
-// compression actually shrinks a real request.
+// Per-codec wire behavior and the compress-failure fallback live in
+// capture_send_test.go. What remains here is what those do not cover: the
+// documented constant values, and proof compression shrinks a real request.
 
 func TestCompressionModeConstants(t *testing.T) {
 	// Verify constant values are as documented (wire-stable: external callers
@@ -28,9 +25,8 @@ func TestCompressionModeConstants(t *testing.T) {
 	require.Equal(t, CompressionMode(4), CompressionBrotli)
 }
 
-// sendAndMeasure enqueues one event with the given compression mode and returns
-// the number of bytes the server actually received. A gzip body is decompressed
-// before it is acknowledged, so the request is also proven to round-trip.
+// sendAndMeasure returns the bytes the server received for one event. A gzip
+// body is decompressed before acknowledging, proving the request round-trips.
 func sendAndMeasure(t *testing.T, mode CompressionMode, props Properties) int {
 	t.Helper()
 

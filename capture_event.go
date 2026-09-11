@@ -8,8 +8,8 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-// capturePath is the analytics capture endpoint. The "v1" in the route is
-// the backend's wire-protocol version and is part of the external contract.
+// capturePath is the analytics capture endpoint. The "v1" is the backend's
+// wire-protocol version, not an internal marker.
 const capturePath = "/i/v1/analytics/events"
 
 // Magic event-property keys lifted out of properties into the wire shape.

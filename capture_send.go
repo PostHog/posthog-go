@@ -83,11 +83,8 @@ func (c *client) send(pb preparedBatch) {
 				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
-			// A terminal non-retryable status (400/401/429/...) whose body
-			// read errored: fail fast rather than falling through to the
-			// transport-retry path. reqErr carries the same status and parsed
-			// body fields as requestError(res) plus the read error, so the
-			// caller can see why the body was unusable.
+			// Terminal status whose body read errored: fail fast. reqErr adds
+			// the read error, so callers see why there is no error body.
 			if res != nil && res.statusCode != 0 && !isRetryableStatus(res.statusCode) {
 				c.notifyFailure(pendingMsgs, reqErr)
 				return
