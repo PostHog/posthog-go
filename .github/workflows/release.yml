@@ -119,7 +119,14 @@ jobs:
           OTEL_VERSION=$(node -p "require('./otel/package.json').version")
 
           if [ "$ROOT_VERSION" != "$PREV_ROOT" ]; then
-            sed -i "s/const Version = \"${PREV_ROOT}\"/const Version = \"${ROOT_VERSION}\"/" version.go
+            # Patch from what version.go actually holds, not from package.json,
+            # so drift between the two cannot make this a silent no-op.
+            CURRENT_GO_VERSION=$(grep -oP 'const Version = "\K[^"]+' version.go)
+            sed -i "s/const Version = \"${CURRENT_GO_VERSION}\"/const Version = \"${ROOT_VERSION}\"/" version.go
+            grep -q "const Version = \"${ROOT_VERSION}\"" version.go || {
+              echo "version.go was not updated to ${ROOT_VERSION} (found: ${CURRENT_GO_VERSION})" >&2
+              exit 1
+            }
             echo "root-changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "root-changed=false" >> "$GITHUB_OUTPUT"
@@ -131,8 +138,22 @@ jobs:
             echo "otel-changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # `if` rather than `[ … ] && …`, whose exit 1 on a false test would
+          # abort this step under the runner's `set -e`.
+          RELEASED=""
+          if [ "$ROOT_VERSION" != "$PREV_ROOT" ]; then
+            RELEASED="v${ROOT_VERSION}"
+          fi
+          if [ "$OTEL_VERSION" != "$PREV_OTEL" ]; then
+            if [ -n "$RELEASED" ]; then
+              RELEASED="${RELEASED}, "
+            fi
+            RELEASED="${RELEASED}otel/v${OTEL_VERSION}"
+          fi
+
           echo "new-version=$ROOT_VERSION" >> "$GITHUB_OUTPUT"
           echo "otel-version=$OTEL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "released=$RELEASED" >> "$GITHUB_OUTPUT"
           echo "Root: $PREV_ROOT -> $ROOT_VERSION | otel: $PREV_OTEL -> $OTEL_VERSION"
 
       - name: Check for version bump changes
@@ -150,7 +171,7 @@ jobs:
         if: steps.check-changes.outputs.committed == 'true'
         uses: planetscale/ghcommit-action@a6b150b81dca5dd027baa898604418eec9e11465 # v0.2.22
         with:
-          commit_message: "chore: release v${{ steps.apply-changesets.outputs.new-version }} [version bump] [skip ci]"
+          commit_message: "chore: release ${{ steps.apply-changesets.outputs.released }} [version bump] [skip ci]"
           repo: ${{ github.repository }}
           branch: main
         env:

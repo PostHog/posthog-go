@@ -3,8 +3,6 @@
 v2 makes capture v1 the only capture path. The legacy `/batch/` pipeline is
 removed, along with the `Config.CaptureMode` switch that chose between them.
 
-> This guide describes the changes staged on the `v1` branch.
-
 ## Import path
 
 Go requires the major version in the module path:
@@ -79,6 +77,10 @@ Two consequences for `Callback`:
 
 - `Failure` can fire on an HTTP **200**, for an individual event the backend
   dropped while accepting the rest of the batch.
+- An event whose uuid is absent from the `results` map fires neither callback.
+  A proxy or gateway that answers the capture path with its own `200` body
+  therefore reports nothing at all, where the old endpoint treated any `< 300`
+  as success. Confirm intermediaries pass the capture response through.
 - Errors are typed. Check them with `errors.As`:
 
 ```go

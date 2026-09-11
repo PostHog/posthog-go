@@ -260,21 +260,6 @@ func serveCaptureOK(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// captureOKServer records each request envelope through onBatch (may be nil)
-// and answers all-"ok".
-func captureOKServer(onBatch func(eventBatch)) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if onBatch != nil {
-			var env eventBatch
-			if err := json.Unmarshal(body, &env); err == nil {
-				onBatch(env)
-			}
-		}
-		writeCaptureOK(w, body)
-	}))
-}
-
 // NewTestTransport creates a transport for the given test scenario
 func NewTestTransport(scenario TestScenario) http.RoundTripper {
 	switch scenario {
