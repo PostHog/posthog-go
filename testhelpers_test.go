@@ -89,8 +89,6 @@ func (c *UnifiedCallback) lastErr() error {
 // MockServerConfig configures a mock HTTP server for testing
 type MockServerConfig struct {
 	// Response configurations
-	BatchResponse     string
-	BatchStatusCode   int
 	FlagsResponse     string
 	FlagsStatusCode   int
 	LocalEvalResponse string
@@ -101,7 +99,6 @@ type MockServerConfig struct {
 	FailAfterN int
 
 	// Handlers for custom behavior
-	BatchHandler     func(body []byte)
 	FlagsHandler     func(w http.ResponseWriter, r *http.Request)
 	LocalEvalHandler func(w http.ResponseWriter, r *http.Request)
 	// CaptureHandler handles the capture endpoint, returning (status, body).
@@ -122,15 +119,10 @@ type MockServerBuilder struct {
 func NewMockServerBuilder() *MockServerBuilder {
 	return &MockServerBuilder{
 		config: MockServerConfig{
-			BatchStatusCode: http.StatusOK,
 			FlagsStatusCode: http.StatusOK,
 			LocalEvalStatus: http.StatusOK,
 		},
 	}
-}
-
-func (b *MockServerBuilder) WithBatchResponse(response string, statusCode int) *MockServerBuilder {
-	return b.withResponse(response, statusCode, &b.config.BatchResponse, &b.config.BatchStatusCode)
 }
 
 func (b *MockServerBuilder) WithFlagsResponse(response string, statusCode int) *MockServerBuilder {
@@ -144,11 +136,6 @@ func (b *MockServerBuilder) WithLocalEvalResponse(response string, statusCode in
 func (b *MockServerBuilder) withResponse(response string, statusCode int, responseField *string, statusField *int) *MockServerBuilder {
 	*responseField = response
 	*statusField = statusCode
-	return b
-}
-
-func (b *MockServerBuilder) WithBatchHandler(handler func(body []byte)) *MockServerBuilder {
-	b.config.BatchHandler = handler
 	return b
 }
 
@@ -207,16 +194,6 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 			w.WriteHeader(status)
 			if resp != "" {
 				w.Write([]byte(resp))
-			}
-
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			if b.config.BatchHandler != nil {
-				body, _ := io.ReadAll(r.Body)
-				b.config.BatchHandler(body)
-			}
-			w.WriteHeader(b.config.BatchStatusCode)
-			if b.config.BatchResponse != "" {
-				w.Write([]byte(b.config.BatchResponse))
 			}
 
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
