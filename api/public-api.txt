@@ -34,6 +34,10 @@ const (
 
 	DefaultMaxEnqueuedRequests = 1000
 
+	DefaultMaxEventBytes = 500000
+
+	DefaultMaxBatchBytes = 500000
+
 	DefaultMaxQueueSize = 10000
 )
 const (
@@ -324,6 +328,10 @@ type Config struct {
 	BeforeSend BeforeSendFunc
 
 	BatchSize int
+
+	MaxEventBytes int
+
+	MaxBatchBytes int
 
 	MaxQueueSize int
 
