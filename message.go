@@ -3,7 +3,6 @@ package posthog
 import (
 	"time"
 
-	json "github.com/goccy/go-json"
 	"github.com/google/uuid"
 )
 
@@ -80,37 +79,12 @@ func makeUUID(u string) string {
 	return uuid.New().String()
 }
 
-// batch is the removed legacy /batch/ request envelope. No production code
-// builds it any more; it survives only so the not-yet-ported tests still
-// compile, and is deleted in the follow-up test-migration commit.
-//
-// Deprecated: test-only scaffolding, pending removal.
-type batch struct {
-	ApiKey              string            `json:"api_key"`
-	HistoricalMigration bool              `json:"historical_migration,omitempty"`
-	Messages            []json.RawMessage `json:"batch"`
-}
-
 // APIMessage is a wire-format message produced by Message.APIfy and passed to callbacks.
 // Legacy API message structs may still expose top-level fields such as type,
 // library, library_version, and send_feature_flags for compatibility. Capture
 // ingestion uses event plus properties such as $lib, $lib_version,
 // $feature/<key>, and $active_feature_flags instead.
 type APIMessage interface{}
-
-// prepareForSend is the removed legacy serializer. No production code calls it
-// any more; it survives only so the not-yet-ported tests still compile, and is
-// deleted in the follow-up test-migration commit. Use prepareForSendV1.
-//
-// Deprecated: test-only scaffolding, pending removal.
-func prepareForSend(msg Message) (json.RawMessage, APIMessage, error) {
-	apiMsg := msg.APIfy()
-	data, err := json.Marshal(apiMsg)
-	if err != nil {
-		return nil, apiMsg, err
-	}
-	return json.RawMessage(data), apiMsg, nil
-}
 
 const (
 	maxBatchBytes   = 500000

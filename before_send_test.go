@@ -301,8 +301,11 @@ func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
 		Properties: originalProperties,
 	}))
 
+	// Person properties travel in properties.$set on the wire.
 	message := firstMessage(t, readBatch(t, body))
-	set, ok := message["$set"].(map[string]interface{})
+	properties, ok := message["properties"].(map[string]interface{})
+	require.True(t, ok)
+	set, ok := properties["$set"].(map[string]interface{})
 	require.True(t, ok)
 	require.Equal(t, true, set["hook_ran"])
 	require.Nil(t, originalProperties["hook_ran"])

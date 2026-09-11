@@ -26,6 +26,9 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 	t.Helper()
 	s := &captureLocalEvalServer{}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			if definitionsFixture == "" {
@@ -225,6 +228,9 @@ func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, 
 	t.Helper()
 	var decideCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(definitions))
