@@ -3,7 +3,7 @@ package posthogmcp
 import (
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 // IntentSource identifies how an MCP tool-call intent was obtained.

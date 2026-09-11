@@ -9,7 +9,7 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/posthog/posthog-go/posthogmcp"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 const (

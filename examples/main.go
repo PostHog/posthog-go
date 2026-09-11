@@ -19,7 +19,7 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
-	_ "github.com/posthog/posthog-go" // Used by other files in this package
+	_ "github.com/posthog/posthog-go/v2" // Used by other files in this package
 )
 
 var (

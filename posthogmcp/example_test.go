@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
-	"github.com/posthog/posthog-go/posthogmcp"
+	posthog "github.com/posthog/posthog-go/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 func ExampleAnalytics_CaptureToolCall() {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 type preparedToolCall struct {

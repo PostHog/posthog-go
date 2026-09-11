@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
-	testerrors "github.com/posthog/posthog-go/posthogmcp/testdata/errors"
+	posthog "github.com/posthog/posthog-go/v2"
+	testerrors "github.com/posthog/posthog-go/v2/posthogmcp/testdata/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

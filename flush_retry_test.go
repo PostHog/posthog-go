@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 	"github.com/stretchr/testify/require"
 )
 

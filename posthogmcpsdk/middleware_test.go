@@ -16,8 +16,8 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	posthog "github.com/posthog/posthog-go"
-	"github.com/posthog/posthog-go/posthogmcp"
+	posthog "github.com/posthog/posthog-go/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
