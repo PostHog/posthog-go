@@ -43,6 +43,7 @@ jobs:
           cache-dependency-path: bin/hobby-installer/go.sum
 
       - name: Install new package version in main repo
+        id: install
         shell: bash
         working-directory: bin/hobby-installer
         env:
@@ -51,6 +52,37 @@ jobs:
           PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
         run: |
           set -euo pipefail
+
+          # Go encodes the major version in the import path, so posthog-go v2+
+          # is a different module path than the one this go.mod requires. Bumping
+          # across a major is a deliberate, human-reviewed migration (the import
+          # path changes in source too), not something this workflow can do.
+          #
+          # Detect that case and stop cleanly instead of retrying a `go get` that
+          # can never succeed: a hard failure here would recur on every release of
+          # the new major and train people to ignore the alert.
+          CURRENT_PATH=$(go list -m -f '{{.Path}}' all 2>/dev/null | grep -E '^github\.com/posthog/posthog-go(/v[0-9]+)?$' | head -1)
+          CURRENT_MAJOR=$(printf '%s' "$CURRENT_PATH" | sed -nE 's|.*/v([0-9]+)$|\1|p')
+          CURRENT_MAJOR=${CURRENT_MAJOR:-1}
+          NEW_MAJOR=${PACKAGE_VERSION%%.*}
+
+          if [ "$NEW_MAJOR" != "$CURRENT_MAJOR" ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "### posthog-go ${PACKAGE_VERSION} needs a manual major upgrade"
+              echo
+              echo "\`bin/hobby-installer\` requires \`${CURRENT_PATH}\` (major ${CURRENT_MAJOR}), but"
+              echo "posthog-go ${PACKAGE_VERSION} is major ${NEW_MAJOR}, which Go treats as a different"
+              echo "module path. Update the import path and the \`go.mod\` require in a reviewed PR."
+              echo
+              echo "No changes were made and nothing is broken: the installer keeps building"
+              echo "against \`${CURRENT_PATH}\`, whose tags remain available."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Major version change detected (${CURRENT_MAJOR} -> ${NEW_MAJOR}); skipping automated bump."
+            exit 0
+          fi
+
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
           for i in $(seq 1 "$RETRY_TIMES"); do
             if go get "github.com/posthog/posthog-go@v${PACKAGE_VERSION}"; then
               break
@@ -64,6 +96,7 @@ jobs:
 
       - name: Generate pull request details
         id: generate-pr-details
+        if: steps.install.outputs.skipped != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ steps.upgrader.outputs.token }}
@@ -98,6 +131,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create main repo pull request
+        if: steps.install.outputs.skipped != 'true'
         id: main-repo-pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         env:

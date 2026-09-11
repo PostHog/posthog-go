@@ -1,4 +1,5 @@
 packages:
   - '.'
+  - 'otel'
 
 minimumReleaseAge: 10080
