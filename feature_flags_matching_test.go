@@ -370,9 +370,15 @@ func TestMatchPropertyNumberStoredAsString(t *testing.T) {
 }
 
 func TestMatchPropertyNonNumericStringIsNotOrderable(t *testing.T) {
-	property := FlagProperty{Key: "Number", Value: "not-a-number", Operator: "gt"}
-	_, err := matchProperty(property, NewProperties().Set("Number", 7))
-	require.Error(t, err)
+	// ParseFloat accepts "NaN" and "Inf", and a NaN comparison is false whichever way it is
+	// asked, so accepting one would answer the condition instead of falling back.
+	for _, value := range []string{"not-a-number", "NaN", "Inf", "-Inf"} {
+		t.Run(value, func(t *testing.T) {
+			property := FlagProperty{Key: "Number", Value: value, Operator: "gt"}
+			_, err := matchProperty(property, NewProperties().Set("Number", 7))
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestMatchPropertyNumber(t *testing.T) {

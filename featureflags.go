@@ -1748,7 +1748,9 @@ func interfaceToFloat(val interface{}) (float64, error) {
 		// parses that form. Without this the value is not orderable and the caller falls back
 		// to the API for a flag it could evaluate locally.
 		parsed, err := strconv.ParseFloat(t, 64)
-		if err != nil {
+		// ParseFloat accepts "NaN" and "Inf". A NaN comparison is false whichever way it is
+		// asked, so accepting one would answer the condition instead of falling back.
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
 			return 0.0, errors.New("argument not orderable")
 		}
 		i = parsed
