@@ -220,7 +220,7 @@ func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
-		case strings.HasPrefix(r.URL.Path, captureV1Path):
+		case strings.HasPrefix(r.URL.Path, capturePath):
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Errorf("Failed to read capture body: %v", err)
@@ -333,7 +333,7 @@ var (
 	// results map is terminal, not a success.
 	testTransportOK = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		body := ""
-		if strings.HasPrefix(r.URL.Path, captureV1Path) && r.Body != nil {
+		if strings.HasPrefix(r.URL.Path, capturePath) && r.Body != nil {
 			reqBody, err := io.ReadAll(r.Body)
 			if err != nil {
 				return nil, err
@@ -732,12 +732,12 @@ func TestEnqueue(t *testing.T) {
 	}
 }
 
-func TestEnqueueCaptureV1EventFamily(t *testing.T) {
+func TestEnqueueCaptureEventFamily(t *testing.T) {
 	const apiKey = "phc_snapshot_project_key"
 	body := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != captureV1Path {
-			t.Errorf("capture path = %q, want %q", r.URL.Path, captureV1Path)
+		if r.URL.Path != capturePath {
+			t.Errorf("capture path = %q, want %q", r.URL.Path, capturePath)
 		}
 		if got, want := r.Header.Get("Authorization"), "Bearer "+apiKey; got != want {
 			t.Errorf("Authorization = %q, want %q", got, want)
@@ -826,7 +826,7 @@ func TestEnqueueCaptureV1EventFamily(t *testing.T) {
 
 	select {
 	case payload := <-body:
-		assertPayloadEqual(t, strings.TrimSpace(fixture("test-enqueue-capture-v1.json")), string(payload))
+		assertPayloadEqual(t, strings.TrimSpace(fixture("test-enqueue-event-family.json")), string(payload))
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for request")
 	}
@@ -1938,7 +1938,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if !strings.HasPrefix(r.URL.Path, captureV1Path) {
+		} else if !strings.HasPrefix(r.URL.Path, capturePath) {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
 	}))
@@ -2130,7 +2130,7 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if !strings.HasPrefix(r.URL.Path, captureV1Path) {
+		} else if !strings.HasPrefix(r.URL.Path, capturePath) {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
 	}))

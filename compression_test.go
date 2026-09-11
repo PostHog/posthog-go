@@ -13,8 +13,8 @@ import (
 
 // Per-codec wire behavior (Content-Encoding header, body round-trip, success
 // callbacks) and the compress-failure fallback are covered end-to-end by
-// TestV1SendCompressionCodecs, TestV1SendCompressionFailureFallsBackToUncompressed
-// and TestCompressV1Body* in capture_v1_send_test.go. What remains here is the
+// TestSendCompressionCodecs, TestSendCompressionFailureFallsBackToUncompressed
+// and TestCompressBody* in capture_v1_send_test.go. What remains here is the
 // coverage those do not provide: the documented constant values, and proof that
 // compression actually shrinks a real request.
 

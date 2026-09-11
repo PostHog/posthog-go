@@ -28,7 +28,7 @@ const (
 
 // String returns a human-readable codec name, used in config validation
 // errors and debug logs. It is not the on-the-wire Content-Encoding token
-// (brotli's token is "br"); see compressV1Body for wire tokens.
+// (brotli's token is "br"); see compressBody for wire tokens.
 func (m CompressionMode) String() string {
 	switch m {
 	case CompressionNone:
