@@ -104,10 +104,10 @@ type MockServerConfig struct {
 	BatchHandler     func(body []byte)
 	FlagsHandler     func(w http.ResponseWriter, r *http.Request)
 	LocalEvalHandler func(w http.ResponseWriter, r *http.Request)
-	// CaptureV1Handler handles the capture-v1 endpoint, returning (status, body).
+	// CaptureHandler handles the capture endpoint, returning (status, body).
 	// When nil, the server replies 200 with an all-"ok" results map derived from
 	// the request batch.
-	CaptureV1Handler func(body []byte) (int, string)
+	CaptureHandler func(body []byte) (int, string)
 }
 
 // MockServerBuilder builds configurable mock servers
@@ -152,8 +152,8 @@ func (b *MockServerBuilder) WithBatchHandler(handler func(body []byte)) *MockSer
 	return b
 }
 
-func (b *MockServerBuilder) WithCaptureV1Handler(handler func(body []byte) (int, string)) *MockServerBuilder {
-	b.config.CaptureV1Handler = handler
+func (b *MockServerBuilder) WithCaptureHandler(handler func(body []byte) (int, string)) *MockServerBuilder {
+	b.config.CaptureHandler = handler
 	return b
 }
 
@@ -196,11 +196,11 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 
 		// Route to appropriate handler
 		switch {
-		case strings.HasPrefix(r.URL.Path, captureV1Path):
+		case strings.HasPrefix(r.URL.Path, capturePath):
 			body, _ := io.ReadAll(r.Body)
 			status, resp := http.StatusOK, ""
-			if b.config.CaptureV1Handler != nil {
-				status, resp = b.config.CaptureV1Handler(body)
+			if b.config.CaptureHandler != nil {
+				status, resp = b.config.CaptureHandler(body)
 			} else {
 				status, resp = http.StatusOK, allOkResultsBody(body)
 			}
@@ -245,7 +245,7 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 	}))
 }
 
-// allOkResultsBody parses a capture-v1 request envelope and returns a results
+// allOkResultsBody parses a capture request envelope and returns a results
 // body marking every event uuid as "ok".
 func allOkResultsBody(body []byte) string {
 	var env eventBatch
@@ -260,7 +260,7 @@ func allOkResultsBody(body []byte) string {
 		_ = json.Unmarshal(raw, &ev)
 		results[ev.Uuid] = eventResult{Result: resultOk}
 	}
-	out, _ := json.Marshal(captureV1Response{Results: results})
+	out, _ := json.Marshal(captureResponse{Results: results})
 	return string(out)
 }
 
@@ -270,7 +270,7 @@ func allOkResultsBody(body []byte) string {
 // Every mock capture handler must use this (or write an equivalent body).
 // Unlike the legacy /batch/ endpoint, which treated any status < 300 as
 // success, a 200 whose body does not parse as a results map is terminal:
-// reportV1 fails to decode it and sendV1 fails the whole batch rather than
+// report fails to decode it and send fails the whole batch rather than
 // retrying. A bare w.WriteHeader(200) therefore drops every event.
 func writeCaptureOK(w http.ResponseWriter, requestBody []byte) {
 	w.WriteHeader(http.StatusOK)
@@ -285,7 +285,7 @@ func writeCaptureOK(w http.ResponseWriter, requestBody []byte) {
 // path with anything but a results map fails those events instead of
 // delivering them.
 func serveCaptureOK(w http.ResponseWriter, r *http.Request) bool {
-	if !strings.HasPrefix(r.URL.Path, captureV1Path) {
+	if !strings.HasPrefix(r.URL.Path, capturePath) {
 		return false
 	}
 	body, _ := io.ReadAll(r.Body)

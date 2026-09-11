@@ -71,7 +71,7 @@ func BenchmarkJSONMarshalBatchWithCardinality(b *testing.B) {
 	}
 }
 
-// BenchmarkPrepareForSend_Cardinality benchmarks prepareForSendV1 at various property cardinalities
+// BenchmarkPrepareForSend_Cardinality benchmarks prepareForSend at various property cardinalities
 // This validates that the combined APIfy + serialization isn't a bottleneck
 func BenchmarkPrepareForSend_Cardinality(b *testing.B) {
 	cardinalities := []struct {
@@ -99,7 +99,7 @@ func BenchmarkPrepareForSend_Cardinality(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				prepareForSendV1(captures[i%100], nil)
+				prepareForSend(captures[i%100], nil)
 			}
 		})
 	}
@@ -178,7 +178,7 @@ func BenchmarkHTTPUploadWithRealPayload(b *testing.B) {
 	}
 }
 
-// BenchmarkPrepareVsMarshaling compares the cost of prepareForSendV1 vs actual marshaling
+// BenchmarkPrepareVsMarshaling compares the cost of prepareForSend vs actual marshaling
 func BenchmarkPrepareVsMarshaling(b *testing.B) {
 	cardinalities := []struct {
 		name        string
@@ -203,7 +203,7 @@ func BenchmarkPrepareVsMarshaling(b *testing.B) {
 		b.Run(tc.name+"_prepare", func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				prepareForSendV1(capture, nil)
+				prepareForSend(capture, nil)
 			}
 		})
 
@@ -290,13 +290,13 @@ func BenchmarkOldVsNewSerializationFlow(b *testing.B) {
 				}
 			})
 
-			// New flow: prepareForSendV1 (marshal individually) then marshal batch wrapper
+			// New flow: prepareForSend (marshal individually) then marshal batch wrapper
 			b.Run(fmt.Sprintf("new_batch_%d_%s", size, tc.name), func(b *testing.B) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					rawMsgs := make([]json.RawMessage, size)
 					for j, c := range captures {
-						data, _, _, _ := prepareForSendV1(c, nil)
+						data, _, _, _ := prepareForSend(c, nil)
 						rawMsgs[j] = data
 					}
 					json.Marshal(eventBatch{CreatedAt: "2009-11-10T23:00:00Z", Batch: rawMsgs})

@@ -310,7 +310,7 @@ func TestConcurrentEnqueueWithSlowServer(t *testing.T) {
 		"All events should be delivered even with slow server")
 }
 
-// TestConcurrentPrepareForSend tests that prepareForSendV1 is thread-safe
+// TestConcurrentPrepareForSend tests that prepareForSend is thread-safe
 func TestConcurrentPrepareForSend(t *testing.T) {
 	t.Parallel()
 	capture := Capture{
@@ -333,9 +333,9 @@ func TestConcurrentPrepareForSend(t *testing.T) {
 			defer wg.Done()
 			var total int
 			for i := 0; i < callsPerGoroutine; i++ {
-				data, _, _, err := prepareForSendV1(capture, nil)
+				data, _, _, err := prepareForSend(capture, nil)
 				if err != nil {
-					t.Errorf("prepareForSendV1 error: %v", err)
+					t.Errorf("prepareForSend error: %v", err)
 					return
 				}
 				total += len(data)
@@ -350,7 +350,7 @@ func TestConcurrentPrepareForSend(t *testing.T) {
 	first := results[0]
 	for i, result := range results {
 		if result != first {
-			t.Errorf("Inconsistent prepareForSendV1 size: goroutine 0 got %d, goroutine %d got %d",
+			t.Errorf("Inconsistent prepareForSend size: goroutine 0 got %d, goroutine %d got %d",
 				first, i, result)
 		}
 	}

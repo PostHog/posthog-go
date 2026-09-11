@@ -152,7 +152,7 @@ func TestExceptionApifyEventIncludesDebugImages(t *testing.T) {
 	ev := exception.apifyEvent()
 	images, ok := ev.properties["$debug_images"].([]DebugImage)
 	if !ok || len(images) != 1 {
-		t.Fatalf("expected $debug_images in v1 properties, got %v", ev.properties["$debug_images"])
+		t.Fatalf("expected $debug_images in properties, got %v", ev.properties["$debug_images"])
 	}
 
 	// And absent (not an empty array) when there are none.
