@@ -241,26 +241,16 @@ func allOkResultsBody(body []byte) string {
 	return string(out)
 }
 
-// writeCaptureOK completes a mock capture request with a 200 and the per-event
-// results body the SDK requires.
-//
-// Every mock capture handler must use this (or write an equivalent body).
-// Unlike the legacy /batch/ endpoint, which treated any status < 300 as
-// success, a 200 whose body does not parse as a results map is terminal:
-// report fails to decode it and send fails the whole batch rather than
-// retrying. A bare w.WriteHeader(200) therefore drops every event.
+// writeCaptureOK answers a mock capture request with an all-"ok" results body.
+// A 200 whose body is not a results map is terminal, so a bare WriteHeader(200)
+// drops every event.
 func writeCaptureOK(w http.ResponseWriter, requestBody []byte) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(allOkResultsBody(requestBody)))
 }
 
-// serveCaptureOK answers a capture request with an all-"ok" results body and
-// reports whether it handled the request.
-//
-// Flag-focused mock servers call it as their first statement: the flag APIs
-// enqueue $feature_flag_called events, and a handler that answers the capture
-// path with anything but a results map fails those events instead of
-// delivering them.
+// serveCaptureOK handles a capture request, reporting whether it did. Call it
+// first in flag-focused servers, which also receive $feature_flag_called events.
 func serveCaptureOK(w http.ResponseWriter, r *http.Request) bool {
 	if !strings.HasPrefix(r.URL.Path, capturePath) {
 		return false
@@ -270,9 +260,8 @@ func serveCaptureOK(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// captureOKServer returns a mock capture server that records each request
-// envelope through onBatch and answers with an all-"ok" results body. onBatch
-// may be nil when a test only needs the endpoint to succeed.
+// captureOKServer records each request envelope through onBatch (may be nil)
+// and answers all-"ok".
 func captureOKServer(onBatch func(eventBatch)) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
