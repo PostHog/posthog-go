@@ -60,7 +60,7 @@ func isRetryableStatus(code int) bool {
 // retry: only events tagged "retry" in the response are re-sent on subsequent
 // attempts. PostHog-Request-Id and created_at are stable across attempts;
 // PostHog-Attempt increments.
-func (c *client) send(pb preparedBatch) {
+func (c *client) send(l *lane, pb preparedBatch) {
 	requestId := newRequestID()
 	createdAt := c.now().UTC().Format(time.RFC3339)
 
@@ -83,7 +83,7 @@ func (c *client) send(pb preparedBatch) {
 			return
 		}
 
-		res, err := c.upload(c.ctx, body, requestId, attempt)
+		res, err := c.upload(l, c.ctx, body, requestId, attempt)
 		if err != nil {
 			reqErr := newCaptureRequestError(res, err)
 			// A 2xx with an unparseable body is terminal for this batch -
@@ -303,17 +303,17 @@ func compressBody(mode CompressionMode, raw []byte) ([]byte, string, error) {
 // upload performs a single capture POST. It reuses c.http (which already
 // carries BatchUploadTimeout) and the caller's ctx; it does not add a separate
 // per-request timeout.
-func (c *client) upload(ctx context.Context, b []byte, requestId string, attempt int) (*attemptResult, error) {
-	body, encoding, err := compressBody(c.Compression, b)
+func (c *client) upload(l *lane, ctx context.Context, b []byte, requestId string, attempt int) (*attemptResult, error) {
+	body, encoding, err := compressBody(l.cfg.compression, b)
 	if err != nil {
 		if body == nil {
-			c.Errorf("compressing body (%s) - %s", c.Compression, err)
+			c.Errorf("compressing body (%s) - %s", l.cfg.compression, err)
 			return nil, err
 		}
-		c.Warnf("compressing body (%s) failed; sending uncompressed - %s", c.Compression, err)
+		c.Warnf("compressing body (%s) failed; sending uncompressed - %s", l.cfg.compression, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+capturePath, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", l.url(c.Endpoint), bytes.NewReader(body))
 	if err != nil {
 		c.Errorf("creating request - %s", err)
 		return nil, err

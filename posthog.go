@@ -156,26 +156,13 @@ type client struct {
 	Config
 	key string
 
-	// This channel is where the `Enqueue` method writes messages so they can be
-	// picked up and pushed by the backend goroutine taking care of applying the
-	// batching rules. Messages are pre-converted to APIMessage format with
-	// pre-computed size to avoid race conditions.
-	msgs chan preparedMessage
+	// analytics is the capture pipeline every event flows through unless the
+	// caller chose another lane explicitly.
+	analytics *lane
 
-	// Channel for sending batches to workers. Acts as both a queue and
-	// concurrency limiter - when full, new batches are shed via failure callback.
-	batches chan preparedBatch
-
-	// Tracks in-flight batches for graceful shutdown
-	inFlight atomic.Int64
-
-	// These two channels are used to synchronize the client shutting down when
-	// `Close` is called.
-	// The first channel is closed to signal the backend goroutine that it has
-	// to stop, then the second one is closed by the backend goroutine to signal
-	// that it has finished flushing all queued messages.
-	quit     chan struct{}
-	shutdown chan struct{}
+	// quit is closed to signal every lane's loop to stop and drain. Each lane
+	// closes its own shutdown channel once it has finished.
+	quit chan struct{}
 
 	// Context and cancel function for graceful shutdown.
 	// When Close is called, the context is cancelled to signal all goroutines
@@ -252,21 +239,15 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
 	}
 
-	// Channel sizing:
-	// - msgs queue (incoming messages) sized by MaxQueueSize (default 10000)
-	// - batches queue (prepared batches awaiting upload) sized by MaxEnqueuedRequests (default 1000)
-	// Both defaults and the MaxQueueSize >= BatchSize clamp are applied in makeConfig.
-	batchesQueueSize := config.MaxEnqueuedRequests
-	msgQueueSize := config.MaxQueueSize
-
+	// Queue sizing: each lane's message queue is sized by its own
+	// maxQueueSize; the batch queue by MaxEnqueuedRequests (default 1000).
+	// Defaults and the MaxQueueSize >= BatchSize clamp are applied in makeConfig.
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
-		msgs:                            make(chan preparedMessage, msgQueueSize),
-		batches:                         make(chan preparedBatch, batchesQueueSize),
+		analytics:                       newLane(analyticsLaneConfig(config), config.MaxEnqueuedRequests),
 		quit:                            make(chan struct{}),
-		shutdown:                        make(chan struct{}),
 		ctx:                             ctx,
 		cancel:                          cancel,
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
@@ -297,7 +278,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		}
 	}
 
-	go c.loop()
+	go c.loop(c.analytics)
 
 	cli = c
 	return
@@ -578,7 +559,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return
 		}
 		select {
-		case c.msgs <- prepared:
+		case c.analytics.msgs <- prepared:
 		default:
 			err = ErrQueueFull
 		}
@@ -1437,7 +1418,7 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 
 		// Wait for shutdown with timeout from provided context
 		select {
-		case <-c.shutdown:
+		case <-c.analytics.shutdown:
 			// Clean shutdown completed
 			c.debugf("shutdown completed successfully")
 		case <-ctx.Done():
@@ -1446,7 +1427,7 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 			err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
 			c.Warnf("shutdown timeout exceeded, some messages may be lost")
 			// Wait for shutdown to acknowledge cancellation
-			<-c.shutdown
+			<-c.analytics.shutdown
 		}
 	})
 
@@ -1458,18 +1439,18 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 
 // processBatch handles a single batch with guaranteed counter decrement.
 // It receives the batch from the channel and processes it.
-func (c *client) processBatch() {
+func (c *client) processBatch(l *lane) {
 	// Receive batch from channel - this also "releases" the semaphore slot
-	batch, ok := <-c.batches
+	batch, ok := <-l.batches
 	if !ok {
 		// Channel closed during shutdown
-		c.inFlight.Add(-1)
+		l.inFlight.Add(-1)
 		return
 	}
 
 	// CRITICAL: defer ensures counter decrements on ANY exit path
 	// (success, JSON error, HTTP error, panic, context cancellation)
-	defer c.inFlight.Add(-1)
+	defer l.inFlight.Add(-1)
 
 	// Recover from panics to prevent goroutine death without cleanup
 	defer func() {
@@ -1479,7 +1460,7 @@ func (c *client) processBatch() {
 		}
 	}()
 
-	c.send(batch)
+	c.send(l, batch)
 }
 
 // sendBatch attempts to enqueue a batch for processing.
@@ -1490,17 +1471,17 @@ func (c *client) processBatch() {
 //
 // On success, spawns a goroutine to process the batch. The batches channel
 // acts as both a queue and concurrency limiter.
-func (c *client) sendBatch(batch preparedBatch) bool {
-	c.inFlight.Add(1)
+func (c *client) sendBatch(l *lane, batch preparedBatch) bool {
+	l.inFlight.Add(1)
 
 	// Negative timeout = non-blocking (immediate drop when queue is full)
 	if c.BatchSubmitTimeout < 0 {
 		select {
-		case c.batches <- batch:
-			go c.processBatch()
+		case l.batches <- batch:
+			go c.processBatch(l)
 			return true
 		default:
-			c.inFlight.Add(-1)
+			l.inFlight.Add(-1)
 			return false
 		}
 	}
@@ -1508,22 +1489,22 @@ func (c *client) sendBatch(batch preparedBatch) bool {
 	// Blocking send with timeout - allows in-flight requests to complete during latency spikes
 	timer := time.NewTimer(c.BatchSubmitTimeout)
 	select {
-	case c.batches <- batch:
+	case l.batches <- batch:
 		timer.Stop()
-		go c.processBatch()
+		go c.processBatch(l)
 		return true
 	case <-timer.C:
-		c.inFlight.Add(-1)
+		l.inFlight.Add(-1)
 		return false
 	}
 }
 
 // awaitDrain polls until all in-flight batches complete or context times out.
-func (c *client) awaitDrain(ctx context.Context) error {
+func (c *client) awaitDrain(l *lane, ctx context.Context) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	for c.inFlight.Load() > 0 {
+	for l.inFlight.Load() > 0 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -1531,7 +1512,7 @@ func (c *client) awaitDrain(ctx context.Context) error {
 			// continue polling
 		}
 	}
-	c.debugf("all in-flight batches completed")
+	c.debugf("%s: all in-flight batches completed", l.cfg.name)
 	return nil
 }
 
@@ -1561,9 +1542,9 @@ func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {
 
 // loop processes messages from the msgs channel, batches them by size,
 // and spawns goroutines to send batches.
-func (c *client) loop() {
-	defer close(c.batches) // prevent any pending receives from blocking
-	defer close(c.shutdown)
+func (c *client) loop(l *lane) {
+	defer close(l.batches) // prevent any pending receives from blocking
+	defer close(l.shutdown)
 	if c.featureFlagsPoller != nil {
 		defer c.featureFlagsPoller.shutdownPoller()
 	}
@@ -1582,7 +1563,7 @@ func (c *client) loop() {
 			return true
 		}
 		batch := preparedBatch{data: batchData, msgs: batchMsgs, uuids: batchUuids}
-		if !c.sendBatch(batch) {
+		if !c.sendBatch(l, batch) {
 			c.Errorf("sending batch failed - %s", ErrTooManyRequests)
 			c.notifyFailure(batchMsgs, ErrTooManyRequests)
 			return false
@@ -1600,13 +1581,13 @@ func (c *client) loop() {
 	processMessage := func(prepared preparedMessage) bool {
 		msgSize := len(prepared.data)
 
-		if msgSize > c.MaxEventBytes {
-			c.Errorf("message exceeds maximum size (%d > %d)", msgSize, c.MaxEventBytes)
+		if msgSize > l.cfg.maxEventBytes {
+			c.Errorf("%s: message exceeds maximum size (%d > %d)", l.cfg.name, msgSize, l.cfg.maxEventBytes)
 			c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
 			return false
 		}
 
-		if batchSize+msgSize > c.MaxBatchBytes && len(batchData) > 0 {
+		if batchSize+msgSize > l.cfg.maxBatchBytes && len(batchData) > 0 {
 			flushBatch()
 			resetBatch()
 		}
@@ -1625,7 +1606,7 @@ func (c *client) loop() {
 
 	for {
 		select {
-		case prepared := <-c.msgs:
+		case prepared := <-l.msgs:
 			if !processMessage(prepared) {
 				continue
 			}
@@ -1642,10 +1623,10 @@ func (c *client) loop() {
 			c.debugf("shutdown requested – draining messages")
 
 			// Close msgs channel to stop accepting new messages
-			close(c.msgs)
+			close(l.msgs)
 
 			// Drain remaining messages using same logic as normal processing
-			for prepared := range c.msgs {
+			for prepared := range l.msgs {
 				processMessage(prepared)
 			}
 
@@ -1656,8 +1637,8 @@ func (c *client) loop() {
 			}
 
 			// Wait for in-flight batches to complete
-			if err := c.awaitDrain(c.ctx); err != nil {
-				c.Warnf("shutdown timeout: %d batches still in flight", c.inFlight.Load())
+			if err := c.awaitDrain(l, c.ctx); err != nil {
+				c.Warnf("%s: shutdown timeout, %d batches still in flight", l.cfg.name, l.inFlight.Load())
 			}
 
 			c.debugf("shutdown complete")
