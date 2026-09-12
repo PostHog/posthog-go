@@ -205,7 +205,13 @@ jobs:
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
+          # Take the section for this exact version. Matching the first "## "
+          # heading instead picked up the "## Unreleased" placeholder that sits
+          # above it, so every release shipped that as its notes.
+          CHANGELOG_ENTRY=$(awk -v v="## ${NEW_VERSION}" '$0==v{flag=1;next} flag&&/^## /{exit} flag' CHANGELOG.md)
+          if [ -z "$(printf '%s' "$CHANGELOG_ENTRY" | tr -d '[:space:]')" ]; then
+            CHANGELOG_ENTRY="see CHANGELOG.md"
+          fi
           gh release create "v${NEW_VERSION}" --target "$RELEASE_COMMIT" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
       - name: Dispatch posthog upgrade for posthog-go
