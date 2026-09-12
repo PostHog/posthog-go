@@ -189,6 +189,11 @@ type client struct {
 	// closed is set to true when the client is closed, used to fast-fail Enqueue
 	closed atomic.Bool
 
+	// sendMu orders queue sends against shutdown. Senders hold it for read
+	// while handing a message to the queue; Close takes it for write to set
+	// closed, so no send is in flight when the loop closes the queue.
+	sendMu sync.RWMutex
+
 	// This HTTP client is used to send requests to the backend, it uses the
 	// HTTP transport provided in the configuration.
 	http http.Client
@@ -563,15 +568,15 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 	// SDKs. The drop is reported only via the returned error -- no callback or log
 	// is invoked on the caller's goroutine, so a sustained overload stays cheap.
 	sendPrepared := func(prepared preparedMessage) {
-		defer func() {
-			// When the `msgs` channel is closed writing to it will trigger a panic.
-			// To avoid letting the panic propagate to the caller we recover from it
-			// and instead report that the client has been closed and shouldn't be
-			// used anymore.
-			if recover() != nil {
-				err = ErrClosed
-			}
-		}()
+		// Held for read across the send so Close cannot mark the client closed --
+		// and the loop cannot then close the queue -- while this send is running.
+		// Sending on a closed channel is a data race, not merely a panic to recover.
+		c.sendMu.RLock()
+		defer c.sendMu.RUnlock()
+		if c.closed.Load() {
+			err = ErrClosed
+			return
+		}
 		select {
 		case c.msgs <- prepared:
 		default:
@@ -1421,8 +1426,11 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 
 	c.closeOnce.Do(func() {
 		alreadyClosed = false
-		// Mark as closed to fast-fail new Enqueue calls
+		// Mark as closed to fast-fail new Enqueue calls. Under the write lock so
+		// every in-flight send finishes first and every later one sees it.
+		c.sendMu.Lock()
 		c.closed.Store(true)
+		c.sendMu.Unlock()
 
 		// Signal the batch loop to stop and drain
 		close(c.quit)
