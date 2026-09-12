@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -934,5 +935,173 @@ func TestRetryDelayHonorsConfiguredCeiling(t *testing.T) {
 	c := withCeiling(250 * time.Millisecond)
 	if got := c.retryDelay(9, nil); got != 250*time.Millisecond {
 		t.Errorf("backoff cap: delay = %v, want 250ms", got)
+	}
+}
+
+// warnRecorder captures only Warnf, so a test can assert the aggregate loss
+// line without picking up the debug result summary emitted on the same path.
+type warnRecorder struct {
+	t     *testing.T
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnRecorder) Debugf(f string, a ...interface{}) { l.t.Logf(f, a...) }
+func (l *warnRecorder) Logf(f string, a ...interface{})   { l.t.Logf(f, a...) }
+func (l *warnRecorder) Errorf(f string, a ...interface{}) { l.t.Logf(f, a...) }
+func (l *warnRecorder) Warnf(f string, a ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns = append(l.warns, fmt.Sprintf(f, a...))
+}
+
+// lossLines returns only the aggregate drop lines, ignoring unrelated warnings.
+func (l *warnRecorder) lossLines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, w := range l.warns {
+		if strings.Contains(w, "event(s) dropped") {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// TestSilentLossWarn pins the only signal a caller without a Callback gets when
+// events are lost. It must be one aggregate line per batch -- never one per
+// event, since per-event logging scales with event volume and payloads may
+// carry sensitive content -- and must stay silent when a Callback is registered,
+// because the Callback already reports every failure.
+func TestSilentLossWarn(t *testing.T) {
+	// respondAll answers every event in the batch with the given result.
+	respondAll := func(result string) func(int, []string) (int, string, string) {
+		return func(_ int, uuids []string) (int, string, string) {
+			m := map[string]eventResult{}
+			for _, u := range uuids {
+				m[u] = eventResult{Result: result}
+			}
+			return http.StatusOK, resultsBody(t, m), ""
+		}
+	}
+
+	// run sends a 3-event batch against respond and returns the loss lines.
+	run := func(t *testing.T, cb Callback, respond func(int, []string) (int, string, string)) *warnRecorder {
+		t.Helper()
+		srv := &captureTestServer{respond: respond}
+		ts := httptest.NewServer(srv.handler(t))
+		defer ts.Close()
+
+		log := &warnRecorder{t: t}
+		c := newCaptureTestClient(t, ts.URL, cb, 0, func(cfg *Config) { cfg.Logger = log })
+		c.send(captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+		return log
+	}
+
+	t.Run("per_event_drops_in_a_200", func(t *testing.T) {
+		got := run(t, nil, respondAll(resultDrop)).lossLines()
+		if len(got) != 1 {
+			t.Fatalf("want exactly 1 aggregate line for a 3-event batch, got %d: %v", len(got), got)
+		}
+		if !strings.Contains(got[0], "3 event(s)") {
+			t.Errorf("line must carry the count: %q", got[0])
+		}
+		for _, id := range []string{uuidA, uuidB, uuidC} {
+			if strings.Contains(got[0], id) {
+				t.Errorf("line must not enumerate events, found %s in %q", id, got[0])
+			}
+		}
+	})
+
+	t.Run("terminal_non_2xx", func(t *testing.T) {
+		// A bad API key is the motivating case: nothing logged it before.
+		got := run(t, nil, func(int, []string) (int, string, string) {
+			return http.StatusUnauthorized, `{"code":"invalid_token","detail":"bad key"}`, ""
+		}).lossLines()
+		if len(got) != 1 {
+			t.Fatalf("want 1 aggregate line, got %d: %v", len(got), got)
+		}
+		if !strings.Contains(got[0], "3 event(s)") || !strings.Contains(got[0], "401") {
+			t.Errorf("line must carry the count and the status: %q", got[0])
+		}
+	})
+
+	t.Run("callback_registered_suppresses_the_line", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			respond func(int, []string) (int, string, string)
+		}{
+			{"drops_in_a_200", respondAll(resultDrop)},
+			{"terminal_non_2xx", func(int, []string) (int, string, string) {
+				return http.StatusUnauthorized, `{"code":"invalid_token"}`, ""
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				cb := &recordingCallback{}
+				got := run(t, cb, tc.respond).lossLines()
+				if len(got) != 0 {
+					t.Errorf("a registered Callback already reports the loss; want no line, got %v", got)
+				}
+				if _, f := cb.counts(); f != 3 {
+					t.Errorf("failure callbacks = %d, want 3", f)
+				}
+			})
+		}
+	})
+
+	t.Run("no_loss_means_no_line", func(t *testing.T) {
+		if got := run(t, nil, respondAll(resultOk)).lossLines(); len(got) != 0 {
+			t.Errorf("an all-ok response must log nothing, got %v", got)
+		}
+	})
+}
+
+// TestCloseRacingEnqueue pins that a send never races the queue close. The loop
+// closes c.msgs on shutdown, so without ordering a concurrent Enqueue is a send
+// on a closed channel: a data race by the memory model, not merely a panic to
+// recover. Run under -race; it is the detector, not an assertion, that fails.
+func TestCloseRacingEnqueue(t *testing.T) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultOk}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+
+	for i := 0; i < 200; i++ {
+		c, err := NewWithConfig("phc_test", Config{
+			Endpoint:  ts.URL,
+			BatchSize: 1,
+			Interval:  10 * time.Millisecond,
+			Logger:    quietTestLogger{t},
+		})
+		if err != nil {
+			t.Fatalf("NewWithConfig: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		start := make(chan struct{})
+		var enqErr error
+		go func() {
+			defer wg.Done()
+			<-start
+			enqErr = c.Enqueue(cap1(uuidA))
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = c.Close()
+		}()
+		close(start)
+		wg.Wait()
+
+		// Either outcome is correct; a panic escaping Enqueue is not.
+		if enqErr != nil && !errors.Is(enqErr, ErrClosed) && !errors.Is(enqErr, ErrQueueFull) {
+			t.Fatalf("iteration %d: Enqueue = %v, want nil, ErrClosed or ErrQueueFull", i, enqErr)
+		}
 	}
 }
