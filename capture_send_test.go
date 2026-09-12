@@ -985,8 +985,8 @@ func TestSilentLossWarn(t *testing.T) {
 		}
 	}
 
-	// run sends a 3-event batch against respond and returns the loss lines.
-	run := func(t *testing.T, cb Callback, respond func(int, []string) (int, string, string)) *warnRecorder {
+	// runOn sends a 3-event batch down one lane and returns the loss lines.
+	runOn := func(t *testing.T, pick func(*client) *lane, cb Callback, respond func(int, []string) (int, string, string)) *warnRecorder {
 		t.Helper()
 		srv := &captureTestServer{respond: respond}
 		ts := httptest.NewServer(srv.handler(t))
@@ -994,8 +994,14 @@ func TestSilentLossWarn(t *testing.T) {
 
 		log := &warnRecorder{t: t}
 		c := newCaptureTestClient(t, ts.URL, cb, 0, func(cfg *Config) { cfg.Logger = log })
-		c.send(c.analytics, captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+		c.send(pick(c), captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
 		return log
+	}
+	analyticsLane := func(c *client) *lane { return c.analytics }
+
+	run := func(t *testing.T, cb Callback, respond func(int, []string) (int, string, string)) *warnRecorder {
+		t.Helper()
+		return runOn(t, analyticsLane, cb, respond)
 	}
 
 	t.Run("per_event_drops_in_a_200", func(t *testing.T) {
@@ -1052,6 +1058,29 @@ func TestSilentLossWarn(t *testing.T) {
 	t.Run("no_loss_means_no_line", func(t *testing.T) {
 		if got := run(t, nil, respondAll(resultOk)).lossLines(); len(got) != 0 {
 			t.Errorf("an all-ok response must log nothing, got %v", got)
+		}
+	})
+
+	// With two pipelines the line is useless unless it says which one lost the
+	// events, so each lane must tag its own.
+	t.Run("each_lane_names_itself", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			pick func(*client) *lane
+			want string
+		}{
+			{"analytics", analyticsLane, "analytics"},
+			{"capture_ai", func(c *client) *lane { return c.aiLane() }, "capture-ai"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := runOn(t, tc.pick, nil, respondAll(resultDrop)).lossLines()
+				if len(got) != 1 {
+					t.Fatalf("want 1 aggregate line, got %d: %v", len(got), got)
+				}
+				if !strings.HasPrefix(got[0], tc.want+":") {
+					t.Errorf("line must be tagged %q, got %q", tc.want, got[0])
+				}
+			})
 		}
 	})
 }
