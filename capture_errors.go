@@ -21,6 +21,9 @@ type CaptureEventError struct {
 	// Exhausted is true when the event was still retryable but the SDK ran out
 	// of attempts, false for a server-directed terminal drop.
 	Exhausted bool
+	// Endpoint is the capture path the event was sent to, so one Callback can
+	// tell the analytics and AI lanes apart.
+	Endpoint string
 }
 
 func (e *CaptureEventError) Error() string {
@@ -54,6 +57,9 @@ type CaptureRequestError struct {
 	Description string
 	// Err is the underlying transport or body-parse error, if any.
 	Err error
+	// Endpoint is the capture path the request was sent to, so one Callback can
+	// tell the analytics and AI lanes apart.
+	Endpoint string
 }
 
 func (e *CaptureRequestError) Error() string {

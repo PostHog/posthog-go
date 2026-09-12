@@ -154,6 +154,17 @@ type Config struct {
 	// zero, it defaults to DefaultMaxBatchBytes.
 	MaxBatchBytes int
 
+	// CaptureAICompression selects the compression mode for EnqueueAI request
+	// bodies, independently of Compression. If zero, AI bodies are sent
+	// uncompressed. CompressionZstd is a good choice: AI events are large JSON.
+	CaptureAICompression CompressionMode
+
+	// CaptureAIMaxQueueSize is the maximum number of AI messages buffered in
+	// memory. It is lower than MaxQueueSize by default because AI events can be
+	// multi-megabyte, so the same count would pin far more memory. If zero, it
+	// defaults to DefaultCaptureAIMaxQueueSize.
+	CaptureAIMaxQueueSize int
+
 	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
 	// be batched and sent. If zero, it defaults to DefaultMaxQueueSize. It is
 	// clamped up to BatchSize so the queue can always hold at least one full batch.
@@ -274,6 +285,11 @@ const (
 	// DefaultMaxBatchBytes is the default maximum serialized size of one capture
 	// request, used when Config.MaxBatchBytes is zero.
 	DefaultMaxBatchBytes = 500000
+
+	// DefaultCaptureAIMaxQueueSize is the default AI-lane queue capacity, used
+	// when Config.CaptureAIMaxQueueSize is zero. Lower than DefaultMaxQueueSize
+	// because AI events can be multi-megabyte.
+	DefaultCaptureAIMaxQueueSize = 1000
 
 	// DefaultMaxQueueSize is the default in-memory message queue capacity used when
 	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
@@ -401,6 +417,10 @@ func makeConfig(c Config) Config {
 	// could never accumulate before the queue overflows.
 	if c.MaxQueueSize < c.BatchSize {
 		c.MaxQueueSize = c.BatchSize
+	}
+
+	if c.CaptureAIMaxQueueSize <= 0 {
+		c.CaptureAIMaxQueueSize = DefaultCaptureAIMaxQueueSize
 	}
 
 	if c.MaxEventBytes <= 0 {
