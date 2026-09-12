@@ -23,6 +23,23 @@ type laneConfig struct {
 	maxQueueSize int
 }
 
+const (
+	// aiCapturePath is the dedicated AI capture endpoint. Its "v1" is the
+	// backend's wire-protocol version, not an internal marker.
+	aiCapturePath = "/i/v1/ai/events"
+
+	// aiMaxEventBytes mirrors the backend's AI_MAX_EVENT_BYTES: an event whose
+	// serialized properties exceed it is refused with ai_event_too_big, so the
+	// lane drops it locally rather than spending a multi-megabyte upload on a
+	// doomed event.
+	aiMaxEventBytes = 8 << 20
+
+	// aiBatchBytesTarget closes an AI batch before appending an event that
+	// would exceed it. Well under the endpoint's 20 MiB compressed body limit,
+	// and the same target posthog-python and posthog-node use.
+	aiBatchBytesTarget = 5 << 20
+)
+
 // analyticsLane reproduces the behavior the single-lane client had.
 func analyticsLaneConfig(c Config) laneConfig {
 	return laneConfig{
@@ -32,6 +49,20 @@ func analyticsLaneConfig(c Config) laneConfig {
 		maxEventBytes: c.MaxEventBytes,
 		maxBatchBytes: c.MaxBatchBytes,
 		maxQueueSize:  c.MaxQueueSize,
+	}
+}
+
+// aiLaneConfig is the AI lane. Its size limits are constants rather than
+// Config fields, matching posthog-rs, posthog-python and posthog-node: they
+// track the backend's limits rather than caller preference.
+func aiLaneConfig(c Config) laneConfig {
+	return laneConfig{
+		name:          "capture-ai",
+		path:          aiCapturePath,
+		compression:   c.CaptureAICompression,
+		maxEventBytes: aiMaxEventBytes,
+		maxBatchBytes: aiBatchBytesTarget,
+		maxQueueSize:  c.CaptureAIMaxQueueSize,
 	}
 }
 
@@ -63,3 +94,29 @@ func newLane(cfg laneConfig, batchQueueSize int) *lane {
 
 // url is the absolute endpoint this lane posts to.
 func (l *lane) url(endpoint string) string { return endpoint + l.cfg.path }
+
+// aiLane returns the AI lane, starting it on first use, or nil once the client
+// is closed.
+//
+// Ordering matters here. Close marks the client closed *before* it reads this
+// lane, so a caller that observes "not closed" either started the lane in time
+// for Close to see and drain it, or observes "closed" on the re-check below and
+// declines to use it. Without the re-check a lane could be started after Close
+// had already looked, and nothing would wait for it.
+func (c *client) aiLane() *lane {
+	if c.closed.Load() {
+		return nil
+	}
+	c.aiOnce.Do(func() {
+		l := newLane(aiLaneConfig(c.Config), c.MaxEnqueuedRequests)
+		c.ai.Store(l)
+		go c.loop(l)
+	})
+	if c.closed.Load() {
+		// Close ran while we were starting. Its quit signal is already closed,
+		// so the lane drains and exits on its own; we just must not hand it a
+		// message nobody is waiting for.
+		return nil
+	}
+	return c.ai.Load()
+}

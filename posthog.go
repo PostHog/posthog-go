@@ -65,6 +65,24 @@ type EnqueueClient interface {
 type Client interface {
 	EnqueueClient
 
+	// EnqueueAI queues a message for PostHog's dedicated AI capture endpoint
+	// instead of the analytics one. Use it for LLM observability events
+	// ($ai_generation, $ai_span, $ai_trace and the rest).
+	//
+	// The two lanes are independent: the AI lane has its own queue, worker and
+	// retry state, so a multi-megabyte AI event cannot delay analytics events,
+	// and it is started on first use so clients that never call this pay
+	// nothing for it.
+	//
+	// EnqueueAI performs no routing check of its own. The server decides
+	// whether an event belongs on this lane and reports the verdict per event,
+	// so a misrouted event comes back as a terminal drop through
+	// Callback.Failure rather than being rejected locally. Enqueue likewise
+	// never reroutes AI-named events to this lane.
+	//
+	// It returns the same errors as Enqueue.
+	EnqueueAI(Message) error
+
 	// Close gracefully shuts down the client and flushes pending messages.
 	// If Config.ShutdownTimeout is positive, Close uses it as the shutdown deadline;
 	// otherwise it waits indefinitely. Repeated calls return ErrClosed.
@@ -160,6 +178,11 @@ type client struct {
 	// caller chose another lane explicitly.
 	analytics *lane
 
+	// ai is the capture-ai pipeline, started on the first EnqueueAI so clients
+	// that never send AI events pay for no extra goroutine or queue.
+	ai     atomic.Pointer[lane]
+	aiOnce sync.Once
+
 	// quit is closed to signal every lane's loop to stop and drain. Each lane
 	// closes its own shutdown channel once it has finished.
 	quit chan struct{}
@@ -177,8 +200,8 @@ type client struct {
 	closed atomic.Bool
 
 	// sendMu orders queue sends against shutdown. Senders hold it for read
-	// while handing a message to the queue; Close takes it for write to set
-	// closed, so no send is in flight when the loop closes the queue.
+	// while handing a message to a lane; Close takes it for write to set
+	// closed, so no send can be in flight when a loop closes its queue.
 	sendMu sync.RWMutex
 
 	// This HTTP client is used to send requests to the backend, it uses the
@@ -529,7 +552,28 @@ func (c *client) Enqueue(msg Message) error {
 	return c.EnqueueWithContext(context.Background(), msg)
 }
 
-func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error) {
+func (c *client) EnqueueWithContext(ctx context.Context, msg Message) error {
+	return c.enqueueTo(ctx, msg, c.analytics)
+}
+
+// EnqueueAI queues a message for the dedicated AI capture endpoint. See the
+// EnqueueAI method on Client for the contract.
+func (c *client) EnqueueAI(msg Message) error {
+	return c.EnqueueAIWithContext(context.Background(), msg)
+}
+
+// EnqueueAIWithContext is EnqueueAI with a RequestContext-carrying context.
+func (c *client) EnqueueAIWithContext(ctx context.Context, msg Message) error {
+	l := c.aiLane()
+	if l == nil {
+		return ErrClosed
+	}
+	return c.enqueueTo(ctx, msg, l)
+}
+
+// enqueueTo validates and enriches msg, then hands it to one lane's queue. The
+// enrichment is identical for every lane; only the destination differs.
+func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -550,7 +594,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 	// is invoked on the caller's goroutine, so a sustained overload stays cheap.
 	sendPrepared := func(prepared preparedMessage) {
 		// Held for read across the send so Close cannot mark the client closed --
-		// and the loop cannot then close the queue -- while this send is running.
+		// and a lane's loop cannot then close its queue -- while this send runs.
 		// Sending on a closed channel is a data race, not merely a panic to recover.
 		c.sendMu.RLock()
 		defer c.sendMu.RUnlock()
@@ -559,7 +603,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 			return
 		}
 		select {
-		case c.analytics.msgs <- prepared:
+		case l.msgs <- prepared:
 		default:
 			err = ErrQueueFull
 		}
@@ -1413,21 +1457,37 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 		c.closed.Store(true)
 		c.sendMu.Unlock()
 
-		// Signal the batch loop to stop and drain
+		// Signal every lane's loop to stop and drain
 		close(c.quit)
 
-		// Wait for shutdown with timeout from provided context
-		select {
-		case <-c.analytics.shutdown:
-			// Clean shutdown completed
-			c.debugf("shutdown completed successfully")
-		case <-ctx.Done():
-			// Timeout exceeded - cancel client context to abort in-flight requests
-			c.cancel()
-			err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
-			c.Warnf("shutdown timeout exceeded, some messages may be lost")
-			// Wait for shutdown to acknowledge cancellation
-			<-c.analytics.shutdown
+		// Read the AI lane only after marking closed. aiLane re-checks closed
+		// after starting, so a lane started concurrently with this either
+		// appears here and gets drained, or declines to accept the message.
+		lanes := []*lane{c.analytics}
+		if ai := c.ai.Load(); ai != nil {
+			lanes = append(lanes, ai)
+		}
+
+		// Both lanes share one deadline: the caller asked for the client to be
+		// closed within it, not for each lane to get it in turn.
+		timedOut := false
+		for _, l := range lanes {
+			if timedOut {
+				<-l.shutdown
+				continue
+			}
+			select {
+			case <-l.shutdown:
+				c.debugf("%s: shutdown completed successfully", l.cfg.name)
+			case <-ctx.Done():
+				// Timeout exceeded - cancel client context to abort in-flight requests
+				c.cancel()
+				err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
+				c.Warnf("shutdown timeout exceeded, some messages may be lost")
+				timedOut = true
+				// Wait for shutdown to acknowledge cancellation
+				<-l.shutdown
+			}
 		}
 	})
 
