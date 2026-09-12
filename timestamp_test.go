@@ -24,17 +24,11 @@ func TestEventTimestampSerializationUsesUTC(t *testing.T) {
 
 	for _, tc := range messages {
 		t.Run(tc.name, func(t *testing.T) {
-			legacyData, _, err := prepareForSend(tc.msg)
+			data, _, _, err := prepareForSend(tc.msg, nil)
 			if err != nil {
 				t.Fatalf("prepareForSend: %v", err)
 			}
-			assertWireTimestamp(t, legacyData, want)
-
-			v1Data, _, _, err := prepareForSendV1(tc.msg, nil)
-			if err != nil {
-				t.Fatalf("prepareForSendV1: %v", err)
-			}
-			assertWireTimestamp(t, v1Data, want)
+			assertWireTimestamp(t, data, want)
 		})
 	}
 }
@@ -54,12 +48,12 @@ func assertWireTimestamp(t *testing.T, data []byte, want string) {
 
 func TestTimestampNormalizationDoesNotRewriteCallerProperties(t *testing.T) {
 	callerTime := time.Date(2025, time.May, 6, 7, 8, 9, 0, time.FixedZone("UTC+5:30", 5*60*60+30*60))
-	data, _, err := prepareForSend(Capture{
+	data, _, _, err := prepareForSend(Capture{
 		Event:      "event",
 		DistinctId: "user",
 		Timestamp:  callerTime,
 		Properties: Properties{"caller_time": callerTime},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}

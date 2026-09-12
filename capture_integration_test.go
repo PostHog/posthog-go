@@ -25,7 +25,7 @@ func waitForCounts(t *testing.T, cb *UnifiedCallback, total int) {
 	}
 }
 
-func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
+func TestDefaultRoutesToCaptureEndpoint(t *testing.T) {
 	b := NewMockServerBuilder()
 	srv := b.Build()
 	defer srv.Close()
@@ -33,13 +33,12 @@ func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
 	cb := NewUnifiedCallback(t)
 	zero := 0
 	c, err := NewWithConfig("phc_test", Config{
-		Endpoint:    srv.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		Callback:    cb,
-		MaxRetries:  &zero,
-		Logger:      quietTestLogger{t},
-		Interval:    10 * time.Millisecond,
-		BatchSize:   1,
+		Endpoint:   srv.URL,
+		Callback:   cb,
+		MaxRetries: &zero,
+		Logger:     quietTestLogger{t},
+		Interval:   10 * time.Millisecond,
+		BatchSize:  1,
 	})
 	if err != nil {
 		t.Fatalf("NewWithConfig: %v", err)
@@ -51,17 +50,21 @@ func TestV1ModeSelectionRoutesToV1Endpoint(t *testing.T) {
 	_ = c.Close()
 
 	paths := b.GetPaths()
-	if len(paths) == 0 || paths[0] != captureV1Path {
-		t.Errorf("v1 mode hit %v, want first request to %s", paths, captureV1Path)
+	if len(paths) == 0 || paths[0] != capturePath {
+		t.Errorf("capture hit %v, want first request to %s", paths, capturePath)
 	}
 	if s, f := cb.GetCounts(); s != 1 || f != 0 {
 		t.Errorf("callbacks success=%d failure=%d, want 1/0", s, f)
 	}
 }
 
-func TestDefaultModeRoutesToBatchEndpoint(t *testing.T) {
-	b := NewMockServerBuilder().WithBatchResponse("ok", 200)
-	srv := b.Build()
+func TestIntegrationEnvelopeAndHeaders(t *testing.T) {
+	var gotAuth, gotSdkInfo string
+	var envelope eventBatch
+	srv := NewMockServerBuilder().WithCaptureHandler(func(body []byte) (int, string) {
+		_ = json.Unmarshal(body, &envelope)
+		return 200, allOkResultsBody(body)
+	}).Build()
 	defer srv.Close()
 
 	cb := NewUnifiedCallback(t)
@@ -71,41 +74,7 @@ func TestDefaultModeRoutesToBatchEndpoint(t *testing.T) {
 		Logger:    quietTestLogger{t},
 		Interval:  10 * time.Millisecond,
 		BatchSize: 1,
-	})
-	if err != nil {
-		t.Fatalf("NewWithConfig: %v", err)
-	}
-	if err := c.Enqueue(Capture{Event: "e", DistinctId: "d"}); err != nil {
-		t.Fatalf("Enqueue: %v", err)
-	}
-	waitForCounts(t, cb, 1)
-	_ = c.Close()
-
-	for _, p := range b.GetPaths() {
-		if p == captureV1Path {
-			t.Errorf("default mode must not hit %s; paths=%v", captureV1Path, b.GetPaths())
-		}
-	}
-}
-
-func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
-	var gotAuth, gotSdkInfo string
-	var envelope eventBatch
-	srv := NewMockServerBuilder().WithCaptureV1Handler(func(body []byte) (int, string) {
-		_ = json.Unmarshal(body, &envelope)
-		return 200, allOkResultsBody(body)
-	}).Build()
-	defer srv.Close()
-
-	cb := NewUnifiedCallback(t)
-	c, err := NewWithConfig("phc_test", Config{
-		Endpoint:    srv.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		Callback:    cb,
-		Logger:      quietTestLogger{t},
-		Interval:    10 * time.Millisecond,
-		BatchSize:   1,
-		Transport:   headerCaptureTransport{auth: &gotAuth, sdkInfo: &gotSdkInfo},
+		Transport: headerCaptureTransport{auth: &gotAuth, sdkInfo: &gotSdkInfo},
 	})
 	if err != nil {
 		t.Fatalf("NewWithConfig: %v", err)
@@ -128,9 +97,9 @@ func TestV1IntegrationEnvelopeAndHeaders(t *testing.T) {
 	}
 }
 
-func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
+func TestIntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 	attempts := 0
-	b := NewMockServerBuilder().WithCaptureV1Handler(func(body []byte) (int, string) {
+	b := NewMockServerBuilder().WithCaptureHandler(func(body []byte) (int, string) {
 		attempts++
 		var env eventBatch
 		_ = json.Unmarshal(body, &env)
@@ -152,7 +121,7 @@ func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 				results[ev.Uuid] = eventResult{Result: resultOk}
 			}
 		}
-		out, _ := json.Marshal(captureV1Response{Results: results})
+		out, _ := json.Marshal(captureResponse{Results: results})
 		return 200, string(out)
 	})
 	srv := b.Build()
@@ -161,14 +130,13 @@ func TestV1IntegrationPartialRetryFiresPerEventCallbacks(t *testing.T) {
 	cb := NewUnifiedCallback(t)
 	nine := 9
 	c, err := NewWithConfig("phc_test", Config{
-		Endpoint:    srv.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		Callback:    cb,
-		MaxRetries:  &nine,
-		RetryAfter:  func(int) time.Duration { return time.Millisecond },
-		Logger:      quietTestLogger{t},
-		Interval:    10 * time.Millisecond,
-		BatchSize:   3,
+		Endpoint:   srv.URL,
+		Callback:   cb,
+		MaxRetries: &nine,
+		RetryAfter: func(int) time.Duration { return time.Millisecond },
+		Logger:     quietTestLogger{t},
+		Interval:   10 * time.Millisecond,
+		BatchSize:  3,
 	})
 	if err != nil {
 		t.Fatalf("NewWithConfig: %v", err)

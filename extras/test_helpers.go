@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 // timeoutTransport wraps an http.RoundTripper with a timeout.

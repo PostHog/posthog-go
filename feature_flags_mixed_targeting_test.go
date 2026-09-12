@@ -66,6 +66,9 @@ const onlyGroupConditionFlagJSON = `{
 func newMixedTargetingServer(t *testing.T, localFlagsJSON string, decideCalls *atomic.Int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		// Order matters: /flags/definitions must be checked before /flags or /flags/
 		// so the prefix doesn't accidentally match the decide endpoint.
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {

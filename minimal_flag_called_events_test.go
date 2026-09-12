@@ -71,11 +71,12 @@ func minimalEventsLocalDefinitions(gated bool) string {
 func newMinimalEventsRemoteServer(t *testing.T, flagsResponse string) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			w.Write([]byte(flagsResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -87,11 +88,12 @@ func newMinimalEventsRemoteServer(t *testing.T, flagsResponse string) *httptest.
 func newMinimalEventsLocalServer(t *testing.T, definitions string) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(definitions))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -338,7 +340,7 @@ func TestEvaluateFlags_GatedNoExperiment_SendsMinimalEvent(t *testing.T) {
 	}
 }
 
-func TestMinimalFlagCalledEvent_V1WireShape(t *testing.T) {
+func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 	t.Parallel()
 	msg := Capture{
 		DistinctId: "user-1",
@@ -354,7 +356,7 @@ func TestMinimalFlagCalledEvent_V1WireShape(t *testing.T) {
 		minimalFlagCalledEvent: true,
 	}
 
-	ev := buildV1Event(msg.apifyEvent(), nil)
+	ev := buildEvent(msg.apifyEvent(), nil)
 
 	got := make([]string, 0, len(ev.Properties))
 	for k := range ev.Properties {
@@ -370,11 +372,11 @@ func TestMinimalFlagCalledEvent_V1WireShape(t *testing.T) {
 		t.Errorf("expected exactly property keys %v, got %v", want, got)
 	}
 	if ev.Properties["$is_server"] != true {
-		t.Errorf("expected minimal v1 event to keep $is_server=true, got %v", ev.Properties["$is_server"])
+		t.Errorf("expected minimal event to keep $is_server=true, got %v", ev.Properties["$is_server"])
 	}
 }
 
-func TestMinimalFlagCalledEvent_V1LiftsSessionId(t *testing.T) {
+func TestMinimalFlagCalledEvent_LiftsSessionId(t *testing.T) {
 	t.Parallel()
 	msg := Capture{
 		DistinctId: "user-1",
@@ -387,7 +389,7 @@ func TestMinimalFlagCalledEvent_V1LiftsSessionId(t *testing.T) {
 		minimalFlagCalledEvent: true,
 	}
 
-	ev := buildV1Event(msg.apifyEvent(), nil)
+	ev := buildEvent(msg.apifyEvent(), nil)
 
 	if ev.SessionId != "sess-1" {
 		t.Errorf("expected $session_id to be lifted to the top-level session_id field, got %q", ev.SessionId)
@@ -464,13 +466,14 @@ func TestGetFeatureFlag_RemoteFallback_GateComesFromFlagsResponse(t *testing.T) 
 			definitions := minimalEventsFallbackDefinitions(test.localGated)
 			flagsResponse := minimalEventsFlagsResponse(test.remoteGated)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				switch {
 				case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 					w.Write([]byte(definitions))
 				case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 					w.Write([]byte(flagsResponse))
-				case strings.HasPrefix(r.URL.Path, "/batch"):
-					w.Write([]byte(`{}`))
 				default:
 					t.Errorf("unexpected request to %s", r.URL.Path)
 				}
@@ -516,6 +519,9 @@ func TestFetchNewFeatureFlags_304PreservesMinimalGate(t *testing.T) {
 	t.Parallel()
 	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			t.Errorf("unexpected request to %s", r.URL.Path)
 			return

@@ -235,9 +235,6 @@ func BenchmarkFeatureFlagLocalEvaluation(b *testing.B) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			io.Copy(io.Discard, r.Body)
-			w.WriteHeader(200)
 		default:
 			w.WriteHeader(404)
 		}

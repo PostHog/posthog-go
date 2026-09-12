@@ -89,8 +89,6 @@ func (c *UnifiedCallback) lastErr() error {
 // MockServerConfig configures a mock HTTP server for testing
 type MockServerConfig struct {
 	// Response configurations
-	BatchResponse     string
-	BatchStatusCode   int
 	FlagsResponse     string
 	FlagsStatusCode   int
 	LocalEvalResponse string
@@ -101,13 +99,12 @@ type MockServerConfig struct {
 	FailAfterN int
 
 	// Handlers for custom behavior
-	BatchHandler     func(body []byte)
 	FlagsHandler     func(w http.ResponseWriter, r *http.Request)
 	LocalEvalHandler func(w http.ResponseWriter, r *http.Request)
-	// CaptureV1Handler handles the capture-v1 endpoint, returning (status, body).
+	// CaptureHandler handles the capture endpoint, returning (status, body).
 	// When nil, the server replies 200 with an all-"ok" results map derived from
 	// the request batch.
-	CaptureV1Handler func(body []byte) (int, string)
+	CaptureHandler func(body []byte) (int, string)
 }
 
 // MockServerBuilder builds configurable mock servers
@@ -122,15 +119,10 @@ type MockServerBuilder struct {
 func NewMockServerBuilder() *MockServerBuilder {
 	return &MockServerBuilder{
 		config: MockServerConfig{
-			BatchStatusCode: http.StatusOK,
 			FlagsStatusCode: http.StatusOK,
 			LocalEvalStatus: http.StatusOK,
 		},
 	}
-}
-
-func (b *MockServerBuilder) WithBatchResponse(response string, statusCode int) *MockServerBuilder {
-	return b.withResponse(response, statusCode, &b.config.BatchResponse, &b.config.BatchStatusCode)
 }
 
 func (b *MockServerBuilder) WithFlagsResponse(response string, statusCode int) *MockServerBuilder {
@@ -147,13 +139,8 @@ func (b *MockServerBuilder) withResponse(response string, statusCode int, respon
 	return b
 }
 
-func (b *MockServerBuilder) WithBatchHandler(handler func(body []byte)) *MockServerBuilder {
-	b.config.BatchHandler = handler
-	return b
-}
-
-func (b *MockServerBuilder) WithCaptureV1Handler(handler func(body []byte) (int, string)) *MockServerBuilder {
-	b.config.CaptureV1Handler = handler
+func (b *MockServerBuilder) WithCaptureHandler(handler func(body []byte) (int, string)) *MockServerBuilder {
+	b.config.CaptureHandler = handler
 	return b
 }
 
@@ -196,27 +183,17 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 
 		// Route to appropriate handler
 		switch {
-		case strings.HasPrefix(r.URL.Path, captureV1Path):
+		case strings.HasPrefix(r.URL.Path, capturePath):
 			body, _ := io.ReadAll(r.Body)
 			status, resp := http.StatusOK, ""
-			if b.config.CaptureV1Handler != nil {
-				status, resp = b.config.CaptureV1Handler(body)
+			if b.config.CaptureHandler != nil {
+				status, resp = b.config.CaptureHandler(body)
 			} else {
 				status, resp = http.StatusOK, allOkResultsBody(body)
 			}
 			w.WriteHeader(status)
 			if resp != "" {
 				w.Write([]byte(resp))
-			}
-
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			if b.config.BatchHandler != nil {
-				body, _ := io.ReadAll(r.Body)
-				b.config.BatchHandler(body)
-			}
-			w.WriteHeader(b.config.BatchStatusCode)
-			if b.config.BatchResponse != "" {
-				w.Write([]byte(b.config.BatchResponse))
 			}
 
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
@@ -245,7 +222,7 @@ func (b *MockServerBuilder) Build() *httptest.Server {
 	}))
 }
 
-// allOkResultsBody parses a capture-v1 request envelope and returns a results
+// allOkResultsBody parses a capture request envelope and returns a results
 // body marking every event uuid as "ok".
 func allOkResultsBody(body []byte) string {
 	var env eventBatch
@@ -260,8 +237,27 @@ func allOkResultsBody(body []byte) string {
 		_ = json.Unmarshal(raw, &ev)
 		results[ev.Uuid] = eventResult{Result: resultOk}
 	}
-	out, _ := json.Marshal(captureV1Response{Results: results})
+	out, _ := json.Marshal(captureResponse{Results: results})
 	return string(out)
+}
+
+// writeCaptureOK answers a mock capture request with an all-"ok" results body.
+// A 200 whose body is not a results map is terminal, so a bare WriteHeader(200)
+// drops every event.
+func writeCaptureOK(w http.ResponseWriter, requestBody []byte) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(allOkResultsBody(requestBody)))
+}
+
+// serveCaptureOK handles a capture request, reporting whether it did. Call it
+// first in flag-focused servers, which also receive $feature_flag_called events.
+func serveCaptureOK(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, capturePath) {
+		return false
+	}
+	body, _ := io.ReadAll(r.Body)
+	writeCaptureOK(w, body)
+	return true
 }
 
 // NewTestTransport creates a transport for the given test scenario
@@ -309,4 +305,13 @@ func NoOpTransport() http.RoundTripper {
 			Request:    r,
 		}, nil
 	})
+}
+
+// captureOKTestServer is a capture endpoint that accepts everything.
+func captureOKTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		writeCaptureOK(w, body)
+	}))
 }

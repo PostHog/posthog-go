@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"fmt"
+	"io"
 
 	json "github.com/goccy/go-json"
 	"net/http"
@@ -25,10 +26,11 @@ func TestConcurrentEnqueue(t *testing.T) {
 
 	var received atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -68,10 +70,11 @@ func TestConcurrentEnqueueDifferentMessageTypes(t *testing.T) {
 
 	var received atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -130,6 +133,9 @@ func TestConcurrentFeatureFlagEvaluation(t *testing.T) {
 	t.Parallel()
 	// Setup mock server with feature flags
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		// Return proper format for both local evaluation and flags endpoints
@@ -210,10 +216,11 @@ func TestConcurrentClientOperations(t *testing.T) {
 		t.Run(fmt.Sprintf("iteration_%d", iteration), func(t *testing.T) {
 			var received atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var b batch
-				json.NewDecoder(r.Body).Decode(&b)
-				received.Add(int64(len(b.Messages)))
-				w.WriteHeader(200)
+				body, _ := io.ReadAll(r.Body)
+				var b eventBatch
+				json.Unmarshal(body, &b)
+				received.Add(int64(len(b.Batch)))
+				writeCaptureOK(w, body)
 			}))
 			defer server.Close()
 
@@ -265,10 +272,11 @@ func TestConcurrentEnqueueWithSlowServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Simulate slow server
 		time.Sleep(10 * time.Millisecond)
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -325,7 +333,7 @@ func TestConcurrentPrepareForSend(t *testing.T) {
 			defer wg.Done()
 			var total int
 			for i := 0; i < callsPerGoroutine; i++ {
-				data, _, err := prepareForSend(capture)
+				data, _, _, err := prepareForSend(capture, nil)
 				if err != nil {
 					t.Errorf("prepareForSend error: %v", err)
 					return
@@ -386,10 +394,11 @@ func TestConcurrentCallbackExecution(t *testing.T) {
 
 	var received atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -438,7 +447,8 @@ func TestRaceConditionDetection(t *testing.T) {
 	t.Parallel()
 	t.Run("concurrent_enqueue_and_close", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(200)
+			body, _ := io.ReadAll(r.Body)
+			writeCaptureOK(w, body)
 		}))
 		defer server.Close()
 

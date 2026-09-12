@@ -22,7 +22,6 @@ func newQueueTestClient(capacity int, logger Logger, callback Callback) *client 
 		},
 		msgs: make(chan preparedMessage, capacity),
 	}
-	c.capture = legacyCapturer{c}
 	return c
 }
 

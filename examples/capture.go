@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/v2"
 )
 
 func TestCapture(projectAPIKey, endpoint string) {
