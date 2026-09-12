@@ -1888,9 +1888,6 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 			case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"flags":[]}`))
-			case strings.HasPrefix(r.URL.Path, "/batch"):
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{}`))
 			default:
 				t.Errorf("Unexpected request to %s", r.URL.Path)
 			}
@@ -2613,7 +2610,7 @@ func TestComplexFlag(t *testing.T) {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -2668,7 +2665,7 @@ func TestMultiVariateFlag(t *testing.T) {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte("{}"))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -2723,7 +2720,7 @@ func TestDisabledFlag(t *testing.T) {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte("{}"))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))

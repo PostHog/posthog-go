@@ -39,9 +39,6 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			s.decideCalls.Add(1)
 			w.Write([]byte(decideResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -237,9 +234,6 @@ func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, 
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			decideCalls.Add(1)
 			w.Write([]byte(flagsResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}

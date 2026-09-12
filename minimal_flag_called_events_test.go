@@ -77,8 +77,6 @@ func newMinimalEventsRemoteServer(t *testing.T, flagsResponse string) *httptest.
 		switch {
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			w.Write([]byte(flagsResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -96,8 +94,6 @@ func newMinimalEventsLocalServer(t *testing.T, definitions string) *httptest.Ser
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(definitions))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -478,8 +474,6 @@ func TestGetFeatureFlag_RemoteFallback_GateComesFromFlagsResponse(t *testing.T) 
 					w.Write([]byte(definitions))
 				case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 					w.Write([]byte(flagsResponse))
-				case strings.HasPrefix(r.URL.Path, "/batch"):
-					w.Write([]byte(`{}`))
 				default:
 					t.Errorf("unexpected request to %s", r.URL.Path)
 				}

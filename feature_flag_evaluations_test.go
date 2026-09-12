@@ -885,8 +885,6 @@ func newHasExperimentLocalServer(t *testing.T) *httptest.Server {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(hasExperimentLocalDefinitions))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -962,8 +960,6 @@ func TestGetFeatureFlag_RemoteFallbackOmitsFlag_OmitsHasExperiment(t *testing.T)
 			w.Write([]byte(definitions))
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			w.Write([]byte(`{"featureFlags": {}}`))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
