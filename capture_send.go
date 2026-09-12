@@ -89,13 +89,13 @@ func (c *client) send(pb preparedBatch) {
 			// A 2xx with an unparseable body is terminal for this batch -
 			// retrying a malformed success would loop forever.
 			if res != nil && isSuccessStatus(res.statusCode) {
-				c.notifyFailure(pendingMsgs, reqErr)
+				c.failBatch(pendingMsgs, reqErr)
 				return
 			}
 			// Terminal status whose body read errored: fail fast. reqErr adds
 			// the read error, so callers see why there is no error body.
 			if res != nil && res.statusCode != 0 && !isRetryableStatus(res.statusCode) {
-				c.notifyFailure(pendingMsgs, reqErr)
+				c.failBatch(pendingMsgs, reqErr)
 				return
 			}
 			// Transport error: retry unless shutting down or exhausted.
@@ -109,7 +109,7 @@ func (c *client) send(pb preparedBatch) {
 				return
 			}
 			if !c.waitBackoff(i, res) {
-				c.notifyFailure(pendingMsgs, reqErr)
+				c.failBatch(pendingMsgs, reqErr)
 				return
 			}
 			continue
@@ -134,7 +134,7 @@ func (c *client) send(pb preparedBatch) {
 			}
 			pendingData, pendingMsgs, pendingUuids = nextData, nextMsgs, nextUuids
 			if !c.waitBackoff(i, res) {
-				c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff})
+				c.failBatch(pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff})
 				return
 			}
 			continue
@@ -147,14 +147,14 @@ func (c *client) send(pb preparedBatch) {
 				return
 			}
 			if !c.waitBackoff(i, res) {
-				c.notifyFailure(pendingMsgs, err)
+				c.failBatch(pendingMsgs, err)
 				return
 			}
 			continue
 		}
 
 		// Terminal non-2xx (400/401/402/413/415/429/...): no retry.
-		c.notifyFailure(pendingMsgs, requestError(res))
+		c.failBatch(pendingMsgs, requestError(res))
 		return
 	}
 }
@@ -166,6 +166,7 @@ func (c *client) partitionResults(res *attemptResult, data []json.RawMessage, ms
 	var nextData []json.RawMessage
 	var nextMsgs []APIMessage
 	var nextUuids []string
+	var dropped int
 	for idx, id := range uuids {
 		r, ok := res.results[id]
 		if !ok {
@@ -179,13 +180,34 @@ func (c *client) partitionResults(res *attemptResult, data []json.RawMessage, ms
 			nextMsgs = append(nextMsgs, msgs[idx])
 			nextUuids = append(nextUuids, id)
 		case resultDrop:
+			dropped++
 			c.notifyFailure([]APIMessage{msgs[idx]}, eventError(id, r))
 		default:
 			// ok, warning, and any unrecognized result are terminal success.
 			c.notifySuccess([]APIMessage{msgs[idx]})
 		}
 	}
+	c.warnSilentLoss(dropped, "rejected by the capture endpoint")
 	return nextData, nextMsgs, nextUuids
+}
+
+// warnSilentLoss makes an event loss visible to a caller with no Callback. A
+// registered Callback already receives every failure, so the line is emitted
+// only without one. Always one aggregate line per batch, never per event:
+// per-event logging scales with event volume rather than request volume, and
+// event payloads may carry sensitive content.
+func (c *client) warnSilentLoss(count int, cause string) {
+	if count == 0 || c.Callback != nil {
+		return
+	}
+	c.Warnf("%d event(s) dropped: %s; set Config.Callback to inspect failures", count, cause)
+}
+
+// failBatch delivers a terminal batch failure to the Callback, and without one
+// logs a single aggregate line so the loss is not silent.
+func (c *client) failBatch(msgs []APIMessage, err error) {
+	c.warnSilentLoss(len(msgs), err.Error())
+	c.notifyFailure(msgs, err)
 }
 
 // retryDelay is the pure delay decision for the next attempt: the configured
