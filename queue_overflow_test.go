@@ -20,7 +20,7 @@ func newQueueTestClient(capacity int, logger Logger, callback Callback) *client 
 			Logger:   logger,
 			Callback: callback,
 		},
-		msgs: make(chan preparedMessage, capacity),
+		analytics: newLane(laneConfig{name: "analytics", maxQueueSize: capacity}, 1),
 	}
 	return c
 }
@@ -50,7 +50,7 @@ func TestEnqueue_DropsNewestWhenQueueFull(t *testing.T) {
 
 	// Saturate the queue so no further message can be buffered.
 	for i := 0; i < capacity; i++ {
-		c.msgs <- preparedMessage{}
+		c.analytics.msgs <- preparedMessage{}
 	}
 
 	// Enqueue must not block even though the queue is full and has no consumer;
@@ -68,7 +68,7 @@ func TestEnqueue_DropsNewestWhenQueueFull(t *testing.T) {
 	}
 
 	require.ErrorIs(t, err, ErrQueueFull, "Enqueue must return ErrQueueFull when the queue is full")
-	require.Len(t, c.msgs, capacity, "the dropped message must not be buffered")
+	require.Len(t, c.analytics.msgs, capacity, "the dropped message must not be buffered")
 
 	// The drop is reported only through the returned error. Doing callback or log
 	// work here would run on the caller's goroutine, re-introducing the latency and
@@ -84,6 +84,6 @@ func TestEnqueue_BuffersWhenQueueHasRoom(t *testing.T) {
 	c := newQueueTestClient(2, testLogger{}, callback)
 
 	require.NoError(t, c.Enqueue(captureOverflowEvent("buffered")))
-	require.Len(t, c.msgs, 1, "a message enqueued with room to spare must be buffered, not dropped")
+	require.Len(t, c.analytics.msgs, 1, "a message enqueued with room to spare must be buffered, not dropped")
 	require.Zero(t, failures, "no failure callback should fire on the happy path")
 }
