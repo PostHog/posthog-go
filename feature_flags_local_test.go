@@ -145,8 +145,6 @@ func TestFlagGroup(t *testing.T) {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// Ignore batch requests
 		} else {
 			t.Error("Unknown request made by library")
 		}
@@ -4200,8 +4198,6 @@ func TestFlagsFetchFail(t *testing.T) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.WriteHeader(http.StatusInternalServerError)
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// ignore batch requests
 		} else {
 			t.Errorf("Unknown request made by library: %s", r.URL.String())
 		}
@@ -4233,8 +4229,6 @@ func TestFlagWithTimeoutExceeded(t *testing.T) {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// Ignore batch requests
 		} else {
 			t.Error("Unknown request made by library")
 		}
@@ -4320,8 +4314,6 @@ func TestFlagDefinitionsWithTimeoutExceeded(t *testing.T) {
 			// Sleep longer than client timeout (100ms) to trigger timeout
 			time.Sleep(1 * time.Second)
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// Ignore batch requests
 		} else {
 			t.Error("Unknown request made by library")
 		}
@@ -4418,8 +4410,6 @@ func TestFeatureFlagWithOverrides(t *testing.T) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-group-props.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// ignore
 		} else {
 			t.Errorf("Unknown request made by library: %s", r.URL.String())
 		}
@@ -4502,8 +4492,6 @@ func TestFeatureFlagDistinctIDOverride(t *testing.T) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-distinct-id-local.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// ignore
 		} else {
 			t.Errorf("Unknown request made by library: %s", r.URL.String())
 		}
@@ -4568,8 +4556,6 @@ func TestFeatureFlagDeviceIDBucketingLocalEvaluation(t *testing.T) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-device-id-bucketing.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// ignore
 		} else {
 			t.Errorf("Unknown request made by library: %s", r.URL.String())
 		}
@@ -4605,8 +4591,6 @@ func TestFeatureFlagWithFalseVariant(t *testing.T) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-false-variant.json")))
-		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
-			// ignore
 		} else {
 			t.Errorf("Unknown request made by library: %s", r.URL.String())
 		}

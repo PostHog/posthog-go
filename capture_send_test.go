@@ -69,13 +69,16 @@ func decodeCaptureBody(t *testing.T, encoding string, raw []byte) []byte {
 
 // recordedRequest captures what the server saw for one attempt.
 type recordedRequest struct {
-	attempt   string
-	requestId string
-	timestamp string
-	createdAt string
-	auth      string
-	encoding  string
-	uuids     []string
+	attempt     string
+	requestId   string
+	timestamp   string
+	createdAt   string
+	auth        string
+	encoding    string
+	contentType string
+	userAgent   string
+	sdkInfo     string
+	uuids       []string
 }
 
 // captureTestServer is a configurable capture endpoint for send-engine tests.
@@ -108,13 +111,16 @@ func (s *captureTestServer) handler(t *testing.T) http.HandlerFunc {
 		s.mu.Lock()
 		attempt := len(s.requests) + 1
 		s.requests = append(s.requests, recordedRequest{
-			attempt:   r.Header.Get("PostHog-Attempt"),
-			requestId: r.Header.Get("PostHog-Request-Id"),
-			timestamp: r.Header.Get("PostHog-Request-Timestamp"),
-			createdAt: env.CreatedAt,
-			auth:      r.Header.Get("Authorization"),
-			encoding:  r.Header.Get("Content-Encoding"),
-			uuids:     uuids,
+			attempt:     r.Header.Get("PostHog-Attempt"),
+			requestId:   r.Header.Get("PostHog-Request-Id"),
+			timestamp:   r.Header.Get("PostHog-Request-Timestamp"),
+			createdAt:   env.CreatedAt,
+			auth:        r.Header.Get("Authorization"),
+			encoding:    r.Header.Get("Content-Encoding"),
+			contentType: r.Header.Get("Content-Type"),
+			userAgent:   r.Header.Get("User-Agent"),
+			sdkInfo:     r.Header.Get("PostHog-Sdk-Info"),
+			uuids:       uuids,
 		})
 		s.mu.Unlock()
 
@@ -277,6 +283,18 @@ func TestSendHeadersAndAllOk(t *testing.T) {
 	}
 	if r.createdAt != wantTimestamp {
 		t.Errorf("created_at = %q, want %q", r.createdAt, wantTimestamp)
+	}
+	// The capture endpoint requires these: a wrong Content-Type is a 415 and a
+	// missing Sdk-Info or User-Agent is a 400, for every event.
+	if r.contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", r.contentType)
+	}
+	wantSdkInfo := SDKName + "/" + getVersion()
+	if r.sdkInfo != wantSdkInfo {
+		t.Errorf("PostHog-Sdk-Info = %q, want %q", r.sdkInfo, wantSdkInfo)
+	}
+	if r.userAgent != wantSdkInfo {
+		t.Errorf("User-Agent = %q, want %q", r.userAgent, wantSdkInfo)
 	}
 	if s, f := cb.counts(); s != 1 || f != 0 {
 		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)
