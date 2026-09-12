@@ -392,7 +392,7 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(`{"error": "Internal Server Error"}`))
 			}
-			// /batch/ returns 200 OK (default) to allow event capture
+			// The capture endpoint returns 200 OK (default) to allow event capture
 		}))
 		defer server.Close()
 
