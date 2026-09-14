@@ -66,6 +66,21 @@ type EnqueueClient interface {
 type Client interface {
 	EnqueueClient
 
+	// Flush sends queued messages and waits for the current delivery cycle without
+	// closing the client. Retryable failures end the cycle while the transport
+	// retains the events for its scheduled retry. Flush does not bypass retry
+	// backoff. Delivery failures use the existing retry policy and
+	// Callback.Failure; a nil result does not guarantee successful ingestion.
+	// Use FlushWithContext to bound the wait. Do not call a blocking Flush from
+	// a delivery callback, which is itself part of the delivery cycle.
+	Flush() error
+
+	// FlushWithContext is Flush with a caller-controlled deadline. Cancellation
+	// stops only this caller's wait, not delivery or future use of the client.
+	// Messages accepted before the call are covered; concurrent Enqueue calls may
+	// be included in this cycle or a later one. Calls after Close return ErrClosed.
+	FlushWithContext(context.Context) error
+
 	// Close gracefully shuts down the client and flushes pending messages.
 	// If Config.ShutdownTimeout is positive, Close uses it as the shutdown deadline;
 	// otherwise it waits indefinitely. Repeated calls return ErrClosed.
@@ -146,6 +161,7 @@ type preparedMessage struct {
 // preparedBatch holds both raw data for efficient serialization and
 // original API messages for callbacks.
 type preparedBatch struct {
+	done *delivery
 	data []json.RawMessage // pre-serialized messages for batch submission
 	msgs []APIMessage      // original messages for callbacks
 	// uuids holds the per-event UUID aligned with data/msgs, used by the
@@ -170,6 +186,12 @@ type client struct {
 
 	// Tracks in-flight batches for graceful shutdown
 	inFlight atomic.Int64
+
+	// Flush requests are handled by the batch owner. Delivery completion is
+	// tracked separately so later batches cannot extend an earlier flush cycle.
+	flushRequests chan chan []<-chan struct{}
+	deliveryMu    sync.Mutex
+	deliveries    map[*delivery]struct{}
 
 	// These two channels are used to synchronize the client shutting down when
 	// `Close` is called.
@@ -268,6 +290,8 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		batches:                         make(chan preparedBatch, batchesQueueSize),
 		quit:                            make(chan struct{}),
 		shutdown:                        make(chan struct{}),
+		flushRequests:                   make(chan chan []<-chan struct{}),
+		deliveries:                      make(map[*delivery]struct{}),
 		ctx:                             ctx,
 		cancel:                          cancel,
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
@@ -1474,6 +1498,7 @@ func (c *client) processBatch() {
 	// CRITICAL: defer ensures counter decrements on ANY exit path
 	// (success, JSON error, HTTP error, panic, context cancellation)
 	defer c.inFlight.Add(-1)
+	defer c.completeDelivery(batch.done)
 
 	// Recover from panics to prevent goroutine death without cleanup
 	defer func() {
@@ -1495,6 +1520,10 @@ func (c *client) processBatch() {
 // On success, spawns a goroutine to process the batch. The batches channel
 // acts as both a queue and concurrency limiter.
 func (c *client) sendBatch(batch preparedBatch) bool {
+	batch.done = &delivery{done: make(chan struct{})}
+	c.deliveryMu.Lock()
+	c.deliveries[batch.done] = struct{}{}
+	c.deliveryMu.Unlock()
 	c.inFlight.Add(1)
 
 	// Negative timeout = non-blocking (immediate drop when queue is full)
@@ -1505,6 +1534,7 @@ func (c *client) sendBatch(batch preparedBatch) bool {
 			return true
 		default:
 			c.inFlight.Add(-1)
+			c.completeDelivery(batch.done)
 			return false
 		}
 	}
@@ -1518,6 +1548,7 @@ func (c *client) sendBatch(batch preparedBatch) bool {
 		return true
 	case <-timer.C:
 		c.inFlight.Add(-1)
+		c.completeDelivery(batch.done)
 		return false
 	}
 }
@@ -1556,6 +1587,7 @@ func (c *client) send(pb preparedBatch) {
 	}
 
 	for i := 0; i < c.maxAttempts; i++ {
+		c.beginDeliveryAttempt(pb.done)
 		if err = c.upload(c.ctx, b); err == nil {
 			c.notifySuccess(pb.msgs)
 			return
@@ -1574,6 +1606,11 @@ func (c *client) send(pb preparedBatch) {
 			return
 		}
 
+		// The batch remains owned by this worker while waiting to retry.
+		// Flush waits for this attempt, not the entire retry budget.
+		if i < c.maxAttempts-1 {
+			c.deferDeliveryRetry(pb.done)
+		}
 		retryDelay := c.RetryAfter(i)
 		if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
 			retryDelay = httpErr.retryAfter
@@ -1791,6 +1828,24 @@ func (c *client) loop() {
 				continue
 			}
 			c.debugf("buffer (%d/%d, %d bytes) %v", len(batchData), c.BatchSize, batchSize, prepared.msg)
+
+		case reply := <-c.flushRequests:
+			// Bound the drain to the queue observed at this barrier. Continual
+			// producers must not keep this flush cycle open indefinitely.
+			queued := len(c.msgs)
+			for i := 0; i < queued; i++ {
+				processMessage(<-c.msgs)
+			}
+			flushBatch()
+			resetBatch()
+			c.deliveryMu.Lock()
+			pending := make([]<-chan struct{}, 0, len(c.deliveries))
+			for d := range c.deliveries {
+				pending = append(pending, d.done)
+			}
+			c.deliveryMu.Unlock()
+			// Buffered reply: a cancelled caller never blocks the batch loop.
+			reply <- pending
 
 		case <-tick.C:
 			if len(batchData) > 0 {

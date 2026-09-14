@@ -65,6 +65,14 @@ func (c *noopClient) Close() error {
 	return ErrSDKDisabled
 }
 
+func (c *noopClient) Flush() error {
+	return ErrSDKDisabled
+}
+
+func (c *noopClient) FlushWithContext(context.Context) error {
+	return ErrSDKDisabled
+}
+
 func (c *noopClient) CloseWithContext(context.Context) error {
 	return ErrSDKDisabled
 }
