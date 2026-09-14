@@ -427,3 +427,55 @@ func TestEnqueueAIWithContext(t *testing.T) {
 		}
 	})
 }
+
+// TestCloseWithPollerAndAILaneDoesNotPanic pins that the feature-flag poller is
+// shut down once by the client, not once per lane. shutdownPoller closes a
+// channel with no guard, so a per-lane shutdown panicked on the second lane --
+// unrecovered, in a background goroutine, killing the host application. The
+// trigger is ordinary: a PersonalApiKey plus any use of EnqueueAI.
+func TestCloseWithPollerAndAILaneDoesNotPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "local_evaluation") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"flags":[],"group_type_mapping":{},"cohorts":{}}`))
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		writeCaptureOK(w, decodeCaptureBody(t, r.Header.Get("Content-Encoding"), body))
+	}))
+	defer srv.Close()
+
+	c := aiTestClient(t, srv.URL, func(cfg *Config) { cfg.PersonalApiKey = "phx_test" })
+	require.NotNil(t, c.(*client).featureFlagsPoller, "precondition: the poller must exist")
+
+	require.NoError(t, c.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation"}))
+	require.NoError(t, c.Close())
+
+	// The second lane's goroutine panics asynchronously, so give it time to run;
+	// an unrecovered panic there fails the test process regardless of assertions.
+	time.Sleep(200 * time.Millisecond)
+
+	// Closing twice must also not re-close the poller channel.
+	require.ErrorIs(t, c.Close(), ErrClosed)
+	time.Sleep(100 * time.Millisecond)
+}
+
+// TestCaptureAICompressionIsValidated pins that a bad AI codec is refused at
+// construction. It is consumed only by the AI lane, so an unvalidated value
+// left analytics working while every AI upload failed locally in compressBody
+// and was dropped without a request ever being made.
+func TestCaptureAICompressionIsValidated(t *testing.T) {
+	_, err := NewWithConfig("phc_test", Config{CaptureAICompression: CompressionMode(255)})
+	require.Error(t, err, "an unsupported AI codec must not construct")
+	var cfgErr ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	require.Equal(t, "CaptureAICompression", cfgErr.Field)
+
+	// Every codec the endpoint decodes is still accepted on the AI lane.
+	for _, mode := range []CompressionMode{
+		CompressionNone, CompressionGzip, CompressionZstd, CompressionDeflate, CompressionBrotli,
+	} {
+		_, err := NewWithConfig("phc_test", Config{CaptureAICompression: mode})
+		require.NoError(t, err, "codec %v must be accepted", mode)
+	}
+}
