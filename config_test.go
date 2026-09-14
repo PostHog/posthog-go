@@ -220,10 +220,61 @@ func TestConfigByteLimitDefaults(t *testing.T) {
 	require.Equal(t, DefaultMaxEventBytes, c.MaxEventBytes)
 	require.Equal(t, DefaultMaxBatchBytes, c.MaxBatchBytes)
 
-	// Explicit values survive; the defaults only fill a zero.
-	custom := makeConfig(Config{MaxEventBytes: 8 << 20, MaxBatchBytes: 5 << 20})
-	require.Equal(t, 8<<20, custom.MaxEventBytes)
-	require.Equal(t, 5<<20, custom.MaxBatchBytes)
+	// Explicit values survive; the defaults only fill a zero. Batch stays >=
+	// event so this models a config Validate accepts.
+	custom := makeConfig(Config{MaxEventBytes: 5 << 20, MaxBatchBytes: 8 << 20})
+	require.Equal(t, 5<<20, custom.MaxEventBytes)
+	require.Equal(t, 8<<20, custom.MaxBatchBytes)
+}
+
+// TestConfigRejectsBatchBytesBelowEventBytes pins the invariant that makes the
+// MaxBatchBytes doc comment true: an event that passes the per-event check must
+// always fit in one request. Without it an event sized between the two limits
+// is accepted, finds an empty batch, and is sent alone in a request larger than
+// MaxBatchBytes -- which a proxy or the endpoint answers with a terminal 413.
+func TestConfigRejectsBatchBytesBelowEventBytes(t *testing.T) {
+	cases := []struct {
+		name      string
+		eventB    int
+		batchB    int
+		wantErr   bool
+		wantValue int
+	}{
+		// The reported case: only MaxBatchBytes is lowered, so it falls under
+		// the default per-event ceiling.
+		{"batch_lowered_event_defaulted", 0, 1000, true, 1000},
+		// The mirror: only MaxEventBytes is raised, above the default request cap.
+		{"event_raised_batch_defaulted", DefaultMaxBatchBytes + 1, 0, true, DefaultMaxBatchBytes},
+		{"both_explicit_batch_smaller", 8 << 20, 5 << 20, true, 5 << 20},
+		{"both_defaulted", 0, 0, false, 0},
+		{"equal", 2000, 2000, false, 0},
+		{"batch_larger", 2000, 4000, false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{MaxEventBytes: tc.eventB, MaxBatchBytes: tc.batchB}
+			err := cfg.Validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			configErr, ok := err.(ConfigError)
+			require.True(t, ok, "expected ConfigError")
+			require.Equal(t, "MaxBatchBytes", configErr.Field)
+			// Reports the effective value, so a defaulted field is actionable
+			// rather than being shown as 0.
+			require.Equal(t, tc.wantValue, configErr.Value)
+			require.Contains(t, configErr.Reason, "single event fits in one request")
+		})
+	}
+}
+
+// TestNewWithConfigRejectsUnboundedRequestSize is the end-to-end guard: the
+// construction that used to produce an over-limit request now fails outright.
+func TestNewWithConfigRejectsUnboundedRequestSize(t *testing.T) {
+	_, err := NewWithConfig("phc_test", Config{MaxBatchBytes: 1000})
+	require.Error(t, err, "MaxBatchBytes below the default event ceiling must not construct")
 }
 
 func TestConfigMaxEventBytesRejectsOversizedEvent(t *testing.T) {
