@@ -150,7 +150,8 @@ type Config struct {
 
 	// MaxBatchBytes is the maximum serialized size of one capture request. A
 	// batch is flushed early when the next event would exceed it, so this bounds
-	// request size independently of BatchSize, which bounds event count. If
+	// request size independently of BatchSize, which bounds event count. Must be
+	// at least MaxEventBytes, so a single event always fits in one request. If
 	// zero, it defaults to DefaultMaxBatchBytes.
 	MaxBatchBytes int
 
@@ -356,6 +357,25 @@ func (c *Config) Validate() error {
 			Reason: "invalid compression mode",
 			Field:  "Compression",
 			Value:  c.Compression,
+		}
+	}
+
+	// A single event must fit in one request, so the per-event ceiling cannot
+	// exceed the request ceiling -- otherwise an event between the two is
+	// accepted and then sent alone in a request that breaks MaxBatchBytes.
+	// Compares effective values because makeConfig applies defaults after this.
+	maxEventBytes, maxBatchBytes := c.MaxEventBytes, c.MaxBatchBytes
+	if maxEventBytes <= 0 {
+		maxEventBytes = DefaultMaxEventBytes
+	}
+	if maxBatchBytes <= 0 {
+		maxBatchBytes = DefaultMaxBatchBytes
+	}
+	if maxBatchBytes < maxEventBytes {
+		return ConfigError{
+			Reason: "MaxBatchBytes must be at least MaxEventBytes so a single event fits in one request",
+			Field:  "MaxBatchBytes",
+			Value:  maxBatchBytes,
 		}
 	}
 
