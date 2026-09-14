@@ -6,7 +6,7 @@ import (
 	"os"
 
 	json "github.com/goccy/go-json"
-	"github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/v2"
 	"github.com/urfave/cli"
 )
 

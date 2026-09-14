@@ -19,10 +19,10 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// decodeV1Body decompresses a recorded request body per its Content-Encoding,
-// mirroring what the capture-v1 backend does. Reaching valid JSON proves the
+// decodeCaptureBody decompresses a recorded request body per its Content-Encoding,
+// mirroring what the capture backend does. Reaching valid JSON proves the
 // SDK emitted a well-formed stream for that codec.
-func decodeV1Body(t *testing.T, encoding string, raw []byte) []byte {
+func decodeCaptureBody(t *testing.T, encoding string, raw []byte) []byte {
 	t.Helper()
 	switch encoding {
 	case "":
@@ -69,17 +69,20 @@ func decodeV1Body(t *testing.T, encoding string, raw []byte) []byte {
 
 // recordedRequest captures what the server saw for one attempt.
 type recordedRequest struct {
-	attempt   string
-	requestId string
-	timestamp string
-	createdAt string
-	auth      string
-	encoding  string
-	uuids     []string
+	attempt     string
+	requestId   string
+	timestamp   string
+	createdAt   string
+	auth        string
+	encoding    string
+	contentType string
+	userAgent   string
+	sdkInfo     string
+	uuids       []string
 }
 
-// v1TestServer is a configurable capture-v1 endpoint for send-engine tests.
-type v1TestServer struct {
+// captureTestServer is a configurable capture endpoint for send-engine tests.
+type captureTestServer struct {
 	mu       sync.Mutex
 	requests []recordedRequest
 	// respond returns (status, jsonBody, retryAfterHeader) for the given
@@ -87,11 +90,11 @@ type v1TestServer struct {
 	respond func(attempt int, reqUuids []string) (int, string, string)
 }
 
-func (s *v1TestServer) handler(t *testing.T) http.HandlerFunc {
+func (s *captureTestServer) handler(t *testing.T) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		body := decodeV1Body(t, r.Header.Get("Content-Encoding"), raw)
+		body := decodeCaptureBody(t, r.Header.Get("Content-Encoding"), raw)
 		var env eventBatch
 		if err := json.Unmarshal(body, &env); err != nil {
 			t.Errorf("server: unmarshal envelope: %v (body=%s)", err, string(body))
@@ -108,13 +111,16 @@ func (s *v1TestServer) handler(t *testing.T) http.HandlerFunc {
 		s.mu.Lock()
 		attempt := len(s.requests) + 1
 		s.requests = append(s.requests, recordedRequest{
-			attempt:   r.Header.Get("PostHog-Attempt"),
-			requestId: r.Header.Get("PostHog-Request-Id"),
-			timestamp: r.Header.Get("PostHog-Request-Timestamp"),
-			createdAt: env.CreatedAt,
-			auth:      r.Header.Get("Authorization"),
-			encoding:  r.Header.Get("Content-Encoding"),
-			uuids:     uuids,
+			attempt:     r.Header.Get("PostHog-Attempt"),
+			requestId:   r.Header.Get("PostHog-Request-Id"),
+			timestamp:   r.Header.Get("PostHog-Request-Timestamp"),
+			createdAt:   env.CreatedAt,
+			auth:        r.Header.Get("Authorization"),
+			encoding:    r.Header.Get("Content-Encoding"),
+			contentType: r.Header.Get("Content-Type"),
+			userAgent:   r.Header.Get("User-Agent"),
+			sdkInfo:     r.Header.Get("PostHog-Sdk-Info"),
+			uuids:       uuids,
 		})
 		s.mu.Unlock()
 
@@ -127,7 +133,7 @@ func (s *v1TestServer) handler(t *testing.T) http.HandlerFunc {
 	}
 }
 
-func (s *v1TestServer) snapshot() []recordedRequest {
+func (s *captureTestServer) snapshot() []recordedRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]recordedRequest, len(s.requests))
@@ -170,7 +176,7 @@ func (rc *recordingCallback) counts() (int, int) {
 // resultsBody builds a {"results":{uuid:{result,details}}} JSON body.
 func resultsBody(t *testing.T, m map[string]eventResult) string {
 	t.Helper()
-	b, err := json.Marshal(captureV1Response{Results: m})
+	b, err := json.Marshal(captureResponse{Results: m})
 	if err != nil {
 		t.Fatalf("marshal results body: %v", err)
 	}
@@ -186,9 +192,9 @@ func (l quietTestLogger) Logf(f string, a ...interface{})   { l.t.Logf(f, a...) 
 func (l quietTestLogger) Warnf(f string, a ...interface{})  { l.t.Logf(f, a...) }
 func (l quietTestLogger) Errorf(f string, a ...interface{}) { l.t.Logf(f, a...) }
 
-// newV1TestClient builds a *client pointed at server with fast retries and the
-// given callback/options. It returns the concrete type so sendV1 is reachable.
-func newV1TestClient(t *testing.T, serverURL string, cb Callback, maxRetries int, configure func(*Config)) *client {
+// newCaptureTestClient builds a *client pointed at server with fast retries and the
+// given callback/options. It returns the concrete type so send is reachable.
+func newCaptureTestClient(t *testing.T, serverURL string, cb Callback, maxRetries int, configure func(*Config)) *client {
 	t.Helper()
 	retries := maxRetries
 	cfg := Config{
@@ -213,14 +219,14 @@ func newV1TestClient(t *testing.T, serverURL string, cb Callback, maxRetries int
 	return nc
 }
 
-// v1Batch builds a preparedBatch (data/msgs/uuids aligned) from messages.
-func v1Batch(t *testing.T, msgs ...Message) preparedBatch {
+// captureBatch builds a preparedBatch (data/msgs/uuids aligned) from messages.
+func captureBatch(t *testing.T, msgs ...Message) preparedBatch {
 	t.Helper()
 	var pb preparedBatch
 	for _, m := range msgs {
-		data, apiMsg, uuid, err := prepareForSendV1(m, nil)
+		data, apiMsg, uuid, err := prepareForSend(m, nil)
 		if err != nil {
-			t.Fatalf("prepareForSendV1: %v", err)
+			t.Fatalf("prepareForSend: %v", err)
 		}
 		pb.data = append(pb.data, data)
 		pb.msgs = append(pb.msgs, apiMsg)
@@ -239,9 +245,9 @@ const (
 	uuidC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 )
 
-func TestV1SendHeadersAndAllOk(t *testing.T) {
+func TestSendHeadersAndAllOk(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		for _, u := range uuids {
 			m[u] = eventResult{Result: resultOk}
@@ -252,10 +258,10 @@ func TestV1SendHeadersAndAllOk(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Date(2025, time.April, 6, 7, 8, 9, 0, time.FixedZone("UTC+5", 5*60*60))
-	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
+	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 		cfg.now = func() time.Time { return now }
 	})
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 1 {
@@ -278,14 +284,26 @@ func TestV1SendHeadersAndAllOk(t *testing.T) {
 	if r.createdAt != wantTimestamp {
 		t.Errorf("created_at = %q, want %q", r.createdAt, wantTimestamp)
 	}
+	// The capture endpoint requires these: a wrong Content-Type is a 415 and a
+	// missing Sdk-Info or User-Agent is a 400, for every event.
+	if r.contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", r.contentType)
+	}
+	wantSdkInfo := SDKName + "/" + getVersion()
+	if r.sdkInfo != wantSdkInfo {
+		t.Errorf("PostHog-Sdk-Info = %q, want %q", r.sdkInfo, wantSdkInfo)
+	}
+	if r.userAgent != wantSdkInfo {
+		t.Errorf("User-Agent = %q, want %q", r.userAgent, wantSdkInfo)
+	}
 	if s, f := cb.counts(); s != 1 || f != 0 {
 		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)
 	}
 }
 
-func TestV1SendStableRequestIdIncrementingAttempt(t *testing.T) {
+func TestSendStableRequestIdIncrementingAttempt(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(attempt int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(attempt int, uuids []string) (int, string, string) {
 		res := resultRetry
 		if attempt >= 2 {
 			res = resultOk
@@ -299,8 +317,8 @@ func TestV1SendStableRequestIdIncrementingAttempt(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 2 {
@@ -317,9 +335,9 @@ func TestV1SendStableRequestIdIncrementingAttempt(t *testing.T) {
 	}
 }
 
-func TestV1SendPartialRetryResendsOnlyRetrySubset(t *testing.T) {
+func TestSendPartialRetryResendsOnlyRetrySubset(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(attempt int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(attempt int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		if attempt == 1 {
 			drop := "billing_limit_exceeded"
@@ -336,8 +354,8 @@ func TestV1SendPartialRetryResendsOnlyRetrySubset(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 2 {
@@ -352,7 +370,7 @@ func TestV1SendPartialRetryResendsOnlyRetrySubset(t *testing.T) {
 	}
 }
 
-func TestV1SendTerminalResultsNotRetried(t *testing.T) {
+func TestSendTerminalResultsNotRetried(t *testing.T) {
 	cases := []struct {
 		name        string
 		result      string
@@ -366,7 +384,7 @@ func TestV1SendTerminalResultsNotRetried(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cb := &recordingCallback{}
-			srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+			srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 				m := map[string]eventResult{}
 				for _, u := range uuids {
 					m[u] = eventResult{Result: tc.result}
@@ -376,8 +394,8 @@ func TestV1SendTerminalResultsNotRetried(t *testing.T) {
 			ts := httptest.NewServer(srv.handler(t))
 			defer ts.Close()
 
-			c := newV1TestClient(t, ts.URL, cb, 9, nil)
-			c.sendV1(v1Batch(t, cap1(uuidA)))
+			c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+			c.send(captureBatch(t, cap1(uuidA)))
 
 			if len(srv.snapshot()) != 1 {
 				t.Fatalf("expected 1 request (no retry), got %d", len(srv.snapshot()))
@@ -389,17 +407,17 @@ func TestV1SendTerminalResultsNotRetried(t *testing.T) {
 	}
 }
 
-func TestV1SendMissingUuidDropped(t *testing.T) {
+func TestSendMissingUuidDropped(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, _ []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, _ []string) (int, string, string) {
 		// Empty results map: the event is absent.
 		return http.StatusOK, `{"results":{}}`, ""
 	}}
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	if len(srv.snapshot()) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(srv.snapshot()))
@@ -409,7 +427,7 @@ func TestV1SendMissingUuidDropped(t *testing.T) {
 	}
 }
 
-func TestV1SendStatusClassification(t *testing.T) {
+func TestSendStatusClassification(t *testing.T) {
 	cases := []struct {
 		status      int
 		wantReqs    int
@@ -421,15 +439,15 @@ func TestV1SendStatusClassification(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
 			cb := &recordingCallback{}
-			srv := &v1TestServer{respond: func(_ int, _ []string) (int, string, string) {
+			srv := &captureTestServer{respond: func(_ int, _ []string) (int, string, string) {
 				return tc.status, `{"error":"boom"}`, ""
 			}}
 			ts := httptest.NewServer(srv.handler(t))
 			defer ts.Close()
 
 			// maxRetries=2 -> 3 attempts max.
-			c := newV1TestClient(t, ts.URL, cb, 2, nil)
-			c.sendV1(v1Batch(t, cap1(uuidA)))
+			c := newCaptureTestClient(t, ts.URL, cb, 2, nil)
+			c.send(captureBatch(t, cap1(uuidA)))
 
 			if got := len(srv.snapshot()); got != tc.wantReqs {
 				t.Errorf("status %d: %d requests, want %d", tc.status, got, tc.wantReqs)
@@ -441,9 +459,9 @@ func TestV1SendStatusClassification(t *testing.T) {
 	}
 }
 
-func TestV1SendRetryableThenSuccess(t *testing.T) {
+func TestSendRetryableThenSuccess(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(attempt int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(attempt int, uuids []string) (int, string, string) {
 		if attempt == 1 {
 			return http.StatusServiceUnavailable, `{"error":"unavailable"}`, ""
 		}
@@ -456,8 +474,8 @@ func TestV1SendRetryableThenSuccess(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.snapshot()); got != 2 {
 		t.Fatalf("expected 2 requests, got %d", got)
@@ -467,9 +485,9 @@ func TestV1SendRetryableThenSuccess(t *testing.T) {
 	}
 }
 
-func TestV1SendMaxAttemptsExhaustion(t *testing.T) {
+func TestSendMaxAttemptsExhaustion(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		for _, u := range uuids {
 			m[u] = eventResult{Result: resultRetry}
@@ -479,8 +497,8 @@ func TestV1SendMaxAttemptsExhaustion(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 2, nil) // 3 attempts
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 2, nil) // 3 attempts
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.snapshot()); got != 3 {
 		t.Fatalf("expected 3 requests, got %d", got)
@@ -490,16 +508,16 @@ func TestV1SendMaxAttemptsExhaustion(t *testing.T) {
 	}
 }
 
-func TestV1SendMalformed200IsTerminal(t *testing.T) {
+func TestSendMalformed200IsTerminal(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, _ []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, _ []string) (int, string, string) {
 		return http.StatusOK, "not json", ""
 	}}
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.snapshot()); got != 1 {
 		t.Fatalf("expected 1 request (no retry on malformed 200), got %d", got)
@@ -509,10 +527,10 @@ func TestV1SendMalformed200IsTerminal(t *testing.T) {
 	}
 }
 
-// TestV1SendCompressionCodecs exercises the full v1 send path for every
+// TestSendCompressionCodecs exercises the full send path for every
 // supported codec: the request carries the right Content-Encoding token and
 // the server (decoding per that token) recovers the original batch.
-func TestV1SendCompressionCodecs(t *testing.T) {
+func TestSendCompressionCodecs(t *testing.T) {
 	cases := []struct {
 		name     string
 		mode     CompressionMode
@@ -527,7 +545,7 @@ func TestV1SendCompressionCodecs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cb := &recordingCallback{}
-			srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+			srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 				m := map[string]eventResult{}
 				for _, u := range uuids {
 					m[u] = eventResult{Result: resultOk}
@@ -537,11 +555,10 @@ func TestV1SendCompressionCodecs(t *testing.T) {
 			ts := httptest.NewServer(srv.handler(t))
 			defer ts.Close()
 
-			c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
-				cfg.CaptureMode = CaptureModeAnalyticsV1
+			c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 				cfg.Compression = tc.mode
 			})
-			c.sendV1(v1Batch(t, cap1(uuidA)))
+			c.send(captureBatch(t, cap1(uuidA)))
 
 			reqs := srv.snapshot()
 			if len(reqs) != 1 {
@@ -562,7 +579,7 @@ func TestV1SendCompressionCodecs(t *testing.T) {
 	}
 }
 
-func TestV1SendCompressionFailureFallsBackToUncompressed(t *testing.T) {
+func TestSendCompressionFailureFallsBackToUncompressed(t *testing.T) {
 	originalCompressGzip := compressGzip
 	compressGzip = func([]byte) ([]byte, error) {
 		return nil, errors.New("gzip unavailable")
@@ -570,7 +587,7 @@ func TestV1SendCompressionFailureFallsBackToUncompressed(t *testing.T) {
 	defer func() { compressGzip = originalCompressGzip }()
 
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		for _, u := range uuids {
 			m[u] = eventResult{Result: resultOk}
@@ -580,11 +597,10 @@ func TestV1SendCompressionFailureFallsBackToUncompressed(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
-		cfg.CaptureMode = CaptureModeAnalyticsV1
+	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 		cfg.Compression = CompressionGzip
 	})
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 1 {
@@ -601,7 +617,7 @@ func TestV1SendCompressionFailureFallsBackToUncompressed(t *testing.T) {
 	}
 }
 
-func TestCompressV1BodyFailureFallsBackToUncompressed(t *testing.T) {
+func TestCompressBodyFailureFallsBackToUncompressed(t *testing.T) {
 	raw := []byte(`{"event":"e","distinct_id":"d"}`)
 
 	cases := []struct {
@@ -665,7 +681,7 @@ func TestCompressV1BodyFailureFallsBackToUncompressed(t *testing.T) {
 			restore := tc.stub()
 			defer restore()
 
-			body, token, err := compressV1Body(tc.mode, raw)
+			body, token, err := compressBody(tc.mode, raw)
 			if err == nil {
 				t.Fatal("expected compression error")
 			}
@@ -682,10 +698,10 @@ func TestCompressV1BodyFailureFallsBackToUncompressed(t *testing.T) {
 	}
 }
 
-// TestCompressV1Body checks the codec helper directly: correct wire token,
+// TestCompressBody checks the codec helper directly: correct wire token,
 // real size reduction on compressible input, and a clean round-trip. This
 // catches encoder regressions the send-path test cannot (size, error path).
-func TestCompressV1Body(t *testing.T) {
+func TestCompressBody(t *testing.T) {
 	// Large, highly compressible payload so every codec yields real savings.
 	raw := bytes.Repeat([]byte(`{"event":"e","distinct_id":"d"},`), 512)
 
@@ -703,9 +719,9 @@ func TestCompressV1Body(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body, token, err := compressV1Body(tc.mode, raw)
+			body, token, err := compressBody(tc.mode, raw)
 			if err != nil {
-				t.Fatalf("compressV1Body: %v", err)
+				t.Fatalf("compressBody: %v", err)
 			}
 			if token != tc.token {
 				t.Errorf("token = %q, want %q", token, tc.token)
@@ -713,20 +729,20 @@ func TestCompressV1Body(t *testing.T) {
 			if tc.compress && len(body) >= len(raw) {
 				t.Errorf("%s output %d bytes did not shrink raw %d", tc.name, len(body), len(raw))
 			}
-			if got := decodeV1Body(t, token, body); !bytes.Equal(got, raw) {
+			if got := decodeCaptureBody(t, token, body); !bytes.Equal(got, raw) {
 				t.Errorf("%s round-trip mismatch: got %d bytes, want %d", tc.name, len(got), len(raw))
 			}
 		})
 	}
 
-	if _, _, err := compressV1Body(CompressionMode(99), raw); err == nil {
+	if _, _, err := compressBody(CompressionMode(99), raw); err == nil {
 		t.Error("expected error for unknown compression mode")
 	}
 }
 
-func TestV1SendRetryAfterHonored(t *testing.T) {
+func TestSendRetryAfterHonored(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(attempt int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(attempt int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		if attempt == 1 {
 			for _, u := range uuids {
@@ -743,8 +759,8 @@ func TestV1SendRetryAfterHonored(t *testing.T) {
 	defer ts.Close()
 
 	// Configured backoff is 1ms; Retry-After of 1s must win.
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) < 2 {
@@ -765,40 +781,42 @@ func TestV1SendRetryAfterHonored(t *testing.T) {
 	}
 }
 
-func TestRetryDelayV1(t *testing.T) {
+func TestRetryDelay(t *testing.T) {
 	const base = 100 * time.Millisecond
-	res := func(d time.Duration, has bool) *v1Result {
-		return &v1Result{retryAfter: d, hasRetryAfter: has}
+	res := func(d time.Duration, has bool) *attemptResult {
+		return &attemptResult{retryAfter: d, hasRetryAfter: has}
 	}
 	// Configured backoff is a constant `base`; Retry-After is a minimum, not a
-	// replacement, and is clamped to defaultMaxBackoff (the configured backoff
+	// replacement, and is clamped to DefaultMaxRetryBackoff (the configured backoff
 	// itself is never truncated).
 	cases := []struct {
 		name string
-		res  *v1Result
+		res  *attemptResult
 		want time.Duration
 	}{
 		{"no_response_uses_configured", nil, base},
 		{"no_retry_after_uses_configured", res(0, false), base},
 		{"larger_retry_after_wins", res(5*time.Second, true), 5 * time.Second},
 		{"smaller_retry_after_ignored", res(10*time.Millisecond, true), base},
-		{"retry_after_at_ceiling", res(defaultMaxBackoff, true), defaultMaxBackoff},
-		{"retry_after_above_ceiling_clamped", res(90*time.Second, true), defaultMaxBackoff},
-		{"absurd_retry_after_clamped", res(1000*time.Hour, true), defaultMaxBackoff},
+		{"retry_after_at_ceiling", res(DefaultMaxRetryBackoff, true), DefaultMaxRetryBackoff},
+		{"retry_after_above_ceiling_clamped", res(90*time.Second, true), DefaultMaxRetryBackoff},
+		{"absurd_retry_after_clamped", res(1000*time.Hour, true), DefaultMaxRetryBackoff},
 	}
-	c := &client{Config: Config{RetryAfter: func(int) time.Duration { return base }}}
+	// Through makeConfig so MaxRetryBackoff resolves to its default, as it does
+	// for any client built by NewWithConfig.
+	c := &client{Config: makeConfig(Config{RetryAfter: func(int) time.Duration { return base }})}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := c.retryDelayV1(0, tc.res); got != tc.want {
-				t.Errorf("retryDelayV1 = %v, want %v", got, tc.want)
+			if got := c.retryDelay(0, tc.res); got != tc.want {
+				t.Errorf("retryDelay = %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestV1SendMultiEventExhaustion(t *testing.T) {
+func TestSendMultiEventExhaustion(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		for _, u := range uuids {
 			m[u] = eventResult{Result: resultRetry}
@@ -808,8 +826,8 @@ func TestV1SendMultiEventExhaustion(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 2, nil) // 3 attempts
-	c.sendV1(v1Batch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+	c := newCaptureTestClient(t, ts.URL, cb, 2, nil) // 3 attempts
+	c.send(captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
 
 	if got := len(srv.snapshot()); got != 3 {
 		t.Fatalf("expected 3 requests, got %d", got)
@@ -821,9 +839,9 @@ func TestV1SendMultiEventExhaustion(t *testing.T) {
 	}
 }
 
-func TestV1SendShutdownDuringBackoff(t *testing.T) {
+func TestSendShutdownDuringBackoff(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		for _, u := range uuids {
 			m[u] = eventResult{Result: resultRetry}
@@ -833,7 +851,7 @@ func TestV1SendShutdownDuringBackoff(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
+	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 		// Backoff of 10s so the test can cancel mid-wait.
 		cfg.RetryAfter = func(int) time.Duration { return 10 * time.Second }
 	})
@@ -843,31 +861,31 @@ func TestV1SendShutdownDuringBackoff(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		_ = c.Close()
 	}()
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	if _, f := cb.counts(); f != 1 {
 		t.Errorf("failure callbacks = %d, want 1", f)
 	}
 }
 
-func TestV1SendTerminalNonRetryableBodyError(t *testing.T) {
+func TestSendTerminalNonRetryableBodyError(t *testing.T) {
 	cb := &recordingCallback{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Write a 400 status but close the connection before the body can be
 		// fully written. The httptest.Server doesn't let us easily abort mid-
 		// write, so instead we write a truncated JSON body to trigger an
-		// unmarshal error in reportV1 (body reads fine, but parse fails as
+		// unmarshal error in report (body reads fine, but parse fails as
 		// incomplete JSON — however the code path we're testing fires when
 		// io.ReadAll errors, which is harder to trigger in tests).
 		// Instead: we return a 400 with a valid error body to confirm the P1
-		// fix delivers requestErrorV1(res) instead of raw err.
+		// fix delivers requestError(res) instead of raw err.
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":"invalid_payload","error_description":"bad event shape"}`))
 	}))
 	defer srv.Close()
 
-	c := newV1TestClient(t, srv.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, srv.URL, cb, 9, nil)
+	c.send(captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.URL); got == 0 {
 		t.Fatal("impossible")
@@ -890,4 +908,31 @@ func containsAll(s string, substrs ...string) bool {
 		}
 	}
 	return true
+}
+
+// TestRetryDelayHonorsConfiguredCeiling pins that Config.MaxRetryBackoff, not a
+// constant, bounds a server Retry-After.
+func TestRetryDelayHonorsConfiguredCeiling(t *testing.T) {
+	withCeiling := func(ceiling time.Duration) *client {
+		cfg := makeConfig(Config{MaxRetryBackoff: ceiling})
+		return &client{Config: cfg}
+	}
+
+	res := &attemptResult{retryAfter: 10 * time.Minute, hasRetryAfter: true}
+
+	if got := withCeiling(5*time.Second).retryDelay(0, res); got != 5*time.Second {
+		t.Errorf("ceiling 5s: delay = %v, want 5s", got)
+	}
+	if got := withCeiling(2*time.Minute).retryDelay(0, res); got != 2*time.Minute {
+		t.Errorf("ceiling 2m: delay = %v, want 2m", got)
+	}
+	// Zero falls back to the documented default.
+	if got := withCeiling(0).retryDelay(0, res); got != DefaultMaxRetryBackoff {
+		t.Errorf("zero ceiling: delay = %v, want %v", got, DefaultMaxRetryBackoff)
+	}
+	// The default exponential backoff is capped by the same value.
+	c := withCeiling(250 * time.Millisecond)
+	if got := c.retryDelay(9, nil); got != 250*time.Millisecond {
+		t.Errorf("backoff cap: delay = %v, want 250ms", got)
+	}
 }

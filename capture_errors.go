@@ -3,7 +3,7 @@ package posthog
 import "fmt"
 
 // CaptureEventError is delivered to Callback.Failure for a single event that the
-// capture-v1 endpoint rejected: either a terminal "drop" result, or an event
+// capture endpoint rejected: either a terminal "drop" result, or an event
 // still asking to "retry" once the attempt budget is exhausted. Callers can use
 // errors.As to inspect the per-event outcome.
 //
@@ -36,7 +36,7 @@ func (e *CaptureEventError) Error() string {
 	return fmt.Sprintf("capture event %s: %s", e.EventUUID, e.Result)
 }
 
-// CaptureRequestError is delivered to Callback.Failure when an entire capture-v1
+// CaptureRequestError is delivered to Callback.Failure when an entire capture
 // request fails: a non-2xx status, a transport error, or a malformed 2xx body.
 // It carries the HTTP status and any structured error body the endpoint returned,
 // and unwraps to the underlying transport/parse error when there is one.

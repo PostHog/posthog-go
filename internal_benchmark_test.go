@@ -23,7 +23,7 @@ func BenchmarkJSONMarshalBatch(b *testing.B) {
 				data, _ := json.Marshal(generateVariedCapture(i).APIfy())
 				msgs[i] = json.RawMessage(data)
 			}
-			payload := batch{ApiKey: "test", Messages: msgs}
+			payload := eventBatch{CreatedAt: "2009-11-10T23:00:00Z", Batch: msgs}
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -61,7 +61,7 @@ func BenchmarkJSONMarshalBatchWithCardinality(b *testing.B) {
 				data, _ := json.Marshal(capture.APIfy())
 				msgs[i] = json.RawMessage(data)
 			}
-			payload := batch{ApiKey: "test", Messages: msgs}
+			payload := eventBatch{CreatedAt: "2009-11-10T23:00:00Z", Batch: msgs}
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -99,7 +99,7 @@ func BenchmarkPrepareForSend_Cardinality(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				prepareForSend(captures[i%100])
+				prepareForSend(captures[i%100], nil)
 			}
 		})
 	}
@@ -154,7 +154,7 @@ func BenchmarkHTTPUploadWithRealPayload(b *testing.B) {
 				data, _ := json.Marshal(capture.APIfy())
 				msgs[i] = json.RawMessage(data)
 			}
-			payload, _ := json.Marshal(batch{ApiKey: "test", Messages: msgs})
+			payload, _ := json.Marshal(eventBatch{CreatedAt: "2009-11-10T23:00:00Z", Batch: msgs})
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				io.Copy(io.Discard, r.Body)
@@ -203,7 +203,7 @@ func BenchmarkPrepareVsMarshaling(b *testing.B) {
 		b.Run(tc.name+"_prepare", func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				prepareForSend(capture)
+				prepareForSend(capture, nil)
 			}
 		})
 
@@ -296,10 +296,10 @@ func BenchmarkOldVsNewSerializationFlow(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					rawMsgs := make([]json.RawMessage, size)
 					for j, c := range captures {
-						data, _, _ := prepareForSend(c)
+						data, _, _, _ := prepareForSend(c, nil)
 						rawMsgs[j] = data
 					}
-					json.Marshal(batch{ApiKey: "test", Messages: rawMsgs})
+					json.Marshal(eventBatch{CreatedAt: "2009-11-10T23:00:00Z", Batch: rawMsgs})
 				}
 			})
 		}
