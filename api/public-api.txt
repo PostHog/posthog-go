@@ -597,6 +597,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error)
 
 type FeatureFlagsResponse struct {
+	PropertyMatchingVersion int `json:"property_matching_version"`
 	Flags []FeatureFlag `json:"flags"`
 	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
 	Cohorts map[string]PropertyGroup `json:"cohorts"`
