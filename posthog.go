@@ -1489,6 +1489,12 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 				<-l.shutdown
 			}
 		}
+
+		// Once, after every lane is done. shutdownPoller closes a channel with
+		// no guard, so a per-lane shutdown would panic on the second lane.
+		if c.featureFlagsPoller != nil {
+			c.featureFlagsPoller.shutdownPoller()
+		}
 	})
 
 	if alreadyClosed {
@@ -1605,9 +1611,6 @@ func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {
 func (c *client) loop(l *lane) {
 	defer close(l.batches) // prevent any pending receives from blocking
 	defer close(l.shutdown)
-	if c.featureFlagsPoller != nil {
-		defer c.featureFlagsPoller.shutdownPoller()
-	}
 
 	var batchData []json.RawMessage
 	var batchMsgs []APIMessage

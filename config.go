@@ -366,14 +366,25 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	switch c.Compression {
-	case CompressionNone, CompressionGzip, CompressionZstd, CompressionDeflate, CompressionBrotli:
-		// All codecs the capture endpoint decodes.
-	default:
-		return ConfigError{
-			Reason: "invalid compression mode",
-			Field:  "Compression",
-			Value:  c.Compression,
+	// Both lanes compress independently, so both settings are checked here: an
+	// unvalidated codec fails inside compressBody on every upload, silently
+	// losing that lane's events without ever making a request.
+	for _, m := range []struct {
+		field string
+		mode  CompressionMode
+	}{
+		{"Compression", c.Compression},
+		{"CaptureAICompression", c.CaptureAICompression},
+	} {
+		switch m.mode {
+		case CompressionNone, CompressionGzip, CompressionZstd, CompressionDeflate, CompressionBrotli:
+			// All codecs the capture endpoint decodes.
+		default:
+			return ConfigError{
+				Reason: "invalid compression mode",
+				Field:  m.field,
+				Value:  m.mode,
+			}
 		}
 	}
 
