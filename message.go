@@ -102,9 +102,9 @@ type APIMessage interface{}
 // Size is derived from len(json.RawMessage) when needed - O(1) operation.
 func prepareForSend(msg Message) (json.RawMessage, APIMessage, error) {
 	apiMsg := msg.APIfy()
-	data, err := json.Marshal(apiMsg)
+	data, err := marshalAPIEvent(apiMsg)
 	if err != nil {
-		return nil, apiMsg, err
+		return nil, apiMsg, eventPropertySerializationError(err)
 	}
 	return json.RawMessage(data), apiMsg, nil
 }
