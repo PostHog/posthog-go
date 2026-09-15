@@ -21,7 +21,7 @@ func TestDropYieldsCaptureEventError(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -46,7 +46,7 @@ func TestExhaustedRetryYieldsExhaustedEventError(t *testing.T) {
 
 	// maxRetries=0 => a single attempt, so the retry directive is never satisfied.
 	c := newCaptureTestClient(t, ts.URL, cb, 0, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -69,7 +69,7 @@ func TestTerminalStatusYieldsRequestError(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -87,7 +87,7 @@ func TestTransportErrorUnwraps(t *testing.T) {
 	cb := &recordingCallback{}
 	// Port 1 is unroutable; the POST fails at the transport layer.
 	c := newCaptureTestClient(t, "http://127.0.0.1:1", cb, 0, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -144,7 +144,7 @@ func TestResultSummaryLogged(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) { cfg.Logger = log })
-	c.send(captureBatch(t, cap1(uuidA), cap1(uuidB)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA), cap1(uuidB)))
 
 	if !log.debugContains("capture response request_id=") {
 		t.Errorf("expected a per-response debug summary, got debugf=%v", log.debugf)

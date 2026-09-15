@@ -38,6 +38,10 @@ const (
 
 	DefaultMaxBatchBytes = 500000
 
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
+
+	DefaultCaptureAIMaxQueueSize = 1000
+
 	DefaultMaxQueueSize = 10000
 )
 const (
@@ -98,6 +102,8 @@ var ErrFlagNotFound = errors.New("feature flag not found")
 
 
 FUNCTIONS
+
+func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error
 
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error
 
@@ -214,6 +220,7 @@ type CaptureEventError struct {
 	Result string
 	Details string
 	Exhausted bool
+	Endpoint string
 }
 
 
@@ -237,6 +244,7 @@ type CaptureRequestError struct {
 	Code string
 	Description string
 	Err error
+	Endpoint string
 }
 
 
@@ -246,6 +254,8 @@ func (e *CaptureRequestError) Unwrap() error
 
 type Client interface {
 	EnqueueClient
+
+	EnqueueAI(Message) error
 
 	Close() error
 
@@ -332,6 +342,12 @@ type Config struct {
 	MaxEventBytes int
 
 	MaxBatchBytes int
+
+	CaptureAICompression CompressionMode
+
+	CaptureAIBatchUploadTimeout time.Duration
+
+	CaptureAIMaxQueueSize int
 
 	MaxQueueSize int
 
