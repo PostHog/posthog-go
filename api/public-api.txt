@@ -925,3 +925,65 @@ type Variants struct {
 package extras // import "github.com/posthog/posthog-go/extras"
 
 
+## github.com/posthog/posthog-go/mcp
+
+package mcp // import "github.com/posthog/posthog-go/mcp"
+
+Package mcp builds and enqueues canonical PostHog analytics events for Model
+Context Protocol activity without depending on a particular MCP framework.
+
+Applications own the PostHog client lifecycle and pass completed tool calls to
+Analytics. Tool parameters, responses, intent, and error messages are sanitized
+and bounded before they are queued.
+
+TYPES
+
+type Analytics struct {
+}
+
+func New(client posthog.EnqueueClient, opts ...Option) *Analytics
+
+func (a *Analytics) CaptureToolCall(call ToolCall) error
+
+type IntentSource string
+
+const (
+	IntentSourceContextParameter IntentSource = "context_parameter"
+	IntentSourceInferred IntentSource = "inferred"
+)
+type Option func(*config)
+
+func WithExceptionAutocapture(enabled bool) Option
+
+type ToolCall struct {
+	ToolName        string
+	ToolDescription string
+	ToolCategory    string
+
+	DistinctID    string
+	SessionID     string
+	Groups        posthog.Groups
+	SetProperties posthog.Properties
+
+	ServerName      string
+	ServerVersion   string
+	ClientName      string
+	ClientVersion   string
+	ProtocolVersion string
+
+	Intent       string
+	IntentSource IntentSource
+
+	Parameters any
+	Response   any
+
+	Duration  time.Duration
+	IsError   bool
+	Error     error
+	ErrorType string
+
+	Properties posthog.Properties
+	Timestamp  time.Time
+}
+
+
