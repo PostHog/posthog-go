@@ -160,6 +160,11 @@ type Config struct {
 	// uncompressed. CompressionZstd is a good choice: AI events are large JSON.
 	CaptureAICompression CompressionMode
 
+	// CaptureAIBatchUploadTimeout is the timeout for uploading one AI batch. AI
+	// events are far larger than analytics events, so the lane gets its own
+	// budget. If zero, it defaults to DefaultCaptureAIBatchUploadTimeout.
+	CaptureAIBatchUploadTimeout time.Duration
+
 	// CaptureAIMaxQueueSize is the maximum number of AI messages buffered in
 	// memory. It is lower than MaxQueueSize by default because AI events can be
 	// multi-megabyte, so the same count would pin far more memory. If zero, it
@@ -286,6 +291,11 @@ const (
 	// DefaultMaxBatchBytes is the default maximum serialized size of one capture
 	// request, used when Config.MaxBatchBytes is zero.
 	DefaultMaxBatchBytes = 500000
+
+	// DefaultCaptureAIBatchUploadTimeout is the default AI-lane upload timeout,
+	// used when Config.CaptureAIBatchUploadTimeout is zero. Larger than
+	// DefaultBatchUploadTimeout because AI batches are far bigger.
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
 
 	// DefaultCaptureAIMaxQueueSize is the default AI-lane queue capacity, used
 	// when Config.CaptureAIMaxQueueSize is zero. Lower than DefaultMaxQueueSize
@@ -448,6 +458,10 @@ func makeConfig(c Config) Config {
 	// could never accumulate before the queue overflows.
 	if c.MaxQueueSize < c.BatchSize {
 		c.MaxQueueSize = c.BatchSize
+	}
+
+	if c.CaptureAIBatchUploadTimeout == 0 {
+		c.CaptureAIBatchUploadTimeout = DefaultCaptureAIBatchUploadTimeout
 	}
 
 	if c.CaptureAIMaxQueueSize <= 0 {
