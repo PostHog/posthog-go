@@ -300,9 +300,8 @@ func compressBody(mode CompressionMode, raw []byte) ([]byte, string, error) {
 	}
 }
 
-// upload performs a single capture POST. It reuses c.http (which already
-// carries BatchUploadTimeout) and the caller's ctx; it does not add a separate
-// per-request timeout.
+// upload performs a single capture POST using the lane's own client, which
+// carries that lane's upload timeout.
 func (c *client) upload(l *lane, ctx context.Context, b []byte, requestId string, attempt int) (*attemptResult, error) {
 	body, encoding, err := compressBody(l.cfg.compression, b)
 	if err != nil {
@@ -332,7 +331,7 @@ func (c *client) upload(l *lane, ctx context.Context, b []byte, requestId string
 		req.Header.Set("Content-Encoding", encoding)
 	}
 
-	res, err := c.http.Do(req)
+	res, err := l.http.Do(req)
 	if err != nil {
 		c.Warnf("sending request - %s", err)
 		return nil, err

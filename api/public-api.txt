@@ -38,6 +38,8 @@ const (
 
 	DefaultMaxBatchBytes = 500000
 
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
+
 	DefaultCaptureAIMaxQueueSize = 1000
 
 	DefaultMaxQueueSize = 10000
@@ -342,6 +344,8 @@ type Config struct {
 	MaxBatchBytes int
 
 	CaptureAICompression CompressionMode
+
+	CaptureAIBatchUploadTimeout time.Duration
 
 	CaptureAIMaxQueueSize int
 

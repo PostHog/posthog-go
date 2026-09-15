@@ -266,14 +266,17 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	// maxQueueSize; the batch queue by MaxEnqueuedRequests (default 1000).
 	// Defaults and the MaxQueueSize >= BatchSize clamp are applied in makeConfig.
 	ctx, cancel := context.WithCancel(context.Background())
+	// One Transport, shared by both lanes and the flags client, so they share
+	// the connection pool while each lane keeps its own upload timeout.
+	httpClient := makeHttpClient(config.Transport, config.BatchUploadTimeout)
 	c := &client{
 		Config:                          config,
 		key:                             apiKey,
-		analytics:                       newLane(analyticsLaneConfig(config), config.MaxEnqueuedRequests),
+		analytics:                       newLane(analyticsLaneConfig(config), config.MaxEnqueuedRequests, httpClient.Transport),
 		quit:                            make(chan struct{}),
 		ctx:                             ctx,
 		cancel:                          cancel,
-		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
+		http:                            httpClient,
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
 

@@ -165,7 +165,7 @@ func TestAILaneSizeLimits(t *testing.T) {
 	ai := aiLaneConfig(makeConfig(Config{}))
 
 	require.Equal(t, DefaultMaxEventBytes, analytics.maxEventBytes)
-	require.Equal(t, aiMaxEventBytes, ai.maxEventBytes)
+	require.Equal(t, aiMaxEventBytes+aiEnvelopeHeadroom, ai.maxEventBytes)
 	require.Equal(t, aiBatchBytesTarget, ai.maxBatchBytes)
 	require.Greater(t, ai.maxEventBytes, analytics.maxEventBytes,
 		"an AI event well over the analytics cap must still be accepted")
@@ -222,7 +222,7 @@ func TestAILaneDropsEventOverItsOwnCeiling(t *testing.T) {
 		}}
 	})
 
-	huge := NewProperties().Set("blob", strings.Repeat("x", aiMaxEventBytes+1024))
+	huge := NewProperties().Set("blob", strings.Repeat("x", aiMaxEventBytes+aiEnvelopeHeadroom))
 	require.NoError(t, c.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation", Properties: huge}))
 	require.NoError(t, c.Close())
 
@@ -478,4 +478,76 @@ func TestCaptureAICompressionIsValidated(t *testing.T) {
 		_, err := NewWithConfig("phc_test", Config{CaptureAICompression: mode})
 		require.NoError(t, err, "codec %v must be accepted", mode)
 	}
+}
+
+// TestAILaneSendsEventAtTheEndpointCeiling pins the envelope headroom. The
+// endpoint's ceiling applies to serialized properties, but the local guard
+// measures the whole event, so without headroom an event whose properties sit
+// exactly at the ceiling is refused here even though the endpoint accepts it.
+func TestAILaneSendsEventAtTheEndpointCeiling(t *testing.T) {
+	rec := newLaneRecorder()
+	srv := rec.server(t)
+	defer srv.Close()
+
+	var failures []error
+	var mu sync.Mutex
+	c := aiTestClient(t, srv.URL, func(cfg *Config) {
+		cfg.Callback = testCallback{nil, func(_ APIMessage, e error) {
+			mu.Lock()
+			failures = append(failures, e)
+			mu.Unlock()
+		}}
+	})
+
+	// Measure the non-blob overhead, then size the blob so the whole event lands
+	// just past the endpoint's ceiling -- the window the headroom covers.
+	probe, _, _, err := prepareForSend(
+		Capture{DistinctId: "d", Event: "$ai_generation", Properties: NewProperties().Set("blob", "")}, nil)
+	require.NoError(t, err)
+	props := NewProperties().Set("blob", strings.Repeat("x", aiMaxEventBytes-len(probe)+256))
+
+	data, _, _, err := prepareForSend(Capture{DistinctId: "d", Event: "$ai_generation", Properties: props}, nil)
+	require.NoError(t, err)
+	require.Greater(t, len(data), aiMaxEventBytes,
+		"precondition: the whole event must exceed the endpoint ceiling")
+	require.Less(t, len(data), aiMaxEventBytes+aiEnvelopeHeadroom,
+		"precondition: the event must still be inside the headroom window")
+
+	require.NoError(t, c.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation", Properties: props}))
+	require.NoError(t, c.Close())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Empty(t, failures, "an event at the endpoint ceiling must not be dropped locally")
+	require.Equal(t, 1, rec.count(aiCapturePath))
+}
+
+// TestAILaneHasItsOwnUploadTimeout pins that the lanes do not share one upload
+// budget: AI batches are much larger, so a timeout sized for analytics is tight.
+func TestAILaneHasItsOwnUploadTimeout(t *testing.T) {
+	rec := newLaneRecorder()
+	srv := rec.server(t)
+	defer srv.Close()
+
+	c := aiTestClient(t, srv.URL, nil)
+	cl := c.(*client)
+	require.NoError(t, cl.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation"}))
+
+	require.Equal(t, DefaultCaptureAIBatchUploadTimeout, cl.aiLane().http.Timeout)
+	require.Equal(t, DefaultBatchUploadTimeout, cl.analytics.http.Timeout)
+	require.Greater(t, cl.aiLane().http.Timeout, cl.analytics.http.Timeout)
+
+	// One Transport keeps the connection pool shared across lanes.
+	require.Same(t, cl.analytics.http.Transport, cl.aiLane().http.Transport)
+	require.NoError(t, c.Close())
+}
+
+// TestCaptureAIBatchUploadTimeoutIsConfigurable pins the public knob.
+func TestCaptureAIBatchUploadTimeoutIsConfigurable(t *testing.T) {
+	cfg := makeConfig(Config{CaptureAIBatchUploadTimeout: 90 * time.Second})
+	require.Equal(t, 90*time.Second, aiLaneConfig(cfg).uploadTimeout)
+	require.Equal(t, DefaultBatchUploadTimeout, analyticsLaneConfig(cfg).uploadTimeout,
+		"the AI knob must not move the analytics lane")
+
+	require.Equal(t, DefaultCaptureAIBatchUploadTimeout, aiLaneConfig(makeConfig(Config{})).uploadTimeout)
 }

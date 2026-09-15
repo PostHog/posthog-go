@@ -20,7 +20,7 @@ func newQueueTestClient(capacity int, logger Logger, callback Callback) *client 
 			Logger:   logger,
 			Callback: callback,
 		},
-		analytics: newLane(laneConfig{name: "analytics", maxQueueSize: capacity}, 1),
+		analytics: newLane(laneConfig{name: "analytics", maxQueueSize: capacity}, 1, nil),
 	}
 	return c
 }

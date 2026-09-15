@@ -158,6 +158,8 @@ It runs on its own queue, batching and retry state, started on first use.
 Routing is by method: `Enqueue` never reroutes an `$ai_`-prefixed event, so
 existing code keeps sending those as ordinary analytics events.
 
-Tune it with `Config.CaptureAICompression` and `Config.CaptureAIMaxQueueSize`.
+Tune it with `Config.CaptureAICompression`, `Config.CaptureAIMaxQueueSize` and
+`Config.CaptureAIBatchUploadTimeout` (30s, longer than the analytics lane's
+because AI batches are much larger).
 Use `EnqueueAIWithContext` from HTTP handlers, as you would
 `EnqueueWithContext`.

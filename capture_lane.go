@@ -1,7 +1,9 @@
 package posthog
 
 import (
+	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 // laneConfig is everything that differs between capture lanes. One pipeline
@@ -21,6 +23,8 @@ type laneConfig struct {
 	maxBatchBytes int
 	// maxQueueSize bounds the lane's in-memory message queue.
 	maxQueueSize int
+	// uploadTimeout bounds one upload from this lane.
+	uploadTimeout time.Duration
 }
 
 const (
@@ -28,11 +32,16 @@ const (
 	// backend's wire-protocol version, not an internal marker.
 	aiCapturePath = "/i/v1/ai/events"
 
-	// aiMaxEventBytes mirrors the backend's AI_MAX_EVENT_BYTES: an event whose
-	// serialized properties exceed it is refused with ai_event_too_big, so the
-	// lane drops it locally rather than spending a multi-megabyte upload on a
-	// doomed event.
+	// aiMaxEventBytes is the endpoint's per-event ceiling, applied there to the
+	// serialized properties alone.
 	aiMaxEventBytes = 8 << 20
+
+	// aiEnvelopeHeadroom is added to the local guard because it measures the
+	// whole serialized event, not just properties. Without it an event whose
+	// properties sit at the ceiling is refused here even though the endpoint
+	// would accept it. The guard stays coarse on purpose: it exists to skip a
+	// doomed multi-megabyte upload, not to reproduce the endpoint's check.
+	aiEnvelopeHeadroom = 64 << 10
 
 	// aiBatchBytesTarget closes an AI batch before appending an event that
 	// would exceed it. Well under the endpoint's 20 MiB compressed body limit,
@@ -49,6 +58,7 @@ func analyticsLaneConfig(c Config) laneConfig {
 		maxEventBytes: c.MaxEventBytes,
 		maxBatchBytes: c.MaxBatchBytes,
 		maxQueueSize:  c.MaxQueueSize,
+		uploadTimeout: c.BatchUploadTimeout,
 	}
 }
 
@@ -60,9 +70,10 @@ func aiLaneConfig(c Config) laneConfig {
 		name:          "capture-ai",
 		path:          aiCapturePath,
 		compression:   c.CaptureAICompression,
-		maxEventBytes: aiMaxEventBytes,
+		maxEventBytes: aiMaxEventBytes + aiEnvelopeHeadroom,
 		maxBatchBytes: aiBatchBytesTarget,
 		maxQueueSize:  c.CaptureAIMaxQueueSize,
+		uploadTimeout: c.CaptureAIBatchUploadTimeout,
 	}
 }
 
@@ -81,14 +92,18 @@ type lane struct {
 	inFlight atomic.Int64
 	// shutdown is closed by the lane's loop once it has drained.
 	shutdown chan struct{}
+	// http carries this lane's upload timeout. Lanes share one Transport, so
+	// they share the connection pool.
+	http *http.Client
 }
 
-func newLane(cfg laneConfig, batchQueueSize int) *lane {
+func newLane(cfg laneConfig, batchQueueSize int, transport http.RoundTripper) *lane {
 	return &lane{
 		cfg:      cfg,
 		msgs:     make(chan preparedMessage, cfg.maxQueueSize),
 		batches:  make(chan preparedBatch, batchQueueSize),
 		shutdown: make(chan struct{}),
+		http:     &http.Client{Transport: transport, Timeout: cfg.uploadTimeout},
 	}
 }
 
@@ -108,7 +123,7 @@ func (c *client) aiLane() *lane {
 		return nil
 	}
 	c.aiOnce.Do(func() {
-		l := newLane(aiLaneConfig(c.Config), c.MaxEnqueuedRequests)
+		l := newLane(aiLaneConfig(c.Config), c.MaxEnqueuedRequests, c.http.Transport)
 		c.ai.Store(l)
 		go c.loop(l)
 	})

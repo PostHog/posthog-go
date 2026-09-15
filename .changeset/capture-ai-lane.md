@@ -10,7 +10,9 @@ Add `Client.EnqueueAI` for PostHog's dedicated AI capture endpoint (`/i/v1/ai/ev
 
 - `EnqueueAIWithContext(ctx, client, msg)` is the request-context-aware form, matching `EnqueueWithContext`.
 
-- `Config.CaptureAICompression` and `Config.CaptureAIMaxQueueSize` (default `DefaultCaptureAIMaxQueueSize`, 1000) configure the AI lane independently. Its per-event (8MiB) and per-batch (5MiB) byte limits track the server's and are not configurable.
+- `Config.CaptureAICompression`, `Config.CaptureAIMaxQueueSize` (default `DefaultCaptureAIMaxQueueSize`, 1000) and `Config.CaptureAIBatchUploadTimeout` (default `DefaultCaptureAIBatchUploadTimeout`, 30s) configure the AI lane independently. Its per-event (8MiB) and per-batch (5MiB) byte limits track the server's and are not configurable.
+
+  The AI lane gets a longer upload timeout than the analytics lane's `BatchUploadTimeout` because its batches are an order of magnitude larger. The two lanes share one HTTP transport, so the connection pool is still shared.
 
 - `CaptureEventError` and `CaptureRequestError` gained `Endpoint`, so a single `Callback` can tell the two lanes apart.
 
