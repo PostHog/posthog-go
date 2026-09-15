@@ -1,15 +1,20 @@
 package posthog
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
-// FlagDefinitionCacheData is the set of local evaluation data for a project.
+// FlagDefinitionCacheData is the local evaluation payload for a project, as served by
+// the PostHog API. Flags and Cohorts are kept as raw JSON so that a cache shared with
+// other SDKs preserves fields this SDK does not use.
 type FlagDefinitionCacheData struct {
 	_ struct{}
 
-	Flags                   []FeatureFlag            `json:"flags"`
-	GroupTypeMapping        map[string]string        `json:"group_type_mapping"`
-	Cohorts                 map[string]PropertyGroup `json:"cohorts"`
-	MinimalFlagCalledEvents bool                     `json:"minimal_flag_called_events"`
+	Flags                   json.RawMessage   `json:"flags"`
+	GroupTypeMapping        map[string]string `json:"group_type_mapping"`
+	Cohorts                 json.RawMessage   `json:"cohorts"`
+	MinimalFlagCalledEvents bool              `json:"minimal_flag_called_events"`
 }
 
 // FlagDefinitionCacheProvider shares feature flag definitions between SDK
