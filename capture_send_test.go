@@ -262,7 +262,7 @@ func TestSendHeadersAndAllOk(t *testing.T) {
 	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 		cfg.now = func() time.Time { return now }
 	})
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 1 {
@@ -319,7 +319,7 @@ func TestSendStableRequestIdIncrementingAttempt(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 2 {
@@ -356,7 +356,7 @@ func TestSendPartialRetryResendsOnlyRetrySubset(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 2 {
@@ -396,7 +396,7 @@ func TestSendTerminalResultsNotRetried(t *testing.T) {
 			defer ts.Close()
 
 			c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-			c.send(captureBatch(t, cap1(uuidA)))
+			c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 			if len(srv.snapshot()) != 1 {
 				t.Fatalf("expected 1 request (no retry), got %d", len(srv.snapshot()))
@@ -418,7 +418,7 @@ func TestSendMissingUuidDropped(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if len(srv.snapshot()) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(srv.snapshot()))
@@ -448,7 +448,7 @@ func TestSendStatusClassification(t *testing.T) {
 
 			// maxRetries=2 -> 3 attempts max.
 			c := newCaptureTestClient(t, ts.URL, cb, 2, nil)
-			c.send(captureBatch(t, cap1(uuidA)))
+			c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 			if got := len(srv.snapshot()); got != tc.wantReqs {
 				t.Errorf("status %d: %d requests, want %d", tc.status, got, tc.wantReqs)
@@ -476,7 +476,7 @@ func TestSendRetryableThenSuccess(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.snapshot()); got != 2 {
 		t.Fatalf("expected 2 requests, got %d", got)
@@ -499,7 +499,7 @@ func TestSendMaxAttemptsExhaustion(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 2, nil) // 3 attempts
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.snapshot()); got != 3 {
 		t.Fatalf("expected 3 requests, got %d", got)
@@ -518,7 +518,7 @@ func TestSendMalformed200IsTerminal(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.snapshot()); got != 1 {
 		t.Fatalf("expected 1 request (no retry on malformed 200), got %d", got)
@@ -559,7 +559,7 @@ func TestSendCompressionCodecs(t *testing.T) {
 			c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 				cfg.Compression = tc.mode
 			})
-			c.send(captureBatch(t, cap1(uuidA)))
+			c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 			reqs := srv.snapshot()
 			if len(reqs) != 1 {
@@ -601,7 +601,7 @@ func TestSendCompressionFailureFallsBackToUncompressed(t *testing.T) {
 	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 		cfg.Compression = CompressionGzip
 	})
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) != 1 {
@@ -761,7 +761,7 @@ func TestSendRetryAfterHonored(t *testing.T) {
 
 	// Configured backoff is 1ms; Retry-After of 1s must win.
 	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
 	if len(reqs) < 2 {
@@ -828,7 +828,7 @@ func TestSendMultiEventExhaustion(t *testing.T) {
 	defer ts.Close()
 
 	c := newCaptureTestClient(t, ts.URL, cb, 2, nil) // 3 attempts
-	c.send(captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
 
 	if got := len(srv.snapshot()); got != 3 {
 		t.Fatalf("expected 3 requests, got %d", got)
@@ -862,7 +862,7 @@ func TestSendShutdownDuringBackoff(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		_ = c.Close()
 	}()
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if _, f := cb.counts(); f != 1 {
 		t.Errorf("failure callbacks = %d, want 1", f)
@@ -886,7 +886,7 @@ func TestSendTerminalNonRetryableBodyError(t *testing.T) {
 	defer srv.Close()
 
 	c := newCaptureTestClient(t, srv.URL, cb, 9, nil)
-	c.send(captureBatch(t, cap1(uuidA)))
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if got := len(srv.URL); got == 0 {
 		t.Fatal("impossible")
@@ -985,8 +985,8 @@ func TestSilentLossWarn(t *testing.T) {
 		}
 	}
 
-	// run sends a 3-event batch against respond and returns the loss lines.
-	run := func(t *testing.T, cb Callback, respond func(int, []string) (int, string, string)) *warnRecorder {
+	// runOn sends a 3-event batch down one lane and returns the loss lines.
+	runOn := func(t *testing.T, pick func(*client) *lane, cb Callback, respond func(int, []string) (int, string, string)) *warnRecorder {
 		t.Helper()
 		srv := &captureTestServer{respond: respond}
 		ts := httptest.NewServer(srv.handler(t))
@@ -994,8 +994,14 @@ func TestSilentLossWarn(t *testing.T) {
 
 		log := &warnRecorder{t: t}
 		c := newCaptureTestClient(t, ts.URL, cb, 0, func(cfg *Config) { cfg.Logger = log })
-		c.send(captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
+		c.send(pick(c), captureBatch(t, cap1(uuidA), cap1(uuidB), cap1(uuidC)))
 		return log
+	}
+	analyticsLane := func(c *client) *lane { return c.analytics }
+
+	run := func(t *testing.T, cb Callback, respond func(int, []string) (int, string, string)) *warnRecorder {
+		t.Helper()
+		return runOn(t, analyticsLane, cb, respond)
 	}
 
 	t.Run("per_event_drops_in_a_200", func(t *testing.T) {
@@ -1052,6 +1058,29 @@ func TestSilentLossWarn(t *testing.T) {
 	t.Run("no_loss_means_no_line", func(t *testing.T) {
 		if got := run(t, nil, respondAll(resultOk)).lossLines(); len(got) != 0 {
 			t.Errorf("an all-ok response must log nothing, got %v", got)
+		}
+	})
+
+	// With two pipelines the line is useless unless it says which one lost the
+	// events, so each lane must tag its own.
+	t.Run("each_lane_names_itself", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			pick func(*client) *lane
+			want string
+		}{
+			{"analytics", analyticsLane, "analytics"},
+			{"capture_ai", func(c *client) *lane { return c.aiLane() }, "capture-ai"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := runOn(t, tc.pick, nil, respondAll(resultDrop)).lossLines()
+				if len(got) != 1 {
+					t.Fatalf("want 1 aggregate line, got %d: %v", len(got), got)
+				}
+				if !strings.HasPrefix(got[0], tc.want+":") {
+					t.Errorf("line must be tagged %q, got %q", tc.want, got[0])
+				}
+			})
 		}
 	})
 }
