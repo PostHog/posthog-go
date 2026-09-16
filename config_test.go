@@ -307,3 +307,32 @@ func TestConfigMaxEventBytesRejectsOversizedEvent(t *testing.T) {
 	require.Len(t, failures, 1, "only the oversized event should fail")
 	require.ErrorIs(t, failures[0], ErrMessageTooBig)
 }
+
+// TestConfigRejectsNegativeKnobs pins that only zero selects a default. A
+// negative value is a caller mistake and used to be silently swallowed.
+func TestConfigRejectsNegativeKnobs(t *testing.T) {
+	cases := []struct {
+		field string
+		cfg   Config
+	}{
+		{"MaxEventBytes", Config{MaxEventBytes: -1}},
+		{"MaxBatchBytes", Config{MaxBatchBytes: -1}},
+		{"MaxQueueSize", Config{MaxQueueSize: -1}},
+		{"MaxRetryBackoff", Config{MaxRetryBackoff: -1}},
+		{"BatchUploadTimeout", Config{BatchUploadTimeout: -1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.field, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			require.Error(t, err)
+			configErr, ok := err.(ConfigError)
+			require.True(t, ok, "expected ConfigError")
+			require.Equal(t, tc.field, configErr.Field)
+			require.Contains(t, configErr.Reason, "negative")
+		})
+	}
+
+	// Zero still selects the documented default.
+	zero := Config{}
+	require.NoError(t, zero.Validate())
+}

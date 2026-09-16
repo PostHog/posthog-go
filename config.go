@@ -148,11 +148,12 @@ type Config struct {
 	// than being sent. If zero, it defaults to DefaultMaxEventBytes.
 	MaxEventBytes int
 
-	// MaxBatchBytes is the maximum serialized size of one capture request. A
-	// batch is flushed early when the next event would exceed it, so this bounds
-	// request size independently of BatchSize, which bounds event count. Must be
-	// at least MaxEventBytes, so a single event always fits in one request. If
-	// zero, it defaults to DefaultMaxBatchBytes.
+	// MaxBatchBytes bounds the combined serialized size of the events in one
+	// capture request, independently of BatchSize, which bounds event count. A
+	// batch is flushed early when the next event would exceed it. The request
+	// envelope adds a small fixed overhead on top, so it is a target rather than
+	// a hard wire limit. Must be at least MaxEventBytes, so a single event
+	// always fits in one request. If zero, it defaults to DefaultMaxBatchBytes.
 	MaxBatchBytes int
 
 	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
@@ -357,6 +358,32 @@ func (c *Config) Validate() error {
 			Reason: "invalid compression mode",
 			Field:  "Compression",
 			Value:  c.Compression,
+		}
+	}
+
+	// Negative values are a caller mistake, not a request for the default: only
+	// zero selects one.
+	for _, f := range []struct {
+		field string
+		value int
+	}{
+		{"MaxEventBytes", c.MaxEventBytes},
+		{"MaxBatchBytes", c.MaxBatchBytes},
+		{"MaxQueueSize", c.MaxQueueSize},
+	} {
+		if f.value < 0 {
+			return ConfigError{Reason: "must not be negative", Field: f.field, Value: f.value}
+		}
+	}
+	for _, f := range []struct {
+		field string
+		value time.Duration
+	}{
+		{"MaxRetryBackoff", c.MaxRetryBackoff},
+		{"BatchUploadTimeout", c.BatchUploadTimeout},
+	} {
+		if f.value < 0 {
+			return ConfigError{Reason: "must not be negative", Field: f.field, Value: f.value}
 		}
 	}
 
