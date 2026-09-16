@@ -78,7 +78,7 @@ func (c *client) send(l *lane, pb preparedBatch) {
 			Batch:               pendingData,
 		})
 		if err != nil {
-			c.Errorf("marshalling batch wrapper - %s", err)
+			c.Errorf("%s: marshalling batch wrapper - %s", l.cfg.name, err)
 			c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: err, Endpoint: l.cfg.path})
 			return
 		}
@@ -100,12 +100,12 @@ func (c *client) send(l *lane, pb preparedBatch) {
 			}
 			// Transport error: retry unless shutting down or exhausted.
 			if c.ctx.Err() != nil {
-				c.Errorf("%d messages dropped: shutdown timeout", len(pendingMsgs))
+				c.Errorf("%s: %d messages dropped: shutdown timeout", l.cfg.name, len(pendingMsgs))
 				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			if lastAttempt {
-				c.dropMessages(pendingMsgs, reqErr)
+				c.dropMessages(l, pendingMsgs, reqErr)
 				return
 			}
 			if !c.waitBackoff(i, res) {
@@ -122,7 +122,7 @@ func (c *client) send(l *lane, pb preparedBatch) {
 				return
 			}
 			if lastAttempt {
-				c.Errorf("%d messages dropped after %d attempts", len(nextMsgs), c.maxAttempts)
+				c.Errorf("%s: %d messages dropped after %d attempts", l.cfg.name, len(nextMsgs), c.maxAttempts)
 				for idx, id := range nextUuids {
 					var details string
 					if r, ok := res.results[id]; ok && r.Details != nil {
@@ -143,7 +143,7 @@ func (c *client) send(l *lane, pb preparedBatch) {
 		if isRetryableStatus(res.statusCode) {
 			err := requestError(l, res)
 			if lastAttempt {
-				c.dropMessages(pendingMsgs, err)
+				c.dropMessages(l, pendingMsgs, err)
 				return
 			}
 			if !c.waitBackoff(i, res) {
@@ -252,8 +252,8 @@ func (c *client) waitBackoff(attemptIndex int, res *attemptResult) bool {
 
 // dropMessages logs and notifies failure for events that are abandoned after
 // exhausting all retry attempts.
-func (c *client) dropMessages(msgs []APIMessage, err error) {
-	c.Errorf("%d messages dropped after %d attempts", len(msgs), c.maxAttempts)
+func (c *client) dropMessages(l *lane, msgs []APIMessage, err error) {
+	c.Errorf("%s: %d messages dropped after %d attempts", l.cfg.name, len(msgs), c.maxAttempts)
 	c.notifyFailure(msgs, err)
 }
 

@@ -1530,7 +1530,7 @@ func (c *client) processBatch(l *lane) {
 	// Recover from panics to prevent goroutine death without cleanup
 	defer func() {
 		if err := recover(); err != nil {
-			c.Errorf("panic in batch processor: %v", err)
+			c.Errorf("%s: panic in batch processor: %v", l.cfg.name, err)
 			c.notifyLocalFailure(l, batch.msgs, fmt.Errorf("panic: %v", err))
 		}
 	}()
@@ -1636,7 +1636,7 @@ func (c *client) loop(l *lane) {
 		}
 		batch := preparedBatch{data: batchData, msgs: batchMsgs, uuids: batchUuids}
 		if !c.sendBatch(l, batch) {
-			c.Errorf("sending batch failed - %s", ErrTooManyRequests)
+			c.Errorf("%s: sending batch failed - %s", l.cfg.name, ErrTooManyRequests)
 			c.notifyLocalFailure(l, batchMsgs, ErrTooManyRequests)
 			return false
 		}
