@@ -14,6 +14,6 @@ Add `Client.EnqueueAI` for PostHog's dedicated AI capture endpoint (`/i/v1/ai/ev
 
   The AI lane gets a longer upload timeout than the analytics lane's `BatchUploadTimeout` because its batches are an order of magnitude larger. The two lanes share one HTTP transport, so the connection pool is still shared.
 
-- `CaptureEventError` and `CaptureRequestError` gained `Endpoint`, so a single `Callback` can tell the two lanes apart.
+- `CaptureEventError` and `CaptureRequestError` gained `Endpoint`, so a single `Callback` can tell the two lanes apart. Drops the SDK makes itself — an oversized event, a full batch queue, a serialization failure, a panic in the batch processor — are now delivered as `CaptureLocalError`, which carries the same `Endpoint` and unwraps to the original cause, so `errors.Is` against `ErrMessageTooBig` still works.
 
 - Breaking for implementers only: `Client` gained `EnqueueAI`, so a hand-written mock of the interface must add it. Callers are unaffected.

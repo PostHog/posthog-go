@@ -551,3 +551,82 @@ func TestCaptureAIBatchUploadTimeoutIsConfigurable(t *testing.T) {
 
 	require.Equal(t, DefaultCaptureAIBatchUploadTimeout, aiLaneConfig(makeConfig(Config{})).uploadTimeout)
 }
+
+// TestCloseWaitsForConcurrentAILaneStart pins that Close does not return while
+// an AI lane is still being started on another goroutine. Without the Once
+// barrier the lane could be created after Close took its snapshot, leaving a
+// loop running past Close.
+func TestCloseWaitsForConcurrentAILaneStart(t *testing.T) {
+	rec := newLaneRecorder()
+	srv := rec.server(t)
+	defer srv.Close()
+
+	outlived := 0
+	for i := 0; i < 300; i++ {
+		c := aiTestClient(t, srv.URL, nil)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		start := make(chan struct{})
+		go func() { defer wg.Done(); <-start; _ = c.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation"}) }()
+		go func() { defer wg.Done(); <-start; _ = c.Close() }()
+		close(start)
+		wg.Wait()
+
+		if l := c.(*client).ai.Load(); l != nil {
+			select {
+			case <-l.shutdown:
+			default:
+				outlived++
+			}
+		}
+	}
+	require.Zero(t, outlived, "an AI lane loop was still running after Close returned")
+}
+
+// TestLocalDropsNameTheirLane pins that a drop the SDK makes itself says which
+// lane it happened on, and still unwraps to the sentinel so errors.Is keeps
+// working for callers written against the old bare error.
+func TestLocalDropsNameTheirLane(t *testing.T) {
+	cases := []struct {
+		name         string
+		wantEndpoint string
+		enqueue      func(Client, Capture) error
+	}{
+		{"analytics", capturePath, func(c Client, m Capture) error { return c.Enqueue(m) }},
+		{"capture_ai", aiCapturePath, func(c Client, m Capture) error { return c.EnqueueAI(m) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := newLaneRecorder()
+			srv := rec.server(t)
+			defer srv.Close()
+
+			var failures []error
+			var mu sync.Mutex
+			c := aiTestClient(t, srv.URL, func(cfg *Config) {
+				// Small enough that one event trips the per-event guard on
+				// either lane.
+				cfg.MaxEventBytes = 2000
+				cfg.MaxBatchBytes = 2000
+				cfg.Callback = testCallback{nil, func(_ APIMessage, e error) {
+					mu.Lock()
+					failures = append(failures, e)
+					mu.Unlock()
+				}}
+			})
+
+			big := NewProperties().Set("blob", strings.Repeat("x", aiMaxEventBytes+aiEnvelopeHeadroom))
+			require.NoError(t, tc.enqueue(c, Capture{DistinctId: "d", Event: "$ai_generation", Properties: big}))
+			require.NoError(t, c.Close())
+
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, failures, 1)
+
+			var localErr *CaptureLocalError
+			require.ErrorAs(t, failures[0], &localErr, "a pre-send drop must be a CaptureLocalError")
+			require.Equal(t, tc.wantEndpoint, localErr.Endpoint)
+			require.ErrorIs(t, failures[0], ErrMessageTooBig, "must still unwrap to the sentinel")
+		})
+	}
+}

@@ -1368,8 +1368,16 @@ func TestClientMarshalMessageError(t *testing.T) {
 	if err := <-errchan; err == nil {
 		t.Error("failure callback not triggered for unserializable message")
 
-	} else if _, ok := err.(*json.UnsupportedTypeError); !ok {
-		t.Errorf("invalid error type returned by unserializable message: %T", err)
+	} else {
+		// The drop is wrapped so it names its lane; the cause is still reachable.
+		var unsupported *json.UnsupportedTypeError
+		if !errors.As(err, &unsupported) {
+			t.Errorf("invalid error type returned by unserializable message: %T", err)
+		}
+		var localErr *CaptureLocalError
+		if !errors.As(err, &localErr) || localErr.Endpoint != capturePath {
+			t.Errorf("expected a CaptureLocalError naming %s, got %v", capturePath, err)
+		}
 	}
 }
 

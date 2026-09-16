@@ -239,6 +239,16 @@ type CaptureInApi struct {
 	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 
+type CaptureLocalError struct {
+	Endpoint string
+	Err error
+}
+
+
+func (e *CaptureLocalError) Error() string
+
+func (e *CaptureLocalError) Unwrap() error
+
 type CaptureRequestError struct {
 	StatusCode int
 	Code string

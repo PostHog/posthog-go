@@ -97,6 +97,13 @@ func (c myCallback) Failure(msg posthog.APIMessage, err error) {
         return
     }
 
+    var localErr *posthog.CaptureLocalError
+    if errors.As(err, &localErr) {
+        // Refused before sending: localErr.Endpoint names the lane, and it
+        // unwraps to ErrMessageTooBig and friends.
+        return
+    }
+
     var reqErr *posthog.CaptureRequestError
     if errors.As(err, &reqErr) {
         // Whole request: reqErr.StatusCode, .Code, .Description,

@@ -629,7 +629,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(Alias)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
-			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
@@ -651,7 +651,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(Identify)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
-			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
@@ -672,7 +672,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(GroupIdentify)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
-			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
@@ -768,7 +768,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		}
 		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
-			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
@@ -797,7 +797,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(Exception)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
-			c.notifyFailure([]APIMessage{apiMsg}, serErr)
+			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
 		}
 		sendPrepared(preparedMessage{data: data, msg: apiMsg, uuid: eventUuid})
@@ -1466,6 +1466,12 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 		// Read the AI lane only after marking closed. aiLane re-checks closed
 		// after starting, so a lane started concurrently with this either
 		// appears here and gets drained, or declines to accept the message.
+		//
+		// Do blocks while another goroutine is mid-initialization, so a lane
+		// started concurrently is visible below rather than outliving Close. On
+		// an unused lane this only marks the Once done, which is harmless: the
+		// client is already closed, so aiLane returns nil regardless.
+		c.aiOnce.Do(func() {})
 		lanes := []*lane{c.analytics}
 		if ai := c.ai.Load(); ai != nil {
 			lanes = append(lanes, ai)
@@ -1525,7 +1531,7 @@ func (c *client) processBatch(l *lane) {
 	defer func() {
 		if err := recover(); err != nil {
 			c.Errorf("panic in batch processor: %v", err)
-			c.notifyFailure(batch.msgs, fmt.Errorf("panic: %v", err))
+			c.notifyLocalFailure(l, batch.msgs, fmt.Errorf("panic: %v", err))
 		}
 	}()
 
@@ -1631,7 +1637,7 @@ func (c *client) loop(l *lane) {
 		batch := preparedBatch{data: batchData, msgs: batchMsgs, uuids: batchUuids}
 		if !c.sendBatch(l, batch) {
 			c.Errorf("sending batch failed - %s", ErrTooManyRequests)
-			c.notifyFailure(batchMsgs, ErrTooManyRequests)
+			c.notifyLocalFailure(l, batchMsgs, ErrTooManyRequests)
 			return false
 		}
 		return true
@@ -1649,7 +1655,7 @@ func (c *client) loop(l *lane) {
 
 		if msgSize > l.cfg.maxEventBytes {
 			c.Errorf("%s: message exceeds maximum size (%d > %d)", l.cfg.name, msgSize, l.cfg.maxEventBytes)
-			c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
+			c.notifyLocalFailure(l, []APIMessage{prepared.msg}, ErrMessageTooBig)
 			return false
 		}
 
@@ -1735,6 +1741,11 @@ func (c *client) notifySuccess(msgs []APIMessage) {
 			c.Callback.Success(m)
 		}
 	}
+}
+
+// notifyLocalFailure reports a drop the SDK made itself, tagged with the lane.
+func (c *client) notifyLocalFailure(l *lane, msgs []APIMessage, err error) {
+	c.notifyFailure(msgs, &CaptureLocalError{Endpoint: l.cfg.path, Err: err})
 }
 
 func (c *client) notifyFailure(msgs []APIMessage, err error) {
