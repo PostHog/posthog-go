@@ -21,7 +21,7 @@ func newQueueTestClient(capacity int, logger Logger, callback Callback) *client 
 			Logger:   logger,
 			Callback: callback,
 		},
-		msgs: make(chan preparedMessage, capacity),
+		analytics: newLane(laneConfig{name: "analytics", maxQueueSize: capacity}, 1, nil),
 	}
 	return c
 }
@@ -69,9 +69,9 @@ func TestEnqueue_DropsNewestWhenQueueFull(t *testing.T) {
 	}
 
 	require.ErrorIs(t, err, ErrQueueFull, "Enqueue must return ErrQueueFull when the queue is full")
-	require.Len(t, c.msgs, capacity, "the dropped message must not be buffered")
+	require.Len(t, c.analytics.msgs, capacity, "the dropped message must not be buffered")
 	for i := 0; i < capacity; i++ {
-		msg := <-c.msgs
+		msg := <-c.analytics.msgs
 		require.Equal(t, fmt.Sprintf("queued-%d", i), msg.msg.(CaptureInApi).Event)
 	}
 
@@ -89,6 +89,6 @@ func TestEnqueue_BuffersWhenQueueHasRoom(t *testing.T) {
 	c := newQueueTestClient(2, testLogger{}, callback)
 
 	require.NoError(t, c.Enqueue(captureOverflowEvent("buffered")))
-	require.Len(t, c.msgs, 1, "a message enqueued with room to spare must be buffered, not dropped")
+	require.Len(t, c.analytics.msgs, 1, "a message enqueued with room to spare must be buffered, not dropped")
 	require.Zero(t, failures, "no failure callback should fire on the happy path")
 }

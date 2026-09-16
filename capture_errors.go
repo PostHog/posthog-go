@@ -21,6 +21,9 @@ type CaptureEventError struct {
 	// Exhausted is true when the event was still retryable but the SDK ran out
 	// of attempts, false for a server-directed terminal drop.
 	Exhausted bool
+	// Endpoint is the capture path the event was sent to, so one Callback can
+	// tell the analytics and AI lanes apart.
+	Endpoint string
 }
 
 func (e *CaptureEventError) Error() string {
@@ -54,6 +57,9 @@ type CaptureRequestError struct {
 	Description string
 	// Err is the underlying transport or body-parse error, if any.
 	Err error
+	// Endpoint is the capture path the request was sent to, so one Callback can
+	// tell the analytics and AI lanes apart.
+	Endpoint string
 }
 
 func (e *CaptureRequestError) Error() string {
@@ -70,3 +76,24 @@ func (e *CaptureRequestError) Error() string {
 }
 
 func (e *CaptureRequestError) Unwrap() error { return e.Err }
+
+// CaptureLocalError is delivered to Callback.Failure for an event the SDK
+// refused itself, before any request: an oversized event, a full batch queue, a
+// serialization failure, or a panic in the batch processor. It names the lane so
+// one Callback can tell them apart, and unwraps to the cause, so errors.Is
+// against ErrMessageTooBig and friends still works.
+//
+// A full in-memory queue is not reported here: Enqueue returns ErrQueueFull to
+// the caller instead.
+type CaptureLocalError struct {
+	// Endpoint is the capture path the event was bound for.
+	Endpoint string
+	// Err is the underlying cause.
+	Err error
+}
+
+func (e *CaptureLocalError) Error() string {
+	return fmt.Sprintf("capture dropped before sending (%s): %s", e.Endpoint, e.Err)
+}
+
+func (e *CaptureLocalError) Unwrap() error { return e.Err }

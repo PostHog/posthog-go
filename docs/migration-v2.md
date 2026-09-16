@@ -42,6 +42,10 @@ client, err := posthog.NewWithConfig(apiKey, posthog.Config{
 The `CaptureMode` type and the `CaptureModeLegacy` / `CaptureModeAnalyticsV1`
 constants are removed with it.
 
+`Client` gained `EnqueueAI`. This only affects code that *implements* the
+interface — a hand-written test mock needs the new method. Callers are
+unaffected.
+
 `CompressionZstd`, `CompressionDeflate` and `CompressionBrotli` no longer
 require an opt-in. A config that previously failed `Validate()` with
 `"zstd compression requires CaptureModeAnalyticsV1"` now succeeds.
@@ -88,14 +92,22 @@ func (c myCallback) Failure(msg posthog.APIMessage, err error) {
     var eventErr *posthog.CaptureEventError
     if errors.As(err, &eventErr) {
         // One event: eventErr.EventUUID, .Result ("drop"/"retry"),
-        // .Details, and .Exhausted when retries ran out.
+        // .Details, .Exhausted when retries ran out, and .Endpoint
+        // to tell the analytics and AI lanes apart.
+        return
+    }
+
+    var localErr *posthog.CaptureLocalError
+    if errors.As(err, &localErr) {
+        // Refused before sending: localErr.Endpoint names the lane, and it
+        // unwraps to ErrMessageTooBig and friends.
         return
     }
 
     var reqErr *posthog.CaptureRequestError
     if errors.As(err, &reqErr) {
-        // Whole request: reqErr.StatusCode, .Code, .Description.
-        // Unwraps to the transport error when there was one.
+        // Whole request: reqErr.StatusCode, .Code, .Description,
+        // .Endpoint. Unwraps to the transport error when there was one.
         return
     }
 }
@@ -135,3 +147,26 @@ surface as `*CaptureEventError`:
 - properties that are not a JSON object
 
 A duplicate, empty or malformed event `uuid` still fails the whole batch.
+
+## New: AI events
+
+`EnqueueAI` sends to PostHog's dedicated AI capture endpoint, which accepts
+much larger events than the analytics endpoint:
+
+```go
+client.EnqueueAI(posthog.Capture{
+    DistinctId: "user-1",
+    Event:      "$ai_generation",
+    Properties: props,
+})
+```
+
+It runs on its own queue, batching and retry state, started on first use.
+Routing is by method: `Enqueue` never reroutes an `$ai_`-prefixed event, so
+existing code keeps sending those as ordinary analytics events.
+
+Tune it with `Config.CaptureAICompression`, `Config.CaptureAIMaxQueueSize` and
+`Config.CaptureAIBatchUploadTimeout` (30s, longer than the analytics lane's
+because AI batches are much larger).
+Use `EnqueueAIWithContext` from HTTP handlers, as you would
+`EnqueueWithContext`.

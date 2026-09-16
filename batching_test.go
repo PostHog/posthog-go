@@ -4,11 +4,11 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 
 	json "github.com/goccy/go-json"
 	"net/http/httptest"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -292,18 +292,18 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	defer ts.Close()
 	c := newCaptureTestClient(t, ts.URL, nil, 0, func(cfg *Config) {
 		cfg.BatchSubmitTimeout = 5 * time.Second
-		cfg.MaxEnqueuedRequests = 1
 	})
-	c.batches <- preparedBatch{}
+	l := newLane(analyticsLaneConfig(c.Config), 1, c.http.Transport)
+	l.batches <- preparedBatch{}
 	done := make(chan bool, 1)
-	go func() { done <- c.sendBatch(captureBatch(t, cap1(uuidA))) }()
-	require.Eventually(t, func() bool { return c.inFlight.Load() == 1 }, time.Second, time.Millisecond)
+	go func() { done <- c.sendBatch(l, captureBatch(t, cap1(uuidA))) }()
+	require.Eventually(t, func() bool { return l.inFlight.Load() == 1 }, time.Second, time.Millisecond)
 	select {
 	case <-done:
 		t.Fatal("submission returned before queue space was available")
 	default:
 	}
-	<-c.batches
+	<-l.batches
 	select {
 	case accepted := <-done:
 		require.True(t, accepted)
@@ -314,10 +314,10 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 		reqs := srv.snapshot()
 		return len(reqs) == 1 && reflect.DeepEqual([]string{uuidA}, reqs[0].uuids)
 	}, 5*time.Second, time.Millisecond, "accepted batch was not processed")
-	require.Eventually(t, func() bool { return c.inFlight.Load() == 0 }, time.Second, time.Millisecond)
-	c.deliveryMu.Lock()
-	defer c.deliveryMu.Unlock()
-	require.Empty(t, c.deliveries)
+	require.Eventually(t, func() bool { return l.inFlight.Load() == 0 }, time.Second, time.Millisecond)
+	l.deliveryMu.Lock()
+	defer l.deliveryMu.Unlock()
+	require.Empty(t, l.deliveries)
 }
 
 func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
@@ -329,23 +329,23 @@ func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
 		{"deadline", 10 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &client{
-				Config:     Config{BatchSubmitTimeout: tc.timeout},
+			c := &client{Config: Config{BatchSubmitTimeout: tc.timeout}}
+			l := &lane{
 				batches:    make(chan preparedBatch, 1),
 				deliveries: make(map[*delivery]struct{}),
 			}
-			c.batches <- preparedBatch{uuids: []string{"queued"}}
+			l.batches <- preparedBatch{uuids: []string{"queued"}}
 			done := make(chan bool, 1)
-			go func() { done <- c.sendBatch(preparedBatch{}) }()
+			go func() { done <- c.sendBatch(l, preparedBatch{}) }()
 			select {
 			case accepted := <-done:
 				require.False(t, accepted)
 			case <-time.After(time.Second):
 				t.Fatal("submission blocked beyond its deadline")
 			}
-			require.Zero(t, c.inFlight.Load())
-			require.Empty(t, c.deliveries)
-			require.Equal(t, []string{"queued"}, (<-c.batches).uuids)
+			require.Zero(t, l.inFlight.Load())
+			require.Empty(t, l.deliveries)
+			require.Equal(t, []string{"queued"}, (<-l.batches).uuids)
 		})
 	}
 }

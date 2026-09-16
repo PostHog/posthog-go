@@ -18,7 +18,7 @@ func (c *client) FlushWithContext(ctx context.Context) error {
 	}
 	reply := make(chan []<-chan struct{}, 1)
 	select {
-	case c.flushRequests <- reply:
+	case c.analytics.flushRequests <- reply:
 	case <-c.quit:
 		return ErrClosed
 	case <-ctx.Done():
@@ -40,42 +40,62 @@ func (c *client) FlushWithContext(ctx context.Context) error {
 	return nil
 }
 
-// delivery tracks the current attempt. All fields are guarded by deliveryMu.
-// Backoff ends a flush cycle, but the transport keeps ownership of the batch.
+// delivery tracks the current attempt. All fields are guarded by the owning
+// lane's deliveryMu. Backoff ends a flush cycle, but the transport keeps
+// ownership of the batch.
 type delivery struct {
 	done     chan struct{}
 	retrying bool
 }
 
-func (c *client) beginDeliveryAttempt(d *delivery) {
+func (l *lane) trackDelivery() *delivery {
+	d := &delivery{done: make(chan struct{})}
+	l.deliveryMu.Lock()
+	l.deliveries[d] = struct{}{}
+	l.deliveryMu.Unlock()
+	return d
+}
+
+func (l *lane) beginDeliveryAttempt(d *delivery) {
 	if d == nil {
 		return
 	}
-	c.deliveryMu.Lock()
+	l.deliveryMu.Lock()
 	if d.retrying {
 		d.done = make(chan struct{})
 		d.retrying = false
 	}
-	c.deliveryMu.Unlock()
+	l.deliveryMu.Unlock()
 }
 
-func (c *client) deferDeliveryRetry(d *delivery) {
+func (l *lane) deferDeliveryRetry(d *delivery) {
 	if d == nil {
 		return
 	}
-	c.deliveryMu.Lock()
+	l.deliveryMu.Lock()
 	if !d.retrying {
 		d.retrying = true
 		close(d.done)
 	}
-	c.deliveryMu.Unlock()
+	l.deliveryMu.Unlock()
 }
 
-func (c *client) completeDelivery(d *delivery) {
-	c.deliveryMu.Lock()
-	delete(c.deliveries, d)
+func (l *lane) completeDelivery(d *delivery) {
+	l.deliveryMu.Lock()
+	delete(l.deliveries, d)
 	if !d.retrying {
 		close(d.done)
 	}
-	c.deliveryMu.Unlock()
+	l.deliveryMu.Unlock()
+}
+
+// pendingDeliveries snapshots the current attempt of every in-flight batch.
+func (l *lane) pendingDeliveries() []<-chan struct{} {
+	l.deliveryMu.Lock()
+	defer l.deliveryMu.Unlock()
+	pending := make([]<-chan struct{}, 0, len(l.deliveries))
+	for d := range l.deliveries {
+		pending = append(pending, d.done)
+	}
+	return pending
 }
