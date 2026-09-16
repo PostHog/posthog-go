@@ -60,7 +60,7 @@ func isRetryableStatus(code int) bool {
 // retry: only events tagged "retry" in the response are re-sent on subsequent
 // attempts. PostHog-Request-Id and created_at are stable across attempts;
 // PostHog-Attempt increments.
-func (c *client) send(pb preparedBatch) {
+func (c *client) send(l *lane, pb preparedBatch) {
 	requestId := newRequestID()
 	createdAt := c.now().UTC().Format(time.RFC3339)
 
@@ -78,38 +78,38 @@ func (c *client) send(pb preparedBatch) {
 			Batch:               pendingData,
 		})
 		if err != nil {
-			c.Errorf("marshalling batch wrapper - %s", err)
-			c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: err})
+			c.Errorf("%s: marshalling batch wrapper - %s", l.cfg.name, err)
+			c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: err, Endpoint: l.cfg.path})
 			return
 		}
 
-		res, err := c.upload(c.ctx, body, requestId, attempt)
+		res, err := c.upload(l, c.ctx, body, requestId, attempt)
 		if err != nil {
-			reqErr := newCaptureRequestError(res, err)
+			reqErr := newCaptureRequestError(l, res, err)
 			// A 2xx with an unparseable body is terminal for this batch -
 			// retrying a malformed success would loop forever.
 			if res != nil && isSuccessStatus(res.statusCode) {
-				c.notifyFailure(pendingMsgs, reqErr)
+				c.failBatch(l, pendingMsgs, reqErr)
 				return
 			}
 			// Terminal status whose body read errored: fail fast. reqErr adds
 			// the read error, so callers see why there is no error body.
 			if res != nil && res.statusCode != 0 && !isRetryableStatus(res.statusCode) {
-				c.notifyFailure(pendingMsgs, reqErr)
+				c.failBatch(l, pendingMsgs, reqErr)
 				return
 			}
 			// Transport error: retry unless shutting down or exhausted.
 			if c.ctx.Err() != nil {
-				c.Errorf("%d messages dropped: shutdown timeout", len(pendingMsgs))
+				c.Errorf("%s: %d messages dropped: shutdown timeout", l.cfg.name, len(pendingMsgs))
 				c.notifyFailure(pendingMsgs, reqErr)
 				return
 			}
 			if lastAttempt {
-				c.dropMessages(pendingMsgs, reqErr)
+				c.dropMessages(l, pendingMsgs, reqErr)
 				return
 			}
 			if !c.waitBackoff(i, res) {
-				c.notifyFailure(pendingMsgs, reqErr)
+				c.failBatch(l, pendingMsgs, reqErr)
 				return
 			}
 			continue
@@ -117,44 +117,44 @@ func (c *client) send(pb preparedBatch) {
 
 		if isSuccessStatus(res.statusCode) {
 			c.logResultSummary(requestId, attempt, res.results)
-			nextData, nextMsgs, nextUuids := c.partitionResults(res, pendingData, pendingMsgs, pendingUuids)
+			nextData, nextMsgs, nextUuids := c.partitionResults(l, res, pendingData, pendingMsgs, pendingUuids)
 			if len(nextUuids) == 0 {
 				return
 			}
 			if lastAttempt {
-				c.Errorf("%d messages dropped after %d attempts", len(nextMsgs), c.maxAttempts)
+				c.Errorf("%s: %d messages dropped after %d attempts", l.cfg.name, len(nextMsgs), c.maxAttempts)
 				for idx, id := range nextUuids {
 					var details string
 					if r, ok := res.results[id]; ok && r.Details != nil {
 						details = *r.Details
 					}
-					c.notifyFailure([]APIMessage{nextMsgs[idx]}, &CaptureEventError{EventUUID: id, Result: resultRetry, Details: details, Exhausted: true})
+					c.notifyFailure([]APIMessage{nextMsgs[idx]}, &CaptureEventError{EventUUID: id, Result: resultRetry, Details: details, Exhausted: true, Endpoint: l.cfg.path})
 				}
 				return
 			}
 			pendingData, pendingMsgs, pendingUuids = nextData, nextMsgs, nextUuids
 			if !c.waitBackoff(i, res) {
-				c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff})
+				c.failBatch(l, pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff, Endpoint: l.cfg.path})
 				return
 			}
 			continue
 		}
 
 		if isRetryableStatus(res.statusCode) {
-			err := requestError(res)
+			err := requestError(l, res)
 			if lastAttempt {
-				c.dropMessages(pendingMsgs, err)
+				c.dropMessages(l, pendingMsgs, err)
 				return
 			}
 			if !c.waitBackoff(i, res) {
-				c.notifyFailure(pendingMsgs, err)
+				c.failBatch(l, pendingMsgs, err)
 				return
 			}
 			continue
 		}
 
 		// Terminal non-2xx (400/401/402/413/415/429/...): no retry.
-		c.notifyFailure(pendingMsgs, requestError(res))
+		c.failBatch(l, pendingMsgs, requestError(l, res))
 		return
 	}
 }
@@ -162,10 +162,11 @@ func (c *client) send(pb preparedBatch) {
 // partitionResults splits a 2xx batch by per-event result: terminal events
 // fire their callback now, "retry" events are returned for the next attempt.
 // A uuid absent from the results map is silently dropped (no callback).
-func (c *client) partitionResults(res *attemptResult, data []json.RawMessage, msgs []APIMessage, uuids []string) ([]json.RawMessage, []APIMessage, []string) {
+func (c *client) partitionResults(l *lane, res *attemptResult, data []json.RawMessage, msgs []APIMessage, uuids []string) ([]json.RawMessage, []APIMessage, []string) {
 	var nextData []json.RawMessage
 	var nextMsgs []APIMessage
 	var nextUuids []string
+	var dropped int
 	for idx, id := range uuids {
 		r, ok := res.results[id]
 		if !ok {
@@ -179,13 +180,34 @@ func (c *client) partitionResults(res *attemptResult, data []json.RawMessage, ms
 			nextMsgs = append(nextMsgs, msgs[idx])
 			nextUuids = append(nextUuids, id)
 		case resultDrop:
-			c.notifyFailure([]APIMessage{msgs[idx]}, eventError(id, r))
+			dropped++
+			c.notifyFailure([]APIMessage{msgs[idx]}, eventError(l, id, r))
 		default:
 			// ok, warning, and any unrecognized result are terminal success.
 			c.notifySuccess([]APIMessage{msgs[idx]})
 		}
 	}
+	c.warnSilentLoss(l, dropped, "rejected by the capture endpoint")
 	return nextData, nextMsgs, nextUuids
+}
+
+// warnSilentLoss makes an event loss visible to a caller with no Callback. A
+// registered Callback already receives every failure, so the line is emitted
+// only without one. Always one aggregate line per batch, never per event:
+// per-event logging scales with event volume rather than request volume, and
+// event payloads may carry sensitive content.
+func (c *client) warnSilentLoss(l *lane, count int, cause string) {
+	if count == 0 || c.Callback != nil {
+		return
+	}
+	c.Warnf("%s: %d event(s) dropped: %s; set Config.Callback to inspect failures", l.cfg.name, count, cause)
+}
+
+// failBatch delivers a terminal batch failure to the Callback, and without one
+// logs a single aggregate line so the loss is not silent.
+func (c *client) failBatch(l *lane, msgs []APIMessage, err error) {
+	c.warnSilentLoss(l, len(msgs), err.Error())
+	c.notifyFailure(msgs, err)
 }
 
 // retryDelay is the pure delay decision for the next attempt: the configured
@@ -230,8 +252,8 @@ func (c *client) waitBackoff(attemptIndex int, res *attemptResult) bool {
 
 // dropMessages logs and notifies failure for events that are abandoned after
 // exhausting all retry attempts.
-func (c *client) dropMessages(msgs []APIMessage, err error) {
-	c.Errorf("%d messages dropped after %d attempts", len(msgs), c.maxAttempts)
+func (c *client) dropMessages(l *lane, msgs []APIMessage, err error) {
+	c.Errorf("%s: %d messages dropped after %d attempts", l.cfg.name, len(msgs), c.maxAttempts)
 	c.notifyFailure(msgs, err)
 }
 
@@ -278,20 +300,19 @@ func compressBody(mode CompressionMode, raw []byte) ([]byte, string, error) {
 	}
 }
 
-// upload performs a single capture POST. It reuses c.http (which already
-// carries BatchUploadTimeout) and the caller's ctx; it does not add a separate
-// per-request timeout.
-func (c *client) upload(ctx context.Context, b []byte, requestId string, attempt int) (*attemptResult, error) {
-	body, encoding, err := compressBody(c.Compression, b)
+// upload performs a single capture POST using the lane's own client, which
+// carries that lane's upload timeout.
+func (c *client) upload(l *lane, ctx context.Context, b []byte, requestId string, attempt int) (*attemptResult, error) {
+	body, encoding, err := compressBody(l.cfg.compression, b)
 	if err != nil {
 		if body == nil {
-			c.Errorf("compressing body (%s) - %s", c.Compression, err)
+			c.Errorf("compressing body (%s) - %s", l.cfg.compression, err)
 			return nil, err
 		}
-		c.Warnf("compressing body (%s) failed; sending uncompressed - %s", c.Compression, err)
+		c.Warnf("compressing body (%s) failed; sending uncompressed - %s", l.cfg.compression, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+capturePath, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", l.url(c.Endpoint), bytes.NewReader(body))
 	if err != nil {
 		c.Errorf("creating request - %s", err)
 		return nil, err
@@ -310,7 +331,7 @@ func (c *client) upload(ctx context.Context, b []byte, requestId string, attempt
 		req.Header.Set("Content-Encoding", encoding)
 	}
 
-	res, err := c.http.Do(req)
+	res, err := l.http.Do(req)
 	if err != nil {
 		c.Warnf("sending request - %s", err)
 		return nil, err
@@ -360,23 +381,23 @@ func isSuccessStatus(code int) bool {
 var errShutdownDuringBackoff = errors.New("shutdown during retry backoff")
 
 // eventError builds the per-event CaptureEventError for a terminal "drop".
-func eventError(eventUuid string, r eventResult) error {
+func eventError(l *lane, eventUuid string, r eventResult) error {
 	details := ""
 	if r.Details != nil {
 		details = *r.Details
 	}
-	return &CaptureEventError{EventUUID: eventUuid, Result: r.Result, Details: details}
+	return &CaptureEventError{EventUUID: eventUuid, Result: r.Result, Details: details, Endpoint: l.cfg.path}
 }
 
 // requestError builds the batch-level CaptureRequestError for a non-2xx response.
-func requestError(res *attemptResult) error {
-	return newCaptureRequestError(res, nil)
+func requestError(l *lane, res *attemptResult) error {
+	return newCaptureRequestError(l, res, nil)
 }
 
 // newCaptureRequestError assembles a *CaptureRequestError from an optional parsed
 // result (status + structured error body) and an optional underlying error.
-func newCaptureRequestError(res *attemptResult, underlying error) *CaptureRequestError {
-	e := &CaptureRequestError{Err: underlying}
+func newCaptureRequestError(l *lane, res *attemptResult, underlying error) *CaptureRequestError {
+	e := &CaptureRequestError{Err: underlying, Endpoint: l.cfg.path}
 	if res != nil {
 		e.StatusCode = res.statusCode
 		if res.errResp != nil {

@@ -407,6 +407,22 @@ func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) 
 	return enqueueWithContext(ctx, client, msg)
 }
 
+// EnqueueAIWithContext queues a message for the dedicated AI capture endpoint and applies any
+// PostHog request context attached to ctx. It is EnqueueWithContext for the AI lane, and takes
+// the full Client because only a real client has an AI lane -- an AI event must never silently
+// fall back to the analytics endpoint.
+func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error {
+	if client == nil {
+		return fmt.Errorf("posthog: nil enqueue client")
+	}
+	if contextClient, ok := client.(interface {
+		EnqueueAIWithContext(context.Context, Message) error
+	}); ok {
+		return contextClient.EnqueueAIWithContext(ctx, msg)
+	}
+	return client.EnqueueAI(msg)
+}
+
 // EvaluateFlagsWithContext evaluates feature flags and uses the request-scoped distinct ID attached
 // to ctx when payload.DistinctId is empty. It does not generate personless IDs: feature flag
 // evaluation requires a stable distinct ID and returns ErrNoDistinctID if neither payload nor ctx has one.

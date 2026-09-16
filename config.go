@@ -156,6 +156,22 @@ type Config struct {
 	// always fits in one request. If zero, it defaults to DefaultMaxBatchBytes.
 	MaxBatchBytes int
 
+	// CaptureAICompression selects the compression mode for EnqueueAI request
+	// bodies, independently of Compression. If zero, AI bodies are sent
+	// uncompressed. CompressionZstd is a good choice: AI events are large JSON.
+	CaptureAICompression CompressionMode
+
+	// CaptureAIBatchUploadTimeout is the timeout for uploading one AI batch. AI
+	// events are far larger than analytics events, so the lane gets its own
+	// budget. If zero, it defaults to DefaultCaptureAIBatchUploadTimeout.
+	CaptureAIBatchUploadTimeout time.Duration
+
+	// CaptureAIMaxQueueSize is the maximum number of AI messages buffered in
+	// memory. It is lower than MaxQueueSize by default because AI events can be
+	// multi-megabyte, so the same count would pin far more memory. If zero, it
+	// defaults to DefaultCaptureAIMaxQueueSize.
+	CaptureAIMaxQueueSize int
+
 	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
 	// be batched and sent. If zero, it defaults to DefaultMaxQueueSize. It is
 	// clamped up to BatchSize so the queue can always hold at least one full batch.
@@ -277,6 +293,16 @@ const (
 	// request, used when Config.MaxBatchBytes is zero.
 	DefaultMaxBatchBytes = 500000
 
+	// DefaultCaptureAIBatchUploadTimeout is the default AI-lane upload timeout,
+	// used when Config.CaptureAIBatchUploadTimeout is zero. Larger than
+	// DefaultBatchUploadTimeout because AI batches are far bigger.
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
+
+	// DefaultCaptureAIMaxQueueSize is the default AI-lane queue capacity, used
+	// when Config.CaptureAIMaxQueueSize is zero. Lower than DefaultMaxQueueSize
+	// because AI events can be multi-megabyte.
+	DefaultCaptureAIMaxQueueSize = 1000
+
 	// DefaultMaxQueueSize is the default in-memory message queue capacity used when
 	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
 	// posthog-node defaults so backend SDKs behave consistently under bursty load.
@@ -350,14 +376,25 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	switch c.Compression {
-	case CompressionNone, CompressionGzip, CompressionZstd, CompressionDeflate, CompressionBrotli:
-		// All codecs the capture endpoint decodes.
-	default:
-		return ConfigError{
-			Reason: "invalid compression mode",
-			Field:  "Compression",
-			Value:  c.Compression,
+	// Both lanes compress independently, so both settings are checked here: an
+	// unvalidated codec fails inside compressBody on every upload, silently
+	// losing that lane's events without ever making a request.
+	for _, m := range []struct {
+		field string
+		mode  CompressionMode
+	}{
+		{"Compression", c.Compression},
+		{"CaptureAICompression", c.CaptureAICompression},
+	} {
+		switch m.mode {
+		case CompressionNone, CompressionGzip, CompressionZstd, CompressionDeflate, CompressionBrotli:
+			// All codecs the capture endpoint decodes.
+		default:
+			return ConfigError{
+				Reason: "invalid compression mode",
+				Field:  m.field,
+				Value:  m.mode,
+			}
 		}
 	}
 
@@ -448,6 +485,14 @@ func makeConfig(c Config) Config {
 	// could never accumulate before the queue overflows.
 	if c.MaxQueueSize < c.BatchSize {
 		c.MaxQueueSize = c.BatchSize
+	}
+
+	if c.CaptureAIBatchUploadTimeout == 0 {
+		c.CaptureAIBatchUploadTimeout = DefaultCaptureAIBatchUploadTimeout
+	}
+
+	if c.CaptureAIMaxQueueSize <= 0 {
+		c.CaptureAIMaxQueueSize = DefaultCaptureAIMaxQueueSize
 	}
 
 	if c.MaxEventBytes <= 0 {
