@@ -9,6 +9,27 @@ import (
 	json "github.com/goccy/go-json"
 )
 
+func TestFeatureFlagsResponseUnkeyedLiteralCompatibility(t *testing.T) {
+	// Keep the released field count and order: consumers may use unkeyed literals.
+	response := FeatureFlagsResponse{nil, nil, nil, false}
+	body := `{"flags":[{"key":"example"}],"group_type_mapping":{"0":"company"},"cohorts":{"cohort":{"type":"AND","values":[]}},"minimal_flag_called_events":true,"property_matching_version":2}`
+	if err := json.Unmarshal([]byte(body), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Flags) != 1 || response.Flags[0].Key != "example" {
+		t.Fatalf("flags = %v", response.Flags)
+	}
+	if response.GroupTypeMapping == nil || (*response.GroupTypeMapping)["0"] != "company" {
+		t.Fatalf("group mapping = %v", response.GroupTypeMapping)
+	}
+	if len(response.Cohorts) != 1 || response.Cohorts["cohort"].Type != "AND" {
+		t.Fatalf("cohorts = %v", response.Cohorts)
+	}
+	if !response.MinimalFlagCalledEvents {
+		t.Fatal("minimal flag called events was not decoded")
+	}
+}
+
 // Exercise the wire envelope and public local-only APIs, not just the matcher.
 func TestPropertyMatchingVersionDefinitions(t *testing.T) {
 	rows := []struct {

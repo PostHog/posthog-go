@@ -222,9 +222,6 @@ type FlagVariantMeta struct {
 
 // FeatureFlagsResponse is the wire-format response from the local evaluation endpoint.
 type FeatureFlagsResponse struct {
-	// PropertyMatchingVersion selects exact/is_not semantics; only 2 enables explicit matching.
-	// Missing versions retain legacy matching.
-	PropertyMatchingVersion int `json:"property_matching_version"`
 	// Flags contains feature flag definitions for local evaluation.
 	Flags []FeatureFlag `json:"flags"`
 	// GroupTypeMapping maps group type indexes to group type names.
@@ -611,7 +608,13 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
 		return
 	}
-	var featureFlagsResponse FeatureFlagsResponse
+	// Decode matching metadata privately to preserve FeatureFlagsResponse's public
+	// field layout, including compatibility with consumers' unkeyed literals.
+	var featureFlagsResponse struct {
+		FeatureFlagsResponse
+		// Only 2 enables explicit matching; missing and unknown versions stay legacy.
+		PropertyMatchingVersion int `json:"property_matching_version"`
+	}
 	if err = json.Unmarshal(resBody, &featureFlagsResponse); err != nil {
 		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
 		return
