@@ -246,6 +246,10 @@ func (e *CaptureRequestError) Unwrap() error
 type Client interface {
 	EnqueueClient
 
+	Flush() error
+
+	FlushWithContext(context.Context) error
+
 	Close() error
 
 	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
