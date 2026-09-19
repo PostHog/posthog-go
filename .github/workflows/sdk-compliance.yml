@@ -13,20 +13,46 @@ on:
 
 jobs:
   compliance:
-    name: PostHog SDK compliance tests (capture v0)
-    # Keep the harness image version pinned separately so v0/v1 runs are reproducible.
+    name: PostHog SDK compliance (${{ matrix.profile }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: v0-gzip
+            dockerfile: Dockerfile
+          - profile: v1-gzip
+            dockerfile: Dockerfile.v1
+          - profile: v1-deflate
+            dockerfile: Dockerfile.v1.deflate
+          - profile: v1-br
+            dockerfile: Dockerfile.v1.br
+          - profile: v1-zstd
+            dockerfile: Dockerfile.v1.zstd
     uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@03d972e49be84402c491324320b0a0f38c2ddc53
     with:
-      adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
+      adapter-dockerfile: sdk_compliance_adapter/${{ matrix.dockerfile }}
       adapter-context: "."
-      test-harness-version: "0.10.0"
-      report-name: "sdk-compliance-report-v0"
+      test-harness-version: "1.0.0"
+      sdk-type: server
+      concurrency: 1
+      continue-on-error: true
+      report-name: sdk-compliance-report-${{ matrix.profile }}
 
-  compliance-v1:
-    name: PostHog SDK compliance tests (capture v1)
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@03d972e49be84402c491324320b0a0f38c2ddc53
-    with:
-      adapter-dockerfile: "sdk_compliance_adapter/Dockerfile.v1"
-      adapter-context: "."
-      test-harness-version: "0.10.0"
-      report-name: "sdk-compliance-report-v1"
+  report-inventory:
+    name: Verify compliance report inventory
+    needs: compliance
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: sdk-compliance-report-*
+          path: reports
+      # Assertion failures remain advisory; absent/truncated/wrong-profile reports do not.
+      - run: |
+          python3 -m unittest discover -s sdk_compliance_adapter -p 'test_*.py'
+          python3 sdk_compliance_adapter/check_reports.py reports
