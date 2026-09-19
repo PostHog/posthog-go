@@ -1286,10 +1286,11 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 // $feature_flag_called events with locally_evaluated=true.
 func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord, locallyEvaluated map[string]struct{}, payload EvaluateFlagsPayload) bool {
 	poller := c.featureFlagsPoller
-	featureFlags, err := poller.GetFeatureFlags()
+	state, err := poller.getLoadedState()
 	if err != nil {
 		return true
 	}
+	featureFlags := state.featureFlags
 	if len(featureFlags) == 0 {
 		return true
 	}
@@ -1301,9 +1302,9 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 		missingFlagKeys[k] = struct{}{}
 	}
 
-	cohorts := poller.getCohorts()
+	cohorts := state.cohorts
 	fallbackToRemote := false
-	minimalFlagCalledEvents := poller.getMinimalFlagCalledEvents()
+	minimalFlagCalledEvents := state.minimalFlagCalledEvents
 	const localReason = "Evaluated locally"
 
 	for _, storedFlag := range featureFlags {
@@ -1321,6 +1322,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 			payload.PersonProperties,
 			payload.GroupProperties,
 			cohorts,
+			state,
 		)
 		if err != nil {
 			c.debugf("Unable to compute flag '%s' locally - %s", storedFlag.Key, err)
