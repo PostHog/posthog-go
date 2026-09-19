@@ -1,0 +1,39 @@
+{
+  "distinct_id": "user_1",
+  "event": "$mcp_tool_call",
+  "properties": {
+    "$groups": {
+      "organization": "org_1"
+    },
+    "$mcp_client_name": "test-client",
+    "$mcp_client_version": "2.0.0",
+    "$mcp_duration_ms": 42,
+    "$mcp_intent": "Find setup instructions",
+    "$mcp_intent_source": "inferred",
+    "$mcp_is_error": false,
+    "$mcp_parameters": {
+      "query": "setup"
+    },
+    "$mcp_protocol_version": "2026-07-28",
+    "$mcp_resource_name": "search_docs",
+    "$mcp_response": {
+      "content": [
+        {
+          "text": "Found",
+          "type": "text"
+        }
+      ]
+    },
+    "$mcp_server_name": "docs-server",
+    "$mcp_server_version": "1.0.0",
+    "$mcp_source": "posthog_mcp_analytics",
+    "$mcp_tool_category": "Docs",
+    "$mcp_tool_description": "Search documentation",
+    "$mcp_tool_name": "search_docs",
+    "$session_id": "session_1",
+    "$set": {
+      "plan": "pro"
+    },
+    "environment": "test"
+  }
+}
