@@ -9,13 +9,13 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-// marshalV1 builds the v1 wire event for a message and decodes it back into a
+// marshalEvent builds the wire event for a message and decodes it back into a
 // generic map so tests can assert the on-the-wire shape.
-func marshalV1(t *testing.T, msg Message) map[string]interface{} {
+func marshalEvent(t *testing.T, msg Message) map[string]interface{} {
 	t.Helper()
-	data, _, uuid, err := prepareForSendV1(msg, nil)
+	data, _, uuid, err := prepareForSend(msg, nil)
 	if err != nil {
-		t.Fatalf("prepareForSendV1: %v", err)
+		t.Fatalf("prepareForSend: %v", err)
 	}
 	if uuid == "" {
 		t.Fatalf("expected non-empty event uuid")
@@ -45,7 +45,7 @@ func wireOptions(t *testing.T, ev map[string]interface{}) map[string]interface{}
 	return opts
 }
 
-func TestV1EventNamesAndDistinctId(t *testing.T) {
+func TestEventNamesAndDistinctId(t *testing.T) {
 	cases := []struct {
 		name           string
 		msg            Message
@@ -60,7 +60,7 @@ func TestV1EventNamesAndDistinctId(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ev := marshalV1(t, tc.msg)
+			ev := marshalEvent(t, tc.msg)
 			if ev["event"] != tc.wantEvent {
 				t.Errorf("event = %v, want %v", ev["event"], tc.wantEvent)
 			}
@@ -71,7 +71,7 @@ func TestV1EventNamesAndDistinctId(t *testing.T) {
 	}
 }
 
-func TestV1DropsLibFromProperties(t *testing.T) {
+func TestDropsLibFromProperties(t *testing.T) {
 	// Decision B: SDK identity rides the PostHog-Sdk-Info header, never properties.
 	msgs := []Message{
 		Capture{Uuid: "u", Event: "e", DistinctId: "d"},
@@ -82,19 +82,19 @@ func TestV1DropsLibFromProperties(t *testing.T) {
 	}
 	for _, m := range msgs {
 		t.Run(fmt.Sprintf("%T", m), func(t *testing.T) {
-			ev := marshalV1(t, m)
+			ev := marshalEvent(t, m)
 			props := wireProps(t, ev)
 			if _, ok := props["$lib"]; ok {
-				t.Errorf("$lib must not be in v1 properties")
+				t.Errorf("$lib must not be in properties")
 			}
 			if _, ok := props["$lib_version"]; ok {
-				t.Errorf("$lib_version must not be in v1 properties")
+				t.Errorf("$lib_version must not be in properties")
 			}
 		})
 	}
 }
 
-func TestV1SystemContextAppliedAsDefaults(t *testing.T) {
+func TestSystemContextAppliedAsDefaults(t *testing.T) {
 	sysCtx := getSystemContext().ToProperties()
 	msgs := []struct {
 		name string
@@ -109,7 +109,7 @@ func TestV1SystemContextAppliedAsDefaults(t *testing.T) {
 
 	for _, tc := range msgs {
 		t.Run(tc.name, func(t *testing.T) {
-			ev := marshalV1(t, tc.msg)
+			ev := marshalEvent(t, tc.msg)
 			props := wireProps(t, ev)
 
 			for _, key := range []string{"$os", "$go_version"} {
@@ -121,7 +121,7 @@ func TestV1SystemContextAppliedAsDefaults(t *testing.T) {
 	}
 }
 
-func TestV1SystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
+func TestSystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
 	callerContext := Properties{
 		"$os":         "caller-os",
 		"$os_version": "caller-os-version",
@@ -154,7 +154,7 @@ func TestV1SystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
 
 	for _, tc := range msgs {
 		t.Run(tc.name, func(t *testing.T) {
-			ev := marshalV1(t, tc.msg)
+			ev := marshalEvent(t, tc.msg)
 			props := wireProps(t, ev)
 			for key, want := range callerContext {
 				if props[key] != want {
@@ -165,16 +165,16 @@ func TestV1SystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
 	}
 }
 
-func TestV1OptionsExtractedOnlyWhenPresent(t *testing.T) {
+func TestOptionsExtractedOnlyWhenPresent(t *testing.T) {
 	// No magic props -> empty options object.
-	ev := marshalV1(t, Capture{Uuid: "u", Event: "e", DistinctId: "d"})
+	ev := marshalEvent(t, Capture{Uuid: "u", Event: "e", DistinctId: "d"})
 	if opts := wireOptions(t, ev); len(opts) != 0 {
 		t.Errorf("expected empty options, got %v", opts)
 	}
 
 	// Overridden magic props -> lifted into options with renamed keys and
 	// removed from properties.
-	ev = marshalV1(t, Capture{
+	ev = marshalEvent(t, Capture{
 		Uuid: "u", Event: "e", DistinctId: "d",
 		Properties: Properties{
 			propertyCookielessMode:       true,
@@ -209,7 +209,7 @@ func TestV1OptionsExtractedOnlyWhenPresent(t *testing.T) {
 	}
 }
 
-func TestV1OptionsBoolCoercion(t *testing.T) {
+func TestOptionsBoolCoercion(t *testing.T) {
 	boolOptions := []struct {
 		propKey string
 		wireKey string
@@ -266,7 +266,7 @@ func TestV1OptionsBoolCoercion(t *testing.T) {
 	for _, opt := range boolOptions {
 		for _, tc := range coercionCases {
 			t.Run(opt.wireKey+"/"+tc.name, func(t *testing.T) {
-				ev := marshalV1(t, Capture{
+				ev := marshalEvent(t, Capture{
 					Uuid: "u", Event: "e", DistinctId: "d",
 					Properties: Properties{opt.propKey: tc.input, "keep": "yes"},
 				})
@@ -298,7 +298,7 @@ func TestV1OptionsBoolCoercion(t *testing.T) {
 	}
 }
 
-func TestV1OptionsProductTourIdCoercion(t *testing.T) {
+func TestOptionsProductTourIdCoercion(t *testing.T) {
 	cases := []struct {
 		name   string
 		input  interface{}
@@ -311,7 +311,7 @@ func TestV1OptionsProductTourIdCoercion(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ev := marshalV1(t, Capture{
+			ev := marshalEvent(t, Capture{
 				Uuid: "u", Event: "e", DistinctId: "d",
 				Properties: Properties{propertyProductTourId: tc.input, "keep": "yes"},
 			})
@@ -342,8 +342,8 @@ func TestV1OptionsProductTourIdCoercion(t *testing.T) {
 	}
 }
 
-func TestV1SessionAndWindowLifted(t *testing.T) {
-	ev := marshalV1(t, Capture{
+func TestSessionAndWindowLifted(t *testing.T) {
+	ev := marshalEvent(t, Capture{
 		Uuid: "u", Event: "e", DistinctId: "d",
 		Properties: Properties{
 			propertySessionID: "sess-1",
@@ -370,8 +370,8 @@ func TestV1SessionAndWindowLifted(t *testing.T) {
 	}
 }
 
-func TestV1IdentifySetInProperties(t *testing.T) {
-	ev := marshalV1(t, Identify{Uuid: "u", DistinctId: "d", Properties: Properties{"email": "a@b.co"}})
+func TestIdentifySetInProperties(t *testing.T) {
+	ev := marshalEvent(t, Identify{Uuid: "u", DistinctId: "d", Properties: Properties{"email": "a@b.co"}})
 	props := wireProps(t, ev)
 	set, ok := props["$set"].(map[string]interface{})
 	if !ok {
@@ -382,16 +382,16 @@ func TestV1IdentifySetInProperties(t *testing.T) {
 	}
 }
 
-func TestV1NilPropertiesOmitsSetKeys(t *testing.T) {
+func TestNilPropertiesOmitsSetKeys(t *testing.T) {
 	t.Run("identify", func(t *testing.T) {
-		ev := marshalV1(t, Identify{Uuid: "u", DistinctId: "d", Properties: nil})
+		ev := marshalEvent(t, Identify{Uuid: "u", DistinctId: "d", Properties: nil})
 		props := wireProps(t, ev)
 		if _, ok := props["$set"]; ok {
 			t.Errorf("$set should be omitted when Properties is nil, got %v", props["$set"])
 		}
 	})
 	t.Run("group_identify", func(t *testing.T) {
-		ev := marshalV1(t, GroupIdentify{Uuid: "u", Type: "company", Key: "acme", Properties: nil})
+		ev := marshalEvent(t, GroupIdentify{Uuid: "u", Type: "company", Key: "acme", Properties: nil})
 		props := wireProps(t, ev)
 		if _, ok := props["$group_set"]; ok {
 			t.Errorf("$group_set should be omitted when Properties is nil, got %v", props["$group_set"])
@@ -399,8 +399,8 @@ func TestV1NilPropertiesOmitsSetKeys(t *testing.T) {
 	})
 }
 
-func TestV1GroupIdentifyKeepsGroupFieldsInProperties(t *testing.T) {
-	ev := marshalV1(t, GroupIdentify{Uuid: "u", Type: "company", Key: "acme", Properties: Properties{"name": "Acme"}})
+func TestGroupIdentifyKeepsGroupFieldsInProperties(t *testing.T) {
+	ev := marshalEvent(t, GroupIdentify{Uuid: "u", Type: "company", Key: "acme", Properties: Properties{"name": "Acme"}})
 	props := wireProps(t, ev)
 	if props["$group_type"] != "company" {
 		t.Errorf("$group_type = %v", props["$group_type"])
@@ -417,10 +417,10 @@ func TestV1GroupIdentifyKeepsGroupFieldsInProperties(t *testing.T) {
 	}
 }
 
-func TestV1AliasIdentityPlacement(t *testing.T) {
+func TestAliasIdentityPlacement(t *testing.T) {
 	// C: alias merge reads "alias" from properties and the top-level distinct_id;
 	// distinct_id must NOT be duplicated into properties.
-	ev := marshalV1(t, Alias{Uuid: "u", DistinctId: "user-3", Alias: "anon-9"})
+	ev := marshalEvent(t, Alias{Uuid: "u", DistinctId: "user-3", Alias: "anon-9"})
 	if ev["distinct_id"] != "user-3" {
 		t.Errorf("top-level distinct_id = %v", ev["distinct_id"])
 	}
@@ -433,20 +433,20 @@ func TestV1AliasIdentityPlacement(t *testing.T) {
 	}
 }
 
-func TestV1OptionsRendersEmptyObjectNotNull(t *testing.T) {
-	data, _, _, err := prepareForSendV1(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
+func TestOptionsRendersEmptyObjectNotNull(t *testing.T) {
+	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
 	if err != nil {
-		t.Fatalf("prepareForSendV1: %v", err)
+		t.Fatalf("prepareForSend: %v", err)
 	}
 	if got := string(data); !strings.Contains(got, `"options":{}`) {
 		t.Errorf("expected options to render as {}, got %s", got)
 	}
 }
 
-func TestV1EnvelopeShape(t *testing.T) {
-	data, _, _, err := prepareForSendV1(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
+func TestEnvelopeShape(t *testing.T) {
+	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
 	if err != nil {
-		t.Fatalf("prepareForSendV1: %v", err)
+		t.Fatalf("prepareForSend: %v", err)
 	}
 	batch := eventBatch{
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -464,7 +464,7 @@ func TestV1EnvelopeShape(t *testing.T) {
 		t.Error("envelope missing created_at")
 	}
 	if _, ok := generic["api_key"]; ok {
-		t.Error("v1 envelope must not carry api_key")
+		t.Error("envelope must not carry api_key")
 	}
 	// historical_migration omitted when false.
 	if _, ok := generic["historical_migration"]; ok {
@@ -475,7 +475,7 @@ func TestV1EnvelopeShape(t *testing.T) {
 	}
 }
 
-func TestV1ResponseUnmarshal(t *testing.T) {
+func TestResponseUnmarshal(t *testing.T) {
 	body := `{"results":{
 		"a":{"result":"ok"},
 		"b":{"result":"warning","details":"person_processing_disabled"},
@@ -483,7 +483,7 @@ func TestV1ResponseUnmarshal(t *testing.T) {
 		"d":{"result":"retry","details":"not_persisted"},
 		"e":{"result":"some_future_status"}
 	}}`
-	var resp captureV1Response
+	var resp captureResponse
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
@@ -505,8 +505,8 @@ func TestV1ResponseUnmarshal(t *testing.T) {
 	}
 }
 
-func TestV1ErrorResponseUnmarshal(t *testing.T) {
-	var e v1ErrorResponse
+func TestErrorResponseUnmarshal(t *testing.T) {
+	var e captureErrorResponse
 	if err := json.Unmarshal([]byte(`{"error":"billing_limit_exceeded","error_description":"over quota"}`), &e); err != nil {
 		t.Fatalf("unmarshal error response: %v", err)
 	}

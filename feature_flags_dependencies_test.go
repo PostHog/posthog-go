@@ -12,6 +12,9 @@ import (
 func newFlagDependencyClient(t *testing.T, definitions string, remoteFallback bool) Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(definitions))
 		} else if remoteFallback && strings.HasPrefix(r.URL.Path, "/flags/") {
@@ -68,6 +71,9 @@ const malformedFlagDependencyDefinitions = `{
 
 func TestFlagDependenciesSimpleChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
@@ -166,6 +172,9 @@ func TestFlagDependenciesSimpleChain(t *testing.T) {
 
 func TestFlagDependenciesCircularDependency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
@@ -254,6 +263,9 @@ func TestFlagDependenciesMissingFlag(t *testing.T) {
 
 func TestFlagDependenciesComplexChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [
@@ -377,6 +389,9 @@ func TestFlagDependenciesMalformedChain(t *testing.T) {
 
 func TestMultiLevelMultivariateDependencyChain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(`{
 				"flags": [

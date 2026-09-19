@@ -3,13 +3,16 @@
 # Public API scope: importable non-main packages in this module, excluding examples, cmd, and SDK compliance adapter packages.
 # Doc comments are intentionally excluded so documentation-only edits do not change this snapshot.
 
-## github.com/posthog/posthog-go
+## github.com/posthog/posthog-go/v2
 
-package posthog // import "github.com/posthog/posthog-go"
+package posthog // import "github.com/posthog/posthog-go/v2"
 
 
 CONSTANTS
 
+const (
+	DefaultMaxRetryBackoff = 30 * time.Second
+)
 const (
 	SDKName = "posthog-go"
 
@@ -30,6 +33,14 @@ const (
 	DefaultBatchSubmitTimeout = 100 * time.Millisecond
 
 	DefaultMaxEnqueuedRequests = 1000
+
+	DefaultMaxEventBytes = 500000
+
+	DefaultMaxBatchBytes = 500000
+
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
+
+	DefaultCaptureAIMaxQueueSize = 1000
 
 	DefaultMaxQueueSize = 10000
 )
@@ -91,6 +102,8 @@ var ErrFlagNotFound = errors.New("feature flag not found")
 
 
 FUNCTIONS
+
+func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error
 
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error
 
@@ -207,6 +220,7 @@ type CaptureEventError struct {
 	Result string
 	Details string
 	Exhausted bool
+	Endpoint string
 }
 
 
@@ -225,17 +239,22 @@ type CaptureInApi struct {
 	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 
-type CaptureMode uint8
+type CaptureLocalError struct {
+	Endpoint string
+	Err error
+}
 
-const (
-	CaptureModeLegacy CaptureMode = 0
-	CaptureModeAnalyticsV1 CaptureMode = 1
-)
+
+func (e *CaptureLocalError) Error() string
+
+func (e *CaptureLocalError) Unwrap() error
+
 type CaptureRequestError struct {
 	StatusCode int
 	Code string
 	Description string
 	Err error
+	Endpoint string
 }
 
 
@@ -245,6 +264,8 @@ func (e *CaptureRequestError) Unwrap() error
 
 type Client interface {
 	EnqueueClient
+
+	EnqueueAI(Message) error
 
 	Close() error
 
@@ -328,6 +349,16 @@ type Config struct {
 
 	BatchSize int
 
+	MaxEventBytes int
+
+	MaxBatchBytes int
+
+	CaptureAICompression CompressionMode
+
+	CaptureAIBatchUploadTimeout time.Duration
+
+	CaptureAIMaxQueueSize int
+
 	MaxQueueSize int
 
 	Verbose bool
@@ -335,6 +366,8 @@ type Config struct {
 	RetryAfter func(int) time.Duration
 
 	MaxRetries *int
+
+	MaxRetryBackoff time.Duration
 
 	ShutdownTimeout time.Duration
 
@@ -345,8 +378,6 @@ type Config struct {
 	MaxEnqueuedRequests int
 
 	Compression CompressionMode
-
-	CaptureMode CaptureMode
 
 }
 
@@ -920,8 +951,8 @@ type Variants struct {
 }
 
 
-## github.com/posthog/posthog-go/extras
+## github.com/posthog/posthog-go/v2/extras
 
-package extras // import "github.com/posthog/posthog-go/extras"
+package extras // import "github.com/posthog/posthog-go/v2/extras"
 
 
