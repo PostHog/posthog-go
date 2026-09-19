@@ -207,7 +207,7 @@ func TestPropertyMatchingVersionReloadAndPropagation(t *testing.T) {
 			if err := json.Unmarshal([]byte(fmt.Sprintf(matchingVersionDefinitions, "")), &raw); err != nil {
 				t.Fatal(err)
 			}
-			got, err := poller.matchCohort(FlagProperty{Value: "outer"}, config.PersonProperties, raw.Cohorts, state.flagsByKey, map[string]interface{}{}, "person", nil, false, state)
+			got, err := poller.matchCohort(FlagProperty{Value: "outer"}, config.PersonProperties, raw.Cohorts, state.flagsByKey, map[string]interface{}{}, "person", nil, nil, state)
 			if err != nil || got != step.want {
 				t.Errorf("raw cohort got %v err=%v", got, err)
 			}

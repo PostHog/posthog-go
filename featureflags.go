@@ -336,15 +336,10 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	deviceId *string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
-	groupContext bool,
+	aggregationGroupTypeIndex *uint8,
 	snapshots ...*flagsState,
 ) (bool, error) {
 	state := poller.evaluationState(snapshots)
-	// Group conditions no longer have the person's properties or bucketing ID.
-	// This must precede cache lookup, including for person-targeted dependencies.
-	if groupContext {
-		return false, &RequiresServerEvaluationError{"Flag dependency cannot use group context"}
-	}
 	// Some of these conditions should never happen, but we'll check them to be defensive.
 	if property.Value == nil {
 		return false, &InconclusiveMatchError{
@@ -387,17 +382,18 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
-		// This evaluator has only the caller's properties, not the referenced
-		// flag's group context. Do not turn missing context into a local result.
-		// Check before the cache so repeated cohort references also fall back.
+		// Dependencies can reuse the caller's key and properties only for the
+		// same aggregation type. Check before the cache so repeated cohort
+		// references cannot bypass the cross-type server boundary.
 		depFlag := flagsByKey[depFlagKey]
 		if depFlag.Active {
-			groupTargeted := depFlag.Filters.AggregationGroupTypeIndex != nil
-			for _, condition := range depFlag.Filters.Groups {
-				groupTargeted = groupTargeted || condition.AggregationGroupTypeIndex != nil
+			if !uint8PtrEqual(depFlag.Filters.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
+				return false, &RequiresServerEvaluationError{"Flag dependency requires different aggregation context"}
 			}
-			if groupTargeted {
-				return false, &RequiresServerEvaluationError{"Flag dependency requires group context"}
+			for _, condition := range depFlag.Filters.Groups {
+				if condition.AggregationGroupTypeIndex != nil && !uint8PtrEqual(condition.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
+					return false, &RequiresServerEvaluationError{"Flag dependency requires different aggregation context"}
+				}
 			}
 		}
 		if _, exists := evaluationCache[depFlagKey]; exists {
@@ -1169,12 +1165,21 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 			isMatch bool
 			err     error
 		)
-		groupContext := flag.Filters.AggregationGroupTypeIndex != nil || condition.AggregationGroupTypeIndex != nil
+		aggregationGroupTypeIndex := condition.AggregationGroupTypeIndex
+		if aggregationGroupTypeIndex == nil {
+			aggregationGroupTypeIndex = flag.Filters.AggregationGroupTypeIndex
+		}
+		dependencyDistinctId, dependencyDeviceId := distinctId, deviceId
+		if aggregationGroupTypeIndex != nil {
+			// A condition-level group override uses the group's key, not the
+			// original person's ID or device, for dependent flag bucketing.
+			dependencyDistinctId, dependencyDeviceId = bucketingId, nil
+		}
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, groupContext, state)
+				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, aggregationGroupTypeIndex, state)
 			} else if prop.Type == "flag" {
-				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts, groupContext, state)
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, cohorts, aggregationGroupTypeIndex, state)
 			} else {
 				isMatch, err = matchProperty(prop, properties, state.propertyMatchingVersion)
 			}
