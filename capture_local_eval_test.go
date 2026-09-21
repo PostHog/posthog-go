@@ -26,6 +26,9 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 	t.Helper()
 	s := &captureLocalEvalServer{}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			if definitionsFixture == "" {
@@ -36,9 +39,6 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			s.decideCalls.Add(1)
 			w.Write([]byte(decideResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -225,15 +225,15 @@ func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, 
 	t.Helper()
 	var decideCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(definitions))
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			decideCalls.Add(1)
 			w.Write([]byte(flagsResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
