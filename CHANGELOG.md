@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.25.3
+
+### Patch Changes
+
+- 739a26f: Honor the definitions snapshot's `property_matching_version` during local flag evaluation: version 2 uses explicit boolean equality, while missing/1 and unknown versions retain legacy matching. Keep definitions and matching semantics together across reloads, cached 304 responses, group/cohort rules, and flag dependencies. Also preserve JSON-decoded dependency chains in cohort leaves, while requiring server evaluation for dependencies that need a different aggregation context. Same-group dependencies reuse the caller’s group key and properties for local evaluation.
+
 ## 1.25.2
 
 ### Patch Changes
