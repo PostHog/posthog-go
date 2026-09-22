@@ -631,6 +631,7 @@ type FlagDefinitionCacheData struct {
 	GroupTypeMapping        map[string]string          `json:"group_type_mapping"`
 	Cohorts                 map[string]json.RawMessage `json:"cohorts"`
 	MinimalFlagCalledEvents bool                       `json:"minimal_flag_called_events"`
+	PropertyMatchingVersion int `json:"property_matching_version,omitempty"`
 }
 
 type FlagDefinitionCacheProvider interface {
