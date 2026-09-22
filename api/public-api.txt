@@ -318,6 +318,8 @@ type Config struct {
 
 	NextFeatureFlagsPollingTick func() time.Duration
 
+	FlagDefinitionCacheProvider FlagDefinitionCacheProvider
+
 	HistoricalMigration bool
 
 	Transport http.RoundTripper
@@ -627,6 +629,17 @@ type Filter struct {
 	DecodedPayloads map[string]string `json:"-"`
 	VariantLookupTable []FlagVariantMeta `json:"-"`
 }
+
+type FlagDefinitionCacheProvider interface {
+	GetFlagDefinitions(ctx context.Context) (json.RawMessage, error)
+
+	ShouldFetchFlagDefinitions(ctx context.Context) (bool, error)
+
+	OnFlagDefinitionsReceived(ctx context.Context, data json.RawMessage) error
+
+	Shutdown(ctx context.Context) error
+}
+
 
 type FlagDetail struct {
 	Key string `json:"key"`
