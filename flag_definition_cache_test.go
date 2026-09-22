@@ -44,29 +44,18 @@ const cachedFlagDefinitions = `{
 	"minimal_flag_called_events": true
 }`
 
-var malformedMultivariateFlags = []json.RawMessage{json.RawMessage(`{
+const malformedMultivariateDefinitions = `{"flags":[{
 	"key": "malformed-multivariate",
 	"active": true,
 	"filters": {"multivariate": {"variants": [{"key": "control"}]}}
-}`)}
-
-func decodedFlags(t *testing.T, raw []json.RawMessage) []FeatureFlag {
-	t.Helper()
-	flags := make([]FeatureFlag, 0, len(raw))
-	for _, r := range raw {
-		var flag FeatureFlag
-		require.NoError(t, json.Unmarshal(r, &flag))
-		flags = append(flags, flag)
-	}
-	return flags
-}
+}]}`
 
 type fakeFlagDefinitionCache struct {
 	mu sync.Mutex
 
 	shouldFetch    bool
 	shouldFetchErr error
-	cached         *FlagDefinitionCacheData
+	cached         json.RawMessage
 	getErr         error
 	publishErr     error
 	shutdownErr    error
@@ -75,7 +64,7 @@ type fakeFlagDefinitionCache struct {
 
 	shouldFetchCalls int
 	getCalls         int
-	published        []FlagDefinitionCacheData
+	published        []json.RawMessage
 	shutdownCalls    int
 }
 
@@ -92,14 +81,14 @@ func (c *fakeFlagDefinitionCache) ShouldFetchFlagDefinitions(ctx context.Context
 	return shouldFetch, err
 }
 
-func (c *fakeFlagDefinitionCache) GetFlagDefinitions(context.Context) (*FlagDefinitionCacheData, error) {
+func (c *fakeFlagDefinitionCache) GetFlagDefinitions(context.Context) (json.RawMessage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.getCalls++
 	return c.cached, c.getErr
 }
 
-func (c *fakeFlagDefinitionCache) OnFlagDefinitionsReceived(_ context.Context, data FlagDefinitionCacheData) error {
+func (c *fakeFlagDefinitionCache) OnFlagDefinitionsReceived(_ context.Context, data json.RawMessage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.published = append(c.published, data)
@@ -119,10 +108,10 @@ func (c *fakeFlagDefinitionCache) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (c *fakeFlagDefinitionCache) calls() (shouldFetch, get, shutdown int, published []FlagDefinitionCacheData) {
+func (c *fakeFlagDefinitionCache) calls() (shouldFetch, get, shutdown int, published []json.RawMessage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.shouldFetchCalls, c.getCalls, c.shutdownCalls, append([]FlagDefinitionCacheData(nil), c.published...)
+	return c.shouldFetchCalls, c.getCalls, c.shutdownCalls, append([]json.RawMessage(nil), c.published...)
 }
 
 func definitionsServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) (*httptest.Server, func() int) {
@@ -210,10 +199,7 @@ func TestFlagDefinitionCacheLeaderFetchesAndPublishes(t *testing.T) {
 	require.Zero(t, getCalls, "the fetching instance has no reason to read the cache")
 	require.Len(t, published, 1, "fetched definitions are published for the other instances")
 
-	require.Len(t, decodedFlags(t, published[0].Flags), 2)
-	require.Equal(t, map[string]string{"0": "company"}, published[0].GroupTypeMapping)
-	require.Contains(t, published[0].Cohorts, "1")
-	require.True(t, published[0].MinimalFlagCalledEvents)
+	require.Equal(t, cachedFlagDefinitions, string(published[0]))
 
 	state := poller.state.Load()
 	require.NotNil(t, state)
@@ -222,10 +208,7 @@ func TestFlagDefinitionCacheLeaderFetchesAndPublishes(t *testing.T) {
 }
 
 func TestFlagDefinitionCacheFollowerReadsCacheInsteadOfAPI(t *testing.T) {
-	var cached FlagDefinitionCacheData
-	require.NoError(t, json.Unmarshal([]byte(cachedFlagDefinitions), &cached))
-
-	provider := &fakeFlagDefinitionCache{shouldFetch: false, cached: &cached}
+	provider := &fakeFlagDefinitionCache{shouldFetch: false, cached: json.RawMessage(cachedFlagDefinitions)}
 	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
 	poller := newCachingTestPoller(t, server.URL, provider)
@@ -261,12 +244,7 @@ func TestFlagDefinitionCacheEvaluatesFlagsLoadedFromCache(t *testing.T) {
 	_, _, _, published := leader.calls()
 	require.Len(t, published, 1)
 
-	encoded, err := json.Marshal(published[0])
-	require.NoError(t, err)
-	var roundTripped FlagDefinitionCacheData
-	require.NoError(t, json.Unmarshal(encoded, &roundTripped))
-
-	follower := &fakeFlagDefinitionCache{shouldFetch: false, cached: &roundTripped}
+	follower := &fakeFlagDefinitionCache{shouldFetch: false, cached: published[0]}
 	followerPoller := newCachingTestPoller(t, server.URL, follower)
 	followerPoller.fetchNewFeatureFlags()
 
@@ -303,7 +281,7 @@ func TestFlagDefinitionCacheEvaluatesFlagsLoadedFromCache(t *testing.T) {
 func TestFlagDefinitionCacheEmptyFlagsIsAHit(t *testing.T) {
 	provider := &fakeFlagDefinitionCache{
 		shouldFetch: false,
-		cached:      &FlagDefinitionCacheData{Flags: []json.RawMessage{}},
+		cached:      json.RawMessage(`{"flags":[]}`),
 	}
 	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
@@ -318,8 +296,7 @@ func TestFlagDefinitionCacheEmptyFlagsIsAHit(t *testing.T) {
 }
 
 func TestFlagDefinitionCacheMissingFlagsIsAMiss(t *testing.T) {
-	// What a provider that deserialized the JSON document `{}` hands back.
-	provider := &fakeFlagDefinitionCache{shouldFetch: false, cached: &FlagDefinitionCacheData{}}
+	provider := &fakeFlagDefinitionCache{shouldFetch: false, cached: json.RawMessage(`{}`)}
 	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
 	poller := newCachingTestPoller(t, server.URL, provider)
@@ -333,8 +310,6 @@ func TestFlagDefinitionCacheMissingFlagsIsAMiss(t *testing.T) {
 }
 
 func TestFlagDefinitionCacheUnusableDefinitionsKeepTheLoadedOnes(t *testing.T) {
-	malformed := FlagDefinitionCacheData{Flags: malformedMultivariateFlags}
-
 	provider := &fakeFlagDefinitionCache{shouldFetch: true}
 	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
@@ -344,7 +319,7 @@ func TestFlagDefinitionCacheUnusableDefinitionsKeepTheLoadedOnes(t *testing.T) {
 
 	provider.mu.Lock()
 	provider.shouldFetch = false
-	provider.cached = &malformed
+	provider.cached = json.RawMessage(malformedMultivariateDefinitions)
 	provider.mu.Unlock()
 
 	require.NotPanics(t, poller.fetchNewFeatureFlags)
@@ -359,7 +334,7 @@ func TestFlagDefinitionCacheUnusableDefinitionsKeepTheLoadedOnes(t *testing.T) {
 func TestFlagDefinitionCacheUnusableDefinitionsFetchWithoutWarmState(t *testing.T) {
 	provider := &fakeFlagDefinitionCache{
 		shouldFetch: false,
-		cached:      &FlagDefinitionCacheData{Flags: malformedMultivariateFlags},
+		cached:      json.RawMessage(malformedMultivariateDefinitions),
 	}
 	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
@@ -480,9 +455,7 @@ func TestFlagDefinitionCacheNotModifiedRepublishesDefinitions(t *testing.T) {
 
 	_, _, _, published := provider.calls()
 	require.Len(t, published, 2)
-	require.Len(t, published[1].Flags, 2, "the 304 republishes the definitions in memory")
-	require.Contains(t, published[1].Cohorts, "1")
-	require.True(t, published[1].MinimalFlagCalledEvents, "the 304 republishes the gate too")
+	require.Equal(t, cachedFlagDefinitions, string(published[1]), "the 304 republishes the complete snapshot")
 }
 
 func TestFlagDefinitionCacheNotModifiedDoesNotPublishForFollowers(t *testing.T) {
@@ -554,13 +527,9 @@ func TestFlagDefinitionCachePublishesTheEndpointPayloadVerbatim(t *testing.T) {
 	_, _, _, published := provider.calls()
 	require.Len(t, published, 1)
 
-	stored, err := json.Marshal(published[0])
-	require.NoError(t, err)
-	require.JSONEq(t, served, string(stored), "fields this SDK does not model must survive a JSON cache")
+	require.Equal(t, served, string(published[0]), "fields this SDK does not model must survive a JSON cache")
 
-	var reloaded FlagDefinitionCacheData
-	require.NoError(t, json.Unmarshal(stored, &reloaded))
-	follower := &fakeFlagDefinitionCache{shouldFetch: false, cached: &reloaded}
+	follower := &fakeFlagDefinitionCache{shouldFetch: false, cached: published[0]}
 	followerPoller := newCachingTestPoller(t, server.URL, follower)
 	followerPoller.fetchNewFeatureFlags()
 	require.Contains(t, followerPoller.state.Load().flagsByKey, "rich-flag")
@@ -782,6 +751,7 @@ func TestFlagDefinitionCacheExpiredDeadlineCancelsPollingBeforeShutdown(t *testi
 		t.Fatal("shutdownPoller did not return after cancelling the in-flight provider call")
 	}
 
+	require.Eventually(t, func() bool { return len(timeline.snapshot()) == 2 }, 5*time.Second, time.Millisecond)
 	require.Equal(t, []string{"should-fetch returned", "shutdown"}, timeline.snapshot())
 
 	_, getCalls, shutdownCalls, published := provider.calls()
@@ -819,6 +789,7 @@ func TestFlagDefinitionCacheCloseDeadlineWithActiveProviderCallStaysOrdered(t *t
 		t.Fatal("CloseWithContext hung behind an in-flight provider call")
 	}
 
+	require.Eventually(t, func() bool { return len(timeline.snapshot()) == 2 }, 5*time.Second, time.Millisecond)
 	require.Equal(t, []string{"should-fetch returned", "shutdown"}, timeline.snapshot())
 
 	_, getCalls, shutdownCalls, _ := provider.calls()
@@ -827,10 +798,7 @@ func TestFlagDefinitionCacheCloseDeadlineWithActiveProviderCallStaysOrdered(t *t
 }
 
 func TestFlagDefinitionCacheProviderThroughClient(t *testing.T) {
-	var cached FlagDefinitionCacheData
-	require.NoError(t, json.Unmarshal([]byte(cachedFlagDefinitions), &cached))
-
-	provider := &fakeFlagDefinitionCache{shouldFetch: false, cached: &cached}
+	provider := &fakeFlagDefinitionCache{shouldFetch: false, cached: json.RawMessage(cachedFlagDefinitions)}
 	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
 	client, err := NewWithConfig("phc_test", Config{

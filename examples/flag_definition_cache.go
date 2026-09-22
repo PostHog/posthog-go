@@ -65,7 +65,7 @@ func (c *FileFlagCache) ShouldFetchFlagDefinitions(_ context.Context) (bool, err
 	return true, c.writeLock()
 }
 
-func (c *FileFlagCache) GetFlagDefinitions(_ context.Context) (*posthog.FlagDefinitionCacheData, error) {
+func (c *FileFlagCache) GetFlagDefinitions(_ context.Context) (json.RawMessage, error) {
 	contents, err := os.ReadFile(c.cachePath())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -73,28 +73,19 @@ func (c *FileFlagCache) GetFlagDefinitions(_ context.Context) (*posthog.FlagDefi
 		return nil, err
 	}
 
-	var data posthog.FlagDefinitionCacheData
-	if err := json.Unmarshal(contents, &data); err != nil {
-		return nil, err
-	}
-	return &data, nil
+	return contents, nil
 }
 
 // OnFlagDefinitionsReceived publishes definitions, writing to a temporary file and
 // renaming it so that a reader never observes a half-written payload.
-func (c *FileFlagCache) OnFlagDefinitionsReceived(_ context.Context, data posthog.FlagDefinitionCacheData) error {
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-
+func (c *FileFlagCache) OnFlagDefinitionsReceived(_ context.Context, data json.RawMessage) error {
 	tmp, err := os.CreateTemp(c.dir, c.name+".*.tmp")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
 
-	if _, err := tmp.Write(encoded); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -102,7 +93,7 @@ func (c *FileFlagCache) OnFlagDefinitionsReceived(_ context.Context, data postho
 		return err
 	}
 
-	fmt.Printf("   [%s] published %d flag definitions to the shared cache\n", c.shortID(), len(data.Flags))
+	fmt.Printf("   [%s] published %d bytes of flag definitions to the shared cache\n", c.shortID(), len(data))
 	return os.Rename(tmp.Name(), c.cachePath())
 }
 

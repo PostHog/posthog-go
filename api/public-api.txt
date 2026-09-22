@@ -626,20 +626,12 @@ type Filter struct {
 	VariantLookupTable []FlagVariantMeta `json:"-"`
 }
 
-type FlagDefinitionCacheData struct {
-	Flags                   []json.RawMessage          `json:"flags"`
-	GroupTypeMapping        map[string]string          `json:"group_type_mapping"`
-	Cohorts                 map[string]json.RawMessage `json:"cohorts"`
-	MinimalFlagCalledEvents bool                       `json:"minimal_flag_called_events"`
-	PropertyMatchingVersion int `json:"property_matching_version,omitempty"`
-}
-
 type FlagDefinitionCacheProvider interface {
-	GetFlagDefinitions(ctx context.Context) (*FlagDefinitionCacheData, error)
+	GetFlagDefinitions(ctx context.Context) (json.RawMessage, error)
 
 	ShouldFetchFlagDefinitions(ctx context.Context) (bool, error)
 
-	OnFlagDefinitionsReceived(ctx context.Context, data FlagDefinitionCacheData) error
+	OnFlagDefinitionsReceived(ctx context.Context, data json.RawMessage) error
 
 	Shutdown(ctx context.Context) error
 }
