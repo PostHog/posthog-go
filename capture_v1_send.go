@@ -60,6 +60,7 @@ func (c *client) sendV1(pb preparedBatch) {
 	pendingUuids := pb.uuids
 
 	for i := 0; i < c.maxAttempts; i++ {
+		c.beginDeliveryAttempt(pb.done)
 		attempt := i + 1
 		lastAttempt := i == c.maxAttempts-1
 
@@ -100,6 +101,7 @@ func (c *client) sendV1(pb preparedBatch) {
 				c.dropMessages(pendingMsgs, reqErr)
 				return
 			}
+			c.deferDeliveryRetry(pb.done)
 			if !c.backoffV1(i, res) {
 				c.notifyFailure(pendingMsgs, reqErr)
 				return
@@ -125,6 +127,7 @@ func (c *client) sendV1(pb preparedBatch) {
 				return
 			}
 			pendingData, pendingMsgs, pendingUuids = nextData, nextMsgs, nextUuids
+			c.deferDeliveryRetry(pb.done)
 			if !c.backoffV1(i, res) {
 				c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff})
 				return
@@ -138,6 +141,7 @@ func (c *client) sendV1(pb preparedBatch) {
 				c.dropMessages(pendingMsgs, err)
 				return
 			}
+			c.deferDeliveryRetry(pb.done)
 			if !c.backoffV1(i, res) {
 				c.notifyFailure(pendingMsgs, err)
 				return
