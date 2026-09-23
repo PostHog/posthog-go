@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -20,6 +21,24 @@ var (
 	base64URLPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
 	base64DataPrefix    = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
 	base64DataPayload   = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
+
+	// Intent-only structured identifiers. Patterns follow the Python and
+	// TypeScript MCP sanitizers: bounded quantifiers, ASCII classes, and
+	// horizontal Unicode spaces normalized before matching. Go's RE2 engine
+	// has no lookaround, so IPv6 and phone boundaries are checked beside the
+	// match instead.
+	unicodeHorizontalSpacePattern = regexp.MustCompile("[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
+	emailPattern                  = regexp.MustCompile(`[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}`)
+	ipv4Pattern                   = regexp.MustCompile(`\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b`)
+	ipv6FullPattern               = regexp.MustCompile(`\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b`)
+	ipv6TailPattern               = regexp.MustCompile(`(?:[0-9A-Fa-f]{1,4}:){1,7}:`)
+	ipv6MidPattern                = regexp.MustCompile(`(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,5}`)
+	ipv6LeadPattern               = regexp.MustCompile(`::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})`)
+	creditCardCandidatePattern    = regexp.MustCompile(`\b\d(?:[ ./-]?\d){12,}\b`)
+	digitGroupPattern             = regexp.MustCompile(`\d+`)
+	ssnPattern                    = regexp.MustCompile(`\b\d{3}[ .-]\d{2}[ .-]\d{4}\b`)
+	phoneNANPPattern              = regexp.MustCompile(`(?:\+?1[ ./-]?)?(?:\(\d{3}\)[ ./-]?|\d{3}[ ./-])\d{3}[ ./-]\d{4}`)
+	phoneIntlPattern              = regexp.MustCompile(`\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}`)
 )
 
 func normalizePayload(field string, value any) (normalized any, err error) {
@@ -78,6 +97,129 @@ func sanitizeCapturedValue(value any) any {
 	default:
 		return value
 	}
+}
+
+func redactIntent(value string) string {
+	result := unicodeHorizontalSpacePattern.ReplaceAllString(value, " ")
+	result = emailPattern.ReplaceAllString(result, redactedValue)
+	result = ipv4Pattern.ReplaceAllString(result, redactedValue)
+	result = ipv6FullPattern.ReplaceAllString(result, redactedValue)
+	result = replaceIf(ipv6TailPattern, result, func(value string, start, end int) bool {
+		return leftAllows(value, start, ":") && rightAllows(value, end, ":")
+	})
+	result = replaceIf(ipv6MidPattern, result, func(value string, start, end int) bool {
+		return leftAllows(value, start, ":") && rightAllows(value, end, "")
+	})
+	result = replaceIf(ipv6LeadPattern, result, func(value string, start, end int) bool {
+		return leftAllows(value, start, ":") && rightAllows(value, end, "")
+	})
+	result = creditCardCandidatePattern.ReplaceAllStringFunc(result, redactCardInMatch)
+	result = ssnPattern.ReplaceAllString(result, redactedValue)
+	result = replaceIf(phoneNANPPattern, result, func(value string, start, end int) bool {
+		return leftAllows(value, start, "+") && rightAllows(value, end, "")
+	})
+	result = replaceIf(phoneIntlPattern, result, func(value string, start, end int) bool {
+		return leftAllows(value, start, "") && rightAllows(value, end, "")
+	})
+	return result
+}
+
+func replaceIf(pattern *regexp.Regexp, value string, accept func(value string, start, end int) bool) string {
+	locs := pattern.FindAllStringIndex(value, -1)
+	if len(locs) == 0 {
+		return value
+	}
+
+	var b strings.Builder
+	last := 0
+	replaced := false
+	for _, loc := range locs {
+		if loc[0] < last || !accept(value, loc[0], loc[1]) {
+			continue
+		}
+		b.WriteString(value[last:loc[0]])
+		b.WriteString(redactedValue)
+		last = loc[1]
+		replaced = true
+	}
+	if !replaced {
+		return value
+	}
+	b.WriteString(value[last:])
+	return b.String()
+}
+
+func leftAllows(value string, index int, extraForbidden string) bool {
+	if index == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(value[:index])
+	return !isASCIIWord(r) && !strings.ContainsRune(extraForbidden, r)
+}
+
+func rightAllows(value string, index int, extraForbidden string) bool {
+	if index == len(value) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(value[index:])
+	return !isASCIIWord(r) && !strings.ContainsRune(extraForbidden, r)
+}
+
+func isASCIIWord(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_'
+}
+
+func redactCardInMatch(text string) string {
+	groups := digitGroupPattern.FindAllStringIndex(text, -1)
+	if len(groups) == 0 {
+		return text
+	}
+
+	var b strings.Builder
+	cursor := 0
+	for first := 0; first < len(groups); {
+		digits := ""
+		matchedLast := -1
+		for last := first; last < len(groups); last++ {
+			digits += text[groups[last][0]:groups[last][1]]
+			if len(digits) > 19 {
+				break
+			}
+			if len(digits) >= 13 && passesLuhn(digits) {
+				matchedLast = last
+			}
+		}
+		if matchedLast >= 0 {
+			b.WriteString(text[cursor:groups[first][0]])
+			b.WriteString(redactedValue)
+			cursor = groups[matchedLast][1]
+			first = matchedLast + 1
+			continue
+		}
+		first++
+	}
+	b.WriteString(text[cursor:])
+	return b.String()
+}
+
+func passesLuhn(digits string) bool {
+	total := 0
+	double := false
+	for index := len(digits) - 1; index >= 0; index-- {
+		digit := int(digits[index] - '0')
+		if digit < 0 || digit > 9 {
+			return false
+		}
+		if double {
+			digit *= 2
+			if digit > 9 {
+				digit -= 9
+			}
+		}
+		total += digit
+		double = !double
+	}
+	return total%10 == 0
 }
 
 func sanitizeString(value string) string {

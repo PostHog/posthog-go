@@ -11,5 +11,4 @@ are pinned to PostHog/posthog-js commit
 - `packages/mcp/src/__tests__/sink.test.ts`
 
 Go-specific validation, UTF-8 byte limits, deterministic size pruning, and
-stackless synthetic exceptions intentionally differ from JavaScript behavior as
-documented in `mcp_support_spec.md` at the repository root.
+stackless synthetic exceptions intentionally differ from JavaScript behavior.

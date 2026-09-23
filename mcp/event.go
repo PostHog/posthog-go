@@ -10,19 +10,20 @@ import (
 )
 
 type preparedToolCall struct {
-	call          ToolCall
-	distinctID    string
-	explicitID    bool
-	toolName      string
-	intent        string
-	intentSource  IntentSource
-	errorType     string
-	errorMessage  string
-	parameters    any
-	response      any
-	groups        posthog.Groups
-	setProperties posthog.Properties
-	custom        posthog.Properties
+	call                  ToolCall
+	distinctID            string
+	explicitID            bool
+	toolName              string
+	intent                string
+	intentSource          IntentSource
+	errorType             string
+	errorMessage          string
+	suppressPersonProfile bool
+	parameters            any
+	response              any
+	groups                posthog.Groups
+	setProperties         posthog.Properties
+	custom                posthog.Properties
 }
 
 func buildToolCallMessages(call ToolCall, exceptionAutocapture bool) ([]namedMessage, error) {
@@ -60,10 +61,12 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		return preparedToolCall{}, errors.New("posthogmcp: invalid IntentSource")
 	}
 
+	explicitID := call.DistinctID != ""
 	prepared := preparedToolCall{
-		call:       call,
-		explicitID: call.DistinctID != "",
-		toolName:   truncateUTF8(call.ToolName, maxResourceNameBytes),
+		call:                  call,
+		explicitID:            explicitID,
+		suppressPersonProfile: !explicitID || personProfileOptOut(call.Properties),
+		toolName:              truncateUTF8(call.ToolName, maxResourceNameBytes),
 	}
 	switch {
 	case call.DistinctID != "":
@@ -76,7 +79,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 
 	intent := strings.TrimSpace(call.Intent)
 	if intent != "" {
-		prepared.intent = truncateUTF8(sanitizeString(intent), maxIntentBytes)
+		prepared.intent = truncateUTF8(sanitizeString(redactIntent(intent)), maxIntentBytes)
 		prepared.intentSource = call.IntentSource
 		if prepared.intentSource == "" {
 			prepared.intentSource = IntentSourceContextParameter
@@ -182,6 +185,15 @@ func safeErrorMessage(err error) (message string, resultErr error) {
 	return err.Error(), nil
 }
 
+func personProfileOptOut(properties posthog.Properties) bool {
+	value, ok := properties[propertyProcessProfile]
+	if !ok {
+		return false
+	}
+	disabled, ok := value.(bool)
+	return ok && !disabled
+}
+
 func removeIdentityControlProperties(properties posthog.Properties) {
 	delete(properties, propertyGroups)
 	delete(properties, propertySet)
@@ -236,7 +248,8 @@ func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, 
 		if includeSet && len(p.setProperties) > 0 {
 			properties[propertySet] = p.setProperties
 		}
-	} else {
+	}
+	if p.suppressPersonProfile {
 		properties[propertyProcessProfile] = false
 	}
 }

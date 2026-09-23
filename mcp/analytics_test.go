@@ -93,7 +93,7 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Groups)
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Properties[propertyGroups])
 	assert.Equal(t, posthog.Properties{"plan": "pro"}, capture.Properties[propertySet])
-	assert.NotContains(t, capture.Properties, propertyProcessProfile)
+	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
 	assert.Equal(t, "test", capture.Properties["environment"])
 
 	assert.Equal(t, map[string]any{"query": "select 1"}, parameters)
@@ -101,6 +101,48 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, groups)
 	assert.Equal(t, posthog.Properties{"plan": "pro"}, setProperties)
 	assert.Equal(t, false, custom[propertyProcessProfile])
+}
+
+func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		distinctID string
+		flag       any
+		want       any
+	}{
+		{
+			name:       "identified explicit opt-out",
+			distinctID: "user_1",
+			flag:       false,
+			want:       false,
+		},
+		{
+			name:       "identified omits explicit true",
+			distinctID: "user_1",
+			flag:       true,
+			want:       nil,
+		},
+		{
+			name: "anonymous cannot opt in",
+			flag: true,
+			want: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(ToolCall{
+				ToolName:   "query",
+				DistinctID: test.distinctID,
+				IsError:    true,
+				Error:      errors.New("request failed"),
+				Properties: posthog.Properties{propertyProcessProfile: test.flag},
+			}))
+			require.Len(t, client.messages, 2)
+
+			assertSerializedProperty(t, client.messages[0], propertyProcessProfile, test.want)
+			assertSerializedProperty(t, client.messages[1], propertyProcessProfile, test.want)
+		})
+	}
 }
 
 func TestCaptureToolCallSessionFallbackAndAnonymousSetSuppression(t *testing.T) {
@@ -287,6 +329,22 @@ func TestCaptureToolCallWireGolden(t *testing.T) {
 	expected, err := os.ReadFile("testdata/tool_call.golden.json")
 	require.NoError(t, err)
 	assert.JSONEq(t, string(expected), string(actual))
+}
+
+func assertSerializedProperty(t *testing.T, message posthog.Message, key string, want any) {
+	t.Helper()
+	data, err := json.Marshal(message.APIfy())
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(data, &payload))
+	properties, ok := payload["properties"].(map[string]any)
+	require.True(t, ok, "properties type = %T", payload["properties"])
+	if want == nil {
+		assert.NotContains(t, properties, key)
+		return
+	}
+	assert.Equal(t, want, properties[key])
 }
 
 func normalizedCaptureWire(t *testing.T, capture posthog.Capture) []byte {
