@@ -235,7 +235,6 @@ type captureContext struct {
 	distinctID                    string
 	properties                    Properties
 	generatedPersonlessDistinctID bool
-	personlessProcessProfileGuard bool
 }
 
 func resolveCaptureContext(ctx context.Context, distinctID string, properties Properties, fieldType string) (captureContext, error) {
@@ -268,7 +267,6 @@ func resolveCaptureContext(ctx context.Context, distinctID string, properties Pr
 		}
 		if _, exists := resolved.properties[propertyProcessPersonProfile]; !exists {
 			resolved.properties[propertyProcessPersonProfile] = false
-			resolved.personlessProcessProfileGuard = true
 		}
 	}
 

@@ -724,11 +724,14 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		if m.Properties == nil {
 			m.Properties = NewProperties()
 		}
+		profileOptOut := m.Properties[propertyProcessPersonProfile] == false
 		m.Properties.Merge(c.DefaultEventProperties)
 		if m.IsServer {
 			m.Properties.Set(propertyIsServer, true)
 		}
-		if captureContext.personlessProcessProfileGuard {
+		// An explicit opt-out, including one set for a personless capture,
+		// must survive defaults that would otherwise enable person profiles.
+		if profileOptOut {
 			m.Properties[propertyProcessPersonProfile] = false
 		}
 		processed, shouldSend := c.processBeforeSend(m)

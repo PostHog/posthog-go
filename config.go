@@ -141,7 +141,8 @@ type Config struct {
 
 	// DefaultEventProperties are merged into every Capture event before sending.
 	// They are useful for common metadata like service name or app version. On key
-	// conflicts, values from DefaultEventProperties overwrite event properties.
+	// conflicts, values from DefaultEventProperties overwrite event properties,
+	// except that an explicit $process_person_profile=false remains false.
 	DefaultEventProperties Properties
 
 	// Callback receives success or failure notifications for messages sent to the

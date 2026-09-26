@@ -3,7 +3,10 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -141,6 +144,56 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 
 			assertSerializedProperty(t, client.messages[0], propertyProcessProfile, test.want)
 			assertSerializedProperty(t, client.messages[1], propertyProcessProfile, test.want)
+		})
+	}
+}
+
+func TestCaptureToolCallPersonProfileSurvivesClientDefaults(t *testing.T) {
+	payloads := make(chan []byte, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read capture request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		payloads <- body
+	}))
+	defer server.Close()
+
+	client, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:               server.URL,
+		BatchSize:              1,
+		DefaultEventProperties: posthog.Properties{propertyProcessProfile: true, "service": "api"},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	for _, test := range []struct {
+		name string
+		call ToolCall
+		want bool
+	}{
+		{name: "identified opt-out", call: ToolCall{ToolName: "query", DistinctID: "user_1", Properties: posthog.Properties{propertyProcessProfile: false}}, want: false},
+		{name: "anonymous opt-out", call: ToolCall{ToolName: "query"}, want: false},
+		{name: "identified default", call: ToolCall{ToolName: "query", DistinctID: "user_2"}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, New(client).CaptureToolCall(test.call))
+			select {
+			case body := <-payloads:
+				var payload struct {
+					Batch []struct {
+						Properties map[string]any `json:"properties"`
+					} `json:"batch"`
+				}
+				require.NoError(t, json.Unmarshal(body, &payload))
+				require.Len(t, payload.Batch, 1)
+				assert.Equal(t, test.want, payload.Batch[0].Properties[propertyProcessProfile])
+				assert.Equal(t, "api", payload.Batch[0].Properties["service"])
+			case <-time.After(5 * time.Second):
+				t.Fatal("timeout waiting for capture request")
+			}
 		})
 	}
 }
