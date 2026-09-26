@@ -159,13 +159,13 @@ func TestBatching_OversizedEventRejected(t *testing.T) {
 		Event:      "oversized_event",
 		Properties: oversizedProps,
 	})
-	require.NoError(t, err) // Enqueue itself doesn't fail
+	require.ErrorIs(t, err, ErrMessageTooBig)
 
 	client.Close()
 
-	// The oversized event should be rejected via callback
+	// The worker rejects the oversized event and preserves the failure callback.
 	require.Equal(t, int64(0), received.Load(), "Oversized event should not be delivered")
-	require.Equal(t, int64(1), failureCount.Load(), "Should have 1 failure callback for oversized event")
+	require.Equal(t, int64(1), failureCount.Load(), "An oversized event should trigger a failure callback")
 }
 
 // TestBatching_MixedCardinalityBatching verifies correct batching with mixed event sizes

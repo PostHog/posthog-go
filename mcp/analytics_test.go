@@ -1,0 +1,486 @@
+package mcp
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	posthog "github.com/posthog/posthog-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type fakeEnqueueClient struct {
+	messages []posthog.Message
+	errors   []error
+}
+
+func (f *fakeEnqueueClient) Enqueue(message posthog.Message) error {
+	f.messages = append(f.messages, message)
+	index := len(f.messages) - 1
+	if index < len(f.errors) {
+		return f.errors[index]
+	}
+	return nil
+}
+
+func TestCaptureToolCallMinimal(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	analytics := New(client)
+
+	require.NoError(t, analytics.CaptureToolCall(ToolCall{ToolName: "search_docs"}))
+	require.Len(t, client.messages, 1)
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, "anonymous", capture.DistinctId)
+	assert.Equal(t, eventToolCall, capture.Event)
+	assert.Equal(t, analyticsSource, capture.Properties[propertySource])
+	assert.Equal(t, "search_docs", capture.Properties[propertyResourceName])
+	assert.Equal(t, "search_docs", capture.Properties[propertyToolName])
+	assert.Equal(t, float64(0), capture.Properties[propertyDurationMS])
+	assert.Equal(t, false, capture.Properties[propertyIsError])
+	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+	assert.NotContains(t, capture.Properties, propertySessionID)
+	assert.NotContains(t, capture.Properties, propertySet)
+	assert.Nil(t, capture.Groups)
+}
+
+func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	analytics := New(client)
+	parameters := map[string]any{"query": "select 1"}
+	response := map[string]any{"rows": []any{1, 2}}
+	groups := posthog.Groups{"organization": "org_1"}
+	setProperties := posthog.Properties{"plan": "pro"}
+	custom := posthog.Properties{
+		propertyClientName:     "custom-client",
+		propertyGroups:         map[string]any{"organization": "wrong"},
+		propertySet:            map[string]any{"plan": "wrong"},
+		propertyProcessProfile: false,
+		propertySessionID:      "wrong-session",
+		"environment":          "test",
+	}
+
+	require.NoError(t, analytics.CaptureToolCall(ToolCall{
+		ToolName:        "query",
+		ToolDescription: "Run a query",
+		ToolCategory:    "Data",
+		DistinctID:      "user_1",
+		SessionID:       "session_1",
+		Groups:          groups,
+		SetProperties:   setProperties,
+		ServerName:      "server",
+		ServerVersion:   "1.0",
+		ClientName:      "client",
+		ClientVersion:   "2.0",
+		ProtocolVersion: "2026-07-28",
+		Intent:          "  inspect data  ",
+		Parameters:      parameters,
+		Response:        response,
+		Duration:        1500 * time.Microsecond,
+		Properties:      custom,
+	}))
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, "user_1", capture.DistinctId)
+	assert.Equal(t, float64(1.5), capture.Properties[propertyDurationMS])
+	assert.Equal(t, "client", capture.Properties[propertyClientName])
+	assert.Equal(t, "session_1", capture.Properties[propertySessionID])
+	assert.Equal(t, "inspect data", capture.Properties[propertyIntent])
+	assert.Equal(t, string(IntentSourceContextParameter), capture.Properties[propertyIntentSource])
+	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Groups)
+	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Properties[propertyGroups])
+	assert.Equal(t, posthog.Properties{"plan": "pro"}, capture.Properties[propertySet])
+	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+	assert.Equal(t, "test", capture.Properties["environment"])
+
+	assert.Equal(t, map[string]any{"query": "select 1"}, parameters)
+	assert.Equal(t, map[string]any{"rows": []any{1, 2}}, response)
+	assert.Equal(t, posthog.Groups{"organization": "org_1"}, groups)
+	assert.Equal(t, posthog.Properties{"plan": "pro"}, setProperties)
+	assert.Equal(t, false, custom[propertyProcessProfile])
+}
+
+func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		distinctID string
+		flag       any
+		want       any
+	}{
+		{
+			name:       "identified explicit opt-out",
+			distinctID: "user_1",
+			flag:       false,
+			want:       false,
+		},
+		{
+			name:       "identified omits explicit true",
+			distinctID: "user_1",
+			flag:       true,
+			want:       nil,
+		},
+		{
+			name: "anonymous cannot opt in",
+			flag: true,
+			want: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(ToolCall{
+				ToolName:   "query",
+				DistinctID: test.distinctID,
+				IsError:    true,
+				Error:      errors.New("request failed"),
+				Properties: posthog.Properties{propertyProcessProfile: test.flag},
+			}))
+			require.Len(t, client.messages, 2)
+
+			assertSerializedProperty(t, client.messages[0], propertyProcessProfile, test.want)
+			assertSerializedProperty(t, client.messages[1], propertyProcessProfile, test.want)
+		})
+	}
+}
+
+func TestCaptureToolCallReservedFieldsSurviveClientDefaults(t *testing.T) {
+	payloads := make(chan []byte, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read capture request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		payloads <- body
+	}))
+	defer server.Close()
+
+	client, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		DefaultEventProperties: posthog.Properties{
+			propertyProcessProfile: true,
+			propertyIntent:         "unredacted@example.com",
+			propertyResponse:       map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}},
+			propertyIsError:        true,
+			propertySessionID:      "wrong-session",
+			propertySet:            map[string]any{"email": "wrong@example.com"},
+			propertyGroups:         map[string]any{"organization": "wrong"},
+			"service":              "api",
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	for _, test := range []struct {
+		name string
+		call ToolCall
+		want bool
+	}{
+		{name: "identified opt-out", call: ToolCall{ToolName: "query", DistinctID: "user_1", Properties: posthog.Properties{propertyProcessProfile: false}}, want: false},
+		{name: "anonymous opt-out", call: ToolCall{ToolName: "query"}, want: false},
+		{name: "identified default", call: ToolCall{ToolName: "query", DistinctID: "user_2"}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.call.Intent = "Find alice@example.com"
+			test.call.Response = map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}}
+			require.NoError(t, New(client).CaptureToolCall(test.call))
+			select {
+			case body := <-payloads:
+				var payload struct {
+					Batch []struct {
+						Properties map[string]any `json:"properties"`
+					} `json:"batch"`
+				}
+				require.NoError(t, json.Unmarshal(body, &payload))
+				require.Len(t, payload.Batch, 1)
+				properties := payload.Batch[0].Properties
+				assert.Equal(t, test.want, properties[propertyProcessProfile])
+				assert.Equal(t, "Find [redacted]", properties[propertyIntent])
+				assert.Equal(t, false, properties[propertyIsError])
+				assert.NotContains(t, properties, propertySessionID)
+				assert.NotContains(t, properties, propertySet)
+				assert.NotContains(t, properties, propertyGroups)
+				assert.NotContains(t, string(body), "raw image")
+				assert.Equal(t, "api", properties["service"])
+			case <-time.After(5 * time.Second):
+				t.Fatal("timeout waiting for capture request")
+			}
+		})
+	}
+}
+
+func TestCaptureToolCallSessionFallbackAndAnonymousSetSuppression(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		call       ToolCall
+		distinctID string
+		personless bool
+	}{
+		{
+			name:       "session fallback",
+			call:       ToolCall{ToolName: "tool", SessionID: "session_1", SetProperties: posthog.Properties{"email": "ignored"}},
+			distinctID: "session_1",
+			personless: true,
+		},
+		{
+			name:       "anonymous fallback",
+			call:       ToolCall{ToolName: "tool", SetProperties: posthog.Properties{"email": "ignored"}},
+			distinctID: "anonymous",
+			personless: true,
+		},
+		{
+			name:       "explicit identity",
+			call:       ToolCall{ToolName: "tool", DistinctID: "user_1"},
+			distinctID: "user_1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(test.call))
+			capture := requireCapture(t, client.messages[0])
+			assert.Equal(t, test.distinctID, capture.DistinctId)
+			assert.NotContains(t, capture.Properties, propertySet)
+			if test.personless {
+				assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+			} else {
+				assert.NotContains(t, capture.Properties, propertyProcessProfile)
+			}
+		})
+	}
+}
+
+func TestCaptureToolCallValidation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		call ToolCall
+		want string
+	}{
+		{name: "empty name", call: ToolCall{}, want: "ToolName"},
+		{name: "blank name", call: ToolCall{ToolName: "  \t"}, want: "ToolName"},
+		{name: "negative duration", call: ToolCall{ToolName: "tool", Duration: -1}, want: "Duration"},
+		{name: "invalid intent source", call: ToolCall{ToolName: "tool", IntentSource: "model"}, want: "IntentSource"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			err := New(client).CaptureToolCall(test.call)
+			require.ErrorContains(t, err, test.want)
+			assert.Empty(t, client.messages)
+		})
+	}
+
+	require.ErrorContains(t, (*Analytics)(nil).CaptureToolCall(ToolCall{ToolName: "tool"}), "nil enqueue client")
+	require.ErrorContains(t, New(nil).CaptureToolCall(ToolCall{ToolName: "tool"}), "nil enqueue client")
+}
+
+type panickingError struct{}
+
+func (panickingError) Error() string { panic("should not run") }
+
+func TestCaptureToolCallFailureAndException(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	token := "phc_abcdefghijklmnopqrstuvwxyz"
+	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+		ToolName:   "query",
+		DistinctID: "user_1",
+		Groups:     posthog.Groups{"organization": "org_1"},
+		IsError:    true,
+		Error:      errors.New("request failed with " + token),
+		ErrorType:  "validation",
+	}))
+	require.Len(t, client.messages, 2)
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, true, capture.Properties[propertyIsError])
+	assert.Equal(t, "validation", capture.Properties[propertyErrorType])
+	assert.Equal(t, "request failed with [redacted]", capture.Properties[propertyErrorMessage])
+
+	exception := requireException(t, client.messages[1])
+	require.Len(t, exception.ExceptionList, 1)
+	item := exception.ExceptionList[0]
+	assert.Equal(t, "validation", item.Type)
+	assert.Equal(t, "request failed with [redacted]", item.Value)
+	require.NotNil(t, item.Mechanism)
+	assert.Equal(t, true, *item.Mechanism.Handled)
+	assert.Equal(t, true, *item.Mechanism.Synthetic)
+	assert.Nil(t, item.Stacktrace)
+	assert.Equal(t, posthog.Groups{"organization": "org_1"}, exception.Properties[propertyGroups])
+}
+
+func TestCaptureToolCallFailureDefaultsAndDisableFanout(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client, WithExceptionAutocapture(false)).CaptureToolCall(ToolCall{
+		ToolName: "query",
+		IsError:  true,
+	}))
+	require.Len(t, client.messages, 1)
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, "Error", capture.Properties[propertyErrorType])
+	assert.Equal(t, "Tool query returned an error", capture.Properties[propertyErrorMessage])
+
+	client = &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+		ToolName: "query",
+		Error:    panickingError{},
+	}))
+	assert.Len(t, client.messages, 1, "successful calls must ignore Error")
+}
+
+func TestCaptureToolCallPanickingErrorFailsWithoutEnqueue(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	err := New(client).CaptureToolCall(ToolCall{ToolName: "query", IsError: true, Error: panickingError{}})
+	require.ErrorContains(t, err, "Error method panicked")
+	assert.Empty(t, client.messages)
+}
+
+func TestCaptureToolCallEmptyErrorUsesFallbackMessage(t *testing.T) {
+	for _, message := range []string{"", "   "} {
+		client := &fakeEnqueueClient{}
+		require.NoError(t, New(client).CaptureToolCall(ToolCall{
+			ToolName: "query",
+			IsError:  true,
+			Error:    errors.New(message),
+		}))
+		require.Len(t, client.messages, 2)
+		capture := requireCapture(t, client.messages[0])
+		assert.Equal(t, "Tool query returned an error", capture.Properties[propertyErrorMessage])
+		exception := requireException(t, client.messages[1])
+		assert.Equal(t, "Tool query returned an error", exception.ExceptionList[0].Value)
+		assert.NoError(t, exception.Validate())
+	}
+}
+
+func TestCaptureToolCallReportsFinalPayloadTooLarge(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("oversized capture was sent")
+	}))
+	defer server.Close()
+
+	client, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:               server.URL,
+		DefaultEventProperties: posthog.Properties{"large_default": strings.Repeat("x", 500_000)},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	err = New(client).CaptureToolCall(ToolCall{ToolName: "query", DistinctID: "user_1"})
+	require.ErrorIs(t, err, posthog.ErrMessageTooBig)
+}
+
+func TestCaptureToolCallAttemptsAllEnqueues(t *testing.T) {
+	client := &fakeEnqueueClient{errors: []error{errors.New("capture full"), errors.New("exception full")}}
+	err := New(client).CaptureToolCall(ToolCall{ToolName: "query", IsError: true})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "enqueue $mcp_tool_call: capture full")
+	assert.ErrorContains(t, err, "enqueue $exception: exception full")
+	assert.Len(t, client.messages, 2)
+}
+
+func TestCaptureToolCallNormalizationErrorsAreSafe(t *testing.T) {
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+	secret := strings.Repeat("do-not-return", 100)
+
+	for _, value := range []any{
+		func() {},
+		cycle,
+		map[string]any{"number": math.Inf(1), "secret": secret},
+		panickingJSON{},
+	} {
+		client := &fakeEnqueueClient{}
+		err := New(client).CaptureToolCall(ToolCall{ToolName: "query", Parameters: value})
+		require.Error(t, err)
+		assert.LessOrEqual(t, len(err.Error()), maxReturnedErrorBytes)
+		assert.NotContains(t, err.Error(), secret)
+		assert.Empty(t, client.messages)
+	}
+}
+
+type panickingJSON struct{}
+
+func (panickingJSON) MarshalJSON() ([]byte, error) { panic("secret payload") }
+
+func TestCaptureToolCallWireGolden(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client, WithExceptionAutocapture(false)).CaptureToolCall(ToolCall{
+		ToolName:        "search_docs",
+		ToolDescription: "Search documentation",
+		ToolCategory:    "Docs",
+		DistinctID:      "user_1",
+		SessionID:       "session_1",
+		Groups:          posthog.Groups{"organization": "org_1"},
+		SetProperties:   posthog.Properties{"plan": "pro"},
+		ServerName:      "docs-server",
+		ServerVersion:   "1.0.0",
+		ClientName:      "test-client",
+		ClientVersion:   "2.0.0",
+		ProtocolVersion: "2026-07-28",
+		Intent:          "Find setup instructions",
+		IntentSource:    IntentSourceInferred,
+		Parameters:      map[string]any{"query": "setup"},
+		Response:        map[string]any{"content": []any{map[string]any{"type": "text", "text": "Found"}}},
+		Duration:        42 * time.Millisecond,
+		Properties:      posthog.Properties{"environment": "test"},
+		Timestamp:       time.Date(2026, 8, 2, 1, 2, 3, 0, time.UTC),
+	}))
+
+	actual := normalizedCaptureWire(t, requireCapture(t, client.messages[0]))
+	expected, err := os.ReadFile("testdata/tool_call.golden.json")
+	require.NoError(t, err)
+	assert.JSONEq(t, string(expected), string(actual))
+}
+
+func assertSerializedProperty(t *testing.T, message posthog.Message, key string, want any) {
+	t.Helper()
+	data, err := json.Marshal(message.APIfy())
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(data, &payload))
+	properties, ok := payload["properties"].(map[string]any)
+	require.True(t, ok, "properties type = %T", payload["properties"])
+	if want == nil {
+		assert.NotContains(t, properties, key)
+		return
+	}
+	assert.Equal(t, want, properties[key])
+}
+
+func normalizedCaptureWire(t *testing.T, capture posthog.Capture) []byte {
+	t.Helper()
+	data, err := json.Marshal(capture.APIfy())
+	require.NoError(t, err)
+	var wire map[string]any
+	require.NoError(t, json.Unmarshal(data, &wire))
+	delete(wire, "uuid")
+	delete(wire, "timestamp")
+	properties := wire["properties"].(map[string]any)
+	for _, key := range []string{"$lib", "$lib_version", "$go_version", "$os", "$os_version", "$os_distro", "$is_server"} {
+		delete(properties, key)
+	}
+	result, err := json.MarshalIndent(wire, "", "  ")
+	require.NoError(t, err)
+	return result
+}
+
+func requireCapture(t *testing.T, message posthog.Message) posthog.Capture {
+	t.Helper()
+	capture, ok := message.(posthog.Capture)
+	require.True(t, ok, "message type = %T", message)
+	return capture
+}
+
+func requireException(t *testing.T, message posthog.Message) posthog.Exception {
+	t.Helper()
+	exception, ok := message.(posthog.Exception)
+	require.True(t, ok, "message type = %T", message)
+	return exception
+}

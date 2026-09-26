@@ -48,11 +48,10 @@ type EnqueueClient interface {
 	//	...
 	//	client.Close()
 	//
-	// Enqueue returns an error if the message could not be queued, which happens
-	// when the client is closed, the message is invalid, or the in-memory queue
-	// is full (ErrQueueFull) -- in the latter case the message is dropped rather
-	// than blocking the caller. A full-queue drop is reported only through this
-	// returned error, not through Callback.Failure.
+	// Enqueue returns an error if the client is closed, the message is invalid or
+	// too large (ErrMessageTooBig), or the in-memory queue is full (ErrQueueFull).
+	// Oversized messages also trigger Callback.Failure when the worker rejects
+	// them; full-queue drops are reported only through the returned error.
 	//
 	// Bulk or backfill workloads that can enqueue faster than the client uploads
 	// should check the returned error for ErrQueueFull and throttle or retry (or
@@ -600,6 +599,7 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 	// SDKs. The drop is reported only via the returned error -- no callback or log
 	// is invoked on the caller's goroutine, so a sustained overload stays cheap.
 	sendPrepared := func(prepared preparedMessage) {
+		oversized := len(prepared.data) > maxMessageBytes
 		defer func() {
 			// When the `msgs` channel is closed writing to it will trigger a panic.
 			// To avoid letting the panic propagate to the caller we recover from it
@@ -611,6 +611,9 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		}()
 		select {
 		case c.msgs <- prepared:
+			if oversized {
+				err = ErrMessageTooBig
+			}
 		default:
 			err = ErrQueueFull
 		}
@@ -751,11 +754,25 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		if m.Properties == nil {
 			m.Properties = NewProperties()
 		}
-		m.Properties.Merge(c.DefaultEventProperties)
+		profileOptOut := m.Properties[propertyProcessPersonProfile] == false
+		for key, value := range c.DefaultEventProperties {
+			if m.Event == "$mcp_tool_call" {
+				if strings.HasPrefix(key, "$mcp_") {
+					continue
+				}
+				switch key {
+				case propertySessionID, "$groups", "$set":
+					continue
+				}
+			}
+			m.Properties[key] = value
+		}
 		if m.IsServer {
 			m.Properties.Set(propertyIsServer, true)
 		}
-		if captureContext.personlessProcessProfileGuard {
+		// An explicit opt-out, including one set for a personless capture,
+		// must survive defaults that would otherwise enable person profiles.
+		if profileOptOut {
 			m.Properties[propertyProcessPersonProfile] = false
 		}
 		processed, shouldSend := c.processBeforeSend(m)
@@ -1794,17 +1811,14 @@ func (c *client) loop() {
 		batchData, batchMsgs, batchUuids, batchSize = nil, nil, nil, 0
 	}
 
-	// Helper to process a single message: validate, batch, flush if needed.
-	// Returns false if message was rejected (oversized).
+	// Helper to process a single message: reject oversized messages, then batch.
 	processMessage := func(prepared preparedMessage) bool {
 		msgSize := len(prepared.data)
-
 		if msgSize > maxMessageBytes {
 			c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
 			c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
 			return false
 		}
-
 		if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
 			flushBatch()
 			resetBatch()
