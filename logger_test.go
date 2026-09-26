@@ -46,10 +46,16 @@ func TestStdLogger(t *testing.T) {
 	logger.Logf("Hello World!")
 	logger.Logf("The answer is %d", 42)
 	logger.Errorf("%s", errors.New("something went wrong!"))
+	logger.Warnf("retry %d", 2)
+	logger.Debugf("must be suppressed")
+	verbose := StdLogger(log.New(&buffer, "test ", 0), true)
+	verbose.Debugf("attempt %d", 3)
 
 	const ref = `test INFO: Hello World!
 test INFO: The answer is 42
 test ERROR: something went wrong!
+test WARN: retry 2
+test DEBUG: attempt 3
 `
 
 	if res := buffer.String(); ref != res {

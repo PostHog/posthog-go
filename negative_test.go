@@ -1,7 +1,9 @@
 package posthog
 
 import (
+	"context"
 	"io"
+	"sync/atomic"
 
 	json "github.com/goccy/go-json"
 	"net/http"
@@ -75,14 +77,15 @@ func TestEnqueue_InvalidMessageTypes(t *testing.T) {
 // TestFeatureFlag_MalformedResponses tests handling of malformed feature flag responses
 func TestFeatureFlag_MalformedResponses(t *testing.T) {
 	malformedResponses := []struct {
-		name     string
-		response string
+		name      string
+		response  string
+		wantError bool
 	}{
-		{"invalid_json", `{invalid json`},
-		{"flags_not_object", `{"featureFlags": "not an object"}`},
-		{"empty_response", ``},
-		{"null_response", `null`},
-		{"array_instead_of_object", `[]`},
+		{"invalid_json", `{invalid json`, true},
+		{"flags_not_object", `{"featureFlags": "not an object"}`, true},
+		{"empty_response", ``, true},
+		{"null_response", `null`, false},
+		{"array_instead_of_object", `[]`, true},
 	}
 
 	for _, tc := range malformedResponses {
@@ -94,20 +97,19 @@ func TestFeatureFlag_MalformedResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, _ := NewWithConfig("test-key", Config{
-				Endpoint:       server.URL,
-				PersonalApiKey: "test-personal",
-			})
+			client, err := NewWithConfig("test-key", Config{Endpoint: server.URL})
+			require.NoError(t, err)
 			defer client.Close()
-
-			// Should not panic, should handle gracefully
 			result, err := client.GetFeatureFlag(FeatureFlagPayload{
-				Key:        "test-flag",
-				DistinctId: "user_1",
+				Key: "test-flag", DistinctId: "user_1", SendFeatureFlagEvents: Ptr(false),
 			})
-
-			// Either returns error or returns false/nil - shouldn't crash
-			t.Logf("Result: %v, Error: %v", result, err)
+			if tc.wantError {
+				require.Error(t, err)
+				require.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, false, result)
+			}
 		})
 	}
 }
@@ -127,27 +129,32 @@ func TestClient_ServerErrors(t *testing.T) {
 
 	for _, code := range errorCodes {
 		t.Run(http.StatusText(code), func(t *testing.T) {
-			callCount := 0
+			var callCount atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				callCount++
+				callCount.Add(1)
 				w.WriteHeader(code)
 			}))
 			defer server.Close()
 
-			maxRetries := 0
-			client, _ := NewWithConfig("test-key", Config{
-				Endpoint:   server.URL,
-				MaxRetries: &maxRetries, // Disable retries for faster test
+			callback := NewUnifiedCallback(t)
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint: server.URL, MaxRetries: Ptr(0), Callback: callback,
 			})
+			require.NoError(t, err)
+			defer client.Close()
 
-			err := client.Enqueue(Capture{
+			err = client.Enqueue(Capture{
 				DistinctId: "user_1",
 				Event:      "test_event",
 			})
 			require.NoError(t, err) // Enqueue should not fail immediately
 
-			client.Close() // Will attempt to flush
-			t.Logf("Server received %d request(s) for status %d", callCount, code)
+			require.NoError(t, client.Close())
+			success, failure := callback.GetCounts()
+			require.Zero(t, success)
+			require.Equal(t, 1, failure)
+			require.Equal(t, int64(1), callCount.Load())
+			require.Error(t, callback.GetLastError())
 		})
 	}
 }
@@ -282,39 +289,53 @@ func TestConfig_Validation(t *testing.T) {
 	})
 
 	t.Run("empty_api_key", func(t *testing.T) {
-		// Note: SDK currently accepts empty API keys (server will reject them)
-		// This test documents current behavior
+		var calls atomic.Int64
 		client, err := NewWithConfig("", Config{
-			Transport: NoOpTransport(),
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return nil, ErrSDKDisabled
+			}),
 		})
-		require.NoError(t, err, "SDK accepts empty API key (server-side validation)")
-		defer client.Close()
+		require.NoError(t, err)
+		require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "user", Event: "event"}), ErrSDKDisabled)
+		require.ErrorIs(t, client.Close(), ErrSDKDisabled)
+		require.Zero(t, calls.Load())
 	})
 }
 
 // TestFeatureFlag_TimeoutHandling tests flag evaluation with network delays
 func TestFeatureFlag_TimeoutHandling(t *testing.T) {
 	t.Run("slow_response", func(t *testing.T) {
+		cancelled := make(chan struct{}, 1)
+		release := make(chan struct{})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(100 * time.Millisecond)
-			w.Write([]byte(`{"featureFlags": {"test-flag": true}}`))
+			_, _ = io.Copy(io.Discard, r.Body)
+			select {
+			case <-r.Context().Done():
+				cancelled <- struct{}{}
+			case <-release:
+			}
 		}))
 		defer server.Close()
+		defer close(release)
 
-		client, _ := NewWithConfig("test-key", Config{
-			Endpoint:       server.URL,
-			PersonalApiKey: "test-personal",
+		client, err := NewWithConfig("test-key", Config{
+			Endpoint: server.URL, FeatureFlagRequestTimeout: 100 * time.Millisecond,
+			FeatureFlagRequestMaxRetries: Ptr(0),
 		})
+		require.NoError(t, err)
 		defer client.Close()
 
-		start := time.Now()
-		_, err := client.GetFeatureFlag(FeatureFlagPayload{
-			Key:        "test-flag",
-			DistinctId: "user_1",
+		result, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key: "test-flag", DistinctId: "user_1", SendFeatureFlagEvents: Ptr(false),
 		})
-		elapsed := time.Since(start)
-
-		t.Logf("Request took %v, error: %v", elapsed, err)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Nil(t, result)
+		select {
+		case <-cancelled:
+		case <-time.After(5 * time.Second):
+			t.Fatal("flag timeout did not cancel the request")
+		}
 	})
 }
 
@@ -324,28 +345,17 @@ func TestEnqueue_AfterClose(t *testing.T) {
 		Transport: NoOpTransport(),
 	})
 
-	// Close the client
-	client.Close()
+	require.NoError(t, client.Close())
 
-	// Try to enqueue - should not panic, should return error or handle gracefully
 	err := client.Enqueue(Capture{
 		DistinctId: "user_1",
 		Event:      "test_event",
 	})
 
-	// The SDK might allow this or return an error - either is acceptable
-	t.Logf("Enqueue after close result: %v", err)
+	require.ErrorIs(t, err, ErrClosed)
 }
 
-// TestCallback_Errors tests that callback errors are handled gracefully
-func TestCallback_Errors(t *testing.T) {
-	callbackCalled := false
-	panicCallback := struct {
-		Callback
-	}{}
-
-	// Create a callback that panics
-	type panicyCallback struct{}
+func TestCallback_SuccessfulDelivery(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
@@ -366,8 +376,9 @@ func TestCallback_Errors(t *testing.T) {
 
 	client.Close()
 
-	callbackCalled = callback.successCount > 0 || callback.failureCount > 0
-	t.Logf("Callback was called: %v, panic callback: %v", callbackCalled, panicCallback)
+	success, failure := callback.GetCounts()
+	require.Equal(t, 1, success)
+	require.Zero(t, failure)
 }
 
 // TestBatch_EmptyAndLarge tests batching edge cases

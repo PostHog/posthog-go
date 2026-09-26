@@ -86,12 +86,17 @@ func TestRetryBehavior(t *testing.T) {
 			if tc.disableRetry {
 				config.MaxRetries = posthog.Ptr[int](0)
 			}
+			backoffStarted := make(chan struct{}, 1)
 			if tc.retryAfter != nil {
-				config.RetryAfter = tc.retryAfter
+				config.RetryAfter = func(i int) time.Duration {
+					backoffStarted <- struct{}{}
+					return tc.retryAfter(i)
+				}
 			}
 
 			client, err := posthog.NewWithConfig("test-api-key", config)
 			require.NoError(t, err)
+			defer client.Close()
 
 			err = client.Enqueue(posthog.Capture{
 				DistinctId: "user1",
@@ -100,8 +105,12 @@ func TestRetryBehavior(t *testing.T) {
 			require.NoError(t, err)
 
 			if tc.forceClose {
-				time.Sleep(10 * time.Millisecond)
-				client.Close()
+				select {
+				case <-backoffStarted:
+				case <-time.After(5 * time.Second):
+					t.Fatal("request did not enter backoff")
+				}
+				require.NoError(t, client.Close())
 			}
 
 			// Wait for callback

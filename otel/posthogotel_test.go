@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -286,6 +287,8 @@ func TestSpanProcessorDropsNonAISpansWithoutRequest(t *testing.T) {
 }
 
 func TestSpanProcessorKeepsBatchesWithinEndpointLimit(t *testing.T) {
+	// This is the backend contract, independent of the SDK's batch setting.
+	const maxSpansPerRequest = 100
 	server := newOTLPServer(t)
 
 	processor, err := NewSpanProcessor(context.Background(), "phc_test", WithHost(server.server.URL))
@@ -294,15 +297,9 @@ func TestSpanProcessorKeepsBatchesWithinEndpointLimit(t *testing.T) {
 	}
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
 
-	// Emit more AI spans than the endpoint accepts in a single request. With the
-	// SDK default batch size (512) they would be sent as one oversized request
-	// that the endpoint rejects with a non-retryable 400.
-	const total = 2*maxSpansPerRequest + 5
-	tracer := provider.Tracer("test")
-	for i := 0; i < total; i++ {
-		_, span := tracer.Start(context.Background(), "gen_ai.chat")
-		span.End()
-	}
+	const total = 205
+	emitIdentifiableSpans(provider, total)
+	t.Cleanup(func() { assertExportedSpanNames(t, server, total) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -344,6 +341,10 @@ func TestExporterWarnsIfPostHogAIGateway(t *testing.T) {
 	if !strings.Contains(buf.String(), "PostHog AI Gateway") {
 		t.Errorf("expected gateway warning, got %q", buf.String())
 	}
+	_, _, _, names := server.snapshot()
+	if len(names) != 1 || names[0] != "gen_ai.chat" {
+		t.Errorf("gateway warning dropped span: got %v", names)
+	}
 }
 
 func TestExporterExportsOnlyAISpans(t *testing.T) {
@@ -372,6 +373,8 @@ func TestExporterExportsOnlyAISpans(t *testing.T) {
 }
 
 func TestExporterKeepsBatchesWithinEndpointLimit(t *testing.T) {
+	// This is the backend contract, independent of the SDK's batch setting.
+	const maxSpansPerRequest = 100
 	server := newOTLPServer(t)
 
 	exporter, err := NewExporter(context.Background(), "phc_test", WithHost(server.server.URL))
@@ -382,12 +385,9 @@ func TestExporterKeepsBatchesWithinEndpointLimit(t *testing.T) {
 	// exporter would hand more than the endpoint's limit to a single request.
 	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
 
-	const total = 2*maxSpansPerRequest + 5
-	tracer := provider.Tracer("test")
-	for i := 0; i < total; i++ {
-		_, span := tracer.Start(context.Background(), "gen_ai.chat")
-		span.End()
-	}
+	const total = 205
+	emitIdentifiableSpans(provider, total)
+	t.Cleanup(func() { assertExportedSpanNames(t, server, total) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -402,6 +402,32 @@ func TestExporterKeepsBatchesWithinEndpointLimit(t *testing.T) {
 	for i, n := range server.batchSizes() {
 		if n > maxSpansPerRequest {
 			t.Errorf("request %d carried %d spans, exceeds endpoint limit %d", i, n, maxSpansPerRequest)
+		}
+	}
+}
+
+func emitIdentifiableSpans(provider *sdktrace.TracerProvider, count int) {
+	tracer := provider.Tracer("test")
+	for i := 0; i < count; i++ {
+		_, span := tracer.Start(context.Background(), fmt.Sprintf("gen_ai.chat.%d", i))
+		span.End()
+	}
+}
+
+func assertExportedSpanNames(t *testing.T, server *otlpServer, count int) {
+	t.Helper()
+	_, _, path, names := server.snapshot()
+	if path != "/i/v0/ai/otel" {
+		t.Errorf("path = %q, want /i/v0/ai/otel", path)
+	}
+	seen := make(map[string]int)
+	for _, name := range names {
+		seen[name]++
+	}
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("gen_ai.chat.%d", i)
+		if seen[name] != 1 {
+			t.Errorf("span %q delivered %d times, want 1", name, seen[name])
 		}
 	}
 }

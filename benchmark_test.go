@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,683 +11,277 @@ import (
 	"testing"
 )
 
-// BenchmarkCallback is a lightweight callback for benchmarks
-// Only tracks failures to avoid overhead on the success path
 type BenchmarkCallback struct {
+	successCount atomic.Int64
 	failureCount atomic.Int64
 }
 
-func (c *BenchmarkCallback) Success(msg APIMessage) {
-	// No-op - tracking successes would add overhead to every message
-}
+func (c *BenchmarkCallback) Success(APIMessage)        { c.successCount.Add(1) }
+func (c *BenchmarkCallback) Failure(APIMessage, error) { c.failureCount.Add(1) }
+func (c *BenchmarkCallback) FailureCount() int64       { return c.failureCount.Load() }
 
-func (c *BenchmarkCallback) Failure(msg APIMessage, err error) {
-	c.failureCount.Add(1)
-}
-
-func (c *BenchmarkCallback) FailureCount() int64 {
-	return c.failureCount.Load()
-}
-
-// BenchmarkConcurrentEnqueue measures throughput at different concurrency levels
-// Tests: 1, 10, 100, 500, 1000 concurrent goroutines
-// Uses NoOpTransport to measure pure enqueue throughput without HTTP overhead
-// Note: Under extreme load, some backpressure (delivery failures) is expected
-func BenchmarkConcurrentEnqueue(b *testing.B) {
-	concurrencyLevels := []int{1, 10, 100, 500, 1000}
-
-	for _, concurrency := range concurrencyLevels {
-		b.Run(fmt.Sprintf("goroutines_%d", concurrency), func(b *testing.B) {
-			// Pre-generate events BEFORE benchmark
-			pool := NewEventPool(b.N + 1000) // Extra events to avoid index issues
-
-			callback := &BenchmarkCallback{}
-			var enqueueErrors atomic.Int64
-
-			client, _ := NewWithConfig("test-key", Config{
-				Transport: NoOpTransport(),
-				Callback:  callback,
-				// Discard logs: under sustained overload the consumer sheds batches
-				// (sendBatch backpressure) and logs from its own goroutine, which would
-				// flood stderr and skew ns/op. This benchmark measures pure enqueue
-				// throughput; stage-1 drops are counted via the returned error and
-				// stage-2 backpressure via the callback.
-				Logger: testLogger{},
-				// Uses production defaults for BatchSize, MaxEnqueuedRequests, MaxQueueSize
-			})
-			defer client.Close()
-
-			b.ResetTimer()
-			b.SetParallelism(concurrency)
-			b.RunParallel(func(pb *testing.PB) {
-				for pb.Next() {
-					if err := client.Enqueue(pool.Next()); err != nil {
-						enqueueErrors.Add(1)
-					}
-				}
-			})
-			b.StopTimer()
-
-			// Enqueue drops the newest message (rather than blocking) once the msgs
-			// channel is full, so a sustained high-concurrency producer burst can
-			// outrun the single consumer loop. This is the expected overload ceiling,
-			// not an invalid measurement, so report the drop rate as a tracked metric
-			// instead of failing. (Under the previous blocking Enqueue this manifested
-			// as hidden caller latency rather than drops.)
-			drops := enqueueErrors.Load()
-			if b.N > 0 {
-				b.ReportMetric(float64(drops)/float64(b.N)*100, "drop%")
-			}
-			if drops > 0 {
-				b.Logf("Note: %d enqueue drops (msgs channel full at %d goroutines)", drops, concurrency)
-			}
-			// Delivery failures indicate batches channel backpressure - report but don't fail
-			if failures := callback.FailureCount(); failures > 0 {
-				b.Logf("Note: %d delivery failures (backpressure at %d goroutines)", failures, concurrency)
-			}
-		})
-	}
-}
-
-// BenchmarkConcurrentEnqueueWithCardinality measures throughput with different property cardinalities
-// Uses NoOpTransport to measure pure enqueue throughput without HTTP overhead
-// Note: Under extreme load, some backpressure (delivery failures) is expected
-func BenchmarkConcurrentEnqueueWithCardinality(b *testing.B) {
-	cardinalities := []struct {
-		name        string
-		cardinality PropertyCardinality
-	}{
-		{"low_10-100_props", CardinalityLow},
-		{"medium_500-2000_props", CardinalityMedium},
-		{"high_2000-10000_props", CardinalityHigh},
-	}
-	concurrency := 100
-
-	for _, tc := range cardinalities {
-		b.Run(tc.name, func(b *testing.B) {
-			// Use cardinality-appropriate pool size with pre-cloned unique maps
-			pool := NewEventPoolWithDefaultSize(tc.cardinality)
-
-			callback := &BenchmarkCallback{}
-			var enqueueErrors atomic.Int64
-
-			client, _ := NewWithConfig("test-key", Config{
-				Transport: NoOpTransport(),
-				Callback:  callback,
-				// Discard logs: under sustained overload the consumer sheds batches
-				// (sendBatch backpressure) and logs from its own goroutine, which would
-				// flood stderr and skew ns/op. This benchmark measures pure enqueue
-				// throughput; stage-1 drops are counted via the returned error and
-				// stage-2 backpressure via the callback.
-				Logger: testLogger{},
-				// Uses production defaults for BatchSize, MaxEnqueuedRequests, MaxQueueSize
-			})
-			defer client.Close()
-
-			b.ResetTimer()
-			b.SetParallelism(concurrency)
-			b.RunParallel(func(pb *testing.PB) {
-				for pb.Next() {
-					if err := client.Enqueue(pool.Next()); err != nil {
-						enqueueErrors.Add(1)
-					}
-				}
-			})
-			b.StopTimer()
-
-			// Enqueue drops the newest message (rather than blocking) once the msgs
-			// channel is full, so a sustained high-concurrency producer burst can
-			// outrun the single consumer loop. This is the expected overload ceiling,
-			// not an invalid measurement, so report the drop rate as a tracked metric
-			// instead of failing. (Under the previous blocking Enqueue this manifested
-			// as hidden caller latency rather than drops.)
-			drops := enqueueErrors.Load()
-			if b.N > 0 {
-				b.ReportMetric(float64(drops)/float64(b.N)*100, "drop%")
-			}
-			if drops > 0 {
-				b.Logf("Note: %d enqueue drops (msgs channel full at %d goroutines)", drops, concurrency)
-			}
-			// Delivery failures indicate batches channel backpressure - report but don't fail
-			if failures := callback.FailureCount(); failures > 0 {
-				b.Logf("Note: %d delivery failures (backpressure at %d goroutines)", failures, concurrency)
-			}
-		})
-	}
-}
-
-// BenchmarkEnqueueThroughput measures raw enqueue speed (no HTTP)
-// Uses production defaults for BatchSize, MaxEnqueuedRequests
-func BenchmarkEnqueueThroughput(b *testing.B) {
-	pool := NewEventPool(b.N + 1000)
-
+// Producer benchmarks exclude draining from timing, but account for every outcome
+// after draining. A rejected enqueue is overload, not completed delivery throughput.
+func benchmarkEnqueue(b *testing.B, pool *EventPool, parallelism int) {
 	callback := &BenchmarkCallback{}
-	var enqueueErrors atomic.Int64
-
-	// Use a transport that returns immediately (no actual HTTP)
-	client, _ := NewWithConfig("test-key", Config{
-		Transport: NoOpTransport(),
-		Callback:  callback,
-		// Uses production defaults for BatchSize, MaxEnqueuedRequests
+	client, err := NewWithConfig("test-key", Config{
+		Transport: NoOpTransport(), Callback: callback, Logger: testLogger{},
 	})
+	if err != nil {
+		b.Fatal(err)
+	}
 	defer client.Close()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	var drops, unexpected atomic.Int64
+	enqueue := func() {
 		if err := client.Enqueue(pool.Next()); err != nil {
-			enqueueErrors.Add(1)
+			if errors.Is(err, ErrQueueFull) {
+				drops.Add(1)
+			} else {
+				unexpected.Add(1)
+			}
+		}
+	}
+	b.ResetTimer()
+	if parallelism > 0 {
+		b.SetParallelism(parallelism)
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				enqueue()
+			}
+		})
+	} else {
+		for i := 0; i < b.N; i++ {
+			enqueue()
 		}
 	}
 	b.StopTimer()
-
-	if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
-		b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
-			enqueueErrors.Load(), failures)
+	if err := client.Close(); err != nil {
+		b.Fatal(err)
 	}
+	if unexpected.Load() != 0 {
+		b.Fatalf("unexpected enqueue errors: %d", unexpected.Load())
+	}
+	if got := drops.Load() + callback.successCount.Load() + callback.FailureCount(); got != int64(b.N) {
+		b.Fatalf("accounted for %d events, want %d", got, b.N)
+	}
+	b.ReportMetric(100*float64(drops.Load())/float64(b.N), "drop%")
+	b.ReportMetric(100*float64(callback.FailureCount())/float64(b.N), "delivery-failure%")
 }
 
-// BenchmarkEnqueueThroughputWithCardinality measures enqueue speed at different cardinalities
-// Uses production defaults for BatchSize, MaxEnqueuedRequests
-func BenchmarkEnqueueThroughputWithCardinality(b *testing.B) {
-	cardinalities := []struct {
-		name        string
-		cardinality PropertyCardinality
-	}{
-		{"low", CardinalityLow},
-		{"medium", CardinalityMedium},
-		{"high", CardinalityHigh},
-	}
-
-	for _, tc := range cardinalities {
-		b.Run(tc.name, func(b *testing.B) {
-			// Use cardinality-appropriate pool size with pre-cloned unique maps
-			pool := NewEventPoolWithDefaultSize(tc.cardinality)
-
-			callback := &BenchmarkCallback{}
-			var enqueueErrors atomic.Int64
-
-			client, _ := NewWithConfig("test-key", Config{
-				Transport: NoOpTransport(),
-				Callback:  callback,
-				// Uses production defaults for BatchSize, MaxEnqueuedRequests
-			})
-			defer client.Close()
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if err := client.Enqueue(pool.Next()); err != nil {
-					enqueueErrors.Add(1)
-				}
-			}
-			b.StopTimer()
-
-			if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
-				b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
-					enqueueErrors.Load(), failures)
-			}
+func BenchmarkConcurrentEnqueue(b *testing.B) {
+	for _, parallelism := range []int{1, 10, 100, 500, 1000} {
+		b.Run(fmt.Sprintf("parallelism_%d", parallelism), func(b *testing.B) {
+			benchmarkEnqueue(b, NewEventPool(1000), parallelism)
 		})
 	}
 }
 
-// BenchmarkFeatureFlagLocalEvaluation measures flag evaluation performance
+func BenchmarkConcurrentEnqueueWithCardinality(b *testing.B) {
+	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
+		b.Run(CardinalityName(card), func(b *testing.B) {
+			benchmarkEnqueue(b, NewEventPoolWithDefaultSize(card), 100)
+		})
+	}
+}
+
+func BenchmarkEnqueueThroughput(b *testing.B) { benchmarkEnqueue(b, NewEventPool(1000), 0) }
+
+func BenchmarkEnqueueThroughputWithCardinality(b *testing.B) {
+	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
+		b.Run(CardinalityName(card), func(b *testing.B) {
+			benchmarkEnqueue(b, NewEventPoolWithDefaultSize(card), 0)
+		})
+	}
+}
+
 func BenchmarkFeatureFlagLocalEvaluation(b *testing.B) {
-	// Setup server that returns actual flag definitions
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
-			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			io.Copy(io.Discard, r.Body)
-			w.WriteHeader(200)
-		default:
-			w.WriteHeader(404)
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			_, _ = w.Write([]byte(fixture("test-api-feature-flag.json")))
+		} else {
+			http.Error(w, "unexpected remote evaluation or capture", http.StatusBadRequest)
 		}
 	}))
 	defer server.Close()
-
-	client, _ := NewWithConfig("test-key", Config{
-		PersonalApiKey: "test",
-		Endpoint:       server.URL,
-	})
+	client, err := NewWithConfig("test-key", Config{PersonalApiKey: "test", Endpoint: server.URL})
+	if err != nil {
+		b.Fatal(err)
+	}
 	defer client.Close()
-
-	// Pre-warm cache - wait for flags to load
-	for i := 0; i < 10; i++ {
-		result, _ := client.GetFeatureFlag(FeatureFlagPayload{Key: "simpleFlag", DistinctId: "warmup"})
-		if result != nil {
-			break
-		}
+	payload := FeatureFlagPayload{Key: "simpleFlag", DistinctId: "warmup", OnlyEvaluateLocally: true, SendFeatureFlagEvents: Ptr(false)}
+	if value, err := client.GetFeatureFlag(payload); err != nil || value != true {
+		b.Fatalf("local flag warmup: value=%v err=%v", value, err)
 	}
-
-	distinctIds := make([]string, 1000)
-	for i := range distinctIds {
-		distinctIds[i] = fmt.Sprintf("user_%d", i)
+	ids := make([]string, 1000)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("user_%d", i)
 	}
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.GetFeatureFlag(FeatureFlagPayload{
-			Key:        "simpleFlag",
-			DistinctId: distinctIds[i%len(distinctIds)],
-		})
+		payload.DistinctId = ids[i%len(ids)]
+		if _, err := client.GetFeatureFlag(payload); err != nil {
+			b.Fatal(err)
+		}
 	}
+	b.StopTimer()
 }
 
-// BenchmarkBatchSizes measures throughput at various batch sizes
-// Note: BatchSize=1 is excluded as it's pathological - creates one batch per event,
-// overwhelming the worker pool with backpressure. Production min should be 10+.
-func BenchmarkBatchSizes(b *testing.B) {
-	batchSizes := []int{10, 50, 100, 250, 500}
-
-	for _, batchSize := range batchSizes {
-		b.Run(fmt.Sprintf("batch_%d", batchSize), func(b *testing.B) {
-			pool := NewEventPool(b.N + 1000)
-
-			callback := &BenchmarkCallback{}
-			var enqueueErrors atomic.Int64
-
-			client, _ := NewWithConfig("test-key", Config{
-				Transport: NoOpTransport(),
-				Callback:  callback,
-				BatchSize: batchSize,
-			})
-			defer client.Close()
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if err := client.Enqueue(pool.Next()); err != nil {
-					enqueueErrors.Add(1)
-				}
-			}
-			b.StopTimer()
-
-			if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
-				b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
-					enqueueErrors.Load(), failures)
-			}
-		})
-	}
-}
-
-// BenchmarkEndToEndWithServer measures end-to-end throughput including HTTP
-// Uses production defaults for BatchSize, MaxEnqueuedRequests
-func BenchmarkEndToEndWithServer(b *testing.B) {
-	pool := NewEventPool(b.N + 1000)
-
-	server := httptest.NewServer(NoOpHandler())
-	defer server.Close()
-
+// Flush each bounded producer window to measure completed work without turning
+// queue overflow into an apparent throughput improvement. Drain is timed.
+func benchmarkDelivery(b *testing.B, cfg Config, pool *EventPool) {
 	callback := &BenchmarkCallback{}
-	var enqueueErrors atomic.Int64
-
-	client, _ := NewWithConfig("test-key", Config{
-		Endpoint: server.URL,
-		Callback: callback,
-		// Uses production defaults for BatchSize, MaxEnqueuedRequests
-	})
+	cfg.Callback, cfg.Logger = callback, testLogger{}
+	client, err := NewWithConfig("test-key", cfg)
+	if err != nil {
+		b.Fatal(err)
+	}
 	defer client.Close()
-
+	window := cfg.BatchSize
+	if window == 0 {
+		window = DefaultBatchSize
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := client.Enqueue(pool.Next()); err != nil {
-			enqueueErrors.Add(1)
+			b.Fatal(err)
+		}
+		if (i+1)%window == 0 {
+			if err := client.Flush(); err != nil {
+				b.Fatal(err)
+			}
 		}
 	}
+	if err := client.Close(); err != nil {
+		b.Fatal(err)
+	}
 	b.StopTimer()
-
-	if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
-		b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
-			enqueueErrors.Load(), failures)
+	if got := callback.successCount.Load(); got != int64(b.N) || callback.FailureCount() != 0 {
+		b.Fatalf("delivered=%d failures=%d, want %d/0", got, callback.FailureCount(), b.N)
 	}
 }
 
-// NoOpHandler returns an HTTP handler that discards the body and returns 200
-func NoOpHandler() noOpHandler {
-	return noOpHandler{}
+func BenchmarkBatchSizes(b *testing.B) {
+	for _, size := range []int{10, 50, 100, 250, 500} {
+		b.Run(fmt.Sprintf("batch_%d", size), func(b *testing.B) {
+			benchmarkDelivery(b, Config{Transport: NoOpTransport(), BatchSize: size}, NewEventPool(1000))
+		})
+	}
 }
+
+func BenchmarkEndToEndWithServer(b *testing.B) {
+	server := httptest.NewServer(NoOpHandler())
+	defer server.Close()
+	benchmarkDelivery(b, Config{Endpoint: server.URL}, NewEventPool(1000))
+}
+
+func NoOpHandler() noOpHandler { return noOpHandler{} }
 
 type noOpHandler struct{}
 
-func (h noOpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	io.Copy(io.Discard, r.Body)
-	w.WriteHeader(200)
+func (noOpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	_, _ = io.Copy(io.Discard, r.Body)
+	w.WriteHeader(http.StatusOK)
 }
 
-// BenchmarkEventPoolGeneration measures event pool creation time
+var benchmarkPoolSink *EventPool
+var benchmarkMessageSink APIMessage
+
 func BenchmarkEventPoolGeneration(b *testing.B) {
-	sizes := []int{100, 1000, 10000}
-
-	for _, size := range sizes {
+	for _, size := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
-			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				NewEventPool(size)
+				benchmarkPoolSink = NewEventPool(size)
 			}
 		})
 	}
 }
 
-// BenchmarkEventPoolGenerationWithCardinality measures pool creation with cardinality
 func BenchmarkEventPoolGenerationWithCardinality(b *testing.B) {
-	cardinalities := []struct {
-		name        string
-		cardinality PropertyCardinality
-	}{
-		{"low", CardinalityLow},
-		{"medium", CardinalityMedium},
-		{"high", CardinalityHigh},
-	}
-
-	size := 100 // Keep small for high cardinality
-
-	for _, tc := range cardinalities {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ResetTimer()
+	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
+		b.Run(CardinalityName(card), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				NewEventPoolWithCardinality(size, tc.cardinality)
+				benchmarkPoolSink = NewEventPoolWithCardinality(100, card)
 			}
 		})
 	}
 }
 
-// BenchmarkValidation measures message validation overhead
 func BenchmarkValidation(b *testing.B) {
-	capture := Capture{
-		DistinctId: "user_1",
-		Event:      "test_event",
-		Properties: generateVariedProperties(42),
-	}
-
+	capture := Capture{DistinctId: "user_1", Event: "test_event", Properties: generateVariedProperties(42)}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		capture.Validate()
+		if err := capture.Validate(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
-// BenchmarkAPIfy measures APIfy conversion overhead
 func BenchmarkAPIfy(b *testing.B) {
-	cardinalities := []struct {
-		name        string
-		cardinality PropertyCardinality
-	}{
-		{"low", CardinalityLow},
-		{"medium", CardinalityMedium},
-		{"high", CardinalityHigh},
-	}
-
-	for _, tc := range cardinalities {
-		b.Run(tc.name, func(b *testing.B) {
-			capture := Capture{
-				DistinctId: "user_1",
-				Event:      "test_event",
-				Properties: generatePropertiesWithCardinality(42, tc.cardinality),
-				Groups:     generateGroupsWithCardinality(42, tc.cardinality),
-			}
-
+	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
+		b.Run(CardinalityName(card), func(b *testing.B) {
+			capture := Capture{DistinctId: "user_1", Event: "test_event", Properties: generatePropertiesWithCardinality(42, card), Groups: generateGroupsWithCardinality(42, card)}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				capture.APIfy()
+				benchmarkMessageSink = capture.APIfy()
 			}
 		})
 	}
 }
 
-// BenchmarkMessageEnqueueOverhead measures the overhead of the Enqueue path
 func BenchmarkMessageEnqueueOverhead(b *testing.B) {
-	callback := &BenchmarkCallback{}
-	var enqueueErrors atomic.Int64
-
-	// Create a client with a very fast transport
-	client, _ := NewWithConfig("test-key", Config{
-		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-			io.Copy(io.Discard, r.Body)
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(strings.NewReader("")),
-			}, nil
-		}),
-		Callback:  callback,
-		BatchSize: 10000, // Large batch to avoid flushing during benchmark
-	})
-	defer client.Close()
-
-	// Pre-generate captures to avoid map race conditions
-	// Each iteration needs its own Properties map since APIfy iterates over it
-	captures := make([]Capture, b.N)
-	for i := range captures {
-		captures[i] = Capture{
-			DistinctId: "user_1",
-			Event:      "test_event",
-			Properties: generateVariedProperties(i),
-		}
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := client.Enqueue(captures[i]); err != nil {
-			enqueueErrors.Add(1)
-		}
-	}
-	b.StopTimer()
-
-	if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
-		b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
-			enqueueErrors.Load(), failures)
-	}
+	benchmarkEnqueue(b, NewEventPoolWithCardinality(1000, CardinalityLow), 0)
 }
 
-// BenchmarkCompressionOverhead measures the CPU and memory overhead of GZIP compression
-// Compares None vs Gzip compression modes with various payload sizes
 func BenchmarkCompressionOverhead(b *testing.B) {
-	compressionModes := []struct {
-		name string
-		mode CompressionMode
-	}{
-		{"none", CompressionNone},
-		{"gzip", CompressionGzip},
-	}
-
-	// Test with different property cardinalities (affects payload size)
-	cardinalities := []struct {
-		name        string
-		cardinality PropertyCardinality
-	}{
-		{"low_cardinality", CardinalityLow},
-		{"medium_cardinality", CardinalityMedium},
-		{"high_cardinality", CardinalityHigh},
-	}
-
-	for _, cm := range compressionModes {
-		for _, card := range cardinalities {
-			b.Run(fmt.Sprintf("%s/%s", cm.name, card.name), func(b *testing.B) {
-				pool := NewEventPoolWithDefaultSize(card.cardinality)
-
-				callback := &BenchmarkCallback{}
-				var enqueueErrors atomic.Int64
-
-				server := httptest.NewServer(NoOpHandler())
-				defer server.Close()
-
-				client, err := NewWithConfig("test-key", Config{
-					Endpoint:    server.URL,
-					Compression: cm.mode,
-					Callback:    callback,
-					MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
-					Logger:      testLogger{}, // Suppress log output in benchmarks
-				})
-				if err != nil {
-					b.Fatalf("Failed to create client: %v", err)
-				}
-				defer client.Close()
-
+	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
+		capture := NewEventPoolWithCardinality(1, card).Next()
+		raw, _, err := prepareForSend(capture)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, mode := range []CompressionMode{CompressionNone, CompressionGzip} {
+			b.Run(fmt.Sprintf("%d/%s", mode, CardinalityName(card)), func(b *testing.B) {
+				b.SetBytes(int64(len(raw)))
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					if err := client.Enqueue(pool.Next()); err != nil {
-						enqueueErrors.Add(1)
+					if _, _, err := compressV1Body(mode, raw); err != nil {
+						b.Fatal(err)
 					}
-				}
-				b.StopTimer()
-
-				if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
-					b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
-						enqueueErrors.Load(), failures)
 				}
 			})
 		}
 	}
 }
 
-// BenchmarkEndToEndWithCompression measures end-to-end throughput with GZIP compression
-// Uses production defaults for BatchSize, MaxEnqueuedRequests
 func BenchmarkEndToEndWithCompression(b *testing.B) {
-	compressionModes := []struct {
-		name string
-		mode CompressionMode
-	}{
-		{"none", CompressionNone},
-		{"gzip", CompressionGzip},
-	}
-
-	for _, cm := range compressionModes {
-		b.Run(cm.name, func(b *testing.B) {
-			pool := NewEventPool(b.N + 1000)
-
+	for _, mode := range []CompressionMode{CompressionNone, CompressionGzip} {
+		b.Run(fmt.Sprintf("compression_%d", mode), func(b *testing.B) {
 			server := httptest.NewServer(NoOpHandler())
 			defer server.Close()
-
-			callback := &BenchmarkCallback{}
-			var enqueueErrors atomic.Int64
-
-			client, err := NewWithConfig("test-key", Config{
-				Endpoint:    server.URL,
-				Compression: cm.mode,
-				Callback:    callback,
-				MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
-				Logger:      testLogger{}, // Suppress log output in benchmarks
-			})
-			if err != nil {
-				b.Fatalf("Failed to create client: %v", err)
-			}
-			defer client.Close()
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if err := client.Enqueue(pool.Next()); err != nil {
-					enqueueErrors.Add(1)
-				}
-			}
-			b.StopTimer()
-
-			if failures := callback.FailureCount(); enqueueErrors.Load() > 0 || failures > 0 {
-				b.Fatalf("Benchmark invalid: %d enqueue errors, %d delivery failures",
-					enqueueErrors.Load(), failures)
-			}
+			benchmarkDelivery(b, Config{Endpoint: server.URL, Compression: mode, MaxRetries: Ptr(0)}, NewEventPool(1000))
 		})
 	}
 }
 
-// BenchmarkCompressionRatio measures the compression ratio achieved
-// This is not a performance benchmark but useful for understanding compression effectiveness
 func BenchmarkCompressionRatio(b *testing.B) {
-	cardinalities := []struct {
-		name        string
-		cardinality PropertyCardinality
-	}{
-		{"low", CardinalityLow},
-		{"medium", CardinalityMedium},
-		{"high", CardinalityHigh},
-	}
-
-	for _, card := range cardinalities {
-		b.Run(card.name, func(b *testing.B) {
-			var uncompressedTotal, compressedTotal atomic.Int64
-
-			// Use two servers to measure sizes
-			uncompressedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, _ := io.ReadAll(r.Body)
-				uncompressedTotal.Add(int64(len(body)))
-				w.WriteHeader(200)
-			}))
-			defer uncompressedServer.Close()
-
-			compressedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, _ := io.ReadAll(r.Body)
-				compressedTotal.Add(int64(len(body)))
-				w.WriteHeader(200)
-			}))
-			defer compressedServer.Close()
-
-			// Send same events to both
-			pool := NewEventPoolWithCardinality(100, card.cardinality)
-
-			callbackUncompressed := &BenchmarkCallback{}
-			callbackCompressed := &BenchmarkCallback{}
-			var enqueueErrorsUncompressed, enqueueErrorsCompressed atomic.Int64
-
-			clientUncompressed, err := NewWithConfig("test-key", Config{
-				Endpoint:    uncompressedServer.URL,
-				Compression: CompressionNone,
-				BatchSize:   50,
-				Callback:    callbackUncompressed,
-				MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
-				Logger:      testLogger{}, // Suppress log output in benchmarks
-			})
+	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
+		b.Run(CardinalityName(card), func(b *testing.B) {
+			capture := NewEventPoolWithCardinality(1, card).Next()
+			raw, _, err := prepareForSend(capture)
 			if err != nil {
-				b.Fatalf("Failed to create uncompressed client: %v", err)
+				b.Fatal(err)
 			}
-
-			clientCompressed, err := NewWithConfig("test-key", Config{
-				Endpoint:    compressedServer.URL,
-				Compression: CompressionGzip,
-				BatchSize:   50,
-				Callback:    callbackCompressed,
-				MaxRetries:  Ptr(0),       // Disable retries to avoid noise during cleanup
-				Logger:      testLogger{}, // Suppress log output in benchmarks
-			})
-			if err != nil {
-				b.Fatalf("Failed to create compressed client: %v", err)
-			}
-
+			var compressed []byte
+			b.SetBytes(int64(len(raw)))
 			b.ResetTimer()
-			for i := 0; i < b.N && i < 100; i++ {
-				event := pool.Next()
-				if err := clientUncompressed.Enqueue(event); err != nil {
-					enqueueErrorsUncompressed.Add(1)
-				}
-				// Create a copy for the compressed client to avoid race
-				eventCopy := Capture{
-					DistinctId: event.DistinctId,
-					Event:      event.Event,
-					Properties: cloneProperties(event.Properties),
-				}
-				if err := clientCompressed.Enqueue(eventCopy); err != nil {
-					enqueueErrorsCompressed.Add(1)
+			for i := 0; i < b.N; i++ {
+				compressed, err = gzipCompress(raw)
+				if err != nil {
+					b.Fatal(err)
 				}
 			}
 			b.StopTimer()
-
-			clientUncompressed.Close()
-			clientCompressed.Close()
-
-			// Verify no errors occurred
-			if enqueueErrorsUncompressed.Load() > 0 || callbackUncompressed.FailureCount() > 0 {
-				b.Fatalf("Uncompressed client: %d enqueue errors, %d delivery failures",
-					enqueueErrorsUncompressed.Load(), callbackUncompressed.FailureCount())
-			}
-			if enqueueErrorsCompressed.Load() > 0 || callbackCompressed.FailureCount() > 0 {
-				b.Fatalf("Compressed client: %d enqueue errors, %d delivery failures",
-					enqueueErrorsCompressed.Load(), callbackCompressed.FailureCount())
-			}
-
-			uncompBytes := uncompressedTotal.Load()
-			compBytes := compressedTotal.Load()
-			if uncompBytes == 0 || compBytes == 0 {
-				b.Fatalf("No data received: uncompressed=%d, compressed=%d", uncompBytes, compBytes)
-			}
-
-			ratio := float64(compBytes) / float64(uncompBytes) * 100
-			b.Logf("Cardinality %s: Uncompressed=%d bytes, Compressed=%d bytes, Ratio=%.1f%%",
-				card.name, uncompBytes, compBytes, ratio)
+			b.ReportMetric(100*float64(len(compressed))/float64(len(raw)), "compressed%")
 		})
 	}
 }

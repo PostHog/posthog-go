@@ -1,11 +1,15 @@
 package posthog
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func createLogRecord(level slog.Level, msg string, attrs ...slog.Attr) slog.Record {
@@ -179,6 +183,72 @@ func TestErrorExtractor_ExtractDescription(t *testing.T) {
 	}
 }
 
+func TestSlogCaptureHandler_LoggerLevels(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		level                slog.Level
+		baseLevel            slog.Level
+		wantLog, wantCapture bool
+	}{
+		{"disabled by both", slog.LevelDebug, slog.LevelInfo, false, false},
+		{"log only", slog.LevelInfo, slog.LevelInfo, true, false},
+		{"capture threshold", slog.LevelWarn, slog.LevelInfo, true, true},
+		{"capture despite disabled base handler", slog.LevelWarn, slog.LevelError, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			client := &fakeEnqueueClient{}
+			logger := slog.New(NewSlogCaptureHandler(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: tc.baseLevel}), client,
+				WithDistinctIDFn(func(context.Context, slog.Record) string { return "user" }),
+			))
+			logger.Log(context.Background(), tc.level, "message")
+			require.Equal(t, tc.wantLog, output.Len() > 0)
+			if tc.wantCapture {
+				require.Len(t, client.enqueuedMsgs, 1)
+			} else {
+				require.Empty(t, client.enqueuedMsgs)
+			}
+		})
+	}
+}
+
+func TestSlogCaptureHandler_DerivedHandlers(t *testing.T) {
+	var output bytes.Buffer
+	client := &fakeEnqueueClient{}
+	fingerprint := "checkout-failure"
+	base := slog.New(NewSlogCaptureHandler(slog.NewJSONHandler(&output, nil), client,
+		WithDistinctIDFn(func(context.Context, slog.Record) string { return "user" }),
+		WithFingerprintFn(func(context.Context, slog.Record) *string { return &fingerprint }),
+		WithDescriptionExtractor(ErrorExtractor{ErrorKeys: []string{"cause"}, Fallback: "no cause"}),
+		WithPropertiesFn(SlogAttrsAsProperties),
+	))
+	derived := base.With("service", "payments").WithGroup("request")
+	derived.Error("payment failed", "cause", errors.New("declined"), "attempt", 2)
+
+	var logged map[string]interface{}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &logged))
+	require.Equal(t, "payments", logged["service"])
+	require.Equal(t, map[string]interface{}{"cause": "declined", "attempt": float64(2)}, logged["request"])
+	require.Len(t, client.enqueuedMsgs, 1)
+	exception, ok := client.enqueuedMsgs[0].(Exception)
+	require.True(t, ok)
+	require.Equal(t, "user", exception.DistinctId)
+	require.Equal(t, &fingerprint, exception.ExceptionFingerprint)
+	require.Len(t, exception.ExceptionList, 1)
+	require.Equal(t, "payment failed", exception.ExceptionList[0].Type)
+	require.Equal(t, "declined", exception.ExceptionList[0].Value)
+	require.Equal(t, int64(2), exception.Properties["attempt"])
+
+	output.Reset()
+	base.Info("base remains unchanged", "plain", true)
+	var baseLogged map[string]interface{}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &baseLogged))
+	require.NotContains(t, baseLogged, "service")
+	require.NotContains(t, baseLogged, "request")
+	require.Equal(t, true, baseLogged["plain"])
+	require.Len(t, client.enqueuedMsgs, 1)
+}
+
 func TestSlogCaptureHandler_WithPropertiesFn(t *testing.T) {
 	next := &fakeNextSlogHandler{isEnabled: true}
 	client := &fakeEnqueueClient{}
@@ -189,14 +259,7 @@ func TestSlogCaptureHandler_WithPropertiesFn(t *testing.T) {
 		WithDistinctIDFn(func(_ context.Context, _ slog.Record) string {
 			return "test-user"
 		}),
-		WithPropertiesFn(func(_ context.Context, r slog.Record) Properties {
-			props := NewProperties()
-			r.Attrs(func(a slog.Attr) bool {
-				props.Set(a.Key, a.Value.Any())
-				return true
-			})
-			return props
-		}),
+		WithPropertiesFn(SlogAttrsAsProperties),
 	)
 
 	record := createLogRecord(slog.LevelError, "test error",
