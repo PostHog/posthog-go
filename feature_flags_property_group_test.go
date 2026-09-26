@@ -61,6 +61,42 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 			properties: NewProperties().Set("country", "CA"),
 		},
 		{
+			name: "negation does not turn an inconclusive leaf into an OR match",
+			group: PropertyGroup{Type: "OR", Values: []any{
+				map[string]any{"key": "missing", "operator": "exact", "value": "value", "negation": true},
+			}},
+			properties: NewProperties().Set("country", "US"),
+			wantErr:    errCohortPropertyValue,
+		},
+		{
+			name: "inconclusive leaf is not an AND mismatch",
+			group: PropertyGroup{Type: "AND", Values: []any{
+				map[string]any{"key": "missing", "operator": "exact", "value": "value"},
+				map[string]any{"key": "country", "operator": "exact", "value": "US"},
+			}},
+			properties: NewProperties().Set("country", "US"),
+			wantErr:    errCohortPropertyValue,
+		},
+		{
+			name: "inconclusive nested group is not an AND mismatch",
+			group: PropertyGroup{Type: "AND", Values: []any{
+				map[string]any{"type": "OR", "values": []any{
+					map[string]any{"key": "missing", "operator": "exact", "value": "value"},
+				}},
+				map[string]any{"key": "country", "operator": "exact", "value": "US"},
+			}},
+			properties: NewProperties().Set("country", "US"),
+			wantErr:    errCohortPropertyValue,
+		},
+		{
+			name: "AND mismatch after an inconclusive leaf is still a mismatch",
+			group: PropertyGroup{Type: "AND", Values: []any{
+				map[string]any{"key": "missing", "operator": "exact", "value": "value"},
+				map[string]any{"key": "country", "operator": "exact", "value": "US"},
+			}},
+			properties: NewProperties().Set("country", "CA"),
+		},
+		{
 			name: "missing cohort requires server evaluation",
 			group: PropertyGroup{Type: "AND", Values: []any{
 				map[string]any{"type": "cohort", "value": "missing-cohort"},

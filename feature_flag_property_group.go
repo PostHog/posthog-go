@@ -45,7 +45,10 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 				if isServerEvalError(err) {
 					return false, err
 				} else if isInconclusiveError(err) {
+					// An inconclusive entry is neither a match nor a mismatch, so it
+					// can't decide the group, with or without negation.
 					errorMatchingLocally = true
+					continue
 				} else {
 					return false, err
 				}
@@ -76,7 +79,10 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 				if isServerEvalError(err) {
 					return false, err
 				} else if isInconclusiveError(err) {
+					// An inconclusive entry is neither a match nor a mismatch, so it
+					// can't decide the group, with or without negation.
 					errorMatchingLocally = true
+					continue
 				} else {
 					return false, err
 				}
