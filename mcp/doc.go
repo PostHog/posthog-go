@@ -3,5 +3,6 @@
 //
 // Applications own the PostHog client lifecycle and pass completed tool calls
 // to Analytics. Tool parameters, responses, intent, and error messages are
-// sanitized and bounded before they are queued.
+// sanitized and bounded before they are queued. Parameter or response JSON
+// exceeding 1 MiB after media redaction is replaced with an omission marker.
 package mcp

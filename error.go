@@ -71,7 +71,7 @@ var (
 	ErrTooManyRequests = errors.New("too many requests are already in-flight")
 
 	// ErrMessageTooBig is returned by Enqueue when the final JSON representation
-	// exceeds the maximum message size.
+	// exceeds the maximum message size. The failure is also sent to Callback.Failure.
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
 	// ErrNoSecretKey is returned when a SecretKey is required for the requested

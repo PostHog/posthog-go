@@ -50,6 +50,12 @@ func normalizePayload(field string, value any) (normalized any, err error) {
 	if err != nil {
 		return nil, packageError("normalize "+field, err)
 	}
+	if len(data) > maxNormalizeBytes {
+		if field == "Parameters" || field == "Response" {
+			return oversizedPayloadValue, nil
+		}
+		return nil, fmt.Errorf("posthogmcp: %s exceeds MCP analytics input limit", field)
+	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -267,26 +273,73 @@ func sanitizeResponse(value any) any {
 	return result
 }
 
+// Redact media in common decoded MCP responses before JSON normalization so
+// large binary fields are not serialized and decoded merely to be discarded.
+func redactMediaBeforeNormalize(value any) any {
+	response, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	var content []any
+	switch blocks := response["content"].(type) {
+	case []any:
+		content = blocks
+	case []map[string]any:
+		content = make([]any, len(blocks))
+		for i, block := range blocks {
+			content[i] = block
+		}
+	default:
+		return value
+	}
+
+	redacted := make([]any, len(content))
+	changed := false
+	for i, block := range content {
+		redacted[i] = block
+		if object, ok := block.(map[string]any); ok {
+			if replacement, ok := redactedMediaBlock(object); ok {
+				redacted[i] = replacement
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return value
+	}
+	result := cloneMap(response)
+	result["content"] = redacted
+	return result
+}
+
+func redactedMediaBlock(block map[string]any) (map[string]any, bool) {
+	switch block["type"] {
+	case "image":
+		return redactedContentBlock("[image content redacted - not supported by PostHog MCP analytics]"), true
+	case "audio":
+		return redactedContentBlock("[audio content redacted - not supported by PostHog MCP analytics]"), true
+	case "resource":
+		if resource, ok := block["resource"].(map[string]any); ok {
+			if _, hasBlob := resource["blob"]; hasBlob {
+				return redactedContentBlock("[binary resource content redacted - not supported by PostHog MCP analytics]"), true
+			}
+		}
+	}
+	return nil, false
+}
+
 func sanitizeContentBlock(value any) any {
 	block, ok := value.(map[string]any)
 	if !ok {
 		return value
 	}
+	if replacement, ok := redactedMediaBlock(block); ok {
+		return replacement
+	}
 
 	contentType, _ := block["type"].(string)
 	switch contentType {
-	case "text", "resource_link":
-		return sanitizeCapturedValue(block)
-	case "image":
-		return redactedContentBlock("[image content redacted - not supported by PostHog MCP analytics]")
-	case "audio":
-		return redactedContentBlock("[audio content redacted - not supported by PostHog MCP analytics]")
-	case "resource":
-		if resource, ok := block["resource"].(map[string]any); ok {
-			if _, hasBlob := resource["blob"]; hasBlob {
-				return redactedContentBlock("[binary resource content redacted - not supported by PostHog MCP analytics]")
-			}
-		}
+	case "text", "resource_link", "resource":
 		return sanitizeCapturedValue(block)
 	default:
 		return redactedContentBlock(fmt.Sprintf(

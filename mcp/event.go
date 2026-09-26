@@ -146,6 +146,9 @@ func prepareValue(field string, value any, response bool) (any, error) {
 	if value == nil {
 		return nil, nil
 	}
+	if response {
+		value = redactMediaBeforeNormalize(value)
+	}
 	normalized, err := normalizePayload(field, value)
 	if err != nil {
 		return nil, err

@@ -34,6 +34,7 @@ const (
 	maxBreadth            = 100
 	maxStringBytes        = 32_768
 	maxEventBytes         = 102_400
+	maxNormalizeBytes     = 1_048_576
 	maxIntentBytes        = 2_048
 	maxErrorMessageBytes  = 2_048
 	maxResourceNameBytes  = 256
@@ -43,7 +44,8 @@ const (
 )
 
 const (
-	redactedValue       = "[redacted]"
-	binaryRedactedValue = "[binary data redacted - not supported by PostHog MCP analytics]"
-	truncationSuffix    = "..."
+	redactedValue         = "[redacted]"
+	binaryRedactedValue   = "[binary data redacted - not supported by PostHog MCP analytics]"
+	truncationSuffix      = "..."
+	oversizedPayloadValue = "[payload omitted - exceeds MCP analytics input limit]"
 )

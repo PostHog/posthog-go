@@ -150,7 +150,7 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 	}
 }
 
-func TestCaptureToolCallPersonProfileSurvivesClientDefaults(t *testing.T) {
+func TestCaptureToolCallReservedFieldsSurviveClientDefaults(t *testing.T) {
 	payloads := make(chan []byte, 3)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -164,9 +164,18 @@ func TestCaptureToolCallPersonProfileSurvivesClientDefaults(t *testing.T) {
 	defer server.Close()
 
 	client, err := posthog.NewWithConfig("test-key", posthog.Config{
-		Endpoint:               server.URL,
-		BatchSize:              1,
-		DefaultEventProperties: posthog.Properties{propertyProcessProfile: true, "service": "api"},
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		DefaultEventProperties: posthog.Properties{
+			propertyProcessProfile: true,
+			propertyIntent:         "unredacted@example.com",
+			propertyResponse:       map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}},
+			propertyIsError:        true,
+			propertySessionID:      "wrong-session",
+			propertySet:            map[string]any{"email": "wrong@example.com"},
+			propertyGroups:         map[string]any{"organization": "wrong"},
+			"service":              "api",
+		},
 	})
 	require.NoError(t, err)
 	defer client.Close()
@@ -181,6 +190,8 @@ func TestCaptureToolCallPersonProfileSurvivesClientDefaults(t *testing.T) {
 		{name: "identified default", call: ToolCall{ToolName: "query", DistinctID: "user_2"}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			test.call.Intent = "Find alice@example.com"
+			test.call.Response = map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}}
 			require.NoError(t, New(client).CaptureToolCall(test.call))
 			select {
 			case body := <-payloads:
@@ -191,8 +202,15 @@ func TestCaptureToolCallPersonProfileSurvivesClientDefaults(t *testing.T) {
 				}
 				require.NoError(t, json.Unmarshal(body, &payload))
 				require.Len(t, payload.Batch, 1)
-				assert.Equal(t, test.want, payload.Batch[0].Properties[propertyProcessProfile])
-				assert.Equal(t, "api", payload.Batch[0].Properties["service"])
+				properties := payload.Batch[0].Properties
+				assert.Equal(t, test.want, properties[propertyProcessProfile])
+				assert.Equal(t, "Find [redacted]", properties[propertyIntent])
+				assert.Equal(t, false, properties[propertyIsError])
+				assert.NotContains(t, properties, propertySessionID)
+				assert.NotContains(t, properties, propertySet)
+				assert.NotContains(t, properties, propertyGroups)
+				assert.NotContains(t, string(body), "raw image")
+				assert.Equal(t, "api", properties["service"])
 			case <-time.After(5 * time.Second):
 				t.Fatal("timeout waiting for capture request")
 			}

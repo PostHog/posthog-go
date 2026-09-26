@@ -66,6 +66,31 @@ func TestCaptureToolCallSanitizesPayloadsWithoutMutation(t *testing.T) {
 	assert.Equal(t, "secret", properties["password"])
 }
 
+func TestCaptureToolCallRedactsMediaBeforeNormalization(t *testing.T) {
+	response := map[string]any{
+		"content": []any{map[string]any{"type": "image", "data": panickingJSON{}}},
+	}
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(ToolCall{ToolName: "query", Response: response}))
+
+	capture := requireCapture(t, client.messages[0])
+	content := capture.Properties[propertyResponse].(map[string]any)["content"].([]any)
+	assert.Equal(t, "[image content redacted - not supported by PostHog MCP analytics]", content[0].(map[string]any)["text"])
+	assert.IsType(t, panickingJSON{}, response["content"].([]any)[0].(map[string]any)["data"])
+}
+
+func TestCaptureToolCallOmitsOversizedRawResponse(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+		ToolName: "query",
+		Response: map[string]any{"content": []any{map[string]any{
+			"type": "text", "text": strings.Repeat("x", maxNormalizeBytes),
+		}}},
+	}))
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, oversizedPayloadValue, capture.Properties[propertyResponse])
+}
+
 func TestCaptureToolCallCustomPropertiesCannotReplaceCanonicalFields(t *testing.T) {
 	client := &fakeEnqueueClient{}
 	properties := posthog.Properties{
