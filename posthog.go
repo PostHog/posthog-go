@@ -49,10 +49,10 @@ type EnqueueClient interface {
 	//	client.Close()
 	//
 	// Enqueue returns an error if the message could not be queued, which happens
-	// when the client is closed, the message is invalid, or the in-memory queue
-	// is full (ErrQueueFull) -- in the latter case the message is dropped rather
-	// than blocking the caller. A full-queue drop is reported only through this
-	// returned error, not through Callback.Failure.
+	// when the client is closed, the message is invalid or too large
+	// (ErrMessageTooBig), or the in-memory queue is full (ErrQueueFull). Oversized
+	// and full-queue messages are dropped and reported only through this error,
+	// not through Callback.Failure.
 	//
 	// Bulk or backfill workloads that can enqueue faster than the client uploads
 	// should check the returned error for ErrQueueFull and throttle or retry (or
@@ -573,6 +573,10 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 	// SDKs. The drop is reported only via the returned error -- no callback or log
 	// is invoked on the caller's goroutine, so a sustained overload stays cheap.
 	sendPrepared := func(prepared preparedMessage) {
+		if len(prepared.data) > maxMessageBytes {
+			err = ErrMessageTooBig
+			return
+		}
 		defer func() {
 			// When the `msgs` channel is closed writing to it will trigger a panic.
 			// To avoid letting the panic propagate to the caller we recover from it
@@ -1728,17 +1732,9 @@ func (c *client) loop() {
 		batchData, batchMsgs, batchUuids, batchSize = nil, nil, nil, 0
 	}
 
-	// Helper to process a single message: validate, batch, flush if needed.
-	// Returns false if message was rejected (oversized).
-	processMessage := func(prepared preparedMessage) bool {
+	// Helper to process a single message: batch and flush if needed.
+	processMessage := func(prepared preparedMessage) {
 		msgSize := len(prepared.data)
-
-		if msgSize > maxMessageBytes {
-			c.Errorf("message exceeds maximum size (%d > %d)", msgSize, maxMessageBytes)
-			c.notifyFailure([]APIMessage{prepared.msg}, ErrMessageTooBig)
-			return false
-		}
-
 		if batchSize+msgSize > maxBatchBytes && len(batchData) > 0 {
 			flushBatch()
 			resetBatch()
@@ -1755,15 +1751,12 @@ func (c *client) loop() {
 			flushBatch()
 			resetBatch()
 		}
-		return true
 	}
 
 	for {
 		select {
 		case prepared := <-c.msgs:
-			if !processMessage(prepared) {
-				continue
-			}
+			processMessage(prepared)
 			c.debugf("buffer (%d/%d, %d bytes) %v", len(batchData), c.BatchSize, batchSize, prepared.msg)
 
 		case <-tick.C:

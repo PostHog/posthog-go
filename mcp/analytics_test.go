@@ -323,6 +323,40 @@ func TestCaptureToolCallPanickingErrorFailsWithoutEnqueue(t *testing.T) {
 	assert.Empty(t, client.messages)
 }
 
+func TestCaptureToolCallEmptyErrorUsesFallbackMessage(t *testing.T) {
+	for _, message := range []string{"", "   "} {
+		client := &fakeEnqueueClient{}
+		require.NoError(t, New(client).CaptureToolCall(ToolCall{
+			ToolName: "query",
+			IsError:  true,
+			Error:    errors.New(message),
+		}))
+		require.Len(t, client.messages, 2)
+		capture := requireCapture(t, client.messages[0])
+		assert.Equal(t, "Tool query returned an error", capture.Properties[propertyErrorMessage])
+		exception := requireException(t, client.messages[1])
+		assert.Equal(t, "Tool query returned an error", exception.ExceptionList[0].Value)
+		assert.NoError(t, exception.Validate())
+	}
+}
+
+func TestCaptureToolCallReportsFinalPayloadTooLarge(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("oversized capture was sent")
+	}))
+	defer server.Close()
+
+	client, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:               server.URL,
+		DefaultEventProperties: posthog.Properties{"large_default": strings.Repeat("x", 500_000)},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	err = New(client).CaptureToolCall(ToolCall{ToolName: "query", DistinctID: "user_1"})
+	require.ErrorIs(t, err, posthog.ErrMessageTooBig)
+}
+
 func TestCaptureToolCallAttemptsAllEnqueues(t *testing.T) {
 	client := &fakeEnqueueClient{errors: []error{errors.New("capture full"), errors.New("exception full")}}
 	err := New(client).CaptureToolCall(ToolCall{ToolName: "query", IsError: true})

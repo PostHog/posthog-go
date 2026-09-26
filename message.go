@@ -20,8 +20,8 @@ type Callback interface {
 	// Success is called for every message that was successfully sent to the API.
 	Success(APIMessage)
 
-	// Failure is called for every message that failed to be sent to the API and
-	// will be discarded by the client. The error describes the send or serialization failure.
+	// Failure reports serialization and delivery failures. Messages rejected for
+	// size or queue capacity are reported only through Enqueue's returned error.
 	Failure(APIMessage, error)
 }
 

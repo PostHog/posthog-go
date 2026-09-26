@@ -70,9 +70,8 @@ var (
 	// already being sent and no more messages can be accepted.
 	ErrTooManyRequests = errors.New("too many requests are already in-flight")
 
-	// This error is used to notify the client callbacks that a message send
-	// failed because the JSON representation of a message exceeded the upper
-	// limit.
+	// ErrMessageTooBig is returned by Enqueue when the final JSON representation
+	// exceeds the maximum message size.
 	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
 	// ErrNoSecretKey is returned when a SecretKey is required for the requested

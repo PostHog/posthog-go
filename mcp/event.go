@@ -128,9 +128,12 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 
 		message := fmt.Sprintf("Tool %s returned an error", prepared.toolName)
 		if call.Error != nil {
-			message, err = safeErrorMessage(call.Error)
+			provided, err := safeErrorMessage(call.Error)
 			if err != nil {
 				return preparedToolCall{}, err
+			}
+			if strings.TrimSpace(provided) != "" {
+				message = provided
 			}
 		}
 		prepared.errorMessage = truncateUTF8(sanitizeString(message), maxErrorMessageBytes)
