@@ -103,11 +103,21 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	if err != nil {
 		return preparedToolCall{}, err
 	}
-	prepared.custom, err = prepareProperties("Properties", call.Properties)
+	custom := make(posthog.Properties, len(call.Properties))
+	for key, value := range call.Properties {
+		if strings.HasPrefix(key, "$mcp_") {
+			continue
+		}
+		switch key {
+		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID:
+			continue
+		}
+		custom[key] = value
+	}
+	prepared.custom, err = prepareProperties("Properties", custom)
 	if err != nil {
 		return preparedToolCall{}, err
 	}
-	removeIdentityControlProperties(prepared.custom)
 
 	if call.IsError {
 		prepared.errorType = strings.TrimSpace(call.ErrorType)
@@ -194,12 +204,6 @@ func personProfileOptOut(properties posthog.Properties) bool {
 	return ok && !disabled
 }
 
-func removeIdentityControlProperties(properties posthog.Properties) {
-	delete(properties, propertyGroups)
-	delete(properties, propertySet)
-	delete(properties, propertyProcessProfile)
-}
-
 func (p preparedToolCall) baseProperties() posthog.Properties {
 	properties := posthog.NewProperties().
 		Set(propertySource, analyticsSource).
@@ -240,7 +244,6 @@ func setStringProperty(properties posthog.Properties, key, value string) {
 }
 
 func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, includeSet bool) {
-	removeIdentityControlProperties(properties)
 	if len(p.groups) > 0 {
 		properties[propertyGroups] = p.groups
 	}

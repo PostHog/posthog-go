@@ -66,6 +66,31 @@ func TestCaptureToolCallSanitizesPayloadsWithoutMutation(t *testing.T) {
 	assert.Equal(t, "secret", properties["password"])
 }
 
+func TestCaptureToolCallCustomPropertiesCannotReplaceCanonicalFields(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	properties := posthog.Properties{
+		propertyIntent:   "alice@example.com",
+		propertyResponse: map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}},
+		propertyIsError:  true,
+		"environment":    "test",
+	}
+	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+		ToolName:   "query",
+		Intent:     "Find alice@example.com",
+		Response:   map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}},
+		Properties: properties,
+	}))
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, "Find [redacted]", capture.Properties[propertyIntent])
+	assert.Equal(t, false, capture.Properties[propertyIsError])
+	assert.Equal(t, "test", capture.Properties["environment"])
+	content := capture.Properties[propertyResponse].(map[string]any)["content"].([]any)
+	assert.Equal(t, "[image content redacted - not supported by PostHog MCP analytics]", content[0].(map[string]any)["text"])
+	assert.NotContains(t, content[0], "data")
+	assert.Equal(t, "alice@example.com", properties[propertyIntent])
+}
+
 func TestCaptureToolCallRedactsStructuredIntentIdentifiers(t *testing.T) {
 	for _, test := range []struct {
 		name   string

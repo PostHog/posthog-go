@@ -45,6 +45,8 @@ type ToolCall struct {
 	Error     error
 	ErrorType string
 
+	// Properties adds custom event metadata. $mcp_* and identity control keys
+	// are reserved; use the corresponding ToolCall fields instead.
 	Properties posthog.Properties
 	Timestamp  time.Time
 }

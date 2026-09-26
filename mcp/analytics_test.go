@@ -64,6 +64,7 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 		propertyGroups:         map[string]any{"organization": "wrong"},
 		propertySet:            map[string]any{"plan": "wrong"},
 		propertyProcessProfile: false,
+		propertySessionID:      "wrong-session",
 		"environment":          "test",
 	}
 
@@ -90,7 +91,8 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 	capture := requireCapture(t, client.messages[0])
 	assert.Equal(t, "user_1", capture.DistinctId)
 	assert.Equal(t, float64(1.5), capture.Properties[propertyDurationMS])
-	assert.Equal(t, "custom-client", capture.Properties[propertyClientName])
+	assert.Equal(t, "client", capture.Properties[propertyClientName])
+	assert.Equal(t, "session_1", capture.Properties[propertySessionID])
 	assert.Equal(t, "inspect data", capture.Properties[propertyIntent])
 	assert.Equal(t, string(IntentSourceContextParameter), capture.Properties[propertyIntentSource])
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Groups)
