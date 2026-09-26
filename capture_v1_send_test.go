@@ -17,6 +17,7 @@ import (
 	"github.com/andybalholm/brotli"
 	json "github.com/goccy/go-json"
 	"github.com/klauspost/compress/zstd"
+	"github.com/stretchr/testify/require"
 )
 
 // decodeV1Body decompresses a recorded request body per its Content-Encoding,
@@ -69,13 +70,14 @@ func decodeV1Body(t *testing.T, encoding string, raw []byte) []byte {
 
 // recordedRequest captures what the server saw for one attempt.
 type recordedRequest struct {
-	attempt   string
-	requestId string
-	timestamp string
-	createdAt string
-	auth      string
-	encoding  string
-	uuids     []string
+	receivedAt time.Time
+	attempt    string
+	requestId  string
+	timestamp  string
+	createdAt  string
+	auth       string
+	encoding   string
+	uuids      []string
 }
 
 // v1TestServer is a configurable capture-v1 endpoint for send-engine tests.
@@ -108,13 +110,14 @@ func (s *v1TestServer) handler(t *testing.T) http.HandlerFunc {
 		s.mu.Lock()
 		attempt := len(s.requests) + 1
 		s.requests = append(s.requests, recordedRequest{
-			attempt:   r.Header.Get("PostHog-Attempt"),
-			requestId: r.Header.Get("PostHog-Request-Id"),
-			timestamp: r.Header.Get("PostHog-Request-Timestamp"),
-			createdAt: env.CreatedAt,
-			auth:      r.Header.Get("Authorization"),
-			encoding:  r.Header.Get("Content-Encoding"),
-			uuids:     uuids,
+			receivedAt: time.Now(),
+			attempt:    r.Header.Get("PostHog-Attempt"),
+			requestId:  r.Header.Get("PostHog-Request-Id"),
+			timestamp:  r.Header.Get("PostHog-Request-Timestamp"),
+			createdAt:  env.CreatedAt,
+			auth:       r.Header.Get("Authorization"),
+			encoding:   r.Header.Get("Content-Encoding"),
+			uuids:      uuids,
 		})
 		s.mu.Unlock()
 
@@ -747,19 +750,8 @@ func TestV1SendRetryAfterHonored(t *testing.T) {
 	c.sendV1(v1Batch(t, cap1(uuidA)))
 
 	reqs := srv.snapshot()
-	if len(reqs) < 2 {
-		t.Fatalf("expected >= 2 attempts, got %d", len(reqs))
-	}
-	t1, err1 := time.Parse(time.RFC3339, reqs[0].timestamp)
-	t2, err2 := time.Parse(time.RFC3339, reqs[1].timestamp)
-	if err1 != nil || err2 != nil {
-		t.Fatalf("parse timestamps: %v / %v", err1, err2)
-	}
-	// RFC3339 has 1-second resolution; Retry-After: 1 means ≥900ms is expected.
-	delta := t2.Sub(t1)
-	if delta < 900*time.Millisecond {
-		t.Errorf("attempt delta %v, expected >= ~1s from Retry-After", delta)
-	}
+	require.Len(t, reqs, 2)
+	require.GreaterOrEqual(t, reqs[1].receivedAt.Sub(reqs[0].receivedAt), time.Second)
 	if s, f := cb.counts(); s != 1 || f != 0 {
 		t.Errorf("callbacks: success=%d failure=%d, want 1/0", s, f)
 	}
@@ -833,54 +825,60 @@ func TestV1SendShutdownDuringBackoff(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
+	backoff := make(chan struct{}, 1)
 	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) {
-		// Backoff of 10s so the test can cancel mid-wait.
-		cfg.RetryAfter = func(int) time.Duration { return 10 * time.Second }
+		cfg.RetryAfter = func(int) time.Duration {
+			backoff <- struct{}{}
+			return time.Minute
+		}
 	})
-
+	batch := v1Batch(t, cap1(uuidA))
+	done := make(chan struct{})
 	go func() {
-		// Allow the first request to complete, then shut down.
-		time.Sleep(100 * time.Millisecond)
-		_ = c.Close()
+		defer close(done)
+		c.sendV1(batch)
 	}()
-	c.sendV1(v1Batch(t, cap1(uuidA)))
-
-	if _, f := cb.counts(); f != 1 {
-		t.Errorf("failure callbacks = %d, want 1", f)
+	select {
+	case <-backoff:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sender did not enter retry backoff")
 	}
+	require.NoError(t, c.Close())
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not interrupt backoff")
+	}
+	require.Len(t, srv.snapshot(), 1)
+	s, f := cb.counts()
+	require.Equal(t, 0, s)
+	require.Equal(t, 1, f)
 }
 
 func TestV1SendTerminalNonRetryableBodyError(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Write a 400 status but close the connection before the body can be
-		// fully written. The httptest.Server doesn't let us easily abort mid-
-		// write, so instead we write a truncated JSON body to trigger an
-		// unmarshal error in reportV1 (body reads fine, but parse fails as
-		// incomplete JSON — however the code path we're testing fires when
-		// io.ReadAll errors, which is harder to trigger in tests).
-		// Instead: we return a 400 with a valid error body to confirm the P1
-		// fix delivers requestErrorV1(res) instead of raw err.
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":"invalid_payload","error_description":"bad event shape"}`))
-	}))
-	defer srv.Close()
-
-	c := newV1TestClient(t, srv.URL, cb, 9, nil)
+	bodyErr := errors.New("response body interrupted")
+	attempts := 0
+	c := newV1TestClient(t, "http://posthog.test", cb, 9, func(cfg *Config) {
+		cfg.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(readFunc(func([]byte) (int, error) { return 0, bodyErr })),
+			}, nil
+		})
+	})
 	c.sendV1(v1Batch(t, cap1(uuidA)))
 
-	if got := len(srv.URL); got == 0 {
-		t.Fatal("impossible")
-	}
+	require.Equal(t, 1, attempts)
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	if len(cb.failures) != 1 {
-		t.Fatalf("expected 1 failure, got %d", len(cb.failures))
-	}
-	errMsg := cb.failures[0].err.Error()
-	if !containsAll(errMsg, "400", "invalid_payload") {
-		t.Errorf("error = %q, want to contain status code and error key", errMsg)
-	}
+	require.Empty(t, cb.successes)
+	require.Len(t, cb.failures, 1)
+	var requestErr *CaptureRequestError
+	require.ErrorAs(t, cb.failures[0].err, &requestErr)
+	require.Equal(t, http.StatusBadRequest, requestErr.StatusCode)
 }
 
 func containsAll(s string, substrs ...string) bool {

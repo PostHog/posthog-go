@@ -178,7 +178,7 @@ func TestMixedTargetingRolloutBucketing(t *testing.T) {
 					{
 						"aggregation_group_type_index": 0,
 						"properties": [],
-						"rollout_percentage": 100
+						"rollout_percentage": 50
 					}
 				]
 			}
@@ -197,13 +197,15 @@ func TestMixedTargetingRolloutBucketing(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 
-	result, err := client.GetFeatureFlag(FeatureFlagPayload{
-		Key:             "rollout-flag",
-		DistinctId:      "any-distinct-id",
-		Groups:          Groups{"company": "acme"},
-		GroupProperties: map[string]Properties{"company": {}},
-	})
-	require.NoError(t, err)
-	require.Equal(t, true, result)
+	// SHA-1 rollout vectors: acme=0.34627, person-a=0.48159, person-b=0.52761.
+	for _, person := range []string{"person-a", "person-b"} {
+		result, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key: "rollout-flag", DistinctId: person,
+			Groups:          Groups{"company": "acme"},
+			GroupProperties: map[string]Properties{"company": {}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, result, "rollout must use the group, not %s", person)
+	}
 	require.Equal(t, int32(0), decideCalls.Load(), "expected no fallback to /flags decide endpoint")
 }

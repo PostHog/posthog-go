@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -63,9 +64,15 @@ func TestDebugIDFromGNUBuildID(t *testing.T) {
 }
 
 func TestNativeImageArch(t *testing.T) {
-	// amd64 is Go-only vocabulary; arm64 is already the shared spelling.
-	if arch := nativeImageArch(); arch == "amd64" || arch == "aarch64" {
-		t.Errorf("nativeImageArch() = %q, want shared vocabulary", arch)
+	want := runtime.GOARCH
+	if want == "amd64" {
+		want = "x86_64"
+	}
+	if want == "386" {
+		want = "x86"
+	}
+	if arch := nativeImageArch(); arch != want {
+		t.Errorf("nativeImageArch() = %q, want %q", arch, want)
 	}
 }
 

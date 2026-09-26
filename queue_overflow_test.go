@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestEnqueue_DropsNewestWhenQueueFull(t *testing.T) {
 
 	// Saturate the queue so no further message can be buffered.
 	for i := 0; i < capacity; i++ {
-		c.msgs <- preparedMessage{}
+		require.NoError(t, c.Enqueue(captureOverflowEvent(fmt.Sprintf("queued-%d", i))))
 	}
 
 	// Enqueue must not block even though the queue is full and has no consumer;
@@ -70,6 +71,10 @@ func TestEnqueue_DropsNewestWhenQueueFull(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrQueueFull, "Enqueue must return ErrQueueFull when the queue is full")
 	require.Len(t, c.msgs, capacity, "the dropped message must not be buffered")
+	for i := 0; i < capacity; i++ {
+		msg := <-c.msgs
+		require.Equal(t, fmt.Sprintf("queued-%d", i), msg.msg.(CaptureInApi).Event)
+	}
 
 	// The drop is reported only through the returned error. Doing callback or log
 	// work here would run on the caller's goroutine, re-introducing the latency and
