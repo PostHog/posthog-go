@@ -127,6 +127,17 @@ func TestMixedTargetingLocalEvaluation(t *testing.T) {
 			expectVal: false,
 		},
 		{
+			name:     "group condition matches with a numeric group key",
+			flagJSON: mixedTargetingFlagJSON,
+			flagKey:  "mixed-flag",
+			opts: opts{
+				groups:           Groups{"company": 42},
+				groupProperties:  map[string]Properties{"company": {"plan": "enterprise"}},
+				personProperties: Properties{"email": "nope@example.com"},
+			},
+			expectVal: true,
+		},
+		{
 			name:      "only group conditions, no groups passed: returns false without server fallback",
 			flagJSON:  onlyGroupConditionFlagJSON,
 			flagKey:   "only-group-flag",

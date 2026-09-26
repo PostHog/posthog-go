@@ -1099,11 +1099,16 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			return nil, errors.New(errMessage)
 		}
 
+		groupKeyStr, ok := groupKeyToString(groupKey)
+		if !ok {
+			return nil, fmt.Errorf("[FEATURE FLAGS] Can't compute group feature flag: %s with a %T group key", flag.Key, groupKey)
+		}
+
 		focusedGroupProperties := groupProperties[groupType]
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groups[groupType].(string), nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+		return poller.matchFeatureFlagProperties(flag, groupKeyStr, nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
 	} else {
 		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
@@ -1122,6 +1127,24 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			}
 		}
 		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+	}
+}
+
+// groupKeyToString returns the bucketing ID for a group key. Groups values are
+// free-form, and the flags service accepts a string or a JSON number as a group
+// key, bucketing a number by its JSON form (42 -> "42"). Other types are rejected.
+func groupKeyToString(groupKey interface{}) (string, bool) {
+	switch key := groupKey.(type) {
+	case string:
+		return key, true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		encoded, err := json.Marshal(key)
+		if err != nil {
+			return "", false
+		}
+		return string(encoded), true
+	default:
+		return "", false
 	}
 }
 
@@ -1221,7 +1244,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 					isInconclusive = true
 					continue
 				}
-				groupKeyStr, ok := groupKey.(string)
+				groupKeyStr, ok := groupKeyToString(groupKey)
 				if !ok {
 					continue
 				}
