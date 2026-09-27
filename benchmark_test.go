@@ -228,10 +228,6 @@ func BenchmarkAPIfy(b *testing.B) {
 	}
 }
 
-func BenchmarkMessageEnqueueOverhead(b *testing.B) {
-	benchmarkEnqueue(b, NewEventPoolWithCardinality(1000, CardinalityLow), 0)
-}
-
 func BenchmarkCompressionOverhead(b *testing.B) {
 	for _, card := range []PropertyCardinality{CardinalityLow, CardinalityMedium, CardinalityHigh} {
 		capture := NewEventPoolWithCardinality(1, card).Next()
