@@ -830,11 +830,17 @@ func (c *client) IsFeatureEnabled(flagConfig FeatureFlagPayload) (interface{}, e
 }
 
 func (c *client) ReloadFeatureFlags() error {
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	if c.featureFlagsPoller == nil {
 		c.warnPersonalAPIKeyMissing("ReloadFeatureFlags")
 		return ErrNoSecretKey
 	}
 	c.featureFlagsPoller.ForceReload()
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	return nil
 }
 

@@ -547,7 +547,6 @@ func (poller *FeatureFlagsPoller) run() {
 		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
-			close(poller.forceReload)
 			timer.Stop()
 			poller.shutdownCacheProvider(poller.shutdownCtx)
 			return
@@ -1437,35 +1436,22 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 		return !strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
-	if operator == "regex" {
-		r, err := getOrCompileRegex(valueToString(value))
-		// invalid regex
-		if err != nil {
-			return false, nil
-		}
-
-		return r.MatchString(valueToString(override_value)), nil
-	}
-
-	if operator == "not_regex" {
+	if operator == "regex" || operator == "not_regex" {
 		// The feature flags evaluation service stringifies an explicit JSON null
 		// as "null" before regex matching. Avoid Go's default "<nil>" representation.
-		overrideValueString := valueToString(override_value)
-		if override_value == nil {
-			overrideValueString = "null"
-		}
-		// Mirror the "regex" branch above: coerce both sides with valueToString
-		// so all property/flag value types are handled. The previous manual
-		// string/int type switch errored on other types, most notably float64,
-		// which is what JSON numbers deserialize to, so not_regex failed on a
-		// numeric property value even though regex handled it.
+		// Coerce both sides with valueToString so every property type is handled,
+		// including float64, which is what JSON numbers deserialize to.
 		r, err := getOrCompileRegex(valueToString(value))
 		// invalid regex
 		if err != nil {
 			return false, nil
 		}
 
-		return !r.MatchString(overrideValueString), nil
+		matched := r.MatchString(regexPropertyString(override_value))
+		if operator == "not_regex" {
+			return !matched, nil
+		}
+		return matched, nil
 	}
 
 	if operator == "gt" {
@@ -2212,6 +2198,15 @@ func valueToString(v interface{}) string {
 	}
 }
 
+// regexPropertyString is the haystack used for regex and not_regex.
+// An explicit JSON null is the string "null", matching the feature flags evaluation service.
+func regexPropertyString(v interface{}) string {
+	if v == nil {
+		return "null"
+	}
+	return valueToString(v)
+}
+
 // exactValueToString mirrors serde_json::Value::to_string for representable JSON
 // values, except that top-level strings remain unquoted like the flags service helper.
 func exactValueToString(value interface{}) string {
@@ -2595,8 +2590,13 @@ func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestD
 }
 
 // ForceReload requests an immediate reload of local feature flag definitions.
+// It returns without sending once the poller has been shut down. The channel
+// is left open so a reload overlapping Close cannot send on a closed channel.
 func (poller *FeatureFlagsPoller) ForceReload() {
-	poller.forceReload <- true
+	select {
+	case <-poller.shutdown:
+	case poller.forceReload <- true:
+	}
 }
 
 // shutdownPoller stops the polling goroutine, which releases the cache provider on

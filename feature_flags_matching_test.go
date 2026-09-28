@@ -557,6 +557,22 @@ func TestMatchPropertyNotRegexHandlesAllValueTypes(t *testing.T) {
 	require.True(t, m)
 }
 
+func TestMatchPropertyRegexTreatsNilAsNull(t *testing.T) {
+	// The flags service stringifies JSON null as "null" before regex matching.
+	// not_regex already does this; regex must use the same haystack.
+	m, err := matchProperty(FlagProperty{Key: "k", Value: "^null$", Operator: "regex"}, NewProperties().Set("k", nil))
+	require.NoError(t, err)
+	require.True(t, m)
+
+	m, err = matchProperty(FlagProperty{Key: "k", Value: "^<nil>$", Operator: "regex"}, NewProperties().Set("k", nil))
+	require.NoError(t, err)
+	require.False(t, m)
+
+	m, err = matchProperty(FlagProperty{Key: "k", Value: "^1", Operator: "regex"}, NewProperties().Set("k", nil))
+	require.NoError(t, err)
+	require.False(t, m)
+}
+
 func TestMatchPropertyContains(t *testing.T) {
 	shouldMatch := []interface{}{"value", "value2", "value3", "value4", "343tfvalue5"}
 
