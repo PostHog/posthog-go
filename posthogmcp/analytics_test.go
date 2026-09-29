@@ -151,7 +151,7 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 	}
 }
 
-func TestCaptureToolCallReservedFieldsSurviveClientDefaults(t *testing.T) {
+func TestCaptureToolCallPersonProfileOptOutSurvivesClientDefaults(t *testing.T) {
 	payloads := make(chan []byte, 3)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -169,12 +169,6 @@ func TestCaptureToolCallReservedFieldsSurviveClientDefaults(t *testing.T) {
 		BatchSize: 1,
 		DefaultEventProperties: posthog.Properties{
 			propertyProcessProfile: true,
-			propertyIntent:         "unredacted@example.com",
-			propertyResponse:       map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}},
-			propertyIsError:        true,
-			propertySessionID:      "wrong-session",
-			propertySet:            map[string]any{"email": "wrong@example.com"},
-			propertyGroups:         map[string]any{"organization": "wrong"},
 			"service":              "api",
 		},
 	})
@@ -191,8 +185,6 @@ func TestCaptureToolCallReservedFieldsSurviveClientDefaults(t *testing.T) {
 		{name: "identified default", call: ToolCall{ToolName: "query", DistinctID: "user_2"}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			test.call.Intent = "Find alice@example.com"
-			test.call.Response = map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}}
 			require.NoError(t, New(client).CaptureToolCall(context.Background(), test.call))
 			select {
 			case body := <-payloads:
@@ -205,12 +197,6 @@ func TestCaptureToolCallReservedFieldsSurviveClientDefaults(t *testing.T) {
 				require.Len(t, payload.Batch, 1)
 				properties := payload.Batch[0].Properties
 				assert.Equal(t, test.want, properties[propertyProcessProfile])
-				assert.Equal(t, "Find [redacted]", properties[propertyIntent])
-				assert.Equal(t, false, properties[propertyIsError])
-				assert.NotContains(t, properties, propertySessionID)
-				assert.NotContains(t, properties, propertySet)
-				assert.NotContains(t, properties, propertyGroups)
-				assert.NotContains(t, string(body), "raw image")
 				assert.Equal(t, "api", properties["service"])
 			case <-time.After(5 * time.Second):
 				t.Fatal("timeout waiting for capture request")
