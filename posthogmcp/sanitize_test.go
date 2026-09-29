@@ -314,3 +314,33 @@ func TestSanitizeFreeTextMatchesPythonLookaround(t *testing.T) {
 		assert.Equal(t, test.want, sanitizeFreeText(test.value), test.value)
 	}
 }
+
+func TestCaptureToolCallKeepsIDsInMetadata(t *testing.T) {
+	id := "V1StGXR8_Z5jdHi6B-myT"
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+		ToolName:      "query",
+		DistinctID:    "user_1",
+		Groups:        posthog.Groups{"organization": id},
+		SetProperties: posthog.Properties{"workspace": id},
+		Properties:    posthog.Properties{"request_id": id},
+	}))
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, posthog.Groups{"organization": id}, capture.Groups)
+	assert.Equal(t, posthog.Properties{"workspace": id}, capture.Properties[propertySet])
+	assert.Equal(t, id, capture.Properties["request_id"])
+	assert.Equal(t, redactedValue, sanitizeString(id), "the secret detector still covers payloads")
+}
+
+func TestCaptureToolCallSanitizesIntentAndToolName(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+		ToolName: "https://svc:pw@internal.test/tools/search",
+		Intent:   "use token phx_AAAA-415-555-0142-AAAAAAAAAAAAAA for alice@example.com",
+	}))
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, "use token [redacted] for [redacted]", capture.Properties[propertyIntent])
+	assert.Equal(t, "https://%5Bredacted%5D@internal.test/tools/search", capture.Properties[propertyToolName])
+}

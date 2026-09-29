@@ -67,7 +67,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		call:                  call,
 		explicitID:            explicitID,
 		suppressPersonProfile: !explicitID || personProfileOptOut(call.Properties),
-		toolName:              truncateUTF8(call.ToolName, maxResourceNameBytes),
+		toolName:              truncateUTF8(sanitizeResourceName(call.ToolName), maxResourceNameBytes),
 	}
 	switch {
 	case call.DistinctID != "":
@@ -80,7 +80,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 
 	intent := strings.TrimSpace(call.Intent)
 	if intent != "" {
-		prepared.intent = truncateUTF8(sanitizeString(redactIntent(intent)), maxIntentBytes)
+		prepared.intent = truncateUTF8(sanitizeFreeText(intent), maxIntentBytes)
 		prepared.intentSource = call.IntentSource
 		if prepared.intentSource == "" {
 			prepared.intentSource = IntentSourceContextParameter
@@ -170,7 +170,7 @@ func prepareProperties(field string, properties posthog.Properties) (posthog.Pro
 	if err != nil {
 		return nil, err
 	}
-	value, ok := truncateValue(sanitizeCapturedValue(normalized)).(map[string]any)
+	value, ok := truncateValue(sanitizeMetadataValue(normalized)).(map[string]any)
 	if !ok {
 		return nil, errors.New("posthogmcp: normalized properties must be an object")
 	}
@@ -185,7 +185,7 @@ func prepareGroups(groups posthog.Groups) (posthog.Groups, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, ok := truncateValue(sanitizeCapturedValue(normalized)).(map[string]any)
+	value, ok := truncateValue(sanitizeMetadataValue(normalized)).(map[string]any)
 	if !ok {
 		return nil, errors.New("posthogmcp: normalized groups must be an object")
 	}

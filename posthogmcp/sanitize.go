@@ -126,13 +126,24 @@ func packageError(stage string, cause error) error {
 }
 
 func sanitizeCapturedValue(value any) any {
+	return sanitizeValue(value, sanitizeString)
+}
+
+// sanitizeMetadataValue is for caller-owned metadata (custom properties,
+// groups, $set). Like resource names, it skips the secret detector, which
+// would redact nanoid-style group and record IDs.
+func sanitizeMetadataValue(value any) any {
+	return sanitizeValue(value, sanitizeResourceName)
+}
+
+func sanitizeValue(value any, sanitize func(string) string) any {
 	switch value := value.(type) {
 	case string:
-		return sanitizeString(value)
+		return sanitize(value)
 	case []any:
 		result := make([]any, len(value))
 		for i, item := range value {
-			result[i] = sanitizeCapturedValue(item)
+			result[i] = sanitizeValue(item, sanitize)
 		}
 		return result
 	case map[string]any:
@@ -141,7 +152,7 @@ func sanitizeCapturedValue(value any) any {
 			if sensitiveKeyPattern.MatchString(key) {
 				result[key] = redactedValue
 			} else {
-				result[key] = sanitizeCapturedValue(item)
+				result[key] = sanitizeValue(item, sanitize)
 			}
 		}
 		return result
