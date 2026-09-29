@@ -54,8 +54,9 @@ jobs:
           set -euo pipefail
 
           # A new major is a different module path, so `go get` can never
-          # succeed and crossing it is a reviewed source migration. Skip cleanly
-          # rather than failing on every release of that major.
+          # succeed and crossing it is a reviewed source migration. Fail on
+          # purpose: the failure event below is the alert that tells the team
+          # the monorepo still needs that migration.
           # `|| true`: under `set -o pipefail` a non-matching grep would abort
           # the step with no output, since go's stderr is suppressed.
           CURRENT_PATH=$(go list -m -f '{{.Path}}' all 2>/dev/null | grep -E '^github\.com/posthog/posthog-go(/v[0-9]+)?$' | head -1 || true)
@@ -69,6 +70,7 @@ jobs:
 
           if [ "$NEW_MAJOR" != "$CURRENT_MAJOR" ]; then
             echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "major_migration_needed=true" >> "$GITHUB_OUTPUT"
             {
               echo "### posthog-go ${PACKAGE_VERSION} needs a manual major upgrade"
               echo
@@ -79,8 +81,8 @@ jobs:
               echo "No changes were made and nothing is broken: the installer keeps building"
               echo "against \`${CURRENT_PATH}\`, whose tags remain available."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "Major version change detected (${CURRENT_MAJOR} -> ${NEW_MAJOR}); skipping automated bump."
-            exit 0
+            echo "Major version change detected (${CURRENT_MAJOR} -> ${NEW_MAJOR}); the monorepo needs a manual migration." >&2
+            exit 1
           fi
 
           echo "skipped=false" >> "$GITHUB_OUTPUT"
@@ -202,6 +204,6 @@ jobs:
               "packageName": "${{ github.event.inputs.package_name }}",
               "packageVersion": "${{ github.event.inputs.package_version || 'unknown' }}",
               "actionUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "alertText": ":warning: Downstream PostHog/posthog dependency bump failed for ${{ github.event.inputs.package_name }}@${{ github.event.inputs.package_version }}",
-              "alertContext": "This is the monorepo upgrade workflow, not a posthog-go release failure."
+              "alertText": "${{ steps.install.outputs.major_migration_needed == 'true' && format(':warning: posthog-go {0} is a new major: PostHog/posthog needs a manual migration to the new module path', github.event.inputs.package_version) || format(':warning: Downstream PostHog/posthog dependency bump failed for {0}@{1}', github.event.inputs.package_name, github.event.inputs.package_version) }}",
+              "alertContext": "${{ steps.install.outputs.major_migration_needed == 'true' && 'Nothing is broken: the installer keeps building against the current module path. Open the migration PR described in the step summary.' || 'This is the monorepo upgrade workflow, not a posthog-go release failure.' }}"
             }
