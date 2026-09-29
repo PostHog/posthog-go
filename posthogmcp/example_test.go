@@ -1,11 +1,11 @@
-package mcp_test
+package posthogmcp_test
 
 import (
 	"log"
 	"time"
 
 	posthog "github.com/posthog/posthog-go"
-	posthogmcp "github.com/posthog/posthog-go/mcp"
+	"github.com/posthog/posthog-go/posthogmcp"
 )
 
 func ExampleAnalytics_CaptureToolCall() {

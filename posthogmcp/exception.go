@@ -1,7 +1,7 @@
 // Event-size pruning is adapted from AgentCat-derived MCP analytics code in
 // PostHog/posthog-js. See THIRD_PARTY_NOTICES.md.
 
-package mcp
+package posthogmcp
 
 import (
 	"errors"

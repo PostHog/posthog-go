@@ -925,12 +925,12 @@ type Variants struct {
 package extras // import "github.com/posthog/posthog-go/extras"
 
 
-## github.com/posthog/posthog-go/mcp
+## github.com/posthog/posthog-go/posthogmcp
 
-package mcp // import "github.com/posthog/posthog-go/mcp"
+package posthogmcp // import "github.com/posthog/posthog-go/posthogmcp"
 
-Package mcp builds and enqueues canonical PostHog analytics events for Model
-Context Protocol activity without depending on a particular MCP framework.
+Package posthogmcp builds and enqueues canonical PostHog analytics events for
+Model Context Protocol activity without depending on a particular MCP framework.
 
 Applications own the PostHog client lifecycle and pass completed tool calls to
 Analytics. Tool parameters, responses, intent, and error messages are sanitized

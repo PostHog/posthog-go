@@ -1,4 +1,4 @@
-package mcp
+package posthogmcp
 
 const (
 	eventToolCall = "$mcp_tool_call"
