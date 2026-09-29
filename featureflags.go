@@ -1149,11 +1149,16 @@ func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
 	return true
 }
 
-func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) string {
-	if flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice && deviceId != nil {
-		return *deviceId
+// getBucketingID returns the id used for person-level rollout hashing.
+// The second result is false when the flag requires a device id and none was provided.
+func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) (string, bool) {
+	if flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice {
+		if deviceId == nil || *deviceId == "" {
+			return "", false
+		}
+		return *deviceId, true
 	}
-	return distinctId
+	return distinctId, true
 }
 
 func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
@@ -1186,8 +1191,13 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 ) (interface{}, error) {
 	state := poller.evaluationState(snapshots)
 	conditions := flag.Filters.Groups
-	bucketingId := getBucketingID(flag, distinctId, deviceId)
+	bucketingId, personBucketOK := getBucketingID(flag, distinctId, deviceId)
 	flagAggregation := flag.Filters.AggregationGroupTypeIndex
+	if !personBucketOK && flagAggregation != nil {
+		// Flag-level group aggregation hashes the group key passed as distinctId.
+		bucketingId = distinctId
+		personBucketOK = true
+	}
 	groupTypeMapping := state.groups
 	isInconclusive := false
 
@@ -1231,6 +1241,12 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 				effectiveProperties = focusedGroupProperties
 				effectiveBucketingId = groupKeyStr
 			}
+		}
+
+		// A device-bucketed person condition cannot fall back to hashing distinct_id.
+		if !personBucketOK && conditionAggregation == nil {
+			isInconclusive = true
+			continue
 		}
 
 		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache, state)

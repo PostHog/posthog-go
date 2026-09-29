@@ -4511,6 +4511,49 @@ func TestFeatureFlagDeviceIDBucketingLocalEvaluation(t *testing.T) {
 	require.Equal(t, expectedDevice, enabled)
 }
 
+func TestFeatureFlagDeviceIDBucketingWithoutDeviceIDIsInconclusive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
+			w.Write([]byte(fixture("feature_flag/test-device-id-bucketing.json")))
+		} else if strings.HasPrefix(r.URL.Path, "/batch/") {
+			// ignore
+		} else {
+			t.Errorf("Unknown request made by library: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWithConfig("Csyjlnlun3OzyNJAafdlv", Config{
+		SecretKey: "some very secret key",
+		Endpoint:  server.URL,
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	distinctId := "distinct-123"
+	expectedDistinct := checkIfSimpleFlagEnabled("device-bucket-flag", distinctId, 50)
+
+	enabled, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key:                 "device-bucket-flag",
+		DistinctId:          distinctId,
+		OnlyEvaluateLocally: true,
+	})
+	require.Error(t, err)
+	var inconclusive *InconclusiveMatchError
+	require.ErrorAs(t, err, &inconclusive)
+	require.NotEqual(t, expectedDistinct, enabled)
+
+	empty := ""
+	enabled, err = client.GetFeatureFlag(FeatureFlagPayload{
+		Key:                 "device-bucket-flag",
+		DistinctId:          distinctId,
+		DeviceId:            &empty,
+		OnlyEvaluateLocally: true,
+	})
+	require.ErrorAs(t, err, &inconclusive)
+	require.NotEqual(t, expectedDistinct, enabled)
+}
+
 func TestFeatureFlagWithFalseVariant(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
