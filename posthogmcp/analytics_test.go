@@ -379,6 +379,8 @@ func TestCaptureToolCallAttemptsAllEnqueues(t *testing.T) {
 func TestCaptureToolCallKeepsEventsWithUnencodableValues(t *testing.T) {
 	selfMap := map[string]any{"name": "loop"}
 	selfMap["self"] = selfMap
+	selfSlice := []any{"loop", nil}
+	selfSlice[1] = selfSlice
 	type reading struct{ Value float64 }
 
 	for _, test := range []struct {
@@ -400,6 +402,16 @@ func TestCaptureToolCallKeepsEventsWithUnencodableValues(t *testing.T) {
 			name:  "self-referential map",
 			value: selfMap,
 			want:  map[string]any{"name": "loop", "self": "[Circular ~]"},
+		},
+		{
+			name:  "slice keeps encodable elements",
+			value: map[string]any{"values": []any{1, "keep", math.NaN()}},
+			want:  map[string]any{"values": []any{json.Number("1"), "keep", "[Unserializable: float64]"}},
+		},
+		{
+			name:  "self-referential slice",
+			value: selfSlice,
+			want:  []any{"loop", "[Circular ~]"},
 		},
 		{
 			name:  "struct with NaN field",
@@ -519,6 +531,7 @@ func TestCaptureToolCallDistinctIDFromRequestContext(t *testing.T) {
 		wantDistinctID string
 	}{
 		{name: "request context fills missing ID", ctx: requestCtx, wantDistinctID: "request_user"},
+		{name: "request session ID stands in for a missing distinct ID", ctx: posthog.WithRequestContext(context.Background(), posthog.RequestContext{SessionId: "request_session"}), wantDistinctID: "request_session"},
 		{name: "explicit ID wins", ctx: requestCtx, distinctID: "user_1", wantDistinctID: "user_1"},
 		{name: "no request context", ctx: context.Background(), wantDistinctID: "anonymous"},
 	}
@@ -529,4 +542,30 @@ func TestCaptureToolCallDistinctIDFromRequestContext(t *testing.T) {
 			assert.Equal(t, tt.wantDistinctID, requireCapture(t, client.messages[0]).DistinctId)
 		})
 	}
+}
+
+func TestCaptureToolCallSanitizesRequestContextProperties(t *testing.T) {
+	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{Properties: posthog.Properties{
+		"$current_url": "https://app.test/cb?token=abc",
+		propertyIntent: "leak alice@example.com",
+		propertySet:    map[string]any{"email": "leak@example.com"},
+		"service":      "context",
+	}})
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(ctx, ToolCall{
+		ToolName:   "query",
+		Properties: posthog.Properties{"service": "call"},
+	}))
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, "https://app.test/cb?token=%5Bredacted%5D", capture.Properties["$current_url"])
+	assert.Equal(t, "call", capture.Properties["service"], "call properties win over the request context")
+	assert.NotContains(t, capture.Properties, propertyIntent)
+	assert.NotContains(t, capture.Properties, propertySet)
+}
+
+func TestCaptureToolCallFallbackErrorMessageKeepsToolName(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "Get_Organization_Memberships", IsError: true}))
+	assert.Equal(t, "Tool Get_Organization_Memberships returned an error", requireCapture(t, client.messages[0]).Properties[propertyErrorMessage])
 }

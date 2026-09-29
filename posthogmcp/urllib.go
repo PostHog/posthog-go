@@ -100,14 +100,14 @@ func checkBracketedNetloc(netloc string) error {
 	} else {
 		host, _, _ = strings.Cut(hostAndPort, ":")
 	}
-	if strings.HasPrefix(host, "v") || strings.HasPrefix(host, "V") {
+	if strings.HasPrefix(host, "v") {
 		if !ipvFuturePattern.MatchString(host) {
 			return errInvalidURL
 		}
 		return nil
 	}
 	address, err := netip.ParseAddr(host)
-	if err != nil || address.Is4() {
+	if err != nil || address.Is4() || strings.Contains(address.Zone(), "%") {
 		return errInvalidURL
 	}
 	return nil

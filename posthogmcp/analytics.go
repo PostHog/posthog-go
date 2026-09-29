@@ -50,16 +50,15 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // either is enqueued. Enqueue failures are joined after every configured
 // message has been attempted.
 //
-// ctx is passed to posthog.EnqueueWithContext, so a posthog.RequestContext
-// attached to it supplies the distinct ID when call.DistinctID is empty.
+// A posthog.RequestContext attached to ctx supplies the distinct and session
+// IDs the call leaves empty, and its properties sit under call.Properties. They
+// go through the same reserved-key and sanitization rules as the call's own.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	if a == nil || a.client == nil {
 		return errors.New("posthogmcp: nil enqueue client")
 	}
-	if call.DistinctID == "" {
-		if requestContext, ok := posthog.RequestContextFromContext(ctx); ok {
-			call.DistinctID = requestContext.DistinctId
-		}
+	if requestContext, ok := posthog.RequestContextFromContext(ctx); ok {
+		call = withRequestContext(call, requestContext)
 	}
 
 	messages, err := buildToolCallMessages(call, a.cfg.exceptionAutocapture)
@@ -69,11 +68,25 @@ func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 
 	var enqueueErrors []error
 	for _, message := range messages {
-		if err := posthog.EnqueueWithContext(ctx, a.client, message.message); err != nil {
+		if err := a.client.Enqueue(message.message); err != nil {
 			enqueueErrors = append(enqueueErrors, fmt.Errorf("posthogmcp: enqueue %s: %w", message.name, err))
 		}
 	}
 	return errors.Join(enqueueErrors...)
+}
+
+func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
+	if call.DistinctID == "" {
+		call.DistinctID = requestContext.DistinctId
+	}
+	if call.SessionID == "" {
+		call.SessionID = requestContext.SessionId
+	}
+	if len(requestContext.Properties) > 0 {
+		properties := posthog.NewProperties().Merge(requestContext.Properties)
+		call.Properties = properties.Merge(call.Properties)
+	}
+	return call
 }
 
 type namedMessage struct {

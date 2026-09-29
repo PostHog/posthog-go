@@ -16,6 +16,8 @@ import (
 )
 
 var (
+	// RE2's \b is ASCII-only, so a token glued to a letter like é is redacted
+	// here and kept by posthog-python. Over-redacting is the safe side.
 	postHogTokenPattern = regexp.MustCompile(`\bph[a-z]_[A-Za-z0-9_-]{20,}\b`)
 	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key)\n?$`)
 	base64Pattern       = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
@@ -87,25 +89,37 @@ func encodePayload(value any) ([]byte, error) {
 	return marshalJSONSafely(encodableValue(value, map[uintptr]bool{}))
 }
 
-// encodableValue walks only the maps that fail to encode. ancestors holds the
-// maps on the current path, so a map that contains itself becomes a marker.
+// encodableValue walks only the maps and sequences that fail to encode.
+// ancestors holds the maps and slices on the current path, so one that
+// contains itself becomes a marker.
 func encodableValue(value any, ancestors map[uintptr]bool) any {
 	if _, err := marshalJSONSafely(value); err == nil {
 		return value
 	}
 	v := reflect.ValueOf(value)
-	if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
+	kind := v.Kind()
+	isObject := kind == reflect.Map && v.Type().Key().Kind() == reflect.String
+	if !isObject && kind != reflect.Slice && kind != reflect.Array {
 		return fmt.Sprintf("[Unserializable: %T]", value)
 	}
-	if ancestors[v.Pointer()] {
-		return "[Circular ~]"
+	if kind != reflect.Array {
+		if ancestors[v.Pointer()] {
+			return "[Circular ~]"
+		}
+		ancestors[v.Pointer()] = true
+		defer delete(ancestors, v.Pointer())
 	}
-	ancestors[v.Pointer()] = true
-	defer delete(ancestors, v.Pointer())
 
-	result := make(map[string]any, v.Len())
-	for entries := v.MapRange(); entries.Next(); {
-		result[entries.Key().String()] = encodableValue(entries.Value().Interface(), ancestors)
+	if isObject {
+		result := make(map[string]any, v.Len())
+		for entries := v.MapRange(); entries.Next(); {
+			result[entries.Key().String()] = encodableValue(entries.Value().Interface(), ancestors)
+		}
+		return result
+	}
+	result := make([]any, v.Len())
+	for i := range result {
+		result[i] = encodableValue(v.Index(i).Interface(), ancestors)
 	}
 	return result
 }
@@ -199,6 +213,9 @@ func (pattern lookaroundPattern) redact(value string) string {
 	var b strings.Builder
 	last := 0
 	for start := 0; start < len(value); start++ {
+		if !mayStartStructuredID(value[start]) {
+			continue
+		}
 		end := pattern.matchEnd(value, start)
 		if end < 0 {
 			continue
@@ -213,6 +230,12 @@ func (pattern lookaroundPattern) redact(value string) string {
 	}
 	b.WriteString(value[last:])
 	return b.String()
+}
+
+// mayStartStructuredID reports whether an IPv6 or phone alternative can begin
+// at c, so redact skips anchored matching over ordinary prose.
+func mayStartStructuredID(c byte) bool {
+	return isHexDigit(c) || c == ':' || c == '+' || c == '('
 }
 
 func (pattern lookaroundPattern) matchEnd(value string, start int) int {

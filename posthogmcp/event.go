@@ -80,7 +80,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 
 	intent := strings.TrimSpace(call.Intent)
 	if intent != "" {
-		prepared.intent = truncateUTF8(sanitizeFreeText(intent), maxIntentBytes)
+		prepared.intent = truncateUTF8(sanitizeFreeText(truncateUTF8(intent, 2*maxIntentBytes)), maxIntentBytes)
 		prepared.intentSource = call.IntentSource
 		if prepared.intentSource == "" {
 			prepared.intentSource = IntentSourceContextParameter
@@ -127,17 +127,16 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		}
 		prepared.errorType = truncateUTF8(prepared.errorType, maxMetadataBytes)
 
-		message := fmt.Sprintf("Tool %s returned an error", prepared.toolName)
+		prepared.errorMessage = fmt.Sprintf("Tool %s returned an error", prepared.toolName)
 		if call.Error != nil {
 			provided, err := safeErrorMessage(call.Error)
 			if err != nil {
 				return preparedToolCall{}, err
 			}
 			if strings.TrimSpace(provided) != "" {
-				message = provided
+				prepared.errorMessage = truncateUTF8(sanitizeString(provided), maxErrorMessageBytes)
 			}
 		}
-		prepared.errorMessage = truncateUTF8(sanitizeString(message), maxErrorMessageBytes)
 	}
 
 	return prepared, nil

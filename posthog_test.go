@@ -2869,3 +2869,39 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 		}
 	})
 }
+
+func TestDefaultEventPropertiesKeepPersonProfileOptOut(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    any
+		defaults any
+		want     any
+	}{
+		{name: "explicit opt-out survives defaults", event: false, defaults: true, want: false},
+		{name: "defaults apply when the event is silent", event: nil, defaults: true, want: true},
+		{name: "defaults still override an explicit opt-in", event: true, defaults: false, want: false},
+		{name: "only a bool false counts as an opt-out", event: "false", defaults: true, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sent := make(chan Properties, 1)
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:               "http://127.0.0.1:0",
+				DefaultEventProperties: Properties{propertyProcessPersonProfile: tt.defaults},
+				BeforeSend: func(msg Message) Message {
+					sent <- msg.(Capture).Properties
+					return nil
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			properties := NewProperties()
+			if tt.event != nil {
+				properties[propertyProcessPersonProfile] = tt.event
+			}
+			require.NoError(t, client.Enqueue(Capture{DistinctId: "user-123", Event: "test-event", Properties: properties}))
+			require.Equal(t, tt.want, (<-sent)[propertyProcessPersonProfile])
+		})
+	}
+}
