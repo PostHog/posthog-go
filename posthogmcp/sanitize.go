@@ -30,15 +30,25 @@ var (
 	unicodeHorizontalSpacePattern = regexp.MustCompile("[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
 	emailPattern                  = regexp.MustCompile(`[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}`)
 	ipv4Pattern                   = regexp.MustCompile(`\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b`)
-	ipv6FullPattern               = regexp.MustCompile(`\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b`)
-	ipv6TailPattern               = regexp.MustCompile(`(?:[0-9A-Fa-f]{1,4}:){1,7}:`)
-	ipv6MidPattern                = regexp.MustCompile(`(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,5}`)
-	ipv6LeadPattern               = regexp.MustCompile(`::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})`)
 	creditCardCandidatePattern    = regexp.MustCompile(`\b\d(?:[ ./-]?\d){12,}\b`)
 	digitGroupPattern             = regexp.MustCompile(`\d+`)
 	ssnPattern                    = regexp.MustCompile(`\b\d{3}[ .-]\d{2}[ .-]\d{4}\b`)
-	phoneNANPPattern              = regexp.MustCompile(`(?:\+?1[ ./-]?)?(?:\(\d{3}\)[ ./-]?|\d{3}[ ./-])\d{3}[ ./-]\d{4}`)
-	phoneIntlPattern              = regexp.MustCompile(`\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}`)
+
+	// One pattern with four alternatives, as in Python: a single pass, so each
+	// alternative's lookbehind sees the original text rather than an earlier
+	// alternative's redaction.
+	ipv6Pattern = lookaroundPattern{
+		lookaround("", `(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}`, ""),
+		lookaround(":", `(?:[0-9A-Fa-f]{1,4}:){1,7}:`, ":"),
+		lookaround(":", `(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,5}`, ""),
+		lookaround(":", `::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})`, ""),
+	}
+	phoneNANPPattern = lookaroundPattern{
+		lookaround("+", `(?:\+?1[ ./-]?)?(?:\(\d{3}\)[ ./-]?|\d{3}[ ./-])\d{3}[ ./-]\d{4}`, ""),
+	}
+	phoneIntlPattern = lookaroundPattern{
+		lookaround("", `\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}`, ""),
+	}
 )
 
 func normalizePayload(field string, value any) (normalized any, err error) {
@@ -109,66 +119,67 @@ func redactIntent(value string) string {
 	result := unicodeHorizontalSpacePattern.ReplaceAllString(value, " ")
 	result = emailPattern.ReplaceAllString(result, redactedValue)
 	result = ipv4Pattern.ReplaceAllString(result, redactedValue)
-	result = ipv6FullPattern.ReplaceAllString(result, redactedValue)
-	result = replaceIf(ipv6TailPattern, result, func(value string, start, end int) bool {
-		return leftAllows(value, start, ":") && rightAllows(value, end, ":")
-	})
-	result = replaceIf(ipv6MidPattern, result, func(value string, start, end int) bool {
-		return leftAllows(value, start, ":") && rightAllows(value, end, "")
-	})
-	result = replaceIf(ipv6LeadPattern, result, func(value string, start, end int) bool {
-		return leftAllows(value, start, ":") && rightAllows(value, end, "")
-	})
+	result = ipv6Pattern.redact(result)
 	result = creditCardCandidatePattern.ReplaceAllStringFunc(result, redactCardInMatch)
 	result = ssnPattern.ReplaceAllString(result, redactedValue)
-	result = replaceIf(phoneNANPPattern, result, func(value string, start, end int) bool {
-		return leftAllows(value, start, "+") && rightAllows(value, end, "")
-	})
-	result = replaceIf(phoneIntlPattern, result, func(value string, start, end int) bool {
-		return leftAllows(value, start, "") && rightAllows(value, end, "")
-	})
+	result = phoneNANPPattern.redact(result)
+	result = phoneIntlPattern.redact(result)
 	return result
 }
 
-func replaceIf(pattern *regexp.Regexp, value string, accept func(value string, start, end int) bool) string {
-	locs := pattern.FindAllStringIndex(value, -1)
-	if len(locs) == 0 {
-		return value
-	}
+// A lookaroundPattern is a Python regex whose alternatives are guarded by
+// lookbehind and lookahead, which RE2 lacks. Each alternative is anchored at
+// every position its lookbehind allows, with the lookahead consumed as a
+// trailing class, so RE2's leftmost-first submatch picks the match Python's
+// backtracking would: `2001:db8::1:8080x` gives up `:8080` to match.
+type lookaroundPattern []lookaroundAlternative
 
+type lookaroundAlternative struct {
+	notAfter string
+	anchored *regexp.Regexp
+}
+
+// lookaround builds an alternative that may not follow an ASCII word
+// character or one of notAfter, nor precede an ASCII word character or one of
+// notBefore.
+func lookaround(notAfter, body, notBefore string) lookaroundAlternative {
+	return lookaroundAlternative{
+		notAfter: notAfter,
+		anchored: regexp.MustCompile(`^(` + body + `)(?:[^\w` + notBefore + `]|$)`),
+	}
+}
+
+func (pattern lookaroundPattern) redact(value string) string {
 	var b strings.Builder
 	last := 0
-	replaced := false
-	for _, loc := range locs {
-		if loc[0] < last || !accept(value, loc[0], loc[1]) {
+	for start := 0; start < len(value); start++ {
+		end := pattern.matchEnd(value, start)
+		if end < 0 {
 			continue
 		}
-		b.WriteString(value[last:loc[0]])
+		b.WriteString(value[last:start])
 		b.WriteString(redactedValue)
-		last = loc[1]
-		replaced = true
+		last = end
+		start = end - 1
 	}
-	if !replaced {
+	if last == 0 {
 		return value
 	}
 	b.WriteString(value[last:])
 	return b.String()
 }
 
-func leftAllows(value string, index int, extraForbidden string) bool {
-	if index == 0 {
-		return true
+func (pattern lookaroundPattern) matchEnd(value string, start int) int {
+	before, _ := utf8.DecodeLastRuneInString(value[:start])
+	for _, alternative := range pattern {
+		if start > 0 && (isASCIIWord(before) || strings.ContainsRune(alternative.notAfter, before)) {
+			continue
+		}
+		if loc := alternative.anchored.FindStringSubmatchIndex(value[start:]); loc != nil {
+			return start + loc[3]
+		}
 	}
-	r, _ := utf8.DecodeLastRuneInString(value[:index])
-	return !isASCIIWord(r) && !strings.ContainsRune(extraForbidden, r)
-}
-
-func rightAllows(value string, index int, extraForbidden string) bool {
-	if index == len(value) {
-		return true
-	}
-	r, _ := utf8.DecodeRuneInString(value[index:])
-	return !isASCIIWord(r) && !strings.ContainsRune(extraForbidden, r)
+	return -1
 }
 
 func isASCIIWord(r rune) bool {

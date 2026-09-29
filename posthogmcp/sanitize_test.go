@@ -299,3 +299,18 @@ func TestSanitizeFreeText(t *testing.T) {
 		})
 	}
 }
+
+// Python's IPv6 and phone patterns backtrack until their lookarounds hold, and
+// test every alternative against the original text in one pass.
+func TestSanitizeFreeTextMatchesPythonLookaround(t *testing.T) {
+	for _, test := range []struct {
+		value, want string
+	}{
+		{"ping 2001:db8::1::1 now", "ping [redacted]::1 now"},
+		{"dead::beef::1", "[redacted]::1"},
+		{"listening on 2001:db8::1:8080x", "listening on [redacted]:8080x"},
+		{"call +44 20 7946 0958x or +4111 1111 1111 1111country", "call [redacted] 0958x or [redacted] 1111country"},
+	} {
+		assert.Equal(t, test.want, sanitizeFreeText(test.value), test.value)
+	}
+}
