@@ -1611,33 +1611,34 @@ func (c *client) send(pb preparedBatch) {
 
 		// The batch remains owned by this worker while waiting to retry.
 		// Flush waits for this attempt, not the entire retry budget.
+		// The final attempt reports failure immediately. Sleeping here only
+		// delays the callback and Close.
 		if i < c.maxAttempts-1 {
 			c.deferDeliveryRetry(pb.done)
-		}
-		retryDelay := c.RetryAfter(i)
-		if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
-			retryDelay = httpErr.retryAfter
-		}
+			retryDelay := c.RetryAfter(i)
+			if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
+				retryDelay = httpErr.retryAfter
+			}
 
-		// Wait for retry or shutdown
-		retryTimer := time.NewTimer(retryDelay)
-		select {
-		case <-retryTimer.C:
-			// continue to next attempt
-		case <-c.quit:
-			// Shutdown initiated - stop timer and exit retry loop
-			if !retryTimer.Stop() {
-				<-retryTimer.C // Drain channel if timer already fired
+			retryTimer := time.NewTimer(retryDelay)
+			select {
+			case <-retryTimer.C:
+				// continue to next attempt
+			case <-c.quit:
+				// Shutdown initiated - stop timer and exit retry loop
+				if !retryTimer.Stop() {
+					<-retryTimer.C // Drain channel if timer already fired
+				}
+				c.notifyFailure(pb.msgs, err)
+				return
+			case <-c.ctx.Done():
+				// Context cancelled - stop timer and exit
+				if !retryTimer.Stop() {
+					<-retryTimer.C // Drain channel if timer already fired
+				}
+				c.notifyFailure(pb.msgs, err)
+				return
 			}
-			c.notifyFailure(pb.msgs, err)
-			return
-		case <-c.ctx.Done():
-			// Context cancelled - stop timer and exit
-			if !retryTimer.Stop() {
-				<-retryTimer.C // Drain channel if timer already fired
-			}
-			c.notifyFailure(pb.msgs, err)
-			return
 		}
 	}
 

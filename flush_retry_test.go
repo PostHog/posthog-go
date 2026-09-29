@@ -14,6 +14,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type failureOnce struct {
+	ch chan struct{}
+}
+
+func (f failureOnce) Success(posthog.APIMessage) {}
+
+func (f failureOnce) Failure(posthog.APIMessage, error) {
+	select {
+	case <-f.ch:
+	default:
+		close(f.ch)
+	}
+}
+
+func TestLegacyFinalAttemptDoesNotWaitForBackoff(t *testing.T) {
+	for _, mode := range []posthog.CaptureMode{posthog.CaptureModeLegacy, posthog.CaptureModeAnalyticsV1} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer server.Close()
+
+			failed := make(chan struct{})
+			c, err := posthog.NewWithConfig("test-key", posthog.Config{
+				Endpoint:    server.URL,
+				CaptureMode: mode,
+				Interval:    time.Hour,
+				BatchSize:   1,
+				MaxRetries:  posthog.Ptr(0),
+				RetryAfter:  func(int) time.Duration { return 2 * time.Second },
+				Callback:    failureOnce{ch: failed},
+			})
+			require.NoError(t, err)
+			defer c.Close()
+
+			start := time.Now()
+			require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "user-123", Event: "Drop"}))
+			select {
+			case <-failed:
+				require.Less(t, time.Since(start), 500*time.Millisecond)
+			case <-time.After(1500 * time.Millisecond):
+				t.Fatal("failure callback waited for a backoff after the final attempt")
+			}
+		})
+	}
+}
+
 func TestFlushKeepsFailedEventsRetryable(t *testing.T) {
 	for _, mode := range []posthog.CaptureMode{posthog.CaptureModeLegacy, posthog.CaptureModeAnalyticsV1} {
 		t.Run(fmt.Sprint(mode), func(t *testing.T) {
