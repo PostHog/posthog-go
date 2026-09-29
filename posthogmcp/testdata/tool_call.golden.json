@@ -12,15 +12,7 @@
     "$mcp_intent_source": "inferred",
     "$mcp_is_error": false,
     "$mcp_parameters": {
-      "request": {
-        "method": "tools/call",
-        "params": {
-          "arguments": {
-            "query": "setup"
-          },
-          "name": "search_docs"
-        }
-      }
+      "query": "setup"
     },
     "$mcp_protocol_version": "2026-07-28",
     "$mcp_resource_name": "search_docs",

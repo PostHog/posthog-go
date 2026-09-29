@@ -40,9 +40,10 @@ type ToolCall struct {
 	Intent       string
 	IntentSource IntentSource
 
-	// Parameters holds the tool arguments. They are captured as
-	// $mcp_parameters.request.params.arguments, the shape the Python and
-	// TypeScript SDKs use.
+	// Parameters is captured as $mcp_parameters as given, like the manual
+	// capture APIs in the Python and TypeScript SDKs. Automatic
+	// instrumentation passes the JSON-RPC request here, as
+	// {"request": {"method": "tools/call", "params": {"name": ..., "arguments": ...}}}.
 	Parameters any
 	Response   any
 
