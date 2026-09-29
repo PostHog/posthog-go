@@ -230,9 +230,7 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 	if p.intent != "" {
 		properties[propertyIntentSource] = string(p.intentSource)
 	}
-	if p.parameters != nil {
-		properties[propertyParameters] = p.parameters
-	}
+	properties[propertyParameters] = p.capturedRequest()
 	if p.response != nil {
 		properties[propertyResponse] = p.response
 	}
@@ -241,6 +239,20 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 		properties[propertyErrorMessage] = p.errorMessage
 	}
 	return properties
+}
+
+// capturedRequest wraps the arguments in the JSON-RPC request shape that
+// posthog-python and @posthog/mcp capture, so $mcp_parameters queries match
+// events from every SDK.
+func (p preparedToolCall) capturedRequest() map[string]any {
+	arguments := p.parameters
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	return map[string]any{"request": map[string]any{
+		"method": "tools/call",
+		"params": map[string]any{"name": p.toolName, "arguments": arguments},
+	}}
 }
 
 func setStringProperty(properties posthog.Properties, key, value string) {

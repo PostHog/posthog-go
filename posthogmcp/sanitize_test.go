@@ -43,7 +43,7 @@ func TestCaptureToolCallSanitizesPayloadsWithoutMutation(t *testing.T) {
 	}))
 	capture := requireCapture(t, client.messages[0])
 
-	gotParameters := capture.Properties[propertyParameters].(map[string]any)
+	gotParameters := capturedArguments(t, capture).(map[string]any)
 	assert.Equal(t, redactedValue, gotParameters["authorization"])
 	nested := gotParameters["nested"].(map[string]any)
 	assert.Equal(t, redactedValue, nested["api_key"])
@@ -219,7 +219,7 @@ func TestCaptureToolCallLeavesNonIntentIdentifiersUntouched(t *testing.T) {
 
 	capture := requireCapture(t, client.messages[0])
 	assert.Equal(t, "Find orders for [redacted] from [redacted]", capture.Properties[propertyIntent])
-	assert.Equal(t, raw, capture.Properties[propertyParameters].(map[string]any)["note"])
+	assert.Equal(t, raw, capturedArguments(t, capture).(map[string]any)["note"])
 	assert.Equal(t, raw, capture.Properties[propertyResponse].(map[string]any)["text"])
 	assert.Equal(t, "request failed for alice@example.com", capture.Properties[propertyErrorMessage])
 }
@@ -247,7 +247,7 @@ func TestCaptureToolCallRedactsCredentialsInCapturedText(t *testing.T) {
 	}))
 
 	capture := requireCapture(t, client.messages[0])
-	assert.Equal(t, map[string]any{"note": "auth with [redacted]", "prose": prose}, capture.Properties[propertyParameters])
+	assert.Equal(t, map[string]any{"note": "auth with [redacted]", "prose": prose}, capturedArguments(t, capture))
 	content := capture.Properties[propertyResponse].(map[string]any)["content"].([]any)
 	assert.Equal(t, "fetched https://%5Bredacted%5D@internal.test/doc?sig=%5Bredacted%5D then parsed", content[0].(map[string]any)["text"])
 	assert.Equal(t, "https://example.com/cb#access_token=%5Bredacted%5D&state=xyz", capture.Properties["callback"])

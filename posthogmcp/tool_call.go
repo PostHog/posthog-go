@@ -34,9 +34,15 @@ type ToolCall struct {
 	ClientVersion   string
 	ProtocolVersion string
 
+	// Intent is the agent's stated reason for the call. When it arrives as a
+	// tool argument, remove that argument from Parameters: Parameters only has
+	// credentials redacted, while Intent also has personal data redacted.
 	Intent       string
 	IntentSource IntentSource
 
+	// Parameters holds the tool arguments. They are captured as
+	// $mcp_parameters.request.params.arguments, the shape the Python and
+	// TypeScript SDKs use.
 	Parameters any
 	Response   any
 

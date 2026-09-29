@@ -434,7 +434,7 @@ func TestCaptureToolCallKeepsEventsWithUnencodableValues(t *testing.T) {
 			}))
 			require.Len(t, client.messages, 1)
 			capture := requireCapture(t, client.messages[0])
-			assert.Equal(t, test.want, capture.Properties[propertyParameters])
+			assert.Equal(t, test.want, capturedArguments(t, capture))
 			assert.Equal(t, test.want, capture.Properties[propertyResponse])
 			assert.Equal(t, test.want, capture.Properties["payload"])
 		})
@@ -568,4 +568,22 @@ func TestCaptureToolCallFallbackErrorMessageKeepsToolName(t *testing.T) {
 	client := &fakeEnqueueClient{}
 	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "Get_Organization_Memberships", IsError: true}))
 	assert.Equal(t, "Tool Get_Organization_Memberships returned an error", requireCapture(t, client.messages[0]).Properties[propertyErrorMessage])
+}
+
+// capturedArguments reads the tool arguments out of the JSON-RPC request
+// envelope that $mcp_parameters shares with posthog-python and @posthog/mcp.
+func capturedArguments(t *testing.T, capture posthog.Capture) any {
+	t.Helper()
+	request := capture.Properties[propertyParameters].(map[string]any)["request"].(map[string]any)
+	require.Equal(t, "tools/call", request["method"])
+	return request["params"].(map[string]any)["arguments"]
+}
+
+func TestCaptureToolCallWithoutParametersCapturesEmptyArguments(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "list_projects"}))
+	assert.Equal(t, map[string]any{"request": map[string]any{
+		"method": "tools/call",
+		"params": map[string]any{"name": "list_projects", "arguments": map[string]any{}},
+	}}, requireCapture(t, client.messages[0]).Properties[propertyParameters])
 }
