@@ -40,8 +40,12 @@ type ToolCall struct {
 	Parameters any
 	Response   any
 
-	Duration  time.Duration
-	IsError   bool
+	Duration time.Duration
+	// IsError marks a failed call that has no Go error, such as an MCP result
+	// with isError set. A non-nil Error implies IsError.
+	IsError bool
+	// Error is the failure, if any. When set, it is also captured as a
+	// $exception unless exception autocapture is disabled.
 	Error     error
 	ErrorType string
 

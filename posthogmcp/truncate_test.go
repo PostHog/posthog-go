@@ -1,6 +1,7 @@
 package posthogmcp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -44,7 +45,7 @@ func TestTruncateValueDepthAndBreadth(t *testing.T) {
 func TestCaptureToolCallDeterministicSizePruning(t *testing.T) {
 	large := strings.Repeat("x:", maxStringBytes/2)
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName: "query",
 		Parameters: map[string]any{
 			"a": large,
@@ -77,7 +78,7 @@ func TestCaptureToolCallDeterministicSizePruning(t *testing.T) {
 
 func TestCaptureToolCallIrreducibleOversizeFailsBeforeEnqueue(t *testing.T) {
 	client := &fakeEnqueueClient{}
-	err := New(client).CaptureToolCall(ToolCall{
+	err := New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:   "query",
 		DistinctID: strings.Repeat("x", maxEventBytes),
 	})
@@ -87,7 +88,7 @@ func TestCaptureToolCallIrreducibleOversizeFailsBeforeEnqueue(t *testing.T) {
 
 func TestCaptureToolCallFieldLimits(t *testing.T) {
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:        strings.Repeat("🙂", maxResourceNameBytes),
 		ToolDescription: strings.Repeat("🙂", maxStringBytes),
 		ToolCategory:    strings.Repeat("🙂", maxMetadataBytes),

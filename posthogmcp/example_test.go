@@ -1,6 +1,7 @@
 package posthogmcp_test
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -13,7 +14,7 @@ func ExampleAnalytics_CaptureToolCall() {
 	defer client.Close()
 
 	analytics := posthogmcp.New(client)
-	err := analytics.CaptureToolCall(posthogmcp.ToolCall{
+	err := analytics.CaptureToolCall(context.Background(), posthogmcp.ToolCall{
 		ToolName:   "search_docs",
 		DistinctID: "user_123",
 		Duration:   42 * time.Millisecond,

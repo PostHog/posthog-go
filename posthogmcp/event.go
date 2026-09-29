@@ -38,7 +38,7 @@ func buildToolCallMessages(call ToolCall, exceptionAutocapture bool) ([]namedMes
 	}
 	messages := []namedMessage{{name: eventToolCall, message: capture}}
 
-	if call.IsError && exceptionAutocapture {
+	if call.Error != nil && exceptionAutocapture {
 		exception, err := prepared.buildException()
 		if err != nil {
 			return nil, err
@@ -61,6 +61,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		return preparedToolCall{}, errors.New("posthogmcp: invalid IntentSource")
 	}
 
+	call.IsError = call.IsError || call.Error != nil
 	explicitID := call.DistinctID != ""
 	prepared := preparedToolCall{
 		call:                  call,

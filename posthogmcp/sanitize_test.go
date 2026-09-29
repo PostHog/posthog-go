@@ -1,6 +1,7 @@
 package posthogmcp
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func TestCaptureToolCallSanitizesPayloadsWithoutMutation(t *testing.T) {
 	properties := posthog.Properties{"password": "secret", "token_value": token}
 
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:   "query",
 		Parameters: parameters,
 		Response:   response,
@@ -71,7 +72,7 @@ func TestCaptureToolCallRedactsMediaBeforeNormalization(t *testing.T) {
 		"content": []any{map[string]any{"type": "image", "data": panickingJSON{}}},
 	}
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{ToolName: "query", Response: response}))
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", Response: response}))
 
 	capture := requireCapture(t, client.messages[0])
 	content := capture.Properties[propertyResponse].(map[string]any)["content"].([]any)
@@ -81,7 +82,7 @@ func TestCaptureToolCallRedactsMediaBeforeNormalization(t *testing.T) {
 
 func TestCaptureToolCallOmitsOversizedRawResponse(t *testing.T) {
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName: "query",
 		Response: map[string]any{"content": []any{map[string]any{
 			"type": "text", "text": strings.Repeat("x", maxNormalizeBytes),
@@ -99,7 +100,7 @@ func TestCaptureToolCallCustomPropertiesCannotReplaceCanonicalFields(t *testing.
 		propertyIsError:  true,
 		"environment":    "test",
 	}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:   "query",
 		Intent:     "Find alice@example.com",
 		Response:   map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}},
@@ -175,7 +176,7 @@ func TestCaptureToolCallRedactsStructuredIntentIdentifiers(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeEnqueueClient{}
-			require.NoError(t, New(client).CaptureToolCall(ToolCall{
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 				ToolName:   "query",
 				DistinctID: "user_1",
 				Intent:     test.intent,
@@ -193,7 +194,7 @@ func TestCaptureToolCallRedactsIntentBeforeTruncation(t *testing.T) {
 	// runs second.
 	prefix := strings.Repeat("|", 2036)
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:   "query",
 		DistinctID: "user_1",
 		Intent:     prefix + email,
@@ -206,7 +207,7 @@ func TestCaptureToolCallRedactsIntentBeforeTruncation(t *testing.T) {
 func TestCaptureToolCallLeavesNonIntentIdentifiersUntouched(t *testing.T) {
 	raw := "Find orders for alice@example.com from 192.0.2.1"
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:   "query",
 		DistinctID: "user_1",
 		Intent:     raw,

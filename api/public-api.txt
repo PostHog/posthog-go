@@ -944,7 +944,8 @@ type Analytics struct {
 
 func New(client posthog.EnqueueClient, opts ...Option) *Analytics
 
-func (a *Analytics) CaptureToolCall(call ToolCall) error
+func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error
+
 
 type IntentSource string
 
@@ -978,8 +979,8 @@ type ToolCall struct {
 	Parameters any
 	Response   any
 
-	Duration  time.Duration
-	IsError   bool
+	Duration time.Duration
+	IsError bool
 	Error     error
 	ErrorType string
 

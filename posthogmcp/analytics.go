@@ -1,6 +1,7 @@
 package posthogmcp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -48,9 +49,17 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // call. When exception autocapture is enabled, all messages are built before
 // either is enqueued. Enqueue failures are joined after every configured
 // message has been attempted.
-func (a *Analytics) CaptureToolCall(call ToolCall) error {
+//
+// ctx is passed to posthog.EnqueueWithContext, so a posthog.RequestContext
+// attached to it supplies the distinct ID when call.DistinctID is empty.
+func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	if a == nil || a.client == nil {
 		return errors.New("posthogmcp: nil enqueue client")
+	}
+	if call.DistinctID == "" {
+		if requestContext, ok := posthog.RequestContextFromContext(ctx); ok {
+			call.DistinctID = requestContext.DistinctId
+		}
 	}
 
 	messages, err := buildToolCallMessages(call, a.cfg.exceptionAutocapture)
@@ -60,7 +69,7 @@ func (a *Analytics) CaptureToolCall(call ToolCall) error {
 
 	var enqueueErrors []error
 	for _, message := range messages {
-		if err := a.client.Enqueue(message.message); err != nil {
+		if err := posthog.EnqueueWithContext(ctx, a.client, message.message); err != nil {
 			enqueueErrors = append(enqueueErrors, fmt.Errorf("posthogmcp: enqueue %s: %w", message.name, err))
 		}
 	}

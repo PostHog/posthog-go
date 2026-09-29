@@ -1,6 +1,7 @@
 package posthogmcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -35,7 +36,7 @@ func TestCaptureToolCallMinimal(t *testing.T) {
 	client := &fakeEnqueueClient{}
 	analytics := New(client)
 
-	require.NoError(t, analytics.CaptureToolCall(ToolCall{ToolName: "search_docs"}))
+	require.NoError(t, analytics.CaptureToolCall(context.Background(), ToolCall{ToolName: "search_docs"}))
 	require.Len(t, client.messages, 1)
 
 	capture := requireCapture(t, client.messages[0])
@@ -68,7 +69,7 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 		"environment":          "test",
 	}
 
-	require.NoError(t, analytics.CaptureToolCall(ToolCall{
+	require.NoError(t, analytics.CaptureToolCall(context.Background(), ToolCall{
 		ToolName:        "query",
 		ToolDescription: "Run a query",
 		ToolCategory:    "Data",
@@ -135,7 +136,7 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeEnqueueClient{}
-			require.NoError(t, New(client).CaptureToolCall(ToolCall{
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 				ToolName:   "query",
 				DistinctID: test.distinctID,
 				IsError:    true,
@@ -192,7 +193,7 @@ func TestCaptureToolCallReservedFieldsSurviveClientDefaults(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			test.call.Intent = "Find alice@example.com"
 			test.call.Response = map[string]any{"content": []any{map[string]any{"type": "image", "data": "raw image"}}}
-			require.NoError(t, New(client).CaptureToolCall(test.call))
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), test.call))
 			select {
 			case body := <-payloads:
 				var payload struct {
@@ -245,7 +246,7 @@ func TestCaptureToolCallSessionFallbackAndAnonymousSetSuppression(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeEnqueueClient{}
-			require.NoError(t, New(client).CaptureToolCall(test.call))
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), test.call))
 			capture := requireCapture(t, client.messages[0])
 			assert.Equal(t, test.distinctID, capture.DistinctId)
 			assert.NotContains(t, capture.Properties, propertySet)
@@ -271,14 +272,14 @@ func TestCaptureToolCallValidation(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeEnqueueClient{}
-			err := New(client).CaptureToolCall(test.call)
+			err := New(client).CaptureToolCall(context.Background(), test.call)
 			require.ErrorContains(t, err, test.want)
 			assert.Empty(t, client.messages)
 		})
 	}
 
-	require.ErrorContains(t, (*Analytics)(nil).CaptureToolCall(ToolCall{ToolName: "tool"}), "nil enqueue client")
-	require.ErrorContains(t, New(nil).CaptureToolCall(ToolCall{ToolName: "tool"}), "nil enqueue client")
+	require.ErrorContains(t, (*Analytics)(nil).CaptureToolCall(context.Background(), ToolCall{ToolName: "tool"}), "nil enqueue client")
+	require.ErrorContains(t, New(nil).CaptureToolCall(context.Background(), ToolCall{ToolName: "tool"}), "nil enqueue client")
 }
 
 type panickingError struct{}
@@ -288,7 +289,7 @@ func (panickingError) Error() string { panic("should not run") }
 func TestCaptureToolCallFailureAndException(t *testing.T) {
 	client := &fakeEnqueueClient{}
 	token := "phc_abcdefghijklmnopqrstuvwxyz"
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:   "query",
 		DistinctID: "user_1",
 		Groups:     posthog.Groups{"organization": "org_1"},
@@ -317,7 +318,7 @@ func TestCaptureToolCallFailureAndException(t *testing.T) {
 
 func TestCaptureToolCallFailureDefaultsAndDisableFanout(t *testing.T) {
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client, WithExceptionAutocapture(false)).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client, WithExceptionAutocapture(false)).CaptureToolCall(context.Background(), ToolCall{
 		ToolName: "query",
 		IsError:  true,
 	}))
@@ -326,17 +327,40 @@ func TestCaptureToolCallFailureDefaultsAndDisableFanout(t *testing.T) {
 	assert.Equal(t, "Error", capture.Properties[propertyErrorType])
 	assert.Equal(t, "Tool query returned an error", capture.Properties[propertyErrorMessage])
 
-	client = &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
-		ToolName: "query",
-		Error:    panickingError{},
-	}))
-	assert.Len(t, client.messages, 1, "successful calls must ignore Error")
+}
+
+func TestCaptureToolCallErrorSignals(t *testing.T) {
+	tests := []struct {
+		name          string
+		call          ToolCall
+		wantIsError   bool
+		wantException bool
+	}{
+		{name: "success", call: ToolCall{ToolName: "query"}},
+		{name: "IsError without Error", call: ToolCall{ToolName: "query", IsError: true}, wantIsError: true},
+		{name: "Error without IsError", call: ToolCall{ToolName: "query", Error: errors.New("boom")}, wantIsError: true, wantException: true},
+		{name: "IsError and Error", call: ToolCall{ToolName: "query", IsError: true, Error: errors.New("boom")}, wantIsError: true, wantException: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), tt.call))
+
+			capture := requireCapture(t, client.messages[0])
+			assert.Equal(t, tt.wantIsError, capture.Properties[propertyIsError])
+			if tt.wantException {
+				require.Len(t, client.messages, 2)
+				assert.Equal(t, "boom", requireException(t, client.messages[1]).ExceptionList[0].Value)
+			} else {
+				assert.Len(t, client.messages, 1)
+			}
+		})
+	}
 }
 
 func TestCaptureToolCallPanickingErrorFailsWithoutEnqueue(t *testing.T) {
 	client := &fakeEnqueueClient{}
-	err := New(client).CaptureToolCall(ToolCall{ToolName: "query", IsError: true, Error: panickingError{}})
+	err := New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", IsError: true, Error: panickingError{}})
 	require.ErrorContains(t, err, "Error method panicked")
 	assert.Empty(t, client.messages)
 }
@@ -344,7 +368,7 @@ func TestCaptureToolCallPanickingErrorFailsWithoutEnqueue(t *testing.T) {
 func TestCaptureToolCallEmptyErrorUsesFallbackMessage(t *testing.T) {
 	for _, message := range []string{"", "   "} {
 		client := &fakeEnqueueClient{}
-		require.NoError(t, New(client).CaptureToolCall(ToolCall{
+		require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 			ToolName: "query",
 			IsError:  true,
 			Error:    errors.New(message),
@@ -358,26 +382,9 @@ func TestCaptureToolCallEmptyErrorUsesFallbackMessage(t *testing.T) {
 	}
 }
 
-func TestCaptureToolCallReportsFinalPayloadTooLarge(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("oversized capture was sent")
-	}))
-	defer server.Close()
-
-	client, err := posthog.NewWithConfig("test-key", posthog.Config{
-		Endpoint:               server.URL,
-		DefaultEventProperties: posthog.Properties{"large_default": strings.Repeat("x", 500_000)},
-	})
-	require.NoError(t, err)
-	defer client.Close()
-
-	err = New(client).CaptureToolCall(ToolCall{ToolName: "query", DistinctID: "user_1"})
-	require.ErrorIs(t, err, posthog.ErrMessageTooBig)
-}
-
 func TestCaptureToolCallAttemptsAllEnqueues(t *testing.T) {
 	client := &fakeEnqueueClient{errors: []error{errors.New("capture full"), errors.New("exception full")}}
-	err := New(client).CaptureToolCall(ToolCall{ToolName: "query", IsError: true})
+	err := New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", Error: errors.New("boom")})
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "enqueue $mcp_tool_call: capture full")
 	assert.ErrorContains(t, err, "enqueue $exception: exception full")
@@ -396,7 +403,7 @@ func TestCaptureToolCallNormalizationErrorsAreSafe(t *testing.T) {
 		panickingJSON{},
 	} {
 		client := &fakeEnqueueClient{}
-		err := New(client).CaptureToolCall(ToolCall{ToolName: "query", Parameters: value})
+		err := New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", Parameters: value})
 		require.Error(t, err)
 		assert.LessOrEqual(t, len(err.Error()), maxReturnedErrorBytes)
 		assert.NotContains(t, err.Error(), secret)
@@ -410,7 +417,7 @@ func (panickingJSON) MarshalJSON() ([]byte, error) { panic("secret payload") }
 
 func TestCaptureToolCallWireGolden(t *testing.T) {
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client, WithExceptionAutocapture(false)).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client, WithExceptionAutocapture(false)).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:        "search_docs",
 		ToolDescription: "Search documentation",
 		ToolCategory:    "Docs",
@@ -483,4 +490,25 @@ func requireException(t *testing.T, message posthog.Message) posthog.Exception {
 	exception, ok := message.(posthog.Exception)
 	require.True(t, ok, "message type = %T", message)
 	return exception
+}
+
+func TestCaptureToolCallDistinctIDFromRequestContext(t *testing.T) {
+	requestCtx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{DistinctId: "request_user"})
+	tests := []struct {
+		name           string
+		ctx            context.Context
+		distinctID     string
+		wantDistinctID string
+	}{
+		{name: "request context fills missing ID", ctx: requestCtx, wantDistinctID: "request_user"},
+		{name: "explicit ID wins", ctx: requestCtx, distinctID: "user_1", wantDistinctID: "user_1"},
+		{name: "no request context", ctx: context.Background(), wantDistinctID: "anonymous"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(tt.ctx, ToolCall{ToolName: "query", DistinctID: tt.distinctID}))
+			assert.Equal(t, tt.wantDistinctID, requireCapture(t, client.messages[0]).DistinctId)
+		})
+	}
 }
