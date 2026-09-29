@@ -230,3 +230,26 @@ func TestSanitizeStringBase64Variants(t *testing.T) {
 	assert.Equal(t, binaryRedactedValue, sanitizeString("data:image/png;base64,"+strings.Repeat("A", largeBinaryGateBytes)))
 	assert.Equal(t, strings.Repeat("A", largeBinaryGateBytes-1), sanitizeString(strings.Repeat("A", largeBinaryGateBytes-1)))
 }
+
+func TestCaptureToolCallRedactsCredentialsInCapturedText(t *testing.T) {
+	key := "sk-proj-" + "T3BlbkFJabcd1234efgh5678ijkl9012mnop3456qrst7890wxyz"
+	prose := "user 550e8400-e29b-41d4-a716-446655440000 not found in /usr/local/lib/app.py at v1.2.3-beta.4 (sha d41d8cd98f00b204e9800998ecf8427e)"
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+		ToolName:   "query",
+		Parameters: map[string]any{"note": "auth with " + key, "prose": prose},
+		Response: map[string]any{"content": []any{map[string]any{
+			"type": "text", "text": "fetched https://svc:pw@internal.test/doc?sig=abc, then parsed",
+		}}},
+		Properties: posthog.Properties{"callback": "https://example.com/cb#access_token=abc&state=xyz"},
+		IsError:    true,
+		Error:      errors.New("GET https://example.com/x?token=abc failed: auth with " + key + " rejected"),
+	}))
+
+	capture := requireCapture(t, client.messages[0])
+	assert.Equal(t, map[string]any{"note": "auth with [redacted]", "prose": prose}, capture.Properties[propertyParameters])
+	content := capture.Properties[propertyResponse].(map[string]any)["content"].([]any)
+	assert.Equal(t, "fetched https://%5Bredacted%5D@internal.test/doc?sig=%5Bredacted%5D then parsed", content[0].(map[string]any)["text"])
+	assert.Equal(t, "https://example.com/cb#access_token=%5Bredacted%5D&state=xyz", capture.Properties["callback"])
+	assert.Equal(t, "GET https://example.com/x?token=%5Bredacted%5D failed: auth with [redacted] rejected", capture.Properties[propertyErrorMessage])
+}

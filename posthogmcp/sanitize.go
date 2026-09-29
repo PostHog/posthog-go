@@ -16,7 +16,7 @@ import (
 
 var (
 	postHogTokenPattern = regexp.MustCompile(`\bph[a-z]_[A-Za-z0-9_-]{20,}\b`)
-	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key)$`)
+	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key)\n?$`)
 	base64Pattern       = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
 	base64URLPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
 	base64DataPrefix    = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
@@ -229,10 +229,54 @@ func passesLuhn(digits string) bool {
 }
 
 func sanitizeString(value string) string {
-	if len(value) >= largeBinaryGateBytes && isBase64Like(value) {
+	if isBinaryBlob(value) {
 		return binaryRedactedValue
 	}
-	return postHogTokenPattern.ReplaceAllString(value, redactedValue)
+	return sanitizeURLs(redactCredentials(value), true)
+}
+
+func isBinaryBlob(value string) bool {
+	return len(value) >= largeBinaryGateBytes && isBase64Like(value)
+}
+
+// redactCredentials runs before the URL pass, because rewriting a URL changes
+// the text these detectors match: it percent-encodes the `/` in front of a
+// `?ref=/phx_...` token, and can grow a word past the known-format scan window.
+func redactCredentials(value string) string {
+	return redactSecretTokens(postHogTokenPattern.ReplaceAllString(value, redactedValue))
+}
+
+// redactSecretTokens redacts each space-separated word that reads as a
+// credential, so an error message keeps its diagnostic prose.
+func redactSecretTokens(value string) string {
+	words := strings.Split(value, " ")
+	changed := false
+	for i, word := range words {
+		if isSecretWord(word) {
+			words[i] = redactedValue
+			changed = true
+		}
+	}
+	if !changed {
+		return value
+	}
+	return strings.Join(words, " ")
+}
+
+// isSecretWord judges a word without this sanitizer's own markers: a value
+// can be sanitized twice, and the marker's character mix alone can push a
+// short uri like `resource:guide?token=%5Bredacted%5D` over the entropy bar.
+func isSecretWord(word string) bool {
+	word = strings.ReplaceAll(word, encodedRedactedValue, "")
+	word = strings.ReplaceAll(word, redactedValue, "")
+	return word != "" && looksLikeSecret(word)
+}
+
+// sanitizeResourceName sanitizes a tool name or resource uri without the
+// entropy detector, which reads a name like `Get_Organization_Memberships`
+// as a credential and would cost every per-tool metric.
+func sanitizeResourceName(value string) string {
+	return sanitizeURLs(postHogTokenPattern.ReplaceAllString(value, redactedValue), true)
 }
 
 func isBase64Like(value string) bool {
