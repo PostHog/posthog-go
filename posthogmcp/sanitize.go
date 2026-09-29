@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -56,15 +57,15 @@ func normalizePayload(field string, value any) (normalized any, err error) {
 		return nil, nil
 	}
 
-	data, err := marshalJSONSafely(value)
-	if err != nil {
-		return nil, packageError("normalize "+field, err)
-	}
-	if len(data) > maxNormalizeBytes {
+	data, err := encodePayload(value)
+	if err == nil && len(data) > maxNormalizeBytes {
 		if field == "Parameters" || field == "Response" {
 			return oversizedPayloadValue, nil
 		}
 		return nil, fmt.Errorf("posthogmcp: %s exceeds MCP analytics input limit", field)
+	}
+	if err != nil {
+		return nil, packageError("normalize "+field, err)
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -73,6 +74,40 @@ func normalizePayload(field string, value any) (normalized any, err error) {
 		return nil, packageError("normalize "+field, err)
 	}
 	return normalized, nil
+}
+
+// encodePayload pays for one json.Marshal in the common case. When that fails,
+// maps keep every entry that encodes and mark the ones that do not, so a NaN,
+// cycle, or func in one value never drops the whole event.
+func encodePayload(value any) ([]byte, error) {
+	data, err := marshalJSONSafely(value)
+	if err == nil {
+		return data, nil
+	}
+	return marshalJSONSafely(encodableValue(value, map[uintptr]bool{}))
+}
+
+// encodableValue walks only the maps that fail to encode. ancestors holds the
+// maps on the current path, so a map that contains itself becomes a marker.
+func encodableValue(value any, ancestors map[uintptr]bool) any {
+	if _, err := marshalJSONSafely(value); err == nil {
+		return value
+	}
+	v := reflect.ValueOf(value)
+	if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
+		return fmt.Sprintf("[Unserializable: %T]", value)
+	}
+	if ancestors[v.Pointer()] {
+		return "[Circular ~]"
+	}
+	ancestors[v.Pointer()] = true
+	defer delete(ancestors, v.Pointer())
+
+	result := make(map[string]any, v.Len())
+	for entries := v.MapRange(); entries.Next(); {
+		result[entries.Key().String()] = encodableValue(entries.Value().Interface(), ancestors)
+	}
+	return result
 }
 
 func marshalJSONSafely(value any) (data []byte, err error) {

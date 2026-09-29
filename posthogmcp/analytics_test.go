@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -377,23 +376,56 @@ func TestCaptureToolCallAttemptsAllEnqueues(t *testing.T) {
 	assert.Len(t, client.messages, 2)
 }
 
-func TestCaptureToolCallNormalizationErrorsAreSafe(t *testing.T) {
-	cycle := map[string]any{}
-	cycle["self"] = cycle
-	secret := strings.Repeat("do-not-return", 100)
+func TestCaptureToolCallKeepsEventsWithUnencodableValues(t *testing.T) {
+	selfMap := map[string]any{"name": "loop"}
+	selfMap["self"] = selfMap
+	type reading struct{ Value float64 }
 
-	for _, value := range []any{
-		func() {},
-		cycle,
-		map[string]any{"number": math.Inf(1), "secret": secret},
-		panickingJSON{},
+	for _, test := range []struct {
+		name  string
+		value any
+		want  any
+	}{
+		{
+			name:  "NaN and infinities",
+			value: map[string]any{"nan": math.NaN(), "high": math.Inf(1), "ok": 1.5},
+			want:  map[string]any{"nan": "[Unserializable: float64]", "high": "[Unserializable: float64]", "ok": json.Number("1.5")},
+		},
+		{
+			name:  "nested map keeps encodable siblings",
+			value: map[string]any{"filters": map[string]any{"limit": 10, "callback": func() {}}},
+			want:  map[string]any{"filters": map[string]any{"limit": json.Number("10"), "callback": "[Unserializable: func()]"}},
+		},
+		{
+			name:  "self-referential map",
+			value: selfMap,
+			want:  map[string]any{"name": "loop", "self": "[Circular ~]"},
+		},
+		{
+			name:  "struct with NaN field",
+			value: reading{Value: math.NaN()},
+			want:  "[Unserializable: posthogmcp.reading]",
+		},
+		{
+			name:  "channel and panicking marshaler",
+			value: map[string]any{"events": make(chan int), "value": panickingJSON{}},
+			want:  map[string]any{"events": "[Unserializable: chan int]", "value": "[Unserializable: posthogmcp.panickingJSON]"},
+		},
 	} {
-		client := &fakeEnqueueClient{}
-		err := New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", Parameters: value})
-		require.Error(t, err)
-		assert.LessOrEqual(t, len(err.Error()), maxReturnedErrorBytes)
-		assert.NotContains(t, err.Error(), secret)
-		assert.Empty(t, client.messages)
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client, WithExceptionAutocapture(false)).CaptureToolCall(context.Background(), ToolCall{
+				ToolName:   "query",
+				Parameters: test.value,
+				Response:   test.value,
+				Properties: posthog.Properties{"payload": test.value},
+			}))
+			require.Len(t, client.messages, 1)
+			capture := requireCapture(t, client.messages[0])
+			assert.Equal(t, test.want, capture.Properties[propertyParameters])
+			assert.Equal(t, test.want, capture.Properties[propertyResponse])
+			assert.Equal(t, test.want, capture.Properties["payload"])
+		})
 	}
 }
 

@@ -235,7 +235,7 @@ func TestCaptureToolCallRedactsCredentialsInCapturedText(t *testing.T) {
 	key := "sk-proj-" + "T3BlbkFJabcd1234efgh5678ijkl9012mnop3456qrst7890wxyz"
 	prose := "user 550e8400-e29b-41d4-a716-446655440000 not found in /usr/local/lib/app.py at v1.2.3-beta.4 (sha d41d8cd98f00b204e9800998ecf8427e)"
 	client := &fakeEnqueueClient{}
-	require.NoError(t, New(client).CaptureToolCall(ToolCall{
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
 		ToolName:   "query",
 		Parameters: map[string]any{"note": "auth with " + key, "prose": prose},
 		Response: map[string]any{"content": []any{map[string]any{
