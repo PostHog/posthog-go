@@ -253,3 +253,49 @@ func TestCaptureToolCallRedactsCredentialsInCapturedText(t *testing.T) {
 	assert.Equal(t, "https://example.com/cb#access_token=%5Bredacted%5D&state=xyz", capture.Properties["callback"])
 	assert.Equal(t, "GET https://example.com/x?token=%5Bredacted%5D failed: auth with [redacted] rejected", capture.Properties[propertyErrorMessage])
 }
+
+func TestSanitizeFreeText(t *testing.T) {
+	for _, test := range []struct {
+		name, value, want string
+	}{
+		{
+			name:  "credential before pii",
+			value: "use token phx_AAAA-415-555-0142-AAAAAAAAAAAAAA",
+			want:  "use token [redacted]",
+		},
+		{
+			name:  "longer token a phone pattern would cut",
+			value: "Rotating phx_AAAAAAAA-415-555-0142-AAAAAAAAAAAAAAAAAAAA",
+			want:  "Rotating [redacted]",
+		},
+		{
+			name:  "posthog token and email",
+			value: "Rotating token phc_123456789012345678901234567890 for user carol@example.org.",
+			want:  "Rotating token [redacted] for user [redacted].",
+		},
+		{
+			name:  "pii before url rewrite",
+			value: "Open https://example.com/?email=alice@example.com&token=fakesecret",
+			want:  "Open https://example.com/?email=%5Bredacted%5D&token=%5Bredacted%5D",
+		},
+		{
+			name:  "vendor key and phone",
+			value: "call +1 (415) 555-0142 with sk-proj-" + "T3BlbkFJabcd1234efgh5678ijkl9012mnop3456qrst7890wxyz",
+			want:  "call [redacted] with [redacted]",
+		},
+		{
+			name:  "binary gate before pii",
+			value: strings.Repeat("AAAA/", 2052) + "4111111111111111/AAA",
+			want:  binaryRedactedValue,
+		},
+		{
+			name:  "prose stays",
+			value: "Find setup instructions for v1.2.3 in /usr/local/lib/app.py",
+			want:  "Find setup instructions for v1.2.3 in /usr/local/lib/app.py",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, sanitizeFreeText(test.value))
+		})
+	}
+}

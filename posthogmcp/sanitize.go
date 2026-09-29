@@ -272,6 +272,20 @@ func isSecretWord(word string) bool {
 	return word != "" && looksLikeSecret(word)
 }
 
+// sanitizeFreeText sanitizes agent-narrated text such as the intent, in an
+// order where each step protects the next. The binary gate runs first, because
+// a redaction spliced into a base64 blob stops it looking like base64.
+// Credentials run before structured PII, which reads the middle of
+// `phx_AAAA-415-555-0142-AAAA` as a phone number and would leave the token's
+// halves behind. PII runs before URLs, because a rewritten URL percent-encodes
+// the `@` the email pattern needs.
+func sanitizeFreeText(value string) string {
+	if isBinaryBlob(value) {
+		return binaryRedactedValue
+	}
+	return sanitizeURLs(redactIntent(redactCredentials(value)), true)
+}
+
 // sanitizeResourceName sanitizes a tool name or resource uri without the
 // entropy detector, which reads a name like `Get_Organization_Memberships`
 // as a credential and would cost every per-tool metric.
