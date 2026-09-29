@@ -483,7 +483,12 @@ func mockServer() (chan []byte, *httptest.Server) {
 			panic(err)
 		}
 
-		done <- b
+		select {
+		case done <- b:
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+			http.Error(w, "test did not consume request", http.StatusServiceUnavailable)
+		}
 	}))
 
 	return done, server
@@ -832,7 +837,7 @@ func TestEnqueue(t *testing.T) {
 				return
 			}
 
-			assertPayloadEqual(t, test.ref, string(<-body))
+			assertPayloadEqual(t, test.ref, string(awaitTestValue(t, body)))
 		})
 	}
 }
@@ -1005,7 +1010,7 @@ func TestFlagsRequestSnapshots(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			assertJSONEqual(t, strings.TrimSpace(fixture(test.fixture)), string(<-body))
+			assertJSONEqual(t, strings.TrimSpace(fixture(test.fixture)), string(awaitTestValue(t, body)))
 		})
 	}
 }
@@ -1245,6 +1250,7 @@ func (c *customMessage) apifyEvent() apiEvent {
 
 func TestEnqueuingCustomTypeFails(t *testing.T) {
 	client := New("0123456789")
+	defer client.Close()
 	err := client.Enqueue(&customMessage{})
 	require.Error(t, err)
 	require.EqualError(t, err, "messages with custom types cannot be enqueued: *posthog.customMessage",
@@ -1281,7 +1287,7 @@ func TestCaptureWithInterval(t *testing.T) {
 	})
 
 	// Will flush in 100 milliseconds
-	assertPayloadEqual(t, ref, string(<-body))
+	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
 
 	if t1 := time.Now(); t1.Sub(t0) < interval {
 		t.Error("the flushing interval is too short:", interval)
@@ -1315,7 +1321,7 @@ func TestCaptureWithTimestamp(t *testing.T) {
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
-	assertPayloadEqual(t, ref, string(<-body))
+	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
 }
 
 func TestCaptureWithDefaultProperties(t *testing.T) {
@@ -1346,7 +1352,7 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 		Timestamp:        time.Date(2015, time.July, 10, 23, 0, 0, 0, time.UTC),
 	})
 
-	assertPayloadEqual(t, ref, string(<-body))
+	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
 }
 
 func TestCaptureMany(t *testing.T) {
@@ -1385,7 +1391,16 @@ func TestCaptureMany(t *testing.T) {
 		})
 	}
 
-	assertPayloadEqual(t, ref, string(<-body))
+	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
+	require.NoError(t, client.Close())
+	var remaining batch
+	require.NoError(t, json.Unmarshal(awaitTestValue(t, body), &remaining))
+	require.Len(t, remaining.Messages, 2)
+	for i, raw := range remaining.Messages {
+		var event CaptureInApi
+		require.NoError(t, json.Unmarshal(raw, &event))
+		require.Equal(t, uuids[i+3], event.Uuid)
+	}
 }
 
 func TestClientCloseTwice(t *testing.T) {
@@ -1445,6 +1460,8 @@ func TestClientCallback(t *testing.T) {
 	case <-reschan:
 	case err := <-errchan:
 		t.Error("failure callback triggered:", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("delivery callback did not run")
 	}
 }
 
@@ -1469,7 +1486,7 @@ func TestClientMarshalMessageError(t *testing.T) {
 	})
 	client.Close()
 
-	if err := <-errchan; err == nil {
+	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for unserializable message")
 
 	} else if _, ok := err.(*json.UnsupportedTypeError); !ok {
@@ -1503,7 +1520,7 @@ func TestClientRoundTripperError(t *testing.T) {
 	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
 	client.Close()
 
-	if err := <-errchan; err == nil {
+	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for an invalid request")
 
 	} else if e, ok := err.(*url.Error); !ok {
@@ -1532,11 +1549,7 @@ func TestClientRetryError(t *testing.T) {
 
 	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
 
-	// Each retry should happen ~1 millisecond, this should give enough time to
-	// the test to trigger the failure callback.
-	time.Sleep(50 * time.Millisecond)
-
-	if err := <-errchan; err == nil {
+	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for a retry falure")
 
 	} else if e, ok := err.(*url.Error); !ok {
@@ -1566,9 +1579,7 @@ func TestClientResponse400(t *testing.T) {
 	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
 	client.Close()
 
-	if err := <-errchan; err == nil {
-		t.Error("failure callback not triggered for a 400 response")
-	}
+	require.Error(t, awaitTestValue(t, errchan))
 }
 
 func TestClientResponseBodyError(t *testing.T) {
@@ -1588,7 +1599,7 @@ func TestClientResponseBodyError(t *testing.T) {
 	client.Enqueue(Capture{DistinctId: "A", Event: "B"})
 	client.Close()
 
-	if err := <-errchan; err == nil {
+	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for a 400 response")
 
 	} else if err != testError {
@@ -1642,6 +1653,7 @@ func TestFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer client.Close()
 
 	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrNoPersonalAPIKey)
 
@@ -1785,10 +1797,10 @@ func TestIsFeatureEnabled(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, _ := NewWithConfig("test-api-key", Config{
-				Endpoint: server.URL,
-			})
-
+			client, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+			require.NoError(t, err)
+			defer client.Close()
+			tt.flagConfig.SendFeatureFlagEvents = Ptr(false)
 			result, err := client.IsFeatureEnabled(tt.flagConfig)
 
 			if tt.expectedError != "" {
@@ -2157,10 +2169,10 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, _ := NewWithConfig("test-api-key", Config{
-				Endpoint: server.URL,
-			})
-
+			client, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+			require.NoError(t, err)
+			defer client.Close()
+			tt.flagConfig.SendFeatureFlagEvents = Ptr(false)
 			value, err := client.GetFeatureFlagPayload(tt.flagConfig)
 
 			if tt.expectedError != "" {
@@ -2386,10 +2398,10 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, _ := NewWithConfig("test-api-key", Config{
-				Endpoint: server.URL,
-			})
-
+			client, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+			require.NoError(t, err)
+			defer client.Close()
+			tt.flagConfig.SendFeatureFlagEvents = Ptr(false)
 			value, err := client.GetFeatureFlag(tt.flagConfig)
 
 			if tt.expectedError != "" {
@@ -2523,11 +2535,9 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, _ := NewWithConfig("test-api-key", Config{
-				Endpoint: server.URL,
-				// Note: No PersonalApiKey is set, so it will fall back to using the flags endpoint
-			})
-
+			client, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+			require.NoError(t, err)
+			defer client.Close()
 			flags, err := client.GetAllFlags(tt.flagConfig)
 
 			if tt.expectedError != "" {
@@ -2549,7 +2559,9 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			t.Fatal("expected local evaluations endpoint to be called")
+			t.Error("expected local evaluations endpoint to be called")
+			http.Error(w, "unexpected remote evaluation", http.StatusBadRequest)
+			return
 		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
@@ -2579,9 +2591,13 @@ func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing
 	apiCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if apiCalls == 0 && (r.URL.Path == "/flags" || r.URL.Path == "/flags/") {
-			t.Fatal("expected local evaluations endpoint to be called first")
+			t.Error("expected local evaluations endpoint to be called first")
+			http.Error(w, "unexpected request order", http.StatusBadRequest)
+			return
 		} else if apiCalls == 1 && strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			t.Fatal("expected flags endpoint to be called second")
+			t.Error("expected flags endpoint to be called second")
+			http.Error(w, "unexpected request order", http.StatusBadRequest)
+			return
 		}
 
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {

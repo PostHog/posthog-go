@@ -422,6 +422,7 @@ func TestConcurrentCallbackExecution(t *testing.T) {
 	client.Close()
 
 	successCount, failureCount := callback.GetCounts()
+	require.Equal(t, goroutines*eventsPerGoroutine, successCount)
 	t.Logf("Callback counts: success=%d, failure=%d", successCount, failureCount)
 
 	// All events should have been delivered with zero failures

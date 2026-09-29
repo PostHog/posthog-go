@@ -267,6 +267,15 @@ func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
 	}
 }
 
+func flushEvaluationEvents(t *testing.T, client Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.FlushWithContext(ctx); err != nil {
+		t.Fatalf("flush event observations: %v", err)
+	}
+}
+
 func TestEvaluateFlags_NoEventsUntilAccessed(t *testing.T) {
 	t.Parallel()
 	fs := newFlagsServer(t, "test-flags-v4.json")
@@ -277,7 +286,7 @@ func TestEvaluateFlags_NoEventsUntilAccessed(t *testing.T) {
 		t.Fatalf("EvaluateFlags error: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	flushEvaluationEvents(t, client)
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	for _, ev := range capture.events {
@@ -303,6 +312,7 @@ func TestIsEnabled_FiresEventWithFullMetadataAndDedupes(t *testing.T) {
 	}
 	// Second call should be deduped.
 	snap.IsEnabled("enabled-flag")
+	flushEvaluationEvents(t, client)
 
 	events := waitForEventCount(capture, 1, 5*time.Second)
 	matching := 0
@@ -384,11 +394,11 @@ func TestGetFlagPayload_DoesNotFireEvent(t *testing.T) {
 	}
 
 	payload := snap.GetFlagPayload("simple-flag")
-	if payload == "" {
-		t.Errorf("expected non-empty payload for simple-flag, got %q", payload)
+	if payload != `{"bar": 2}` {
+		t.Errorf("unexpected payload for simple-flag: %q", payload)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	flushEvaluationEvents(t, client)
 	capture.mu.Lock()
 	for _, ev := range capture.events {
 		if ev.Event == "$feature_flag_called" {
@@ -541,10 +551,12 @@ func TestCaptureWithFlags_AttachesPropertiesNoExtraRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected $active_feature_flags to be []string, got %T", thing.Properties["$active_feature_flags"])
 	}
-	for i := 1; i < len(active); i++ {
-		if active[i-1] > active[i] {
-			t.Errorf("$active_feature_flags should be sorted, got %v", active)
-		}
+	wantActive := []string{"beta-feature", "beta-feature2", "continuation-flag", "enabled-flag", "group-flag", "multi-variate-flag", "simple-flag", "test-get-feature"}
+	if strings.Join(active, ",") != strings.Join(wantActive, ",") {
+		t.Errorf("$active_feature_flags = %v, want %v", active, wantActive)
+	}
+	if got := thing.Properties["$feature/disabled-flag"]; got != false {
+		t.Errorf("expected disabled flag property to be false, got %v", got)
 	}
 
 	// Critically: only one /flags request (from EvaluateFlags), none from the
@@ -784,7 +796,7 @@ func TestEvaluateFlags_EmptyDistinctId_NoEvents(t *testing.T) {
 	snap.IsEnabled("enabled-flag")
 	snap.GetFlag("multi-variate-flag")
 
-	time.Sleep(50 * time.Millisecond)
+	flushEvaluationEvents(t, client)
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	for _, ev := range capture.events {
@@ -844,6 +856,9 @@ func TestEvaluateFlags_LocalEvaluation_TagsLocallyEvaluated(t *testing.T) {
 	}
 	if event.Properties["$feature_flag_reason"] != "Evaluated locally" {
 		t.Errorf("expected $feature_flag_reason='Evaluated locally', got %v", event.Properties["$feature_flag_reason"])
+	}
+	if got := remoteCalls.Load(); got != 0 {
+		t.Errorf("local evaluation made %d remote flag requests", got)
 	}
 	// The local definitions fixture has no has_experiment; the property must be omitted.
 	if got, ok := event.Properties["$feature_flag_has_experiment"]; ok {
@@ -1047,8 +1062,7 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	snap, _ := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
 	snap.IsEnabled("enabled-flag")
 
-	_ = waitForEventCount(capture, 1, 5*time.Second)
-	time.Sleep(150 * time.Millisecond)
+	flushEvaluationEvents(t, client)
 	events := snapshotCapturedEvents(capture)
 
 	count := countFlagCalledEvents(events, "enabled-flag")
@@ -1090,8 +1104,7 @@ func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
 		})
 	}
 
-	_ = waitForEventCount(capture, len(testCases), 5*time.Second)
-	time.Sleep(150 * time.Millisecond)
+	flushEvaluationEvents(t, clientIface)
 	events := snapshotCapturedEvents(capture)
 
 	count := countFlagCalledEvents(events, "changing-flag")
@@ -1189,8 +1202,7 @@ func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 
 			// Wait for the first (and only) event to arrive, then briefly
 			// pause to catch any stragglers that would indicate broken dedup.
-			waitForEventCount(capture, 1, 5*time.Second)
-			time.Sleep(150 * time.Millisecond)
+			flushEvaluationEvents(t, client)
 			capture.mu.Lock()
 			defer capture.mu.Unlock()
 			count := 0

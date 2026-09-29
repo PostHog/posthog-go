@@ -459,9 +459,11 @@ func TestFlagDefinitionCacheNotModifiedRepublishesDefinitions(t *testing.T) {
 }
 
 func TestFlagDefinitionCacheNotModifiedDoesNotPublishForFollowers(t *testing.T) {
-	server, _ := definitionsServer(t, func(w http.ResponseWriter, r *http.Request) {
+	var notModified atomic.Int32
+	server, requests := definitionsServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"etag-1"`)
 		if r.Header.Get("If-None-Match") == `"etag-1"` {
+			notModified.Add(1)
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
@@ -471,7 +473,11 @@ func TestFlagDefinitionCacheNotModifiedDoesNotPublishForFollowers(t *testing.T) 
 	provider := &fakeFlagDefinitionCache{shouldFetch: false}
 	poller := newCachingTestPoller(t, server.URL, provider)
 	poller.fetchNewFeatureFlags()
+	poller.fetchFlagDefinitions(false)
 
+	require.Equal(t, 2, requests())
+	require.Equal(t, int32(1), notModified.Load())
+	require.Contains(t, poller.state.Load().flagsByKey, "cached-flag")
 	_, _, _, published := provider.calls()
 	require.Empty(t, published)
 }
@@ -593,7 +599,7 @@ func TestFlagDefinitionCacheShutdownUsesTheCallerDeadline(t *testing.T) {
 	poller := newRunningCachingPoller(t, server.URL, provider)
 	<-poller.firstFeatureFlagRequestFinished
 
-	callerDeadline := time.Now().Add(20 * time.Millisecond)
+	callerDeadline := time.Now().Add(5 * time.Second)
 	ctx, cancel := context.WithDeadline(context.Background(), callerDeadline)
 	defer cancel()
 	poller.shutdownPoller(ctx)
@@ -605,6 +611,9 @@ func TestFlagDefinitionCacheShutdownUsesTheCallerDeadline(t *testing.T) {
 func TestFlagDefinitionCacheShutdownWaitsForAnInFlightProviderCall(t *testing.T) {
 	fetching := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
 	shutdownStarted := make(chan struct{})
 
 	var inFlight atomic.Int32
@@ -628,7 +637,7 @@ func TestFlagDefinitionCacheShutdownWaitsForAnInFlightProviderCall(t *testing.T)
 
 	poller := newRunningCachingPoller(t, server.URL, provider)
 
-	<-fetching
+	awaitTestValue(t, fetching)
 
 	done := make(chan struct{})
 	go func() {
@@ -642,7 +651,7 @@ func TestFlagDefinitionCacheShutdownWaitsForAnInFlightProviderCall(t *testing.T)
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	close(release)
+	unblock()
 
 	select {
 	case <-done:
@@ -734,7 +743,7 @@ func TestFlagDefinitionCacheExpiredDeadlineCancelsPollingBeforeShutdown(t *testi
 	server, _ := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
 	poller := newRunningCachingPoller(t, server.URL, provider)
-	<-fetching
+	awaitTestValue(t, fetching)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -774,7 +783,8 @@ func TestFlagDefinitionCacheCloseDeadlineWithActiveProviderCallStaysOrdered(t *t
 		FlagDefinitionCacheProvider:        provider,
 	})
 	require.NoError(t, err)
-	<-fetching
+	defer client.Close()
+	awaitTestValue(t, fetching)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

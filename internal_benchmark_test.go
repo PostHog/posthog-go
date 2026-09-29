@@ -121,10 +121,19 @@ func BenchmarkHTTPUpload(b *testing.B) {
 			client := &http.Client{}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				req, _ := http.NewRequest("POST", server.URL, bytes.NewReader(payload))
-				resp, _ := client.Do(req)
-				if resp != nil {
-					resp.Body.Close()
+				req, err := http.NewRequest("POST", server.URL, bytes.NewReader(payload))
+				if err != nil {
+					b.Fatal(err)
+				}
+				resp, err := client.Do(req)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := resp.Body.Close(); err != nil {
+					b.Fatal(err)
+				}
+				if resp.StatusCode != http.StatusOK {
+					b.Fatalf("upload status: %d", resp.StatusCode)
 				}
 			}
 		})
@@ -167,11 +176,20 @@ func BenchmarkHTTPUploadWithRealPayload(b *testing.B) {
 			b.ResetTimer()
 			b.SetBytes(int64(len(payload)))
 			for i := 0; i < b.N; i++ {
-				req, _ := http.NewRequest("POST", server.URL, bytes.NewReader(payload))
+				req, err := http.NewRequest("POST", server.URL, bytes.NewReader(payload))
+				if err != nil {
+					b.Fatal(err)
+				}
 				req.Header.Set("Content-Type", "application/json")
-				resp, _ := client.Do(req)
-				if resp != nil {
-					resp.Body.Close()
+				resp, err := client.Do(req)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := resp.Body.Close(); err != nil {
+					b.Fatal(err)
+				}
+				if resp.StatusCode != http.StatusOK {
+					b.Fatalf("upload status: %d", resp.StatusCode)
 				}
 			}
 		})
@@ -216,7 +234,9 @@ func BenchmarkPrepareVsMarshaling(b *testing.B) {
 	}
 }
 
-// BenchmarkPropertyIteration benchmarks the cost of iterating over properties
+var benchmarkPropertyBytes int
+
+// BenchmarkPropertyIteration benchmarks the cost of iterating over property keys.
 func BenchmarkPropertyIteration(b *testing.B) {
 	cardinalities := []struct {
 		name        string
@@ -234,10 +254,10 @@ func BenchmarkPropertyIteration(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				total := 0
-				for k, v := range props {
+				for k := range props {
 					total += len(k)
-					_ = v // access value
 				}
+				benchmarkPropertyBytes = total
 			}
 		})
 	}

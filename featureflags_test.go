@@ -43,13 +43,10 @@ func TestFeatureFlagsPollerStateMapGetters(t *testing.T) {
 
 	gotCohorts := poller.getCohorts()
 	gotGroups := poller.getGroups()
-	gotCohorts["2"] = PropertyGroup{Type: "OR"}
-	gotGroups["1"] = "team"
-
-	if cohorts["2"].Type != "OR" {
-		t.Fatalf("getCohorts() did not return the stored map")
+	if len(gotCohorts) != 1 || gotCohorts["1"].Type != "AND" {
+		t.Fatalf("getCohorts() = %#v, want stored cohort", gotCohorts)
 	}
-	if groups["1"] != "team" {
-		t.Fatalf("getGroups() did not return the stored map")
+	if len(gotGroups) != 1 || gotGroups["0"] != "company" {
+		t.Fatalf("getGroups() = %#v, want stored group mapping", gotGroups)
 	}
 }

@@ -55,8 +55,9 @@ endpoint correctly.
 func TestFlags(t *testing.T) {
 	t.Parallel()
 	validateCapturedEvent := func(t *testing.T, event *CaptureInApi) {
+		t.Helper()
 		if event == nil {
-			return
+			t.Fatal("expected a delivered $feature_flag_called event")
 		}
 		if event.Event != "$feature_flag_called" {
 			t.Errorf("Expected a $feature_flag_called event, got: %v", event.Event)

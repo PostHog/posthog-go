@@ -3,6 +3,7 @@ package posthog
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	json "github.com/goccy/go-json"
 	"net/http/httptest"
@@ -99,27 +100,25 @@ func TestBatching_LargeEventsTriggerFlush(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Medium-high cardinality events (~2000 props, ~100KB each)
-	// With 500KB batch limit, should fit ~5 events per batch
+	// Ten ~100KB events exceed the byte limit but not the count limit.
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:  server.URL,
-		BatchSize: DefaultBatchSize, // byte limit should trigger before count
-		Interval:  50 * time.Millisecond,
+		BatchSize: DefaultBatchSize,
+		Interval:  time.Hour,
 	})
 	require.NoError(t, err)
 
-	// Send 10 medium-high cardinality events
-	pool := NewEventPoolWithCardinality(10, CardinalityMedium)
+	defer client.Close()
 	for i := 0; i < 10; i++ {
-		err := client.Enqueue(pool.Next())
-		require.NoError(t, err)
+		require.NoError(t, client.Enqueue(Capture{
+			DistinctId: "user", Event: "large",
+			Properties: Properties{"payload": strings.Repeat("x", 100000)},
+		}))
 	}
 
-	client.Close()
-
-	// Medium cardinality events should trigger multiple batches
-	require.GreaterOrEqual(t, batchCount.Load(), int64(1), "Should have at least 1 batch")
-	t.Logf("Batch count: %d, sizes: %v", batchCount.Load(), batchSizes)
+	require.NoError(t, client.Close())
+	require.Equal(t, int64(3), batchCount.Load())
+	require.ElementsMatch(t, []int{4, 4, 2}, batchSizes)
 }
 
 // TestBatching_OversizedEventRejected verifies that events >500KB are rejected
@@ -222,28 +221,20 @@ func TestBatching_BatchCountLimit(t *testing.T) {
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint:  server.URL,
 		BatchSize: batchSize,
-		Interval:  10 * time.Millisecond, // Short interval so batch count limit triggers
+		Interval:  time.Hour,
 	})
 	require.NoError(t, err)
 
-	// Send 25 small events with BatchSize=10 and short interval
-	// The batch count limit should trigger before interval flush
+	defer client.Close()
+	// Only the count limit or Close can flush these small events.
 	pool := NewEventPoolWithCardinality(25, CardinalityLow)
 	for i := 0; i < 25; i++ {
 		err := client.Enqueue(pool.Next())
 		require.NoError(t, err)
 	}
 
-	// Wait for batches to be flushed before closing
-	time.Sleep(100 * time.Millisecond)
-
-	client.Close()
-
-	// Check that no batch exceeds BatchSize
-	for i, size := range batchSizes {
-		require.LessOrEqual(t, size, batchSize, "Batch %d has size %d which exceeds BatchSize %d", i, size, batchSize)
-	}
-	t.Logf("Batch sizes: %v", batchSizes)
+	require.NoError(t, client.Close())
+	require.ElementsMatch(t, []int{10, 10, 5}, batchSizes)
 }
 
 // testCallbackCounter is a simple callback for counting successes and failures
@@ -282,116 +273,78 @@ func TestConfigBatchSubmitTimeout(t *testing.T) {
 	require.Equal(t, time.Duration(-1), cfg.BatchSubmitTimeout, "negative BatchSubmitTimeout should be preserved")
 }
 
-// TestBatchSubmitTimeout_WaitsForWorkers verifies that batch submission waits
-// when queue is full, giving workers time to complete during latency spikes.
-// Note: params are tuned for reliability under -race (adds ~10x overhead).
 func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
-	t.Parallel()
-
-	var mu sync.Mutex
-	var batchCount int
-
-	// Create a handler with moderate latency
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(20 * time.Millisecond)
-		mu.Lock()
-		batchCount++
-		mu.Unlock()
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
-
-	// Config: queue buffer = MaxEnqueuedRequests = 10
-	// With 20 events, queue will fill and submissions must wait for goroutines
-	client, err := NewWithConfig("test-key", Config{
-		Endpoint:            server.URL,
-		BatchSize:           1,                      // 1 event per batch
-		Interval:            1 * time.Millisecond,   // Flush immediately
-		MaxEnqueuedRequests: 10,                     // Queue buffer = 10
-		BatchSubmitTimeout:  500 * time.Millisecond, // Ample time for race mode
-	})
-	require.NoError(t, err)
-
-	// Send 20 events - will exceed queue buffer (10), so some must wait
-	for i := 0; i < 20; i++ {
-		client.Enqueue(Capture{
-			DistinctId: "test-user",
-			Event:      "test-event",
-		})
+	c := &client{
+		Config:     Config{BatchSubmitTimeout: 5 * time.Second},
+		batches:    make(chan preparedBatch, 1),
+		deliveries: make(map[*delivery]struct{}),
 	}
-
-	client.Close()
-
-	mu.Lock()
-	finalBatchCount := batchCount
-	mu.Unlock()
-
-	// With 500ms timeout and 20ms latency, 10 workers can process ~250 batches
-	// All 20 events should be delivered
-	require.GreaterOrEqual(t, finalBatchCount, 18, "With BatchSubmitTimeout, nearly all events should be delivered")
+	processed := make(chan preparedBatch, 1)
+	c.capture = batchRecordingCapturer{processed: processed}
+	c.batches <- preparedBatch{}
+	done := make(chan bool, 1)
+	go func() { done <- c.sendBatch(preparedBatch{uuids: []string{"submitted"}}) }()
+	require.Eventually(t, func() bool { return c.inFlight.Load() == 1 }, time.Second, time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("submission returned before queue space was available")
+	default:
+	}
+	<-c.batches
+	select {
+	case accepted := <-done:
+		require.True(t, accepted)
+	case <-time.After(5 * time.Second):
+		t.Fatal("submission did not resume when queue space became available")
+	}
+	select {
+	case batch := <-processed:
+		require.Equal(t, []string{"submitted"}, batch.uuids)
+	case <-time.After(5 * time.Second):
+		t.Fatal("accepted batch was not processed")
+	}
+	require.Eventually(t, func() bool { return c.inFlight.Load() == 0 }, time.Second, time.Millisecond)
+	c.deliveryMu.Lock()
+	defer c.deliveryMu.Unlock()
+	require.Empty(t, c.deliveries)
 }
 
-// TestBatchSubmitTimeout_NonBlocking verifies that negative timeout gives non-blocking behavior
-func TestBatchSubmitTimeout_NonBlocking(t *testing.T) {
-	t.Parallel()
-
-	var mu sync.Mutex
-	var successCount int
-	var failureCount int
-
-	// Create a very slow handler to saturate workers
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(500 * time.Millisecond) // Very slow backend
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
-
-	callback := &testCallbackCounter{
-		onSuccess: func() {
-			mu.Lock()
-			successCount++
-			mu.Unlock()
-		},
-		onFailure: func() {
-			mu.Lock()
-			failureCount++
-			mu.Unlock()
-		},
-	}
-
-	// Use non-blocking mode with negative timeout
-	client, err := NewWithConfig("test-key", Config{
-		Endpoint:            server.URL,
-		BatchSize:           1,                    // 1 event per batch
-		Interval:            1 * time.Millisecond, // Flush immediately
-		MaxEnqueuedRequests: 1,                    // Only 1 batch can be queued
-		BatchSubmitTimeout:  -1,                   // Non-blocking (immediate drop)
-		Callback:            callback,
-	})
-	require.NoError(t, err)
-
-	// Blast events as fast as possible - no sleep between enqueues.
-	// This ensures the channel fills faster than processBatch goroutines can drain it,
-	// causing the non-blocking send to drop events when the queue is full.
-	for i := 0; i < 100; i++ {
-		client.Enqueue(Capture{
-			DistinctId: "test-user",
-			Event:      "test-event",
+func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+	}{
+		{"nonblocking", -1},
+		{"deadline", 10 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &client{
+				Config:     Config{BatchSubmitTimeout: tc.timeout},
+				batches:    make(chan preparedBatch, 1),
+				deliveries: make(map[*delivery]struct{}),
+			}
+			c.batches <- preparedBatch{uuids: []string{"queued"}}
+			done := make(chan bool, 1)
+			go func() { done <- c.sendBatch(preparedBatch{}) }()
+			select {
+			case accepted := <-done:
+				require.False(t, accepted)
+			case <-time.After(time.Second):
+				t.Fatal("submission blocked beyond its deadline")
+			}
+			require.Zero(t, c.inFlight.Load())
+			require.Empty(t, c.deliveries)
+			require.Equal(t, []string{"queued"}, (<-c.batches).uuids)
 		})
 	}
-
-	client.Close()
-
-	mu.Lock()
-	finalSuccess := successCount
-	finalFailure := failureCount
-	mu.Unlock()
-
-	t.Logf("Non-blocking mode: %d succeeded, %d failed", finalSuccess, finalFailure)
-
-	// In non-blocking mode with slow backend, some events should be dropped
-	require.Greater(t, finalFailure, 0, "In non-blocking mode with slow backend, some events should be dropped")
 }
+
+type batchRecordingCapturer struct {
+	capturer
+	processed chan<- preparedBatch
+}
+
+func (c batchRecordingCapturer) send(batch preparedBatch) { c.processed <- batch }
 
 // TestShutdownTimeout_DefaultWaitsForCompletion verifies that with default config
 // (ShutdownTimeout=0), Close() waits indefinitely for in-flight batches to complete.

@@ -281,9 +281,12 @@ func TestFallbackToFlags(t *testing.T) {
 }
 
 func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing.T) {
+	var remoteCalls atomic.Int32
+	defer func() { require.Zero(t, remoteCalls.Load(), "local-only evaluation must not call /flags") }()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
-			w.Write([]byte("test-flags-v3.json"))
+			remoteCalls.Add(1)
+			w.Write([]byte(`{"featureFlags":{"beta-feature":true,"beta-feature2":true},"featureFlagPayloads":{"beta-feature":"remote-payload"}}`))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-feature-flags-dont-fallback-to-decide-when-only-local-evaluation-is-true.json")))
 		}
@@ -467,7 +470,27 @@ func TestFeatureFlagNullComeIntoPlayOnlyWhenFlagsErrorsOut(t *testing.T) {
 }
 
 func TestExperienceContinuityOverride(t *testing.T) {
-	client := newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag.json")
+	var remoteCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
+			_, _ = w.Write([]byte(`{"flags":[{"key":"beta-feature","active":true,"ensure_experience_continuity":true,"filters":{"groups":[{"properties":[],"rollout_percentage":100}]}}]}`))
+		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
+			remoteCalls.Add(1)
+			_, _ = w.Write([]byte(`{"featureFlags":{"beta-feature":"decide-fallback-value"},"featureFlagPayloads":{"beta-feature":{"foo":"bar"}}}`))
+		}
+	}))
+	defer server.Close()
+	client, err := NewWithConfig("test-key", Config{Endpoint: server.URL, PersonalApiKey: "secret"})
+	require.NoError(t, err)
+	defer client.Close()
+	local, err := client.GetFeatureFlag(FeatureFlagPayload{
+		Key: "beta-feature", DistinctId: "distinct_id", OnlyEvaluateLocally: true,
+	})
+	require.Error(t, err)
+	require.Nil(t, local)
+	require.Zero(t, remoteCalls.Load())
+	defer func() { require.Positive(t, remoteCalls.Load()) }()
 
 	featureVariant, _ := client.GetFeatureFlag(
 		FeatureFlagPayload{
@@ -487,9 +510,7 @@ func TestExperienceContinuityOverride(t *testing.T) {
 		},
 	)
 
-	if payload != "{\"foo\": \"bar\"}" {
-		t.Error(`Should be "{"foo": "bar"}"`)
-	}
+	require.JSONEq(t, `{"foo":"bar"}`, payload)
 }
 
 func TestGetAllFlags(t *testing.T) {
@@ -941,28 +962,23 @@ func assertFlagVariantAndPayload(t *testing.T, client Client, request FeatureFla
 
 func assertAllFlags(t *testing.T, client Client, request FeatureFlagPayloadNoKey, want map[string]interface{}) {
 	t.Helper()
-	featureVariants, _ := client.GetAllFlags(request)
-	for key, value := range want {
-		if featureVariants[key] != value {
-			t.Error("Should match")
-		}
-	}
+	featureVariants, err := client.GetAllFlags(request)
+	require.NoError(t, err)
+	require.Equal(t, want, featureVariants)
 }
 
 func assertFeatureFlag(t *testing.T, client Client, request FeatureFlagPayload, want interface{}) {
 	t.Helper()
-	variant, _ := client.GetFeatureFlag(request)
-	if variant != want {
-		t.Error("Should match", variant, want)
-	}
+	variant, err := client.GetFeatureFlag(request)
+	require.NoError(t, err)
+	require.Equal(t, want, variant)
 }
 
 func assertFeatureFlagPayload(t *testing.T, client Client, request FeatureFlagPayload, want string) {
 	t.Helper()
-	payload, _ := client.GetFeatureFlagPayload(request)
-	if payload != want {
-		t.Error("Should match", payload, want)
-	}
+	payload, err := client.GetFeatureFlagPayload(request)
+	require.NoError(t, err)
+	require.Equal(t, want, payload)
 }
 
 func TestConditionsEvaluatedInOrder(t *testing.T) {
@@ -1036,7 +1052,7 @@ func TestConditionsEvaluatedInOrder(t *testing.T) {
 	}
 }
 
-func TestCaptureIsCalled(t *testing.T) {
+func TestFeatureFlagPersonPropertyVariant(t *testing.T) {
 	assertFeatureFlag(t, newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag-person-prop.json"), FeatureFlagPayload{Key: "test-get-feature", DistinctId: "distinct_id"}, "variant-1")
 }
 

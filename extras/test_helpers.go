@@ -2,6 +2,7 @@ package extras
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"sync"
 	"testing"
@@ -18,8 +19,23 @@ type timeoutTransport struct {
 
 func (t *timeoutTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx, cancel := context.WithTimeout(req.Context(), t.timeout)
-	defer cancel()
-	return t.rt.RoundTrip(req.WithContext(ctx))
+	res, err := t.rt.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return res, err
+	}
+	res.Body = &cancelOnCloseBody{ReadCloser: res.Body, cancel: cancel}
+	return res, nil
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
 }
 
 // testCallback implements posthog.Callback to track success/failure in tests.
