@@ -1,6 +1,10 @@
 package posthogmcpsdk
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"sync"
 	"testing"
@@ -112,15 +116,78 @@ func TestIdleGeneratedSessionsAreEvicted(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
 	resolver := newSessionResolver(clock.Now)
 	idle, active := &mcpsdk.ServerSession{}, &mcpsdk.ServerSession{}
-	resolver.resolve(idle)
-	resolver.resolve(active)
+	resolver.resolve(idle, false)
+	resolver.resolve(active, false)
 	require.Len(t, resolver.generated, 2)
 
 	clock.advance(sessionInactivityTimeout - time.Minute)
-	resolver.resolve(active)
+	resolver.resolve(active, false)
 	clock.advance(2 * time.Minute)
-	resolver.resolve(active)
+	resolver.resolve(active, false)
 
 	assert.Len(t, resolver.generated, 1)
 	assert.Contains(t, resolver.generated, active)
+}
+
+func TestRequestScopedSessionsAreNotRetained(t *testing.T) {
+	resolver := newSessionResolver(time.Now)
+	ids := map[string]bool{}
+	for range 10_000 {
+		id := resolver.resolve(&mcpsdk.ServerSession{}, true)
+		assert.Regexp(t, generatedSessionID, id)
+		ids[id] = true
+	}
+
+	assert.Len(t, ids, 10_000)
+	assert.Empty(t, resolver.generated)
+}
+
+func TestGeneratedSessionsAreCappedOldestFirst(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	resolver := newSessionResolver(clock.Now)
+	oldest := &mcpsdk.ServerSession{}
+	resolver.resolve(oldest, false)
+	for range maxGeneratedSessions {
+		clock.advance(time.Millisecond)
+		resolver.resolve(&mcpsdk.ServerSession{}, false)
+	}
+
+	assert.Len(t, resolver.generated, maxGeneratedSessions)
+	_, retained := resolver.generated[oldest]
+	assert.False(t, retained)
+}
+
+// A stateless HTTP request is the one transport whose sessions are request
+// scoped, and go-sdk marks it with request Extra and an empty session id.
+func TestStatelessHTTPRequestsAreRequestScoped(t *testing.T) {
+	server := mcpsdk.NewServer(
+		&mcpsdk.Implementation{Name: "test-server", Version: "1.0.0"},
+		&mcpsdk.ServerOptions{GetSessionID: func() string { return "" }},
+	)
+	var mu sync.Mutex
+	var seen []string
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			if call, ok := req.(*mcpsdk.CallToolRequest); ok {
+				mu.Lock()
+				seen = append(seen, fmt.Sprintf("id=%q extra=%t", call.Session.ID(), call.Extra != nil))
+				mu.Unlock()
+			}
+			return next(ctx, method, req)
+		}
+	})
+	addWeatherTool(server, nil)
+	httpServer := httptest.NewServer(mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, &mcpsdk.StreamableHTTPOptions{Stateless: true}))
+	t.Cleanup(httpServer.Close)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+
+	_, err = session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{`id="" extra=true`}, seen)
 }

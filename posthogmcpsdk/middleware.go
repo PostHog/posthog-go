@@ -228,7 +228,7 @@ func (m *middleware) observe(
 		}
 	}
 
-	call.SessionID = m.sessions.resolve(toolRequest.Session)
+	call.SessionID = m.sessions.resolve(toolRequest.Session, toolRequest.Extra != nil)
 
 	// TODO: once ToolCall has the conversation, model, and transport fields,
 	// set LLMModel from toolRequest.Params.Meta["x-codex-turn-metadata"]["model"]
