@@ -296,7 +296,7 @@ func TestRemoteConfigAuthUsesResolvedSecretKey(t *testing.T) {
 			defer server.Close()
 
 			tc.config.Endpoint = server.URL
-			c := &client{Config: tc.config, key: "test-api-key", http: http.Client{}}
+			c := &client{Config: tc.config, key: "test-api-key", http: http.Client{}, flagHTTP: http.Client{}}
 
 			payload, err := c.makeRemoteConfigRequest("test-flag")
 			require.NoError(t, err)

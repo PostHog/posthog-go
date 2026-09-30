@@ -213,9 +213,12 @@ type client struct {
 	// closed is set to true when the client is closed, used to fast-fail Enqueue
 	closed atomic.Bool
 
-	// This HTTP client is used to send requests to the backend, it uses the
-	// HTTP transport provided in the configuration.
+	// http sends batch and capture-v1 uploads with BatchUploadTimeout.
 	http http.Client
+	// flagHTTP sends /flags/, definition polling, and remote config. It has no
+	// Client.Timeout so FeatureFlagRequestTimeout on each request is not capped
+	// by BatchUploadTimeout.
+	flagHTTP http.Client
 
 	// A background poller for fetching feature flags
 	featureFlagsPoller *FeatureFlagsPoller
@@ -295,6 +298,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		ctx:                             ctx,
 		cancel:                          cancel,
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
+		flagHTTP:                        makeHttpClient(config.Transport, 0),
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
 
@@ -304,7 +308,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		c.capture = legacyCapturer{c}
 	}
 
-	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger, config.FeatureFlagRequestMaxRetries)
+	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.flagHTTP, config.FeatureFlagRequestTimeout, c.Logger, config.FeatureFlagRequestMaxRetries)
 	if err != nil {
 		return nil, fmt.Errorf("error creating flags client: %v", err)
 	}
@@ -316,7 +320,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			secretKey,
 			c.Logger,
 			c.Endpoint,
-			c.http,
+			c.flagHTTP,
 			c.DefaultFeatureFlagsPollingInterval,
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
@@ -600,6 +604,10 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 	// SDKs. The drop is reported only via the returned error -- no callback or log
 	// is invoked on the caller's goroutine, so a sustained overload stays cheap.
 	sendPrepared := func(prepared preparedMessage) {
+		if c.closed.Load() {
+			err = ErrClosed
+			return
+		}
 		defer func() {
 			// When the `msgs` channel is closed writing to it will trigger a panic.
 			// To avoid letting the panic propagate to the caller we recover from it
@@ -1649,22 +1657,28 @@ func (c *client) send(pb preparedBatch) {
 
 // Upload serialized batch message.
 func (c *client) upload(ctx context.Context, b []byte) error {
-	url := c.Endpoint + "/batch/"
 	body := b
 	encoding := ""
+	gzip := false
 
 	if c.Compression == CompressionGzip {
 		compressed, err := compressGzip(b)
 		if err != nil {
 			c.Warnf("gzip compression failed; sending uncompressed - %s", err)
 		} else {
-			url += "?compression=gzip"
+			gzip = true
 			body = compressed
 			encoding = "gzip"
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	uploadURL, err := legacyBatchURL(c.Endpoint, gzip)
+	if err != nil {
+		c.Errorf("building batch URL - %s", err)
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, bytes.NewReader(body))
 	if err != nil {
 		c.Errorf("creating request - %s", err)
 		return err
@@ -1722,6 +1736,21 @@ type httpError struct {
 
 func (e *httpError) Error() string {
 	return fmt.Sprintf("%d %s", e.statusCode, e.status)
+}
+
+// legacyBatchURL builds the POST /batch/ URL, preserving any query on Endpoint.
+func legacyBatchURL(endpoint string, gzip bool) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", err
+	}
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/batch/"
+	if gzip {
+		q := u.Query()
+		q.Set("compression", "gzip")
+		u.RawQuery = q.Encode()
+	}
+	return u.String(), nil
 }
 
 func isRetryableStatus(statusCode int) bool {
@@ -1979,7 +2008,14 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	q.Set("token", c.key)
 	parsedURL.RawQuery = q.Encode()
 
-	req, err := http.NewRequest("GET", parsedURL.String(), nil)
+	timeout := c.FeatureFlagRequestTimeout
+	if timeout <= 0 {
+		timeout = DefaultFeatureFlagRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", parsedURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %v", err)
 	}
@@ -1988,7 +2024,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "posthog-go/"+Version)
 
-	res, err := c.http.Do(req)
+	res, err := c.flagHTTP.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("sending request: %v", err)
 	}
