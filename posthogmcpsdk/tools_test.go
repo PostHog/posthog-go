@@ -158,6 +158,41 @@ func TestCatalogForgetsMissesAfterTenSeconds(t *testing.T) {
 	}
 }
 
+func TestCatalogRelearnsKnownToolsAfterTenSeconds(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		elapsed   time.Duration
+		wantLists int32
+		wantInfo  toolInfo
+	}{
+		{name: "just before", elapsed: 10*time.Second - time.Nanosecond, wantLists: 0, wantInfo: toolInfo{description: "about plan", contextInjected: true}},
+		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 1, wantInfo: toolInfo{description: "replaced"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := newToolCatalog(true)
+			now := time.Unix(1_700_000_000, 0)
+			catalog.now = func() time.Time { return now }
+			catalog.advertise(catalog.generation(), listing("plan").Tools)
+
+			var lists atomic.Int32
+			next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+				lists.Add(1)
+				return &mcpsdk.ListToolsResult{Tools: []*mcpsdk.Tool{{
+					Name:        "plan",
+					Description: "replaced",
+					InputSchema: map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "string"}}},
+				}}}, nil
+			}
+			now = now.Add(test.elapsed)
+			info, err := catalog.lookup(t.Context(), next, callRequest("plan"))
+
+			assert.NoError(t, err)
+			assert.Equal(t, test.wantInfo, info)
+			assert.Equal(t, test.wantLists, lists.Load())
+		})
+	}
+}
+
 func TestCatalogListingKeepsRememberedMisses(t *testing.T) {
 	catalog := newToolCatalog(true)
 	var lists atomic.Int32

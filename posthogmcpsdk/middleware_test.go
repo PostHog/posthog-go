@@ -831,6 +831,41 @@ func TestInstrumentRelearnsToolsAfterListChanged(t *testing.T) {
 	}
 }
 
+func TestInstrumentRelearnsAToolReplacedWhileNoSessionIsConnected(t *testing.T) {
+	type ownContextInput struct {
+		Context string `json:"context"`
+	}
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	server := newServer()
+	Instrument(server, posthogmcp.New(&fakeQueue{}), withClock(clock))
+	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "plan"}, func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+		return &mcpsdk.CallToolResult{}, nil, nil
+	})
+
+	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
+	require.NoError(t, err)
+	listing, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "listing-client", Version: "1.0.0"}, nil).Connect(t.Context(), clientTransport, nil)
+	require.NoError(t, err)
+	_, err = listing.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.NoError(t, listing.Close())
+	require.NoError(t, serverSession.Wait())
+
+	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "plan"}, func(_ context.Context, _ *mcpsdk.CallToolRequest, in ownContextInput) (*mcpsdk.CallToolResult, any, error) {
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "own context: " + in.Context}}}, nil, nil
+	})
+	clock.advance(10 * time.Second)
+
+	result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+		Name:      "plan",
+		Arguments: map[string]any{"context": "Planning a trip"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, toolResultText(result))
+	assert.Equal(t, "own context: Planning a trip", result.Content[0].(*mcpsdk.TextContent).Text)
+}
+
 func TestNilAnalyticsPanicsAtConstruction(t *testing.T) {
 	for _, test := range []struct {
 		name    string

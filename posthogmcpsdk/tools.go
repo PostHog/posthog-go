@@ -31,13 +31,13 @@ type toolInfo struct {
 // maxListingPages bounds the tools/list pages one learning walk requests.
 const maxListingPages = 100
 
-// missTTL is how long a completed walk vouches that a name it did not find is
-// not registered. go-sdk sends no list_changed without a connected session,
-// so on a stateless server this is what lets a tool added at runtime become
-// known. Ten seconds keeps steady calls for unregistered names to one walk,
-// which runs in process, per ten seconds, and has a tool added at runtime
-// recognized within ten seconds.
-const missTTL = 10 * time.Second
+// catalogTTL is how long what the catalog learned is trusted: a tool's entry
+// after it was learned, and the absence of a name after a completed walk.
+// go-sdk sends no list_changed without a connected session, so on a stateless
+// server this is what lets a tool added or replaced at runtime be learned
+// again. Ten seconds keeps steady calls to one walk, which runs in process,
+// per ten seconds, and has such a change recognized within ten seconds.
+const catalogTTL = 10 * time.Second
 
 // toolCatalog remembers every tool seen in a tools/list result. go-sdk has no
 // public tool registry, so listings are the only source of tool metadata.
@@ -51,13 +51,18 @@ type toolCatalog struct {
 
 // catalogGeneration is what the catalog knows between two invalidations.
 type catalogGeneration struct {
-	tools map[string]toolInfo
+	tools map[string]catalogEntry
 	// walking is non-nil while a learning walk runs, and closed when it ends.
 	walking chan struct{}
-	// walkedAt is when the last complete walk ended. Until missTTL later, a
+	// walkedAt is when the last complete walk ended. Until catalogTTL later, a
 	// name the catalog does not know is not registered: a later tools/list
 	// result can only add names, which are then known.
 	walkedAt time.Time
+}
+
+type catalogEntry struct {
+	info      toolInfo
+	learnedAt time.Time
 }
 
 func newToolCatalog(injectContext bool) *toolCatalog {
@@ -65,7 +70,7 @@ func newToolCatalog(injectContext bool) *toolCatalog {
 }
 
 func newCatalogGeneration() *catalogGeneration {
-	return &catalogGeneration{tools: map[string]toolInfo{}}
+	return &catalogGeneration{tools: map[string]catalogEntry{}}
 }
 
 // invalidate starts a new generation that knows no tools.
@@ -106,7 +111,7 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 	defer c.mu.Unlock()
 	if gen == c.current {
 		for i, tool := range tools {
-			gen.tools[tool.Name] = infos[i]
+			gen.tools[tool.Name] = catalogEntry{info: infos[i], learnedAt: c.now()}
 		}
 	}
 	return advertised
@@ -115,8 +120,10 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 // lookup returns what the catalog knows about the called tool. A call that
 // reaches this process before any tools/list did, as when a load balancer
 // sends a client's listing and its calls to different replicas, lists tools
-// through next. Concurrent callers share that walk, and once one completes
-// the generation remembers for missTTL which names are not registered. The
+// through next, and so does a call for a tool learned catalogTTL ago, which
+// may have been replaced since. Concurrent callers share that walk, and once
+// one completes the generation remembers for catalogTTL which names are not
+// registered. The
 // error reports why a walk did not complete, which never reaches the
 // tools/call.
 func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
@@ -133,11 +140,13 @@ func (c *toolCatalog) lookupIn(ctx context.Context, next mcpsdk.MethodHandler, r
 	name := req.Params.Name
 	c.mu.Lock()
 	gen := c.current
-	info, known := gen.tools[name]
-	missRemembered := !gen.walkedAt.IsZero() && c.now().Sub(gen.walkedAt) < missTTL
-	if known || missRemembered || req.Session == nil {
+	entry, known := gen.tools[name]
+	now := c.now()
+	trusted := known && now.Sub(entry.learnedAt) < catalogTTL
+	missRemembered := !gen.walkedAt.IsZero() && now.Sub(gen.walkedAt) < catalogTTL
+	if trusted || missRemembered || req.Session == nil {
 		c.mu.Unlock()
-		return info, gen, nil
+		return entry.info, gen, nil
 	}
 	walking := gen.walking
 	leads := walking == nil
@@ -158,7 +167,7 @@ func (c *toolCatalog) lookupIn(ctx context.Context, next mcpsdk.MethodHandler, r
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return gen.tools[name], gen, err
+	return gen.tools[name].info, gen, err
 }
 
 // walk lists every tool into gen and then ends the walk, waking its waiters.

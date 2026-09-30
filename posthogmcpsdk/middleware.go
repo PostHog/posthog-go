@@ -44,10 +44,9 @@ func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...
 // schema is handled by that schema. Without it, the old one still decides
 // whether context is removed. go-sdk sends the notification a few
 // milliseconds after a change, and only to connected sessions when the tools
-// capability allows it. A tool replaced while no session is connected keeps
-// its old entry until a tools/list result includes it again. A tool added
-// while no session is connected is recognized within ten seconds, when
-// Receiving lists tools again.
+// capability allows it. A tool added or replaced while no session is
+// connected is recognized within ten seconds, when Receiving lists tools
+// again.
 type Middleware struct {
 	Receiving mcpsdk.Middleware
 	Sending   mcpsdk.Middleware
@@ -65,7 +64,9 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 			opt(cfg)
 		}
 	}
-	m := &middleware{config: cfg, tools: newToolCatalog(cfg.contextParameter), sessions: newSessionResolver(cfg.now)}
+	tools := newToolCatalog(cfg.contextParameter)
+	tools.now = cfg.now
+	m := &middleware{config: cfg, tools: tools, sessions: newSessionResolver(cfg.now)}
 	return Middleware{Receiving: m.receive, Sending: m.send}
 }
 
