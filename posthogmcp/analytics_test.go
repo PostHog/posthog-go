@@ -617,19 +617,22 @@ func TestCaptureToolCallManualAPIFields(t *testing.T) {
 		{
 			name: "values are bounded to the metadata limit",
 			call: ToolCall{
-				ConversationID:  strings.Repeat("c", 300),
 				LLMModel:        strings.Repeat("m", 300),
 				ClientUserAgent: strings.Repeat("u", 300),
 				VendorClient:    strings.Repeat("v", 300),
 			},
 			wantToolCall: map[string]any{
-				"$mcp_conversation_id":   strings.Repeat("c", 253) + "...",
 				"$mcp_llm_model":         strings.Repeat("m", 253) + "...",
 				"$mcp_llm_model_source":  "self_reported",
 				"$mcp_client_user_agent": strings.Repeat("u", 253) + "...",
 				"$mcp_vendor_client":     strings.Repeat("v", 253) + "...",
 			},
-			wantException: map[string]any{"$mcp_conversation_id": strings.Repeat("c", 253) + "..."},
+		},
+		{
+			name:          "conversation id is a join key and is never truncated",
+			call:          ToolCall{ConversationID: strings.Repeat("c", 300)},
+			wantToolCall:  map[string]any{"$mcp_conversation_id": strings.Repeat("c", 300)},
+			wantException: map[string]any{"$mcp_conversation_id": strings.Repeat("c", 300)},
 		},
 		{
 			name: "custom properties cannot set the reserved keys",

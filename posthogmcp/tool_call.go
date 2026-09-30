@@ -61,7 +61,8 @@ type ToolCall struct {
 	// ProtocolVersion is captured as $mcp_protocol_version on both events.
 	ProtocolVersion string
 
-	// ConversationID is captured as $mcp_conversation_id on both events.
+	// ConversationID is captured verbatim as $mcp_conversation_id on both events,
+	// since it joins tool calls into a conversation.
 	ConversationID string
 	// ClientUserAgent is the HTTP User-Agent header of the request, captured as
 	// $mcp_client_user_agent on $mcp_tool_call.

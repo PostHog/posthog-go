@@ -247,7 +247,7 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 	setStringProperty(properties, propertyToolDescription, truncateUTF8(p.call.ToolDescription, maxStringBytes))
 	setStringProperty(properties, propertyToolCategory, truncateUTF8(p.call.ToolCategory, maxMetadataBytes))
 	setStringProperty(properties, propertySessionID, p.call.SessionID)
-	setStringProperty(properties, propertyConversationID, truncateUTF8(p.call.ConversationID, maxMetadataBytes))
+	setStringProperty(properties, propertyConversationID, p.call.ConversationID)
 	setStringProperty(properties, propertyClientUserAgent, truncateUTF8(p.call.ClientUserAgent, maxMetadataBytes))
 	setStringProperty(properties, propertyVendorClient, truncateUTF8(p.call.VendorClient, maxMetadataBytes))
 	setStringProperty(properties, propertyLLMModel, p.model)
