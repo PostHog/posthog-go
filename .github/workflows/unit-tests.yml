@@ -83,6 +83,16 @@ jobs:
           go vet ./...
           go test -race -count=1 -timeout=5m ./...
 
+      # Consumers ignore go.mod's replace and get the pinned posthog-go release,
+      # so prove the adapter builds against it and not only the checkout.
+      - name: Build and vet against the pinned posthog-go
+        run: |
+          cp -r posthogmcpsdk "$RUNNER_TEMP/pinned"
+          cd "$RUNNER_TEMP/pinned"
+          go mod edit -dropreplace github.com/posthog/posthog-go
+          GOFLAGS=-mod=mod go build ./...
+          GOFLAGS=-mod=mod go vet ./...
+
   public-api:
     name: Public API
     runs-on: ubuntu-latest

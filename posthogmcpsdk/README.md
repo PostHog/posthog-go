@@ -90,7 +90,9 @@ the repository root, so it builds against the local core without a workspace.
 
 Consumers ignore that `replace`, so they build against the `posthog-go`
 version this module's `go.mod` requires, and that version must contain
-`posthogmcp`. Release in this order:
+`posthogmcp`. CI also builds and vets the module with the `replace` dropped, so
+an adapter change that needs unreleased core API fails there. Release in this
+order:
 
 1. Release the `posthog-go` version that contains the `posthogmcp` changes
    this module needs.
