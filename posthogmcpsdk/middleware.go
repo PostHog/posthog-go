@@ -41,9 +41,10 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) mcpsdk.Middl
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
 			switch method {
 			case methodListTools:
+				gen := m.tools.generation()
 				result, err := next(ctx, method, req)
 				if page, ok := result.(*mcpsdk.ListToolsResult); ok && err == nil {
-					return m.advertise(ctx, page), nil
+					return m.advertise(ctx, gen, page), nil
 				}
 				return result, err
 			case methodCallTool:
@@ -77,7 +78,7 @@ type preparedCall struct {
 	tool      toolInfo
 }
 
-func (m *middleware) advertise(ctx context.Context, page *mcpsdk.ListToolsResult) (advertised *mcpsdk.ListToolsResult) {
+func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page *mcpsdk.ListToolsResult) (advertised *mcpsdk.ListToolsResult) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			m.report(ctx, fmt.Errorf("posthogmcpsdk: tools/list panic (%T)", recovered))
@@ -85,7 +86,7 @@ func (m *middleware) advertise(ctx context.Context, page *mcpsdk.ListToolsResult
 		}
 	}()
 	copied := *page
-	copied.Tools = m.tools.advertise(page.Tools)
+	copied.Tools = m.tools.advertise(gen, page.Tools)
 	return &copied
 }
 
@@ -98,12 +99,8 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 		}
 	}()
 
-	tool, known := m.tools.get(req.Params.Name)
-	if !known {
-		tool = m.tools.learn(ctx, next, req)
-	}
-	call.tool = tool
-	if _, sent := call.arguments[contextArgument]; sent && tool.contextInjected {
+	call.tool = m.tools.lookup(ctx, next, req)
+	if _, sent := call.arguments[contextArgument]; sent && call.tool.contextInjected {
 		arguments, err := json.Marshal(call.arguments.without(contextArgument))
 		if err != nil {
 			return call

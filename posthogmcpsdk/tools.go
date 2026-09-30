@@ -26,29 +26,54 @@ type toolInfo struct {
 	contextInjected bool
 }
 
+// maxListingPages bounds the tools/list pages one learning walk requests.
+const maxListingPages = 100
+
 // toolCatalog remembers every tool seen in a tools/list result. go-sdk has no
 // public tool registry, so listings are the only source of tool metadata.
 type toolCatalog struct {
 	injectContext bool
 
-	mu    sync.Mutex
+	mu      sync.Mutex
+	current *catalogGeneration
+}
+
+// catalogGeneration is what the catalog knows between two invalidations.
+type catalogGeneration struct {
 	tools map[string]toolInfo
+	// walked is nil until a learning walk starts, and closed when it ends.
+	// After that a name the walk did not find stays unknown until a tools/list
+	// result or an invalidation.
+	walked chan struct{}
 }
 
 func newToolCatalog(injectContext bool) *toolCatalog {
-	return &toolCatalog{injectContext: injectContext, tools: map[string]toolInfo{}}
+	return &toolCatalog{injectContext: injectContext, current: newCatalogGeneration()}
 }
 
-func (c *toolCatalog) get(name string) (toolInfo, bool) {
+func newCatalogGeneration() *catalogGeneration {
+	return &catalogGeneration{tools: map[string]toolInfo{}}
+}
+
+func (c *toolCatalog) generation() *catalogGeneration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	info, ok := c.tools[name]
-	return info, ok
+	return c.current
 }
 
-// advertise records tools and returns them as clients should see them. The
-// registered tools are never modified.
-func (c *toolCatalog) advertise(tools []*mcpsdk.Tool) []*mcpsdk.Tool {
+// advertise records a tools/list result and returns its tools as clients
+// should see them. The registered tools are never modified.
+func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []*mcpsdk.Tool {
+	advertised := c.record(gen, tools)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	gen.walked = nil
+	return advertised
+}
+
+// record remembers tools in gen unless gen has been invalidated, and returns
+// them as clients should see them.
+func (c *toolCatalog) record(gen *catalogGeneration, tools []*mcpsdk.Tool) []*mcpsdk.Tool {
 	advertised := make([]*mcpsdk.Tool, len(tools))
 	infos := make([]toolInfo, len(tools))
 	for i, tool := range tools {
@@ -68,32 +93,59 @@ func (c *toolCatalog) advertise(tools []*mcpsdk.Tool) []*mcpsdk.Tool {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for i, tool := range tools {
-		c.tools[tool.Name] = infos[i]
+	if gen == c.current {
+		for i, tool := range tools {
+			gen.tools[tool.Name] = infos[i]
+		}
 	}
 	return advertised
 }
 
-// learn lists tools through next until the called tool appears, for a call that
+// lookup returns what the catalog knows about the called tool. A call that
 // reaches this process before any tools/list did, as when a load balancer
-// sends a client's listing and its calls to different replicas.
-func (c *toolCatalog) learn(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) toolInfo {
-	if req.Session == nil {
-		return toolInfo{}
+// sends a client's listing and its calls to different replicas, lists tools
+// through next once per generation. Concurrent callers share that walk.
+func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) toolInfo {
+	name := req.Params.Name
+	c.mu.Lock()
+	gen := c.current
+	info, known := gen.tools[name]
+	walked := gen.walked
+	leads := !known && walked == nil && req.Session != nil
+	if leads {
+		walked = make(chan struct{})
+		gen.walked = walked
 	}
+	c.mu.Unlock()
+	if known || walked == nil {
+		return info
+	}
+
+	if leads {
+		defer close(walked)
+		c.walk(ctx, next, req, gen)
+	} else {
+		select {
+		case <-walked:
+		case <-ctx.Done():
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return gen.tools[name]
+}
+
+func (c *toolCatalog) walk(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest, gen *catalogGeneration) {
 	list := &mcpsdk.ListToolsRequest{Session: req.Session, Params: &mcpsdk.ListToolsParams{}, Extra: req.Extra}
-	for {
+	for range maxListingPages {
 		result, err := next(ctx, methodListTools, list)
 		page, ok := result.(*mcpsdk.ListToolsResult)
 		if err != nil || !ok {
-			return toolInfo{}
+			return
 		}
-		c.advertise(page.Tools)
-		if info, ok := c.get(req.Params.Name); ok {
-			return info
-		}
-		if page.NextCursor == "" || page.NextCursor == list.Params.Cursor {
-			return toolInfo{}
+		c.record(gen, page.Tools)
+		if page.NextCursor == "" {
+			return
 		}
 		list.Params = &mcpsdk.ListToolsParams{Cursor: page.NextCursor}
 	}

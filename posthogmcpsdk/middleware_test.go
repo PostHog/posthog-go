@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	posthog "github.com/posthog/posthog-go"
@@ -579,4 +582,128 @@ func jsonString(t *testing.T, value any) string {
 	encoded, err := json.Marshal(value)
 	require.NoError(t, err)
 	return string(encoded)
+}
+
+func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		toolCount        int
+		calls            []string
+		wantPages        int
+		wantDescriptions []any
+	}{
+		{
+			name:             "a tool on the last page",
+			toolCount:        5,
+			calls:            []string{"tool-005"},
+			wantPages:        5,
+			wantDescriptions: []any{"Tool 5"},
+		},
+		{
+			name:             "tools on the first and last pages",
+			toolCount:        5,
+			calls:            []string{"tool-001", "tool-005"},
+			wantPages:        5,
+			wantDescriptions: []any{"Tool 1", "Tool 5"},
+		},
+		{
+			name:             "repeated unknown names",
+			toolCount:        5,
+			calls:            []string{"nope", "nope", "other"},
+			wantPages:        5,
+			wantDescriptions: []any{nil, nil, nil},
+		},
+		{
+			name:             "a tool beyond the page cap",
+			toolCount:        101,
+			calls:            []string{"tool-101"},
+			wantPages:        100,
+			wantDescriptions: []any{nil},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server, pages := newPagedServer(test.toolCount)
+			Instrument(server, posthogmcp.New(queue))
+			client := connectInMemory(t, server)
+
+			for _, name := range test.calls {
+				_, _ = client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: name, Arguments: map[string]any{}})
+			}
+
+			assert.Equal(t, test.wantPages, int(pages.Load()))
+			var descriptions []any
+			for _, capture := range queue.toolCalls(t) {
+				descriptions = append(descriptions, capture.Properties["$mcp_tool_description"])
+			}
+			assert.Equal(t, test.wantDescriptions, descriptions)
+		})
+	}
+}
+
+func TestInstrumentConcurrentUnknownCallsShareOneWalk(t *testing.T) {
+	const calls = 4
+	var entered sync.WaitGroup
+	entered.Add(calls)
+	allEntered := make(chan struct{})
+	go func() {
+		entered.Wait()
+		close(allEntered)
+	}()
+
+	server, pages := newPagedServer(5)
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			if method == methodListTools {
+				select {
+				case <-allEntered:
+				case <-time.After(5 * time.Second):
+				}
+			}
+			return next(ctx, method, req)
+		}
+	})
+	Instrument(server, posthogmcp.New(&fakeQueue{}))
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			if method == methodCallTool {
+				entered.Done()
+			}
+			return next(ctx, method, req)
+		}
+	})
+	client := connectInMemory(t, server)
+
+	var done sync.WaitGroup
+	for range calls {
+		done.Go(func() {
+			_, _ = client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "nope"})
+		})
+	}
+	done.Wait()
+
+	assert.Equal(t, 5, int(pages.Load()))
+}
+
+// newPagedServer returns a server listing one tool per page, named in listing
+// order from tool-001, and a count of the tools/list pages its handler serves.
+func newPagedServer(n int) (*mcpsdk.Server, *atomic.Int32) {
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test-server", Version: "1.0.0"}, &mcpsdk.ServerOptions{PageSize: 1})
+	for i := 1; i <= n; i++ {
+		server.AddTool(&mcpsdk.Tool{
+			Name:        fmt.Sprintf("tool-%03d", i),
+			Description: fmt.Sprintf("Tool %d", i),
+			InputSchema: map[string]any{"type": "object"},
+		}, echoHandler)
+	}
+	pages := &atomic.Int32{}
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			if method == methodListTools {
+				pages.Add(1)
+			}
+			return next(ctx, method, req)
+		}
+	})
+	return server, pages
 }
