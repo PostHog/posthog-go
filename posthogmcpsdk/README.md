@@ -73,3 +73,14 @@ The adapter requires go-sdk v1.6.1 or later and Go 1.25, the SDK's minimum. It
 is a separate Go module so that the core `posthog-go` module, which supports Go
 1.21, does not depend on the MCP SDK. Its `go.mod` replaces `posthog-go` with
 the repository root, so it builds against the local core without a workspace.
+
+Consumers ignore that `replace`, so they build against the `posthog-go`
+version this module's `go.mod` requires, and that version must contain
+`posthogmcp`. Release in this order:
+
+1. Release the `posthog-go` version that contains the `posthogmcp` changes
+   this module needs.
+2. Bump this module's `require github.com/posthog/posthog-go` to that version
+   and run `go mod tidy`.
+3. Tag this module as `posthogmcpsdk/vX.Y.Z`. Go resolves a nested module's
+   versions from tags prefixed with its directory.
