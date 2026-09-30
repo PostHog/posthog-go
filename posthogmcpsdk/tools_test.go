@@ -157,3 +157,53 @@ func TestCatalogForgetsMissesAfterTenSeconds(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogListingKeepsRememberedMisses(t *testing.T) {
+	catalog := newToolCatalog(true)
+	var lists atomic.Int32
+	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+		lists.Add(1)
+		return listing("known"), nil
+	}
+
+	for range 3 {
+		_, _ = catalog.lookup(t.Context(), next, callRequest("removed"))
+		catalog.advertise(catalog.generation(), listing("known").Tools)
+	}
+
+	assert.Equal(t, int32(1), lists.Load())
+}
+
+func TestCatalogWalkInvalidatedMidwayLearnsTheCurrentGeneration(t *testing.T) {
+	catalog := newToolCatalog(true)
+	var lists atomic.Int32
+	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+		if lists.Add(1) == 1 {
+			catalog.invalidate()
+		}
+		return listing("a"), nil
+	}
+
+	info, err := catalog.lookup(t.Context(), next, callRequest("a"))
+
+	assert.NoError(t, err)
+	assert.Equal(t, toolInfo{description: "about a", contextInjected: true}, info)
+}
+
+func TestCatalogCancelledWalkIsNotReportedAndStaysRetryable(t *testing.T) {
+	catalog := newToolCatalog(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancelling := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+		cancel()
+		return nil, context.Canceled
+	}
+	_, err := catalog.lookup(ctx, cancelling, callRequest("a"))
+	assert.NoError(t, err)
+
+	succeeding := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+		return listing("a"), nil
+	}
+	info, err := catalog.lookup(t.Context(), succeeding, callRequest("a"))
+	assert.NoError(t, err)
+	assert.Equal(t, "about a", info.description)
+}

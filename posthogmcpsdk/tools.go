@@ -54,9 +54,9 @@ type catalogGeneration struct {
 	tools map[string]toolInfo
 	// walking is non-nil while a learning walk runs, and closed when it ends.
 	walking chan struct{}
-	// walkedAt is when the last complete walk ended, zero if a tools/list
-	// result came after it. Until missTTL later, a name the catalog does not
-	// know is not registered.
+	// walkedAt is when the last complete walk ended. Until missTTL later, a
+	// name the catalog does not know is not registered: a later tools/list
+	// result can only add names, which are then known.
 	walkedAt time.Time
 }
 
@@ -108,7 +108,6 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 		for i, tool := range tools {
 			gen.tools[tool.Name] = infos[i]
 		}
-		gen.walkedAt = time.Time{}
 	}
 	return advertised
 }
@@ -121,6 +120,16 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 // error reports why a walk did not complete, which never reaches the
 // tools/call.
 func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
+	info, gen, err := c.lookupIn(ctx, next, req)
+	if err == nil && gen != c.generation() {
+		// The tools changed during the walk, so what it learned went to a
+		// generation nobody reads. Learn the current one instead.
+		info, _, err = c.lookupIn(ctx, next, req)
+	}
+	return info, err
+}
+
+func (c *toolCatalog) lookupIn(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, *catalogGeneration, error) {
 	name := req.Params.Name
 	c.mu.Lock()
 	gen := c.current
@@ -128,7 +137,7 @@ func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req
 	missRemembered := !gen.walkedAt.IsZero() && c.now().Sub(gen.walkedAt) < missTTL
 	if known || missRemembered || req.Session == nil {
 		c.mu.Unlock()
-		return info, nil
+		return info, gen, nil
 	}
 	walking := gen.walking
 	leads := walking == nil
@@ -149,7 +158,7 @@ func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return gen.tools[name], err
+	return gen.tools[name], gen, err
 }
 
 // walk lists every tool into gen and then ends the walk, waking its waiters.
@@ -176,6 +185,10 @@ func (c *toolCatalog) walk(
 	for range maxListingPages {
 		result, err := listThrough(ctx, next, list)
 		if err != nil {
+			if ctx.Err() != nil {
+				// The caller went away; the walk stays retryable and is not a fault.
+				return nil
+			}
 			return err
 		}
 		page, ok := result.(*mcpsdk.ListToolsResult)
