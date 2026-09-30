@@ -970,6 +970,12 @@ const (
 	IntentSourceContextParameter IntentSource = "context_parameter"
 	IntentSourceInferred IntentSource = "inferred"
 )
+type ModelSource string
+
+const (
+	ModelSourceClientMetadata ModelSource = "client_metadata"
+	ModelSourceSelfReported ModelSource = "self_reported"
+)
 type Option func(*config)
 
 func WithExceptionAutocapture(enabled bool) Option
@@ -989,6 +995,12 @@ type ToolCall struct {
 	ClientName      string
 	ClientVersion   string
 	ProtocolVersion string
+
+	ConversationID  string
+	ClientUserAgent string
+	VendorClient    string
+	LLMModel        string
+	LLMModelSource  ModelSource
 
 	Intent       string
 	IntentSource IntentSource

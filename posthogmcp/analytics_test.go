@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -568,4 +569,104 @@ func TestCaptureToolCallFallbackErrorMessageKeepsToolName(t *testing.T) {
 	client := &fakeEnqueueClient{}
 	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "Get_Organization_Memberships", IsError: true}))
 	assert.Equal(t, "Tool Get_Organization_Memberships returned an error", requireCapture(t, client.messages[0]).Properties[propertyErrorMessage])
+}
+
+func TestCaptureToolCallManualAPIFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		call          ToolCall
+		wantToolCall  map[string]any
+		wantException map[string]any
+	}{
+		{
+			name:          "conversation id lands on both events",
+			call:          ToolCall{ConversationID: "conv_1"},
+			wantToolCall:  map[string]any{"$mcp_conversation_id": "conv_1"},
+			wantException: map[string]any{"$mcp_conversation_id": "conv_1"},
+		},
+		{
+			name:         "model defaults to self reported and is trimmed",
+			call:         ToolCall{LLMModel: "  claude-opus-4  "},
+			wantToolCall: map[string]any{"$mcp_llm_model": "claude-opus-4", "$mcp_llm_model_source": "self_reported"},
+		},
+		{
+			name: "model keeps an explicit source",
+			call: ToolCall{LLMModel: "gpt-5", LLMModelSource: ModelSourceClientMetadata},
+			wantToolCall: map[string]any{
+				"$mcp_llm_model":        "gpt-5",
+				"$mcp_llm_model_source": "client_metadata",
+			},
+		},
+		{name: "empty model is not recorded", call: ToolCall{LLMModel: "", LLMModelSource: ModelSourceClientMetadata}},
+		{name: "blank model is not recorded", call: ToolCall{LLMModel: "   "}},
+		{name: "unknown model is not recorded", call: ToolCall{LLMModel: " Unknown "}},
+		{
+			name:         "user agent and vendor client",
+			call:         ToolCall{ClientUserAgent: "claude-code/2.1", VendorClient: "anthropic"},
+			wantToolCall: map[string]any{"$mcp_client_user_agent": "claude-code/2.1", "$mcp_vendor_client": "anthropic"},
+		},
+		{
+			name: "values are bounded to the metadata limit",
+			call: ToolCall{
+				ConversationID:  strings.Repeat("c", 300),
+				LLMModel:        strings.Repeat("m", 300),
+				ClientUserAgent: strings.Repeat("u", 300),
+				VendorClient:    strings.Repeat("v", 300),
+			},
+			wantToolCall: map[string]any{
+				"$mcp_conversation_id":   strings.Repeat("c", 253) + "...",
+				"$mcp_llm_model":         strings.Repeat("m", 253) + "...",
+				"$mcp_llm_model_source":  "self_reported",
+				"$mcp_client_user_agent": strings.Repeat("u", 253) + "...",
+				"$mcp_vendor_client":     strings.Repeat("v", 253) + "...",
+			},
+			wantException: map[string]any{"$mcp_conversation_id": strings.Repeat("c", 253) + "..."},
+		},
+		{
+			name: "custom properties cannot set the reserved keys",
+			call: ToolCall{Properties: posthog.Properties{
+				"$mcp_conversation_id":   "wrong",
+				"$mcp_llm_model":         "wrong",
+				"$mcp_llm_model_source":  "wrong",
+				"$mcp_client_user_agent": "wrong",
+				"$mcp_vendor_client":     "wrong",
+			}},
+		},
+	}
+	keys := []string{
+		"$mcp_conversation_id", "$mcp_llm_model", "$mcp_llm_model_source",
+		"$mcp_client_user_agent", "$mcp_vendor_client",
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			tt.call.Error = errors.New("boom")
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), tt.call))
+			require.Len(t, client.messages, 2)
+
+			for _, event := range []struct {
+				properties posthog.Properties
+				want       map[string]any
+			}{
+				{requireCapture(t, client.messages[0]).Properties, tt.wantToolCall},
+				{requireException(t, client.messages[1]).Properties, tt.wantException},
+			} {
+				for _, key := range keys {
+					if value, ok := event.want[key]; ok {
+						assert.Equal(t, value, event.properties[key], key)
+					} else {
+						assert.NotContains(t, event.properties, key)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCaptureToolCallRejectsInvalidLLMModelSource(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	err := New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", LLMModelSource: "guess"})
+	require.EqualError(t, err, "posthogmcp: invalid LLMModelSource")
+	assert.Empty(t, client.messages)
 }

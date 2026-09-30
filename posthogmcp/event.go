@@ -16,6 +16,8 @@ type preparedToolCall struct {
 	toolName              string
 	intent                string
 	intentSource          IntentSource
+	model                 string
+	modelSource           ModelSource
 	errorType             string
 	errorMessage          string
 	suppressPersonProfile bool
@@ -60,6 +62,11 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		call.IntentSource != IntentSourceInferred {
 		return preparedToolCall{}, errors.New("posthogmcp: invalid IntentSource")
 	}
+	if call.LLMModelSource != "" &&
+		call.LLMModelSource != ModelSourceClientMetadata &&
+		call.LLMModelSource != ModelSourceSelfReported {
+		return preparedToolCall{}, errors.New("posthogmcp: invalid LLMModelSource")
+	}
 
 	call.IsError = call.IsError || call.Error != nil
 	explicitID := call.DistinctID != ""
@@ -84,6 +91,14 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		prepared.intentSource = call.IntentSource
 		if prepared.intentSource == "" {
 			prepared.intentSource = IntentSourceContextParameter
+		}
+	}
+
+	prepared.model = normalizeModel(call.LLMModel)
+	if prepared.model != "" {
+		prepared.modelSource = call.LLMModelSource
+		if prepared.modelSource == "" {
+			prepared.modelSource = ModelSourceSelfReported
 		}
 	}
 
@@ -140,6 +155,14 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 
 	return prepared, nil
+}
+
+func normalizeModel(model string) string {
+	model = strings.TrimSpace(model)
+	if strings.EqualFold(model, "unknown") {
+		return ""
+	}
+	return truncateUTF8(model, maxMetadataBytes)
 }
 
 func prepareValue(field string, value any, response bool) (any, error) {
@@ -221,6 +244,13 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 	setStringProperty(properties, propertyToolDescription, truncateUTF8(p.call.ToolDescription, maxStringBytes))
 	setStringProperty(properties, propertyToolCategory, truncateUTF8(p.call.ToolCategory, maxMetadataBytes))
 	setStringProperty(properties, propertySessionID, p.call.SessionID)
+	setStringProperty(properties, propertyConversationID, truncateUTF8(p.call.ConversationID, maxMetadataBytes))
+	setStringProperty(properties, propertyClientUserAgent, truncateUTF8(p.call.ClientUserAgent, maxMetadataBytes))
+	setStringProperty(properties, propertyVendorClient, truncateUTF8(p.call.VendorClient, maxMetadataBytes))
+	setStringProperty(properties, propertyLLMModel, p.model)
+	if p.model != "" {
+		properties[propertyLLMModelSource] = string(p.modelSource)
+	}
 	setStringProperty(properties, propertyServerName, truncateUTF8(p.call.ServerName, maxMetadataBytes))
 	setStringProperty(properties, propertyServerVersion, truncateUTF8(p.call.ServerVersion, maxMetadataBytes))
 	setStringProperty(properties, propertyClientName, truncateUTF8(p.call.ClientName, maxMetadataBytes))

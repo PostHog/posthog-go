@@ -17,6 +17,17 @@ const (
 	IntentSourceInferred IntentSource = "inferred"
 )
 
+// ModelSource identifies how an MCP tool-call LLM model name was obtained.
+type ModelSource string
+
+const (
+	// ModelSourceClientMetadata means the MCP client's own metadata named the
+	// model.
+	ModelSourceClientMetadata ModelSource = "client_metadata"
+	// ModelSourceSelfReported means the calling agent reported the model.
+	ModelSourceSelfReported ModelSource = "self_reported"
+)
+
 // ToolCall describes one completed MCP tool invocation.
 type ToolCall struct {
 	ToolName        string
@@ -33,6 +44,12 @@ type ToolCall struct {
 	ClientName      string
 	ClientVersion   string
 	ProtocolVersion string
+
+	ConversationID  string
+	ClientUserAgent string
+	VendorClient    string
+	LLMModel        string
+	LLMModelSource  ModelSource
 
 	// Intent is the agent's stated reason for the call. When it arrives as a
 	// tool argument, remove that argument from Parameters: Parameters only has
