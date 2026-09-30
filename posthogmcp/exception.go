@@ -77,7 +77,7 @@ func (p preparedToolCall) buildException() (posthog.Exception, error) {
 		},
 	}
 
-	base := posthog.NewProperties()
+	base := posthog.NewProperties().Set(propertyExceptionLevel, "error")
 	setStringProperty(base, propertySessionID, p.call.SessionID)
 	setStringProperty(base, propertyConversationID, truncateUTF8(p.call.ConversationID, maxMetadataBytes))
 	setStringProperty(base, propertyResourceName, p.toolName)

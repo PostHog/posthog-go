@@ -27,6 +27,7 @@ const (
 	propertyClientVersion   = "$mcp_client_version"
 	propertyProtocolVersion = "$mcp_protocol_version"
 	propertySessionID       = "$session_id"
+	propertyExceptionLevel  = "$exception_level"
 	propertyGroups          = "$groups"
 	propertySet             = "$set"
 	propertyProcessProfile  = "$process_person_profile"

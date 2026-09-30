@@ -670,3 +670,26 @@ func TestCaptureToolCallRejectsInvalidLLMModelSource(t *testing.T) {
 	require.EqualError(t, err, "posthogmcp: invalid LLMModelSource")
 	assert.Empty(t, client.messages)
 }
+
+func TestCaptureToolCallExceptionLevel(t *testing.T) {
+	tests := []struct {
+		name      string
+		message   int
+		wantLevel any
+	}{
+		{name: "exception event is an error", message: 1, wantLevel: "error"},
+		{name: "tool call event has no level", message: 0, wantLevel: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+				ToolName: "query",
+				Error:    errors.New("boom"),
+			}))
+			require.Len(t, client.messages, 2)
+
+			assertSerializedProperty(t, client.messages[tt.message], "$exception_level", tt.wantLevel)
+		})
+	}
+}
