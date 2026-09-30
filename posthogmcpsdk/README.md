@@ -24,12 +24,26 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   redacted. Turn either off with `WithCaptureParameters(false)` or
   `WithCaptureResponses(false)`. The error text of a failed call is captured
   either way.
-- The MCP session ID, client name and version, and protocol version.
+- The session as `$session_id`, always set. A transport session ID (streamable
+  HTTP) becomes `ses_` plus a hash every PostHog MCP SDK computes the same way,
+  so one session served from several languages groups together. Without one
+  (stdio, in-memory, stateless HTTP), the adapter generates `ses_<UUIDv7>` per
+  go-sdk session and starts a new one after 30 minutes without a tool call
+  in that session.
+- The client name and version, and the protocol version.
 - The tool's description and `_meta.category`, read from `tools/list`.
 - The agent's intent, from the `context` argument described below.
 
 Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
 `WithProperties` to add event properties.
+
+## Not yet
+
+Conversation anchoring, the optional `conversation_id` argument that keeps a
+stateless client's calls in one session, is not implemented. The other SDKs
+have it. Until it lands, each request to a stateless HTTP server is its own
+go-sdk session and so gets its own `$session_id`, which fragments a
+conversation across sessions.
 
 ## The context argument
 

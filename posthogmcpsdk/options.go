@@ -2,6 +2,7 @@ package posthogmcpsdk
 
 import (
 	"context"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	posthog "github.com/posthog/posthog-go"
@@ -44,6 +45,7 @@ type config struct {
 	contextParameter  bool
 	serverName        string
 	serverVersion     string
+	now               func() time.Time
 }
 
 func defaultConfig(analytics *posthogmcp.Analytics) *config {
@@ -52,6 +54,7 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 		captureParameters: true,
 		captureResponses:  true,
 		contextParameter:  true,
+		now:               time.Now,
 	}
 }
 

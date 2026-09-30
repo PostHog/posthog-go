@@ -65,13 +65,14 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 			opt(cfg)
 		}
 	}
-	m := &middleware{config: cfg, tools: newToolCatalog(cfg.contextParameter)}
+	m := &middleware{config: cfg, tools: newToolCatalog(cfg.contextParameter), sessions: newSessionResolver(cfg.now)}
 	return Middleware{Receiving: m.receive, Sending: m.send}
 }
 
 type middleware struct {
 	*config
-	tools *toolCatalog
+	tools    *toolCatalog
+	sessions *sessionResolver
 }
 
 func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
@@ -218,7 +219,6 @@ func (m *middleware) observe(
 	}
 
 	if session := toolRequest.Session; session != nil {
-		call.SessionID = session.ID()
 		if initialize := session.InitializeParams(); initialize != nil {
 			call.ProtocolVersion = initialize.ProtocolVersion
 			if initialize.ClientInfo != nil {
@@ -227,6 +227,8 @@ func (m *middleware) observe(
 			}
 		}
 	}
+
+	call.SessionID = m.sessions.resolve(toolRequest.Session)
 
 	// TODO: once ToolCall has the conversation, model, and transport fields,
 	// set LLMModel from toolRequest.Params.Meta["x-codex-turn-metadata"]["model"]

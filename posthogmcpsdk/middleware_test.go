@@ -134,6 +134,8 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	properties := capture.Properties
 	assert.IsType(t, float64(0), properties["$mcp_duration_ms"])
 	delete(properties, "$mcp_duration_ms")
+	assert.Regexp(t, generatedSessionID, properties["$session_id"])
+	delete(properties, "$session_id")
 	assert.JSONEq(t, `{
 		"$groups": {"company": "acme"},
 		"$mcp_client_name": "test-client",
@@ -572,7 +574,7 @@ func TestStreamableHTTPMapsSessionID(t *testing.T) {
 		Arguments: map[string]any{"city": "Melbourne"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "session-123", queue.onlyToolCall(t)["$session_id"])
+	assert.Equal(t, "ses_346bdc9a6b5cb06913bb476a65021eb5", queue.onlyToolCall(t)["$session_id"])
 }
 
 func newServer() *mcpsdk.Server {
