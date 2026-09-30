@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -30,10 +31,19 @@ type toolInfo struct {
 // maxListingPages bounds the tools/list pages one learning walk requests.
 const maxListingPages = 100
 
+// missTTL is how long a completed walk vouches that a name it did not find is
+// not registered. go-sdk sends no list_changed without a connected session,
+// so on a stateless server this is what lets a tool added at runtime become
+// known. Ten seconds keeps steady calls for unregistered names to one walk,
+// which runs in process, per ten seconds, and has a tool added at runtime
+// recognized within ten seconds.
+const missTTL = 10 * time.Second
+
 // toolCatalog remembers every tool seen in a tools/list result. go-sdk has no
 // public tool registry, so listings are the only source of tool metadata.
 type toolCatalog struct {
 	injectContext bool
+	now           func() time.Time
 
 	mu      sync.Mutex
 	current *catalogGeneration
@@ -44,13 +54,14 @@ type catalogGeneration struct {
 	tools map[string]toolInfo
 	// walking is non-nil while a learning walk runs, and closed when it ends.
 	walking chan struct{}
-	// walked means a walk ended after the last tools/list result, so a name
-	// the catalog does not know is not registered.
-	walked bool
+	// walkedAt is when the last complete walk ended, zero if a tools/list
+	// result came after it. Until missTTL later, a name the catalog does not
+	// know is not registered.
+	walkedAt time.Time
 }
 
 func newToolCatalog(injectContext bool) *toolCatalog {
-	return &toolCatalog{injectContext: injectContext, current: newCatalogGeneration()}
+	return &toolCatalog{injectContext: injectContext, now: time.Now, current: newCatalogGeneration()}
 }
 
 func newCatalogGeneration() *catalogGeneration {
@@ -97,7 +108,7 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 		for i, tool := range tools {
 			gen.tools[tool.Name] = infos[i]
 		}
-		gen.walked = false
+		gen.walkedAt = time.Time{}
 	}
 	return advertised
 }
@@ -106,14 +117,16 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 // reaches this process before any tools/list did, as when a load balancer
 // sends a client's listing and its calls to different replicas, lists tools
 // through next. Concurrent callers share that walk, and once one completes
-// the generation remembers which names are not registered. The error reports
-// why a walk did not complete, which never reaches the tools/call.
+// the generation remembers for missTTL which names are not registered. The
+// error reports why a walk did not complete, which never reaches the
+// tools/call.
 func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
 	name := req.Params.Name
 	c.mu.Lock()
 	gen := c.current
 	info, known := gen.tools[name]
-	if known || gen.walked || req.Session == nil {
+	missRemembered := !gen.walkedAt.IsZero() && c.now().Sub(gen.walkedAt) < missTTL
+	if known || missRemembered || req.Session == nil {
 		c.mu.Unlock()
 		return info, nil
 	}
@@ -154,7 +167,7 @@ func (c *toolCatalog) walk(
 		c.mu.Lock()
 		gen.walking = nil
 		if complete {
-			gen.walked = true
+			gen.walkedAt = c.now()
 		}
 		c.mu.Unlock()
 		close(walking)

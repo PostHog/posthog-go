@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -122,4 +123,37 @@ func TestCatalogPropagatesItsOwnPanicAndStaysRetryable(t *testing.T) {
 	info, err := catalog.lookup(t.Context(), next, callRequest("tool"))
 	assert.Equal(t, toolInfo{contextInjected: true}, info)
 	assert.NoError(t, err)
+}
+
+func TestCatalogForgetsMissesAfterTenSeconds(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		elapsed   time.Duration
+		wantLists int32
+		wantInfo  toolInfo
+	}{
+		{name: "just before", elapsed: 10*time.Second - time.Nanosecond, wantLists: 1, wantInfo: toolInfo{}},
+		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 2, wantInfo: toolInfo{description: "about added", contextInjected: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := newToolCatalog(true)
+			now := time.Unix(1_700_000_000, 0)
+			catalog.now = func() time.Time { return now }
+			registered := listing()
+			var lists atomic.Int32
+			next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+				lists.Add(1)
+				return registered, nil
+			}
+			_, _ = catalog.lookup(t.Context(), next, callRequest("added"))
+
+			registered = listing("added")
+			now = now.Add(test.elapsed)
+			info, err := catalog.lookup(t.Context(), next, callRequest("added"))
+
+			assert.NoError(t, err)
+			assert.Equal(t, test.wantInfo, info)
+			assert.Equal(t, test.wantLists, lists.Load())
+		})
+	}
 }

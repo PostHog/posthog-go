@@ -52,7 +52,9 @@ again with a different schema is handled by the new one. go-sdk sends that
 notification about 10ms after the change, so calls in that window still use
 the old schema. It notifies only connected sessions, so a tool replaced while
 no session is connected keeps its old schema until a `tools/list` result
-includes it.
+includes it. A tool added while no session is connected, as on a stateless
+server, is recognized within ten seconds, when the middleware lists tools
+again.
 
 ## Middleware order
 
