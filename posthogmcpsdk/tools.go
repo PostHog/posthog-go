@@ -105,8 +105,9 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 // lookup returns what the catalog knows about the called tool. A call that
 // reaches this process before any tools/list did, as when a load balancer
 // sends a client's listing and its calls to different replicas, lists tools
-// through next once per generation. Concurrent callers share that walk. The
-// error reports a panic in next, which never reaches the tools/call.
+// through next. Concurrent callers share that walk, and once one completes
+// the generation remembers which names are not registered. The error reports
+// why a walk did not complete, which never reaches the tools/call.
 func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
 	name := req.Params.Name
 	c.mu.Lock()
@@ -126,14 +127,7 @@ func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req
 
 	var err error
 	if leads {
-		defer func() {
-			c.mu.Lock()
-			gen.walking = nil
-			gen.walked = true
-			c.mu.Unlock()
-			close(walking)
-		}()
-		err = c.walk(ctx, next, req, gen)
+		err = c.walk(ctx, next, req, gen, walking)
 	} else {
 		select {
 		case <-walking:
@@ -145,31 +139,57 @@ func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req
 	return gen.tools[name], err
 }
 
+// walk lists every tool into gen and then ends the walk, waking its waiters.
+// Only a walk that reaches the last page lets gen remember misses; otherwise
+// the next lookup walks again.
 func (c *toolCatalog) walk(
 	ctx context.Context,
 	next mcpsdk.MethodHandler,
 	req *mcpsdk.CallToolRequest,
 	gen *catalogGeneration,
-) (err error) {
+	walking chan struct{},
+) error {
+	complete := false
+	defer func() {
+		c.mu.Lock()
+		gen.walking = nil
+		if complete {
+			gen.walked = true
+		}
+		c.mu.Unlock()
+		close(walking)
+	}()
+	list := &mcpsdk.ListToolsRequest{Session: req.Session, Params: &mcpsdk.ListToolsParams{}, Extra: req.Extra}
+	for range maxListingPages {
+		result, err := listThrough(ctx, next, list)
+		if err != nil {
+			return err
+		}
+		page, ok := result.(*mcpsdk.ListToolsResult)
+		if !ok {
+			return fmt.Errorf("posthogmcpsdk: tools/list through inner handler returned %T", result)
+		}
+		c.advertise(gen, page.Tools)
+		if page.NextCursor == "" {
+			complete = true
+			return nil
+		}
+		list.Params = &mcpsdk.ListToolsParams{Cursor: page.NextCursor}
+	}
+	return fmt.Errorf("posthogmcpsdk: tools/list through inner handler has more than %d pages", maxListingPages)
+}
+
+func listThrough(ctx context.Context, next mcpsdk.MethodHandler, list *mcpsdk.ListToolsRequest) (result mcpsdk.Result, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("posthogmcpsdk: tools/list through inner handler panicked (%T)", recovered)
 		}
 	}()
-	list := &mcpsdk.ListToolsRequest{Session: req.Session, Params: &mcpsdk.ListToolsParams{}, Extra: req.Extra}
-	for range maxListingPages {
-		result, err := next(ctx, methodListTools, list)
-		page, ok := result.(*mcpsdk.ListToolsResult)
-		if err != nil || !ok {
-			return nil
-		}
-		c.advertise(gen, page.Tools)
-		if page.NextCursor == "" {
-			return nil
-		}
-		list.Params = &mcpsdk.ListToolsParams{Cursor: page.NextCursor}
+	result, err = next(ctx, methodListTools, list)
+	if err != nil {
+		return nil, fmt.Errorf("posthogmcpsdk: tools/list through inner handler: %w", err)
 	}
-	return nil
+	return result, nil
 }
 
 // withContextParameter returns a copy of inputSchema that declares a required

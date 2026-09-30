@@ -667,6 +667,38 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 	}
 }
 
+func TestInstrumentRecoversFromATransientListingFailure(t *testing.T) {
+	queue := &fakeQueue{}
+	server, pages := newPagedServer(3)
+	var failOnce atomic.Bool
+	failOnce.Store(true)
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			if method == methodListTools && failOnce.Swap(false) {
+				return nil, errors.New("transient")
+			}
+			return next(ctx, method, req)
+		}
+	})
+	var reported []string
+	Instrument(server, posthogmcp.New(queue), WithErrorHandler(func(_ context.Context, err error) {
+		reported = append(reported, err.Error())
+	}))
+	client := connectInMemory(t, server)
+
+	for range 3 {
+		_, _ = client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "tool-003", Arguments: map[string]any{}})
+	}
+
+	assert.Equal(t, 3, int(pages.Load()))
+	var descriptions []any
+	for _, capture := range queue.toolCalls(t) {
+		descriptions = append(descriptions, capture.Properties["$mcp_tool_description"])
+	}
+	assert.Equal(t, []any{nil, "Tool 3", "Tool 3"}, descriptions)
+	assert.Equal(t, []string{"posthogmcpsdk: tools/list through inner handler: transient"}, reported)
+}
+
 func TestInstrumentConcurrentUnknownCallsShareOneWalk(t *testing.T) {
 	const calls = 4
 	var entered sync.WaitGroup
