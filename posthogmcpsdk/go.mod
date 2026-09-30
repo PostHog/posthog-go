@@ -1,4 +1,4 @@
-module github.com/posthog/posthog-go/contrib/modelcontextprotocol/go-sdk
+module github.com/posthog/posthog-go/posthogmcpsdk
 
 go 1.25.0
 
