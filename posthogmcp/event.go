@@ -138,7 +138,10 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	if call.IsError {
 		prepared.errorType = strings.TrimSpace(call.ErrorType)
 		if prepared.errorType == "" {
-			prepared.errorType = "Error"
+			prepared.errorType = errorTypeName(call.Error)
+		}
+		if prepared.errorType == "" {
+			prepared.errorType = defaultErrorType
 		}
 		prepared.errorType = truncateUTF8(prepared.errorType, maxMetadataBytes)
 

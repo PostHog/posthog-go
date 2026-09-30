@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -690,6 +693,52 @@ func TestCaptureToolCallExceptionLevel(t *testing.T) {
 			require.Len(t, client.messages, 2)
 
 			assertSerializedProperty(t, client.messages[tt.message], "$exception_level", tt.wantLevel)
+		})
+	}
+}
+
+type domainError struct{}
+
+func (*domainError) Error() string { return "domain failure" }
+
+type valueError struct{}
+
+func (valueError) Error() string { return "value failure" }
+
+func TestCaptureToolCallErrorTypeDefaultsToErrorClass(t *testing.T) {
+	pathErr := &fs.PathError{Op: "open", Path: "/x", Err: errors.New("denied")}
+	opErr := &net.OpError{Op: "dial", Err: errors.New("refused")}
+	tests := []struct {
+		name      string
+		err       error
+		errorType string
+		want      string
+	}{
+		{name: "plain error has no informative type", err: errors.New("boom"), want: "Error"},
+		{name: "wrapped plain error has no informative type", err: fmt.Errorf("ctx: %w", errors.New("boom")), want: "Error"},
+		{name: "unwrapped formatted error", err: fmt.Errorf("ctx: %v", pathErr), want: "Error"},
+		{name: "pointer type drops the star", err: pathErr, want: "fs.PathError"},
+		{name: "single wrapper is skipped", err: fmt.Errorf("ctx: %w", pathErr), want: "fs.PathError"},
+		{name: "stacked wrappers are skipped", err: fmt.Errorf("a: %w", fmt.Errorf("b: %w", opErr)), want: "net.OpError"},
+		{name: "multi-wrap takes the first informative", err: fmt.Errorf("%w and %w", errors.New("x"), opErr), want: "net.OpError"},
+		{name: "join takes the first informative", err: errors.Join(errors.New("x"), pathErr, opErr), want: "fs.PathError"},
+		{name: "joined plain errors have no informative type", err: errors.Join(errors.New("x"), errors.New("y")), want: "Error"},
+		{name: "custom pointer type", err: &domainError{}, want: "posthogmcp.domainError"},
+		{name: "custom value type", err: valueError{}, want: "posthogmcp.valueError"},
+		{name: "explicit type wins", err: pathErr, errorType: "validation", want: "validation"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+				ToolName:  "query",
+				Error:     tt.err,
+				ErrorType: tt.errorType,
+			}))
+			require.Len(t, client.messages, 2)
+
+			assert.Equal(t, tt.want, requireCapture(t, client.messages[0]).Properties[propertyErrorType])
+			assert.Equal(t, tt.want, requireException(t, client.messages[1]).ExceptionList[0].Type)
 		})
 	}
 }
