@@ -84,5 +84,6 @@ version this module's `go.mod` requires, and that version must contain
    this module needs.
 2. Bump this module's `require github.com/posthog/posthog-go` to that version
    and run `go mod tidy`.
-3. Tag this module as `posthogmcpsdk/vX.Y.Z`. Go resolves a nested module's
-   versions from tags prefixed with its directory.
+3. The release workflow tags this module as `posthogmcpsdk/vX.Y.Z` at the
+   same version as `posthog-go`, alongside `otel/vX.Y.Z`. Go resolves a nested
+   module's versions from tags prefixed with its directory.
