@@ -61,12 +61,12 @@ again.
 `Instrument` adds receiving middleware, and sending middleware that watches for
 `notifications/tools/list_changed`. Receiving middleware added before it runs
 inside the measured duration; middleware added after it runs outside. To place
-the middleware yourself, install both halves that `NewMiddleware` returns:
+the middleware yourself, install both halves of what `NewMiddleware` returns:
 
 ```go
-receiving, sending := posthogmcpsdk.NewMiddleware(analytics)
-server.AddReceivingMiddleware(receiving)
-server.AddSendingMiddleware(sending)
+middleware := posthogmcpsdk.NewMiddleware(analytics)
+server.AddReceivingMiddleware(middleware.Receiving)
+server.AddSendingMiddleware(middleware.Sending)
 ```
 
 ## Compatibility and development

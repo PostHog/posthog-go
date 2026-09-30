@@ -490,8 +490,7 @@ func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
 
 func TestMiddlewarePreservesDownstreamPanic(t *testing.T) {
 	want := &struct{}{}
-	receiving, _ := NewMiddleware(posthogmcp.New(&fakeQueue{}))
-	handler := receiving(func(
+	handler := NewMiddleware(posthogmcp.New(&fakeQueue{})).Receiving(func(
 		context.Context,
 		string,
 		mcpsdk.Request,

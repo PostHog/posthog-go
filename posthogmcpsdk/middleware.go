@@ -19,36 +19,41 @@ const (
 )
 
 // Instrument adds PostHog tool-call analytics to server receiving middleware,
-// and the sending middleware described in [NewMiddleware]. Install other
+// and the sending middleware described in [Middleware]. Install other
 // receiving middleware before or after Instrument according to whether its
 // work should be included in the measured duration. It panics if analytics is
 // nil.
 func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...Option) {
-	receiving, sending := NewMiddleware(analytics, opts...)
-	server.AddReceivingMiddleware(receiving)
-	server.AddSendingMiddleware(sending)
+	m := NewMiddleware(analytics, opts...)
+	server.AddReceivingMiddleware(m.Receiving)
+	server.AddSendingMiddleware(m.Sending)
 }
 
-// NewMiddleware returns the middleware [Instrument] installs, for servers that
-// order their middleware by hand. Install receiving with
-// Server.AddReceivingMiddleware and sending with Server.AddSendingMiddleware.
+// Middleware is what [Instrument] installs, for servers that order their
+// middleware by hand. Install Receiving with Server.AddReceivingMiddleware and
+// Sending with Server.AddSendingMiddleware.
 //
-// receiving records terminal tools/call requests without changing their
+// Receiving records terminal tools/call requests without changing their
 // result, error, or panic behavior. Unless WithContextParameter(false) is set,
 // it also adds the context argument to tools/list results and removes it from
 // tools/call arguments, according to what it learned about each tool from
 // tools/list.
 //
-// sending forgets what receiving learned whenever the server sends
+// Sending forgets what Receiving learned whenever the server sends
 // notifications/tools/list_changed, so a tool registered again with a new
 // schema is handled by that schema. Without it, the old one still decides
 // whether context is removed. go-sdk sends the notification a few
 // milliseconds after a change, and only to connected sessions when the tools
 // capability allows it. A tool replaced while no session is connected keeps
 // its old entry until a tools/list result includes it again.
-//
-// NewMiddleware panics if analytics is nil.
-func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) (receiving, sending mcpsdk.Middleware) {
+type Middleware struct {
+	Receiving mcpsdk.Middleware
+	Sending   mcpsdk.Middleware
+}
+
+// NewMiddleware returns the [Middleware] [Instrument] installs. It panics if
+// analytics is nil.
+func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 	if analytics == nil {
 		panic("posthogmcpsdk: analytics must not be nil")
 	}
@@ -59,7 +64,7 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) (receiving, 
 		}
 	}
 	m := &middleware{config: cfg, tools: newToolCatalog(cfg.contextParameter)}
-	return m.receive, m.send
+	return Middleware{Receiving: m.receive, Sending: m.send}
 }
 
 type middleware struct {
