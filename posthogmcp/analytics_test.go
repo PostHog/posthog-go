@@ -583,10 +583,10 @@ func TestCaptureToolCallManualAPIFields(t *testing.T) {
 		wantException map[string]any
 	}{
 		{
-			name:          "conversation id lands on both events",
-			call:          ToolCall{ConversationID: "conv_1"},
-			wantToolCall:  map[string]any{"$mcp_conversation_id": "conv_1"},
-			wantException: map[string]any{"$mcp_conversation_id": "conv_1"},
+			name:          "conversation id lands on both events lowercased",
+			call:          ToolCall{ConversationID: "0190F0E8-7A6B-7C3D-9E4F-5A6B7C8D9E0F"},
+			wantToolCall:  map[string]any{"$mcp_conversation_id": "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"},
+			wantException: map[string]any{"$mcp_conversation_id": "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"},
 		},
 		{
 			name:         "model defaults to self reported and is trimmed",
@@ -629,10 +629,15 @@ func TestCaptureToolCallManualAPIFields(t *testing.T) {
 			},
 		},
 		{
-			name:          "conversation id is a join key and is never truncated",
-			call:          ToolCall{ConversationID: strings.Repeat("c", 300)},
-			wantToolCall:  map[string]any{"$mcp_conversation_id": strings.Repeat("c", 300)},
-			wantException: map[string]any{"$mcp_conversation_id": strings.Repeat("c", 300)},
+			name: "user agent and vendor client have credentials redacted",
+			call: ToolCall{
+				ClientUserAgent: "claude-code/2.1 (token phc_abcdefghijklmnopqrstuvwxyz)",
+				VendorClient:    "https://user:hunter2@vendor.test/",
+			},
+			wantToolCall: map[string]any{
+				"$mcp_client_user_agent": "claude-code/2.1 (token [redacted])",
+				"$mcp_vendor_client":     "https://%5Bredacted%5D@vendor.test/",
+			},
 		},
 		{
 			name: "custom properties cannot set the reserved keys",
@@ -676,6 +681,110 @@ func TestCaptureToolCallManualAPIFields(t *testing.T) {
 	}
 }
 
+func TestCaptureToolCallConversationIdentity(t *testing.T) {
+	const handle = "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"
+	const derived = "ses_6df45f0102a182bcd5e8dd5dad6c65a0"
+	tests := []struct {
+		name               string
+		call               ToolCall
+		wantConversationID any
+		wantSessionID      any
+		wantDistinctID     string
+	}{
+		{
+			name:               "handle derives the session",
+			call:               ToolCall{ConversationID: handle},
+			wantConversationID: handle,
+			wantSessionID:      derived,
+			wantDistinctID:     derived,
+		},
+		{
+			name:               "uppercase handle derives the same session",
+			call:               ToolCall{ConversationID: "0190F0E8-7A6B-7C3D-9E4F-5A6B7C8D9E0F"},
+			wantConversationID: handle,
+			wantSessionID:      derived,
+			wantDistinctID:     derived,
+		},
+		{
+			name:               "explicit session wins over the handle",
+			call:               ToolCall{ConversationID: handle, SessionID: "session_1"},
+			wantConversationID: handle,
+			wantSessionID:      "session_1",
+			wantDistinctID:     "session_1",
+		},
+		{
+			name:               "explicit distinct id still leads",
+			call:               ToolCall{ConversationID: handle, DistinctID: "user_1"},
+			wantConversationID: handle,
+			wantSessionID:      derived,
+			wantDistinctID:     "user_1",
+		},
+		{
+			name:           "non-uuid is dropped",
+			call:           ToolCall{ConversationID: "conv_1"},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "uuid of another version is dropped",
+			call:           ToolCall{ConversationID: "0190f0e8-7a6b-4c3d-9e4f-5a6b7c8d9e0f"},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "uuidv7 with a trailing suffix is dropped",
+			call:           ToolCall{ConversationID: handle + "x"},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "oversized id is dropped and the event still ships",
+			call:           ToolCall{ConversationID: strings.Repeat("c", 200_000)},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "invalid id keeps the explicit session",
+			call:           ToolCall{ConversationID: "conv_1", SessionID: "session_1"},
+			wantSessionID:  "session_1",
+			wantDistinctID: "session_1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			tt.call.Error = errors.New("boom")
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), tt.call))
+			require.Len(t, client.messages, 2)
+
+			capture := requireCapture(t, client.messages[0])
+			exception := requireException(t, client.messages[1])
+			assert.Equal(t, tt.wantDistinctID, capture.DistinctId)
+			assert.Equal(t, tt.wantDistinctID, exception.DistinctId)
+			for _, properties := range []posthog.Properties{capture.Properties, exception.Properties} {
+				assert.Equal(t, tt.wantConversationID, properties[propertyConversationID])
+				assert.Equal(t, tt.wantSessionID, properties[propertySessionID])
+			}
+		})
+	}
+}
+
+func TestPreparedPayloadsAreBoundedOnce(t *testing.T) {
+	wide := map[string]any{"a_long": strings.Repeat("word ", maxStringBytes/4)}
+	for i := 0; i < 1000; i++ {
+		wide[fmt.Sprintf("key_%04d", i)] = i
+	}
+	prepared, err := prepareToolCall(ToolCall{ToolName: "query", Parameters: wide, Response: wide})
+	require.NoError(t, err)
+
+	for name, payload := range map[string]any{"parameters": prepared.parameters, "response": prepared.response} {
+		object, ok := payload.(map[string]any)
+		require.True(t, ok, name)
+		assert.Len(t, object, 100, name)
+		assert.Equal(t, "[MaxProperties ~]", object["..."], name)
+		assert.Equal(t, strings.Repeat("word ", 6553)+"...", object["a_long"], name)
+		assert.Equal(t, json.Number("97"), object["key_0097"], name)
+		assert.NotContains(t, object, "key_0098", name)
+	}
+}
+
 func TestCaptureToolCallInvalidLLMModelSource(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -707,19 +816,23 @@ func TestCaptureToolCallInvalidLLMModelSource(t *testing.T) {
 
 func TestCaptureToolCallExceptionLevel(t *testing.T) {
 	tests := []struct {
-		name      string
-		message   int
-		wantLevel any
+		name       string
+		message    int
+		properties posthog.Properties
+		wantLevel  any
 	}{
 		{name: "exception event is an error", message: 1, wantLevel: "error"},
 		{name: "tool call event has no level", message: 0, wantLevel: nil},
+		{name: "custom level cannot override the exception's", message: 1, properties: posthog.Properties{"$exception_level": "info"}, wantLevel: "error"},
+		{name: "custom level is not set on the tool call", message: 0, properties: posthog.Properties{"$exception_level": "info"}, wantLevel: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &fakeEnqueueClient{}
 			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
-				ToolName: "query",
-				Error:    errors.New("boom"),
+				ToolName:   "query",
+				Error:      errors.New("boom"),
+				Properties: tt.properties,
 			}))
 			require.Len(t, client.messages, 2)
 

@@ -13,6 +13,10 @@ type preparedToolCall struct {
 	call                  ToolCall
 	distinctID            string
 	explicitID            bool
+	sessionID             string
+	conversationID        string
+	clientUserAgent       string
+	vendorClient          string
 	toolName              string
 	intent                string
 	intentSource          IntentSource
@@ -72,11 +76,16 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		suppressPersonProfile: !explicitID || personProfileOptOut(call.Properties),
 		toolName:              truncateUTF8(sanitizeResourceName(call.ToolName), maxResourceNameBytes),
 	}
+	prepared.conversationID = normalizeConversationID(call.ConversationID)
+	prepared.sessionID = call.SessionID
+	if prepared.sessionID == "" && prepared.conversationID != "" {
+		prepared.sessionID = deriveSessionID(prepared.conversationID)
+	}
 	switch {
 	case call.DistinctID != "":
 		prepared.distinctID = call.DistinctID
-	case call.SessionID != "":
-		prepared.distinctID = call.SessionID
+	case prepared.sessionID != "":
+		prepared.distinctID = prepared.sessionID
 	default:
 		prepared.distinctID = "anonymous"
 	}
@@ -90,6 +99,8 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		}
 	}
 
+	prepared.clientUserAgent = boundedMetadata(call.ClientUserAgent)
+	prepared.vendorClient = boundedMetadata(call.VendorClient)
 	prepared.model = normalizeModel(call.LLMModel)
 	if prepared.model != "" {
 		prepared.modelSource = call.LLMModelSource
@@ -126,7 +137,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 			continue
 		}
 		switch key {
-		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID:
+		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID, propertyExceptionLevel:
 			continue
 		}
 		custom[key] = value
@@ -167,7 +178,11 @@ func normalizeModel(model string) string {
 	if strings.EqualFold(model, "unknown") {
 		return ""
 	}
-	return truncateUTF8(sanitizeString(model), maxMetadataBytes)
+	return boundedMetadata(model)
+}
+
+func boundedMetadata(value string) string {
+	return truncateUTF8(sanitizeString(value), maxMetadataBytes)
 }
 
 func prepareValue(field string, value any, response bool) (any, error) {
@@ -182,9 +197,9 @@ func prepareValue(field string, value any, response bool) (any, error) {
 		return nil, err
 	}
 	if response {
-		return sanitizeResponse(normalized), nil
+		return truncateValue(sanitizeResponse(normalized)), nil
 	}
-	return sanitizeCapturedValue(normalized), nil
+	return truncateValue(sanitizeCapturedValue(normalized)), nil
 }
 
 func prepareProperties(field string, properties posthog.Properties) (posthog.Properties, error) {
@@ -246,10 +261,10 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 
 	setStringProperty(properties, propertyToolDescription, truncateUTF8(p.call.ToolDescription, maxStringBytes))
 	setStringProperty(properties, propertyToolCategory, truncateUTF8(p.call.ToolCategory, maxMetadataBytes))
-	setStringProperty(properties, propertySessionID, p.call.SessionID)
-	setStringProperty(properties, propertyConversationID, p.call.ConversationID)
-	setStringProperty(properties, propertyClientUserAgent, truncateUTF8(p.call.ClientUserAgent, maxMetadataBytes))
-	setStringProperty(properties, propertyVendorClient, truncateUTF8(p.call.VendorClient, maxMetadataBytes))
+	setStringProperty(properties, propertySessionID, p.sessionID)
+	setStringProperty(properties, propertyConversationID, p.conversationID)
+	setStringProperty(properties, propertyClientUserAgent, p.clientUserAgent)
+	setStringProperty(properties, propertyVendorClient, p.vendorClient)
 	setStringProperty(properties, propertyLLMModel, p.model)
 	if p.model != "" {
 		properties[propertyLLMModelSource] = string(p.modelSource)

@@ -41,6 +41,8 @@ const (
 	maxStringBytes        = 32_768
 	maxEventBytes         = 102_400
 	maxNormalizeBytes     = 1_048_576
+	maxRedactBytes        = 33_554_432
+	maxRedactBlocks       = 1_000
 	maxIntentBytes        = 2_048
 	maxErrorMessageBytes  = 2_048
 	maxResourceNameBytes  = 256

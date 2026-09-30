@@ -42,7 +42,8 @@ type ToolCall struct {
 	// the RequestContext's, then SessionID, then "anonymous", and no person
 	// profile is processed.
 	DistinctID string
-	// SessionID is captured as $session_id and is the distinct ID fallback.
+	// SessionID is captured as $session_id and is the distinct ID fallback. When
+	// empty, a valid ConversationID derives it.
 	SessionID string
 	// Groups is captured as $groups on both events.
 	Groups posthog.Groups
@@ -61,11 +62,12 @@ type ToolCall struct {
 	// ProtocolVersion is captured as $mcp_protocol_version on both events.
 	ProtocolVersion string
 
-	// ConversationID is captured verbatim as $mcp_conversation_id on both events,
-	// since it joins tool calls into a conversation.
+	// ConversationID is captured as $mcp_conversation_id on both events, since it
+	// joins tool calls into a conversation. Only a UUIDv7-shaped value is kept,
+	// lowercased, and anything else is dropped.
 	ConversationID string
 	// ClientUserAgent is the HTTP User-Agent header of the request, captured as
-	// $mcp_client_user_agent on $mcp_tool_call.
+	// $mcp_client_user_agent on $mcp_tool_call with credentials redacted.
 	ClientUserAgent string
 	// VendorClient is the client vendor the transport reported, captured as
 	// $mcp_vendor_client on $mcp_tool_call.

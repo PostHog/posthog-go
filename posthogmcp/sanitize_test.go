@@ -424,3 +424,37 @@ func TestCaptureToolCallTypedResponseWithLargeMedia(t *testing.T) {
 		})
 	}
 }
+
+func TestRedactOversizedResponseBudgets(t *testing.T) {
+	image := `{"type":"image","mimeType":"image/png","data":"` + strings.Repeat("QUJD", 300_000) + `"}`
+	blocks := func(count int) []byte {
+		return []byte(`{"content":[` + image + strings.Repeat(`,{"type":"text","text":"a"}`, count) + `]}`)
+	}
+	tests := []struct {
+		name   string
+		data   []byte
+		wantOK bool
+	}{
+		{name: "blocks at the budget are redacted", data: blocks(maxRedactBlocks - 1), wantOK: true},
+		{name: "blocks over the budget are not decoded", data: blocks(maxRedactBlocks)},
+		{
+			name:   "bytes at the budget are redacted",
+			data:   []byte(`{"content":[{"type":"image","data":"` + strings.Repeat("A", maxRedactBytes-len(`{"content":[{"type":"image","data":""}]}`)) + `"}]}`),
+			wantOK: true,
+		},
+		{
+			name: "bytes over the budget are not decoded",
+			data: []byte(`{"content":[{"type":"image","data":"` + strings.Repeat("A", maxRedactBytes) + `"}]}`),
+		},
+		{name: "content that is not an array is not redacted", data: []byte(`{"content":"` + strings.Repeat("A", maxNormalizeBytes) + `"}`)},
+		{name: "null content is not redacted", data: []byte(`{"content":null}`)},
+		{name: "missing content is not redacted", data: []byte(`{}`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := redactOversizedResponse(tt.data)
+
+			assert.Equal(t, tt.wantOK, ok)
+		})
+	}
+}

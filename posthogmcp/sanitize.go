@@ -93,14 +93,19 @@ func decodeJSON(data []byte) (value any, err error) {
 // cap only because of media, such as a typed MCP result that
 // redactMediaBeforeNormalize cannot see into. It reads each content block's
 // type through raw JSON without building the decoded tree, swaps media blocks
-// for their placeholders, and reports whether the result fits the cap.
+// for their placeholders, and reports whether the result fits the cap. A
+// response over maxRedactBytes or with more than maxRedactBlocks content
+// blocks is not rescued, which bounds what a hostile result can make it decode.
 func redactOversizedResponse(data []byte) (any, bool) {
+	if len(data) > maxRedactBytes {
+		return nil, false
+	}
 	var response map[string]json.RawMessage
 	if json.Unmarshal(data, &response) != nil {
 		return nil, false
 	}
-	var content []json.RawMessage
-	if json.Unmarshal(response["content"], &content) != nil {
+	content, ok := decodeBlocks(response["content"])
+	if !ok {
 		return nil, false
 	}
 
@@ -139,6 +144,24 @@ func redactOversizedResponse(data []byte) (any, bool) {
 	}
 	redacted, err := decodeJSON(encoded)
 	return redacted, err == nil
+}
+
+// decodeBlocks reads a JSON array one element at a time, so it stops at
+// maxRedactBlocks instead of growing with the input.
+func decodeBlocks(data json.RawMessage) ([]json.RawMessage, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
+		return nil, false
+	}
+	var blocks []json.RawMessage
+	for decoder.More() {
+		var block json.RawMessage
+		if len(blocks) == maxRedactBlocks || decoder.Decode(&block) != nil {
+			return nil, false
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks, true
 }
 
 // encodePayload pays for one json.Marshal in the common case. When that fails,
