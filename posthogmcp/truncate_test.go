@@ -2,6 +2,7 @@ package posthogmcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -113,3 +114,134 @@ func TestCaptureToolCallFieldLimits(t *testing.T) {
 type errorsWithMessage string
 
 func (e errorsWithMessage) Error() string { return string(e) }
+
+func TestCaptureToolCallSizePruningStages(t *testing.T) {
+	large := strings.Repeat("x:", 15_000)
+	oversized := map[string]any{"a": large, "b": large, "c": large, "d": large}
+	oversizedProperties := posthog.Properties{"a": large, "b": large, "c": large, "d": large}
+	strings30 := make([]any, 30)
+	for i := range strings30 {
+		strings30[i] = large
+	}
+	small := map[string]any{"q": "x"}
+
+	tests := []struct {
+		name           string
+		call           ToolCall
+		wantResponse   any
+		wantParameters any
+		wantCustom     any
+		wantSet        any
+	}{
+		{
+			name:           "fits untouched",
+			call:           ToolCall{Response: small, Parameters: small, Properties: posthog.Properties{"c": "x"}, SetProperties: posthog.Properties{"s": "x"}},
+			wantResponse:   map[string]any{"q": "x"},
+			wantParameters: map[string]any{"q": "x"},
+			wantCustom:     "x",
+			wantSet:        posthog.Properties{"s": "x"},
+		},
+		{
+			name:           "depth shrinks until it fits",
+			call:           ToolCall{Response: map[string]any{"a": map[string]any{"b": map[string]any{"c": map[string]any{"d": strings30}}}}, Parameters: small},
+			wantResponse:   map[string]any{"a": map[string]any{"b": map[string]any{"c": map[string]any{"d": "[Array]"}}}},
+			wantParameters: map[string]any{"q": "x"},
+		},
+		{
+			name:           "response dropped first",
+			call:           ToolCall{Response: oversized, Parameters: small, Properties: posthog.Properties{"c": "x"}, SetProperties: posthog.Properties{"s": "x"}},
+			wantParameters: map[string]any{"q": "x"},
+			wantCustom:     "x",
+			wantSet:        posthog.Properties{"s": "x"},
+		},
+		{
+			name:       "parameters dropped next",
+			call:       ToolCall{Response: oversized, Parameters: oversized, Properties: posthog.Properties{"c": "x"}, SetProperties: posthog.Properties{"s": "x"}},
+			wantCustom: "x",
+			wantSet:    posthog.Properties{"s": "x"},
+		},
+		{
+			name:    "custom properties dropped next",
+			call:    ToolCall{Response: oversized, Parameters: oversized, Properties: oversizedProperties, SetProperties: posthog.Properties{"s": "x"}},
+			wantSet: posthog.Properties{"s": "x"},
+		},
+		{
+			name: "person properties dropped last",
+			call: ToolCall{Response: oversized, Parameters: oversized, Properties: oversizedProperties, SetProperties: posthog.Properties(oversized)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			tt.call.DistinctID = "user_1"
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), tt.call))
+
+			properties := requireCapture(t, client.messages[0]).Properties
+			assert.Equal(t, tt.wantResponse, properties[propertyResponse])
+			assert.Equal(t, tt.wantParameters, properties[propertyParameters])
+			assert.Equal(t, tt.wantCustom, properties["c"])
+			assert.Equal(t, tt.wantSet, properties[propertySet])
+		})
+	}
+}
+
+func TestCaptureToolCallBoundsParametersAndResponseOnce(t *testing.T) {
+	longString := strings.Repeat("x:", maxStringBytes)
+	wideList := make([]any, maxBreadth+50)
+	wideMap := make(map[string]any, maxBreadth+50)
+	for i := range wideList {
+		wideList[i] = i
+		wideMap[fmt.Sprintf("key-%03d", i)] = i
+	}
+	deep := any("leaf")
+	for i := 0; i < maxDepth+2; i++ {
+		deep = map[string]any{"next": deep}
+	}
+
+	tests := []struct {
+		name  string
+		value any
+		check func(t *testing.T, got any)
+	}{
+		{"long string", longString, func(t *testing.T, got any) {
+			value := got.(string)
+			assert.Len(t, value, maxStringBytes)
+			assert.True(t, strings.HasSuffix(value, "..."))
+		}},
+		{"wide list", wideList, func(t *testing.T, got any) {
+			list := got.([]any)
+			assert.Len(t, list, maxBreadth)
+			assert.Equal(t, "[MaxProperties ~]", list[maxBreadth-1])
+			assert.Equal(t, json.Number("98"), list[98])
+		}},
+		{"wide map", wideMap, func(t *testing.T, got any) {
+			object := got.(map[string]any)
+			assert.Len(t, object, maxBreadth)
+			assert.Equal(t, "[MaxProperties ~]", object["..."])
+			assert.Equal(t, json.Number("98"), object["key-098"])
+			assert.NotContains(t, object, "key-099")
+		}},
+		{"deep map", deep, func(t *testing.T, got any) {
+			object := got.(map[string]any)
+			for i := 0; i < maxDepth-1; i++ {
+				object = object["next"].(map[string]any)
+			}
+			assert.Equal(t, "[Object]", object["next"])
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+				ToolName:   "query",
+				Parameters: tt.value,
+				Response:   tt.value,
+			}))
+
+			properties := requireCapture(t, client.messages[0]).Properties
+			tt.check(t, properties[propertyParameters])
+			tt.check(t, properties[propertyResponse])
+		})
+	}
+}

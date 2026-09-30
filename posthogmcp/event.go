@@ -180,11 +180,9 @@ func prepareValue(field string, value any, response bool) (any, error) {
 		return nil, err
 	}
 	if response {
-		normalized = sanitizeResponse(normalized)
-	} else {
-		normalized = sanitizeCapturedValue(normalized)
+		return sanitizeResponse(normalized), nil
 	}
-	return truncateValue(normalized), nil
+	return sanitizeCapturedValue(normalized), nil
 }
 
 func prepareProperties(field string, properties posthog.Properties) (posthog.Properties, error) {
