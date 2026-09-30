@@ -91,9 +91,9 @@ func decodeJSON(data []byte) (value any, err error) {
 
 // redactOversizedResponse rescues a response whose JSON is over the normalize
 // cap only because of media, such as a typed MCP result that
-// redactMediaBeforeNormalize cannot see into. It peeks at each content block's
-// type without decoding the rest, swaps media blocks for their placeholders,
-// and reports whether the result fits the cap.
+// redactMediaBeforeNormalize cannot see into. It reads each content block's
+// type through raw JSON without building the decoded tree, swaps media blocks
+// for their placeholders, and reports whether the result fits the cap.
 func redactOversizedResponse(data []byte) (any, bool) {
 	var response map[string]json.RawMessage
 	if json.Unmarshal(data, &response) != nil {
@@ -106,14 +106,15 @@ func redactOversizedResponse(data []byte) (any, bool) {
 
 	swapped := false
 	for i, raw := range content {
-		var block struct {
-			Type     string `json:"type"`
-			Resource struct {
-				Blob json.RawMessage `json:"blob"`
-			} `json:"resource"`
-		}
+		// Maps, not a struct: struct fields match keys case-insensitively, while
+		// redactedMediaBlock reads the exact "type" key of the decoded block.
+		var block, resource map[string]json.RawMessage
+		var blockType string
 		_ = json.Unmarshal(raw, &block)
-		message, ok := mediaRedactionMessage(block.Type, len(block.Resource.Blob) > 0)
+		_ = json.Unmarshal(block["type"], &blockType)
+		_ = json.Unmarshal(block["resource"], &resource)
+		_, hasBlob := resource["blob"]
+		message, ok := mediaRedactionMessage(blockType, hasBlob)
 		if !ok {
 			continue
 		}

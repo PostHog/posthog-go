@@ -2,6 +2,7 @@ package posthogmcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -367,7 +368,7 @@ func TestCaptureToolCallTypedResponseWithLargeMedia(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		response *callToolResult
+		response any
 		want     any
 	}{
 		{
@@ -393,6 +394,14 @@ func TestCaptureToolCallTypedResponseWithLargeMedia(t *testing.T) {
 				map[string]any{"type": "text", "text": "[binary resource content redacted - not supported by PostHog MCP analytics]"},
 				map[string]any{"type": "resource", "resource": map[string]any{"uri": "file:///a.txt", "text": "hello"}},
 				map[string]any{"type": "text", "text": "[audio content redacted - not supported by PostHog MCP analytics]"},
+			}},
+		},
+		{
+			name: "only the exact type key marks a block as media",
+			response: json.RawMessage(`{"content":[{"type":"text","Type":"image","text":"keep"},` +
+				`{"type":"image","mimeType":"image/png","data":"` + strings.Repeat("QUJD", 300_000) + `"}]}`),
+			want: map[string]any{"content": []any{
+				map[string]any{"type": "text", "Type": "image", "text": "keep"}, redactedImage,
 			}},
 		},
 		{
