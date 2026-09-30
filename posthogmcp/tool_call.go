@@ -42,8 +42,8 @@ type ToolCall struct {
 	// the RequestContext's, then SessionID, then "anonymous", and no person
 	// profile is processed.
 	DistinctID string
-	// SessionID is captured as $session_id and is the distinct ID fallback. When
-	// empty, a valid ConversationID derives it.
+	// SessionID is captured as $session_id and is the distinct ID fallback. A
+	// valid ConversationID replaces it with the session derived from the handle.
 	SessionID string
 	// Groups is captured as $groups on both events.
 	Groups posthog.Groups

@@ -629,6 +629,11 @@ func TestCaptureToolCallManualAPIFields(t *testing.T) {
 			},
 		},
 		{
+			name:         "a browser user agent is kept whole",
+			call:         ToolCall{ClientUserAgent: "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"},
+			wantToolCall: map[string]any{"$mcp_client_user_agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"},
+		},
+		{
 			name: "user agent and vendor client have credentials redacted",
 			call: ToolCall{
 				ClientUserAgent: "claude-code/2.1 (token phc_abcdefghijklmnopqrstuvwxyz)",
@@ -706,11 +711,11 @@ func TestCaptureToolCallConversationIdentity(t *testing.T) {
 			wantDistinctID:     derived,
 		},
 		{
-			name:               "explicit session wins over the handle",
+			name:               "handle wins over an explicit session",
 			call:               ToolCall{ConversationID: handle, SessionID: "session_1"},
 			wantConversationID: handle,
-			wantSessionID:      "session_1",
-			wantDistinctID:     "session_1",
+			wantSessionID:      derived,
+			wantDistinctID:     derived,
 		},
 		{
 			name:               "explicit distinct id still leads",

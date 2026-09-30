@@ -78,7 +78,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 	prepared.conversationID = normalizeConversationID(call.ConversationID)
 	prepared.sessionID = call.SessionID
-	if prepared.sessionID == "" && prepared.conversationID != "" {
+	if prepared.conversationID != "" {
 		prepared.sessionID = deriveSessionID(prepared.conversationID)
 	}
 	switch {
@@ -99,8 +99,8 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		}
 	}
 
-	prepared.clientUserAgent = boundedMetadata(call.ClientUserAgent)
-	prepared.vendorClient = boundedMetadata(call.VendorClient)
+	prepared.clientUserAgent = boundedClientHeader(call.ClientUserAgent)
+	prepared.vendorClient = boundedClientHeader(call.VendorClient)
 	prepared.model = normalizeModel(call.LLMModel)
 	if prepared.model != "" {
 		prepared.modelSource = call.LLMModelSource
@@ -183,6 +183,13 @@ func normalizeModel(model string) string {
 
 func boundedMetadata(value string) string {
 	return truncateUTF8(sanitizeString(value), maxMetadataBytes)
+}
+
+// boundedClientHeader redacts known credential shapes without the entropy
+// detector, which reads version tokens such as AppleWebKit/537.36 as secrets
+// and would erase the headers that identify the calling client.
+func boundedClientHeader(value string) string {
+	return truncateUTF8(sanitizeResourceName(value), maxMetadataBytes)
 }
 
 func prepareValue(field string, value any, response bool) (any, error) {
