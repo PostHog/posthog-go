@@ -42,10 +42,11 @@ type toolCatalog struct {
 // catalogGeneration is what the catalog knows between two invalidations.
 type catalogGeneration struct {
 	tools map[string]toolInfo
-	// walked is nil until a learning walk starts, and closed when it ends.
-	// After that a name the walk did not find stays unknown until a tools/list
-	// result or an invalidation.
-	walked chan struct{}
+	// walking is non-nil while a learning walk runs, and closed when it ends.
+	walking chan struct{}
+	// walked means a walk ended after the last tools/list result, so a name
+	// the catalog does not know is not registered.
+	walked bool
 }
 
 func newToolCatalog(injectContext bool) *toolCatalog {
@@ -69,19 +70,10 @@ func (c *toolCatalog) generation() *catalogGeneration {
 	return c.current
 }
 
-// advertise records a tools/list result and returns its tools as clients
-// should see them. The registered tools are never modified.
+// advertise remembers tools in gen unless gen has been invalidated, and
+// returns them as clients should see them. The registered tools are never
+// modified.
 func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []*mcpsdk.Tool {
-	advertised := c.record(gen, tools)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	gen.walked = nil
-	return advertised
-}
-
-// record remembers tools in gen unless gen has been invalidated, and returns
-// them as clients should see them.
-func (c *toolCatalog) record(gen *catalogGeneration, tools []*mcpsdk.Tool) []*mcpsdk.Tool {
 	advertised := make([]*mcpsdk.Tool, len(tools))
 	infos := make([]toolInfo, len(tools))
 	for i, tool := range tools {
@@ -105,6 +97,7 @@ func (c *toolCatalog) record(gen *catalogGeneration, tools []*mcpsdk.Tool) []*mc
 		for i, tool := range tools {
 			gen.tools[tool.Name] = infos[i]
 		}
+		gen.walked = false
 	}
 	return advertised
 }
@@ -119,24 +112,31 @@ func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req
 	c.mu.Lock()
 	gen := c.current
 	info, known := gen.tools[name]
-	walked := gen.walked
-	leads := !known && walked == nil && req.Session != nil
-	if leads {
-		walked = make(chan struct{})
-		gen.walked = walked
-	}
-	c.mu.Unlock()
-	if known || walked == nil {
+	if known || gen.walked || req.Session == nil {
+		c.mu.Unlock()
 		return info, nil
 	}
+	walking := gen.walking
+	leads := walking == nil
+	if leads {
+		walking = make(chan struct{})
+		gen.walking = walking
+	}
+	c.mu.Unlock()
 
 	var err error
 	if leads {
-		defer close(walked)
+		defer func() {
+			c.mu.Lock()
+			gen.walking = nil
+			gen.walked = true
+			c.mu.Unlock()
+			close(walking)
+		}()
 		err = c.walk(ctx, next, req, gen)
 	} else {
 		select {
-		case <-walked:
+		case <-walking:
 		case <-ctx.Done():
 		}
 	}
@@ -163,7 +163,7 @@ func (c *toolCatalog) walk(
 		if err != nil || !ok {
 			return nil
 		}
-		c.record(gen, page.Tools)
+		c.advertise(gen, page.Tools)
 		if page.NextCursor == "" {
 			return nil
 		}
