@@ -15,15 +15,21 @@ import (
 	"unicode/utf8"
 )
 
+const sensitiveKeyNames = `authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key`
+
 var (
 	// RE2's \b is ASCII-only, so a token glued to a letter like é is redacted
 	// here and kept by posthog-python. Over-redacting is the safe side.
 	postHogTokenPattern = regexp.MustCompile(`\bph[a-z]_[A-Za-z0-9_-]{20,}\b`)
-	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key)\n?$`)
-	base64Pattern       = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
-	base64URLPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
-	base64DataPrefix    = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
-	base64DataPayload   = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
+	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyNames + `)\n?$`)
+	// A tool that returns structuredContent also returns it as JSON text, where
+	// a sensitive key is a member inside a string instead of a map key. A string
+	// value may run to the end of the text, because truncation can cut it off.
+	sensitiveJSONMemberPattern = regexp.MustCompile(`("(?i:` + sensitiveKeyNames + `)"\s*:\s*)(?:"(?:[^"\\]|\\.)*(?:"|$)|-?\d[\d.eE+-]*|true|false)`)
+	base64Pattern              = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
+	base64URLPattern           = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
+	base64DataPrefix           = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
+	base64DataPayload          = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
 
 	// Intent-only structured identifiers. Patterns follow the Python and
 	// TypeScript MCP sanitizers: bounded quantifiers, ASCII classes, and
@@ -409,6 +415,7 @@ func isBinaryBlob(value string) bool {
 // the text these detectors match: it percent-encodes the `/` in front of a
 // `?ref=/phx_...` token, and can grow a word past the known-format scan window.
 func redactCredentials(value string) string {
+	value = sensitiveJSONMemberPattern.ReplaceAllString(value, `${1}"`+redactedValue+`"`)
 	return redactSecretTokens(postHogTokenPattern.ReplaceAllString(value, redactedValue))
 }
 

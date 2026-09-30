@@ -255,6 +255,40 @@ func TestCaptureToolCallRedactsCredentialsInCapturedText(t *testing.T) {
 	assert.Equal(t, "GET https://example.com/x?token=%5Bredacted%5D failed: auth with [redacted] rejected", capture.Properties[propertyErrorMessage])
 }
 
+func TestSanitizeStringRedactsSensitiveJSONMembers(t *testing.T) {
+	for _, test := range []struct {
+		name, value, want string
+	}{
+		{"string", `{"user":"ada","password":"hunter2"}`, `{"user":"ada","password":"[redacted]"}`},
+		{"escaped quote and spacing", "{\n  \"Password\" : \"hun\\\"ter2\",\n  \"n\": 1\n}", "{\n  \"Password\" : \"[redacted]\",\n  \"n\": 1\n}"},
+		{"number", `{"api_key":12345}`, `{"api_key":"[redacted]"}`},
+		{"boolean", `{"access-token":true}`, `{"access-token":"[redacted]"}`},
+		{"cut off by truncation", `{"refresh_token":"abcdefgh`, `{"refresh_token":"[redacted]"`},
+		{"inside prose", `retry failed: "token": "abc"`, `retry failed: "token": "[redacted]"`},
+		{"key only contains a sensitive word", `{"password_hint":"pet"}`, `{"password_hint":"pet"}`},
+		{"null", `{"token":null}`, `{"token":null}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, sanitizeString(test.value))
+		})
+	}
+}
+
+func TestCaptureToolCallRedactsTheTextCopyOfStructuredContent(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+		ToolName: "get_user",
+		Response: map[string]any{
+			"content":           []any{map[string]any{"type": "text", "text": `{"password":"hunter2","user":"ada"}`}},
+			"structuredContent": map[string]any{"password": "hunter2", "user": "ada"},
+		},
+	}))
+
+	response := requireCapture(t, client.messages[0]).Properties[propertyResponse].(map[string]any)
+	assert.Equal(t, `{"password":"[redacted]","user":"ada"}`, response["content"].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, map[string]any{"password": redactedValue, "user": "ada"}, response["structuredContent"])
+}
+
 func TestSanitizeFreeText(t *testing.T) {
 	for _, test := range []struct {
 		name, value, want string
