@@ -797,3 +797,17 @@ func TestInstrumentRelearnsToolsAfterListChanged(t *testing.T) {
 		})
 	}
 }
+
+func TestNilAnalyticsPanicsAtConstruction(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		install func()
+	}{
+		{name: "NewMiddleware", install: func() { NewMiddleware(nil) }},
+		{name: "Instrument", install: func() { Instrument(newServer(), nil) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.PanicsWithValue(t, "posthogmcpsdk: analytics must not be nil", test.install)
+		})
+	}
+}
