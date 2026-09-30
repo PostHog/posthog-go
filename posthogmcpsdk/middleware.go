@@ -45,7 +45,9 @@ func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...
 // whether context is removed. go-sdk sends the notification a few
 // milliseconds after a change, and only to connected sessions when the tools
 // capability allows it. A tool replaced while no session is connected keeps
-// its old entry until a tools/list result includes it again.
+// its old entry until a tools/list result includes it again. A tool added
+// while no session is connected is recognized within ten seconds, when
+// Receiving lists tools again.
 type Middleware struct {
 	Receiving mcpsdk.Middleware
 	Sending   mcpsdk.Middleware
@@ -102,6 +104,10 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 func (m *middleware) send(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
 		if method == notificationToolListChanged {
+			// go-sdk sends one change to each connected session in turn, so
+			// this runs once per session. Invalidating only swaps in an empty
+			// generation, and the sends go out back to back, so the repeats
+			// cost at most a tools/list learned in between being learned again.
 			m.tools.invalidate()
 		}
 		return next(ctx, method, req)
