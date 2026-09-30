@@ -17,6 +17,7 @@ import (
 	"time"
 
 	posthog "github.com/posthog/posthog-go"
+	testerrors "github.com/posthog/posthog-go/posthogmcp/testdata/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -724,6 +725,10 @@ func TestCaptureToolCallErrorTypeAndExceptionType(t *testing.T) {
 		{name: "multi-wrap takes the first informative", err: fmt.Errorf("%w and %w", errors.New("x"), opErr), wantErrorType: "net.OpError", wantException: "net.OpError"},
 		{name: "join takes the first informative", err: errors.Join(errors.New("x"), pathErr, opErr), wantErrorType: "fs.PathError", wantException: "fs.PathError"},
 		{name: "joined plain errors have no informative type", err: errors.Join(errors.New("x"), errors.New("y")), wantErrorType: "Error", wantException: "Error"},
+		{name: "third-party wrapper is skipped via Cause", err: &testerrors.WithStack{Err: pathErr}, wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "third-party wrapper is skipped via Unwrap", err: &testerrors.WithMessage{Err: opErr, Msg: "ctx"}, wantErrorType: "net.OpError", wantException: "net.OpError"},
+		{name: "stacked third-party wrappers are skipped", err: &testerrors.WithStack{Err: &testerrors.WithMessage{Err: pathErr, Msg: "ctx"}}, wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "third-party leaf has no informative type", err: &testerrors.WithStack{Err: &testerrors.Fundamental{Msg: "boom"}}, wantErrorType: "Error", wantException: "Error"},
 		{name: "custom pointer type", err: &domainError{}, wantErrorType: "posthogmcp.domainError", wantException: "posthogmcp.domainError"},
 		{name: "custom value type", err: valueError{}, wantErrorType: "posthogmcp.valueError", wantException: "posthogmcp.valueError"},
 		{name: "explicit type replaces only the error type", err: pathErr, errorType: "validation", wantErrorType: "validation", wantException: "fs.PathError"},
