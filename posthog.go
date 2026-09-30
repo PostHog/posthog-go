@@ -1621,12 +1621,7 @@ func (c *client) send(pb preparedBatch) {
 		// delays the callback and Close.
 		if i < c.maxAttempts-1 {
 			c.deferDeliveryRetry(pb.done)
-			retryDelay := c.RetryAfter(i)
-			if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
-				retryDelay = httpErr.retryAfter
-			}
-
-			retryTimer := time.NewTimer(retryDelay)
+			retryTimer := time.NewTimer(c.legacyRetryDelay(i, httpErr))
 			select {
 			case <-retryTimer.C:
 				// continue to next attempt
@@ -1739,6 +1734,23 @@ func isRetryableStatus(statusCode int) bool {
 	default:
 		return false
 	}
+}
+
+// legacyRetryDelay is the wait before the next legacy /batch/ attempt. It uses
+// the configured backoff and raises it to the server Retry-After when larger,
+// clamped to defaultMaxBackoff so a hostile header cannot park a batch worker.
+func (c *client) legacyRetryDelay(attemptIndex int, httpErr *httpError) time.Duration {
+	retryDelay := c.RetryAfter(attemptIndex)
+	if httpErr != nil && httpErr.hasRetryAfter {
+		clamped := httpErr.retryAfter
+		if clamped > defaultMaxBackoff {
+			clamped = defaultMaxBackoff
+		}
+		if clamped > retryDelay {
+			retryDelay = clamped
+		}
+	}
+	return retryDelay
 }
 
 func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {

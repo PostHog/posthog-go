@@ -6,6 +6,33 @@ import (
 	"time"
 )
 
+func TestLegacyRetryDelay(t *testing.T) {
+	const base = 100 * time.Millisecond
+	err := func(d time.Duration, has bool) *httpError {
+		return &httpError{retryAfter: d, hasRetryAfter: has}
+	}
+	cases := []struct {
+		name string
+		http *httpError
+		want time.Duration
+	}{
+		{"no_response_uses_configured", nil, base},
+		{"no_retry_after_uses_configured", err(0, false), base},
+		{"larger_retry_after_wins", err(5*time.Second, true), 5 * time.Second},
+		{"smaller_retry_after_ignored", err(10*time.Millisecond, true), base},
+		{"retry_after_at_ceiling", err(defaultMaxBackoff, true), defaultMaxBackoff},
+		{"retry_after_above_ceiling_clamped", err(90*time.Second, true), defaultMaxBackoff},
+	}
+	c := &client{Config: Config{RetryAfter: func(int) time.Duration { return base }}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := c.legacyRetryDelay(0, tc.http); got != tc.want {
+				t.Errorf("legacyRetryDelay = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 
