@@ -3,8 +3,8 @@ package posthogmcpsdk_test
 import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	posthog "github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/posthogmcp"
 	posthogmcpsdk "github.com/posthog/posthog-go/posthogmcpsdk"
-	posthogmcp "github.com/posthog/posthog-go/mcp"
 )
 
 func ExampleInstrument() {

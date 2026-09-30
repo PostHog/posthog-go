@@ -8,27 +8,22 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	posthogmcp "github.com/posthog/posthog-go/mcp"
+	"github.com/posthog/posthog-go/posthogmcp"
 )
 
 const methodCallTool = "tools/call"
 
-// Recorder records one completed MCP tool call.
-type Recorder interface {
-	CaptureToolCall(posthogmcp.ToolCall) error
-}
-
 // Instrument adds PostHog tool-call analytics to server receiving middleware.
 // Install other receiving middleware before or after Instrument according to
 // whether its work should be included in the measured duration.
-func Instrument(server *mcpsdk.Server, recorder Recorder, opts ...Option) {
-	server.AddReceivingMiddleware(NewMiddleware(recorder, opts...))
+func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...Option) {
+	server.AddReceivingMiddleware(NewMiddleware(analytics, opts...))
 }
 
 // NewMiddleware returns receiving middleware that records terminal tools/call
 // requests without changing their result, error, or panic behavior.
-func NewMiddleware(recorder Recorder, opts ...Option) mcpsdk.Middleware {
-	cfg := defaultConfig(recorder)
+func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) mcpsdk.Middleware {
+	cfg := defaultConfig(analytics)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(cfg)
@@ -153,12 +148,8 @@ func (cfg *config) observe(
 		}
 	}
 
-	if cfg.recorder == nil {
-		cfg.report(ctx, errors.New("posthogmcpsdk: nil recorder"))
-		return
-	}
-	if err := callRecorder(cfg.recorder, call); err != nil {
-		cfg.report(ctx, fmt.Errorf("posthogmcpsdk: recorder: %w", err))
+	if err := captureToolCall(ctx, cfg.analytics, call); err != nil {
+		cfg.report(ctx, fmt.Errorf("posthogmcpsdk: capture: %w", err))
 	}
 }
 
@@ -200,9 +191,9 @@ func callPropertiesResolver(
 	return resolver(ctx, req, result, handlerErr)
 }
 
-func callRecorder(recorder Recorder, call posthogmcp.ToolCall) (err error) {
-	defer recoverInstrumentationPanic("recorder", &err)
-	return recorder.CaptureToolCall(call)
+func captureToolCall(ctx context.Context, analytics *posthogmcp.Analytics, call posthogmcp.ToolCall) (err error) {
+	defer recoverInstrumentationPanic("capture", &err)
+	return analytics.CaptureToolCall(ctx, call)
 }
 
 func recoverInstrumentationPanic(stage string, err *error) {

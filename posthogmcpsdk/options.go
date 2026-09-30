@@ -5,6 +5,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	posthog "github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/posthogmcp"
 )
 
 // Identity describes the PostHog identity associated with an MCP tool call.
@@ -43,7 +44,7 @@ type ErrorHandler func(context.Context, error)
 type Option func(*config)
 
 type config struct {
-	recorder          Recorder
+	analytics         *posthogmcp.Analytics
 	identity          IdentityResolver
 	toolMetadata      ToolMetadataResolver
 	properties        PropertiesResolver
@@ -54,9 +55,9 @@ type config struct {
 	serverVersion     string
 }
 
-func defaultConfig(recorder Recorder) *config {
+func defaultConfig(analytics *posthogmcp.Analytics) *config {
 	return &config{
-		recorder:          recorder,
+		analytics:         analytics,
 		captureParameters: true,
 		captureResponses:  true,
 	}
