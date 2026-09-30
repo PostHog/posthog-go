@@ -167,7 +167,7 @@ func normalizeModel(model string) string {
 	if strings.EqualFold(model, "unknown") {
 		return ""
 	}
-	return truncateUTF8(model, maxMetadataBytes)
+	return truncateUTF8(sanitizeString(model), maxMetadataBytes)
 }
 
 func prepareValue(field string, value any, response bool) (any, error) {

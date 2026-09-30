@@ -601,6 +601,11 @@ func TestCaptureToolCallManualAPIFields(t *testing.T) {
 				"$mcp_llm_model_source": "client_metadata",
 			},
 		},
+		{
+			name:         "model has secrets redacted",
+			call:         ToolCall{LLMModel: "phc_abcdefghijklmnopqrstuvwxyz"},
+			wantToolCall: map[string]any{"$mcp_llm_model": "[redacted]", "$mcp_llm_model_source": "self_reported"},
+		},
 		{name: "empty model is not recorded", call: ToolCall{LLMModel: "", LLMModelSource: ModelSourceClientMetadata}},
 		{name: "blank model is not recorded", call: ToolCall{LLMModel: "   "}},
 		{name: "unknown model is not recorded", call: ToolCall{LLMModel: " Unknown "}},
