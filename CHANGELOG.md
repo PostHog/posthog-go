@@ -1,5 +1,14 @@
 ## Unreleased
 
+## 1.28.0
+
+### Minor Changes
+
+- eb05349: Add the `posthogmcp` package: framework-independent MCP tool-call analytics with payload sanitization,
+  bounded event sizes, identity mapping, and optional exception fan-out.
+  
+  An explicit `$process_person_profile: false` on an event now survives `DefaultEventProperties`.
+
 ## 1.27.1
 
 ### Patch Changes
