@@ -348,9 +348,9 @@ func TestInstrumentCapturesParametersAndIntent(t *testing.T) {
 		wantSource     any
 	}{
 		{
-			name:           "analytics arguments are captured as intent, not parameters",
+			name:           "context is captured as intent, not parameters, and a tool's own conversation_id stays a parameter",
 			arguments:      map[string]any{"city": "Melbourne", "context": "  Checking the weather for a trip  ", "conversation_id": "c-1"},
-			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"city":"Melbourne"}}}}`,
+			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"city":"Melbourne","conversation_id":"c-1"}}}}`,
 			wantIntent:     "Checking the weather for a trip",
 			wantSource:     "context_parameter",
 		},
