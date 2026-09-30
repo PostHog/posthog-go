@@ -66,8 +66,10 @@ func WithCaptureParameters(enabled bool) Option {
 	return func(cfg *config) { cfg.captureParameters = enabled }
 }
 
-// WithCaptureResponses controls capture of terminal tool results. It is
-// enabled by default.
+// WithCaptureResponses controls capture of terminal tool results as
+// $mcp_response. It is enabled by default. Disabling it does not cover
+// failures: the text of an IsError result is still sent as $mcp_error_message
+// and in a $exception event, as in the Python SDK.
 func WithCaptureResponses(enabled bool) Option {
 	return func(cfg *config) { cfg.captureResponses = enabled }
 }

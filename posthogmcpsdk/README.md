@@ -22,7 +22,8 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   `{"request": {"method": "tools/call", "params": {"name": ..., "arguments": ...}}}`,
   and the result as `$mcp_response`. Credentials and binary content are
   redacted. Turn either off with `WithCaptureParameters(false)` or
-  `WithCaptureResponses(false)`.
+  `WithCaptureResponses(false)`. The error text of a failed call is captured
+  either way.
 - The MCP session ID, client name and version, and protocol version.
 - The tool's description and `_meta.category`, read from `tools/list`.
 - The agent's intent, from the `context` argument described below.
