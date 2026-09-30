@@ -84,7 +84,7 @@ func (p preparedToolCall) buildException() (posthog.Exception, error) {
 	handled := true
 	synthetic := true
 	item := posthog.ExceptionItem{
-		Type:  p.errorType,
+		Type:  p.exceptionType,
 		Value: p.errorMessage,
 		Mechanism: &posthog.ExceptionMechanism{
 			Handled:   &handled,

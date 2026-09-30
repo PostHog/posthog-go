@@ -296,7 +296,7 @@ func TestCaptureToolCallFailureAndException(t *testing.T) {
 	exception := requireException(t, client.messages[1])
 	require.Len(t, exception.ExceptionList, 1)
 	item := exception.ExceptionList[0]
-	assert.Equal(t, "validation", item.Type)
+	assert.Equal(t, "Error", item.Type)
 	assert.Equal(t, "request failed with [redacted]", item.Value)
 	require.NotNil(t, item.Mechanism)
 	assert.Equal(t, true, *item.Mechanism.Handled)
@@ -705,27 +705,30 @@ type valueError struct{}
 
 func (valueError) Error() string { return "value failure" }
 
-func TestCaptureToolCallErrorTypeDefaultsToErrorClass(t *testing.T) {
+func TestCaptureToolCallErrorTypeAndExceptionType(t *testing.T) {
 	pathErr := &fs.PathError{Op: "open", Path: "/x", Err: errors.New("denied")}
 	opErr := &net.OpError{Op: "dial", Err: errors.New("refused")}
 	tests := []struct {
-		name      string
-		err       error
-		errorType string
-		want      string
+		name          string
+		err           error
+		errorType     string
+		wantErrorType string
+		wantException string
 	}{
-		{name: "plain error has no informative type", err: errors.New("boom"), want: "Error"},
-		{name: "wrapped plain error has no informative type", err: fmt.Errorf("ctx: %w", errors.New("boom")), want: "Error"},
-		{name: "unwrapped formatted error", err: fmt.Errorf("ctx: %v", pathErr), want: "Error"},
-		{name: "pointer type drops the star", err: pathErr, want: "fs.PathError"},
-		{name: "single wrapper is skipped", err: fmt.Errorf("ctx: %w", pathErr), want: "fs.PathError"},
-		{name: "stacked wrappers are skipped", err: fmt.Errorf("a: %w", fmt.Errorf("b: %w", opErr)), want: "net.OpError"},
-		{name: "multi-wrap takes the first informative", err: fmt.Errorf("%w and %w", errors.New("x"), opErr), want: "net.OpError"},
-		{name: "join takes the first informative", err: errors.Join(errors.New("x"), pathErr, opErr), want: "fs.PathError"},
-		{name: "joined plain errors have no informative type", err: errors.Join(errors.New("x"), errors.New("y")), want: "Error"},
-		{name: "custom pointer type", err: &domainError{}, want: "posthogmcp.domainError"},
-		{name: "custom value type", err: valueError{}, want: "posthogmcp.valueError"},
-		{name: "explicit type wins", err: pathErr, errorType: "validation", want: "validation"},
+		{name: "plain error has no informative type", err: errors.New("boom"), wantErrorType: "Error", wantException: "Error"},
+		{name: "wrapped plain error has no informative type", err: fmt.Errorf("ctx: %w", errors.New("boom")), wantErrorType: "Error", wantException: "Error"},
+		{name: "unwrapped formatted error", err: fmt.Errorf("ctx: %v", pathErr), wantErrorType: "Error", wantException: "Error"},
+		{name: "pointer type drops the star", err: pathErr, wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "single wrapper is skipped", err: fmt.Errorf("ctx: %w", pathErr), wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "stacked wrappers are skipped", err: fmt.Errorf("a: %w", fmt.Errorf("b: %w", opErr)), wantErrorType: "net.OpError", wantException: "net.OpError"},
+		{name: "multi-wrap takes the first informative", err: fmt.Errorf("%w and %w", errors.New("x"), opErr), wantErrorType: "net.OpError", wantException: "net.OpError"},
+		{name: "join takes the first informative", err: errors.Join(errors.New("x"), pathErr, opErr), wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "joined plain errors have no informative type", err: errors.Join(errors.New("x"), errors.New("y")), wantErrorType: "Error", wantException: "Error"},
+		{name: "custom pointer type", err: &domainError{}, wantErrorType: "posthogmcp.domainError", wantException: "posthogmcp.domainError"},
+		{name: "custom value type", err: valueError{}, wantErrorType: "posthogmcp.valueError", wantException: "posthogmcp.valueError"},
+		{name: "explicit type replaces only the error type", err: pathErr, errorType: "validation", wantErrorType: "validation", wantException: "fs.PathError"},
+		{name: "explicit type over a plain error", err: errors.New("boom"), errorType: "timeout", wantErrorType: "timeout", wantException: "Error"},
+		{name: "blank explicit type is derived", err: pathErr, errorType: "  ", wantErrorType: "fs.PathError", wantException: "fs.PathError"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -737,8 +740,8 @@ func TestCaptureToolCallErrorTypeDefaultsToErrorClass(t *testing.T) {
 			}))
 			require.Len(t, client.messages, 2)
 
-			assert.Equal(t, tt.want, requireCapture(t, client.messages[0]).Properties[propertyErrorType])
-			assert.Equal(t, tt.want, requireException(t, client.messages[1]).ExceptionList[0].Type)
+			assert.Equal(t, tt.wantErrorType, requireCapture(t, client.messages[0]).Properties[propertyErrorType])
+			assert.Equal(t, tt.wantException, requireException(t, client.messages[1]).ExceptionList[0].Type)
 		})
 	}
 }

@@ -101,8 +101,10 @@ type ToolCall struct {
 	// Error is the failure, if any. When set, it is also captured as a
 	// $exception unless exception autocapture is disabled.
 	Error error
-	// ErrorType is captured as $mcp_error_type and the exception type. When
-	// empty it is the Go type of Error, such as fs.PathError, else "Error".
+	// ErrorType is a coarse category captured as $mcp_error_type, such as
+	// "validation" or "timeout". When empty it is the Go type of Error, such as
+	// fs.PathError, else "Error". The $exception event always carries the Go
+	// type of Error.
 	ErrorType string
 
 	// Properties adds custom event metadata. $mcp_* and identity control keys

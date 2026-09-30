@@ -19,6 +19,7 @@ type preparedToolCall struct {
 	model                 string
 	modelSource           ModelSource
 	errorType             string
+	exceptionType         string
 	errorMessage          string
 	suppressPersonProfile bool
 	parameters            any
@@ -136,14 +137,15 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 
 	if call.IsError {
-		prepared.errorType = strings.TrimSpace(call.ErrorType)
-		if prepared.errorType == "" {
-			prepared.errorType = errorTypeName(call.Error)
+		prepared.exceptionType = errorTypeName(call.Error)
+		if prepared.exceptionType == "" {
+			prepared.exceptionType = defaultErrorType
 		}
+		prepared.exceptionType = truncateUTF8(prepared.exceptionType, maxMetadataBytes)
+		prepared.errorType = truncateUTF8(strings.TrimSpace(call.ErrorType), maxMetadataBytes)
 		if prepared.errorType == "" {
-			prepared.errorType = defaultErrorType
+			prepared.errorType = prepared.exceptionType
 		}
-		prepared.errorType = truncateUTF8(prepared.errorType, maxMetadataBytes)
 
 		prepared.errorMessage = fmt.Sprintf("Tool %s returned an error", prepared.toolName)
 		if call.Error != nil {
