@@ -129,7 +129,9 @@ func TestInstrumentCapturesToolCall(t *testing.T) {
 	assert.Equal(t, false, properties["$mcp_is_error"])
 	assert.Equal(t, posthog.Properties{"plan": "pro"}, properties["$set"])
 	assert.Equal(t, "test", properties["environment"])
-	assert.JSONEq(t, `{"city":"Melbourne"}`, jsonString(t, properties["$mcp_parameters"]))
+	assert.JSONEq(t,
+		`{"request":{"method":"tools/call","params":{"name":"weather","arguments":{"city":"Melbourne"}}}}`,
+		jsonString(t, properties["$mcp_parameters"]))
 	assert.JSONEq(t,
 		`{"content":[{"type":"text","text":"{\"temperature\":21}"}],"structuredContent":{"temperature":21}}`,
 		jsonString(t, properties["$mcp_response"]))
@@ -175,8 +177,58 @@ func TestInstrumentCapturesFailures(t *testing.T) {
 
 			properties := queue.onlyToolCall(t)
 			assert.Equal(t, true, properties["$mcp_is_error"])
-			assert.Contains(t, properties["$mcp_error_message"], test.wantMessage)
+			assert.Equal(t, test.wantMessage, properties["$mcp_error_message"])
 			assert.Len(t, queue.exceptions(), 1)
+		})
+	}
+}
+
+func TestInstrumentCapturesParametersAndIntent(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		arguments      any
+		wantParameters string
+		wantIntent     any
+		wantSource     any
+	}{
+		{
+			name:           "analytics arguments are captured as intent, not parameters",
+			arguments:      map[string]any{"city": "Melbourne", "context": "  Checking the weather for a trip  ", "conversation_id": "c-1"},
+			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"city":"Melbourne"}}}}`,
+			wantIntent:     "Checking the weather for a trip",
+			wantSource:     "context_parameter",
+		},
+		{
+			name:           "absent arguments are an empty object",
+			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{}}}}`,
+		},
+		{
+			name:           "a non-string context is not an intent",
+			arguments:      map[string]any{"context": 42, "limit": 1.50},
+			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"limit":1.5}}}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue))
+			server.AddTool(
+				&mcpsdk.Tool{Name: "echo", InputSchema: map[string]any{"type": "object"}},
+				func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+					return &mcpsdk.CallToolResult{}, nil
+				},
+			)
+
+			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "echo",
+				Arguments: test.arguments,
+			})
+			require.NoError(t, err)
+
+			properties := queue.onlyToolCall(t)
+			assert.JSONEq(t, test.wantParameters, jsonString(t, properties["$mcp_parameters"]))
+			assert.Equal(t, test.wantIntent, properties["$mcp_intent"])
+			assert.Equal(t, test.wantSource, properties["$mcp_intent_source"])
 		})
 	}
 }

@@ -92,8 +92,13 @@ func (cfg *config) observe(
 		Timestamp:     started,
 	}
 
-	if cfg.captureParameters && len(toolRequest.Params.Arguments) > 0 {
-		call.Parameters = toolRequest.Params.Arguments
+	arguments := parseArguments(toolRequest.Params.Arguments)
+	if intent := arguments.text(contextArgument); intent != "" {
+		call.Intent = intent
+		call.IntentSource = posthogmcp.IntentSourceContextParameter
+	}
+	if cfg.captureParameters {
+		call.Parameters = capturedParameters(toolRequest.Params, arguments)
 	}
 	if cfg.captureResponses && toolResult != nil {
 		call.Response = toolResult
@@ -110,14 +115,15 @@ func (cfg *config) observe(
 		}
 	}
 
+	// TODO: once ToolCall has the conversation, model, and transport fields,
+	// set LLMModel from toolRequest.Params.Meta["x-codex-turn-metadata"]["model"]
+	// with ModelSourceClientMetadata, ClientUserAgent from the User-Agent header
+	// in toolRequest.Extra, and VendorClient from its X-Anthropic-Client header.
+
 	if handlerErr != nil {
-		call.IsError = true
 		call.Error = handlerErr
-		call.ErrorType = "MCPProtocolError"
 	} else if toolResult != nil && toolResult.IsError {
-		call.IsError = true
-		call.Error = toolResultError(toolResult)
-		call.ErrorType = "MCPToolError"
+		call.Error = errors.New(toolResultText(toolResult))
 	}
 
 	if cfg.identity != nil {
@@ -153,13 +159,17 @@ func (cfg *config) observe(
 	}
 }
 
-func toolResultError(result *mcpsdk.CallToolResult) error {
+func toolResultText(result *mcpsdk.CallToolResult) string {
+	var texts []string
 	for _, content := range result.Content {
-		if text, ok := content.(*mcpsdk.TextContent); ok && text != nil && strings.TrimSpace(text.Text) != "" {
-			return errors.New(text.Text)
+		if text, ok := content.(*mcpsdk.TextContent); ok {
+			texts = append(texts, text.Text)
 		}
 	}
-	return errors.New("MCP tool returned an error")
+	if text := strings.TrimSpace(strings.Join(texts, " ")); text != "" {
+		return text
+	}
+	return "Unknown error"
 }
 
 func callIdentityResolver(
