@@ -126,7 +126,11 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 		}
 	}()
 
-	call.tool = m.tools.lookup(ctx, next, req)
+	tool, err := m.tools.lookup(ctx, next, req)
+	if err != nil {
+		m.report(ctx, err)
+	}
+	call.tool = tool
 	if _, sent := call.arguments[contextArgument]; sent && call.tool.contextInjected {
 		arguments, err := json.Marshal(call.arguments.without(contextArgument))
 		if err != nil {

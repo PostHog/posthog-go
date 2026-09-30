@@ -414,10 +414,21 @@ func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
 	) (posthog.Properties, error) {
 		panic("properties panic")
 	})
+	panickingInnerListing := func(server *mcpsdk.Server) {
+		server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+			return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+				if method == methodListTools {
+					panic("inner tools/list panic")
+				}
+				return next(ctx, method, req)
+			}
+		})
+	}
 	for _, test := range []struct {
 		name         string
 		queue        *fakeQueue
 		opts         []Option
+		inner        func(*mcpsdk.Server)
 		wantReported []string
 	}{
 		{
@@ -439,11 +450,20 @@ func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
 				"posthogmcpsdk: properties resolver: properties resolver panic (string)",
 			},
 		},
+		{
+			name:         "inner handler panic while learning tools",
+			queue:        &fakeQueue{},
+			inner:        panickingInnerListing,
+			wantReported: []string{"posthogmcpsdk: tools/list through inner handler panicked (string)"},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var mu sync.Mutex
 			var reported []string
 			server := newServer()
+			if test.inner != nil {
+				test.inner(server)
+			}
 			opts := append(test.opts, WithErrorHandler(func(_ context.Context, err error) {
 				mu.Lock()
 				defer mu.Unlock()

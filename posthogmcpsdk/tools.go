@@ -3,6 +3,7 @@ package posthogmcpsdk
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -111,8 +112,9 @@ func (c *toolCatalog) record(gen *catalogGeneration, tools []*mcpsdk.Tool) []*mc
 // lookup returns what the catalog knows about the called tool. A call that
 // reaches this process before any tools/list did, as when a load balancer
 // sends a client's listing and its calls to different replicas, lists tools
-// through next once per generation. Concurrent callers share that walk.
-func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) toolInfo {
+// through next once per generation. Concurrent callers share that walk. The
+// error reports a panic in next, which never reaches the tools/call.
+func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
 	name := req.Params.Name
 	c.mu.Lock()
 	gen := c.current
@@ -125,12 +127,13 @@ func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req
 	}
 	c.mu.Unlock()
 	if known || walked == nil {
-		return info
+		return info, nil
 	}
 
+	var err error
 	if leads {
 		defer close(walked)
-		c.walk(ctx, next, req, gen)
+		err = c.walk(ctx, next, req, gen)
 	} else {
 		select {
 		case <-walked:
@@ -139,23 +142,34 @@ func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return gen.tools[name]
+	return gen.tools[name], err
 }
 
-func (c *toolCatalog) walk(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest, gen *catalogGeneration) {
+func (c *toolCatalog) walk(
+	ctx context.Context,
+	next mcpsdk.MethodHandler,
+	req *mcpsdk.CallToolRequest,
+	gen *catalogGeneration,
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("posthogmcpsdk: tools/list through inner handler panicked (%T)", recovered)
+		}
+	}()
 	list := &mcpsdk.ListToolsRequest{Session: req.Session, Params: &mcpsdk.ListToolsParams{}, Extra: req.Extra}
 	for range maxListingPages {
 		result, err := next(ctx, methodListTools, list)
 		page, ok := result.(*mcpsdk.ListToolsResult)
 		if err != nil || !ok {
-			return
+			return nil
 		}
 		c.record(gen, page.Tools)
 		if page.NextCursor == "" {
-			return
+			return nil
 		}
 		list.Params = &mcpsdk.ListToolsParams{Cursor: page.NextCursor}
 	}
+	return nil
 }
 
 // withContextParameter returns a copy of inputSchema that declares a required
