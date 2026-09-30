@@ -7,16 +7,20 @@ import (
 
 const defaultErrorType = "Error"
 
-// wrapperErrorTypes are the standard library types outside package errors that
-// only wrap other errors.
+// wrapperErrorTypes only carry a message or wrap other errors, so they say
+// nothing about what failed: the standard library's and github.com/pkg/errors'.
 var wrapperErrorTypes = map[string]bool{
-	"fmt.wrapError":  true,
-	"fmt.wrapErrors": true,
+	"errors.errorString": true,
+	"errors.joinError":   true,
+	"fmt.wrapError":      true,
+	"fmt.wrapErrors":     true,
+	"errors.fundamental": true,
+	"errors.withStack":   true,
+	"errors.withMessage": true,
 }
 
 // errorTypeName names err by its Go type, like the exception class Python uses,
-// looking past types that only carry a message or wrap other errors: those of
-// any package named errors (the standard library's, pkg/errors') and fmt's.
+// looking past wrapperErrorTypes.
 // The name is package-qualified, such as fs.PathError, on purpose:
 // posthog.ExceptionItem has no module field. It returns "" when nothing is
 // informative.
@@ -25,7 +29,7 @@ func errorTypeName(err error) string {
 		return ""
 	}
 	name := strings.TrimLeft(reflect.TypeOf(err).String(), "*")
-	if !strings.HasPrefix(name, "errors.") && !wrapperErrorTypes[name] {
+	if !wrapperErrorTypes[name] {
 		return name
 	}
 	switch wrapper := err.(type) {
