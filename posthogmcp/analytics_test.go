@@ -676,11 +676,33 @@ func TestCaptureToolCallManualAPIFields(t *testing.T) {
 	}
 }
 
-func TestCaptureToolCallRejectsInvalidLLMModelSource(t *testing.T) {
-	client := &fakeEnqueueClient{}
-	err := New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", LLMModelSource: "guess"})
-	require.EqualError(t, err, "posthogmcp: invalid LLMModelSource")
-	assert.Empty(t, client.messages)
+func TestCaptureToolCallInvalidLLMModelSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		call    ToolCall
+		wantErr string
+	}{
+		{name: "invalid source with a model is rejected", call: ToolCall{LLMModel: "gpt-5", LLMModelSource: "guess"}, wantErr: "posthogmcp: invalid LLMModelSource"},
+		{name: "invalid source without a model is ignored", call: ToolCall{LLMModelSource: "guess"}},
+		{name: "invalid source with a blank model is ignored", call: ToolCall{LLMModel: "  ", LLMModelSource: "guess"}},
+		{name: "invalid source with an unknown model is ignored", call: ToolCall{LLMModel: "unknown", LLMModelSource: "guess"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			err := New(client).CaptureToolCall(context.Background(), tt.call)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				assert.Empty(t, client.messages)
+				return
+			}
+			require.NoError(t, err)
+			capture := requireCapture(t, client.messages[0])
+			assert.NotContains(t, capture.Properties, propertyLLMModel)
+			assert.NotContains(t, capture.Properties, propertyLLMModelSource)
+		})
+	}
 }
 
 func TestCaptureToolCallExceptionLevel(t *testing.T) {

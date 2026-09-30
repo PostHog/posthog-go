@@ -74,7 +74,7 @@ type ToolCall struct {
 	// $mcp_tool_call. A blank value or "unknown" is not recorded.
 	LLMModel string
 	// LLMModelSource says where LLMModel came from and defaults to
-	// ModelSourceSelfReported. It is only recorded with a model.
+	// ModelSourceSelfReported. It is only recorded, and only validated, with a model.
 	LLMModelSource ModelSource
 
 	// Intent is the agent's stated reason for the call. When it arrives as a

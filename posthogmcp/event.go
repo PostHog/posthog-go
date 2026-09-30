@@ -63,11 +63,6 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		call.IntentSource != IntentSourceInferred {
 		return preparedToolCall{}, errors.New("posthogmcp: invalid IntentSource")
 	}
-	if call.LLMModelSource != "" &&
-		call.LLMModelSource != ModelSourceClientMetadata &&
-		call.LLMModelSource != ModelSourceSelfReported {
-		return preparedToolCall{}, errors.New("posthogmcp: invalid LLMModelSource")
-	}
 
 	call.IsError = call.IsError || call.Error != nil
 	explicitID := call.DistinctID != ""
@@ -98,6 +93,11 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	prepared.model = normalizeModel(call.LLMModel)
 	if prepared.model != "" {
 		prepared.modelSource = call.LLMModelSource
+		if prepared.modelSource != "" &&
+			prepared.modelSource != ModelSourceClientMetadata &&
+			prepared.modelSource != ModelSourceSelfReported {
+			return preparedToolCall{}, errors.New("posthogmcp: invalid LLMModelSource")
+		}
 		if prepared.modelSource == "" {
 			prepared.modelSource = ModelSourceSelfReported
 		}
