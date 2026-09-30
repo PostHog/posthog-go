@@ -344,3 +344,60 @@ func TestCaptureToolCallSanitizesIntentAndToolName(t *testing.T) {
 	assert.Equal(t, "use token [redacted] for [redacted]", capture.Properties[propertyIntent])
 	assert.Equal(t, "https://%5Bredacted%5D@internal.test/tools/search", capture.Properties[propertyToolName])
 }
+
+type resultContentBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MIMEType string `json:"mimeType,omitempty"`
+}
+
+type callToolResult struct {
+	Content []resultContentBlock `json:"content"`
+	IsError bool                 `json:"isError,omitempty"`
+}
+
+func TestCaptureToolCallTypedResponseWithLargeMedia(t *testing.T) {
+	image := func(size int) resultContentBlock {
+		return resultContentBlock{Type: "image", MIMEType: "image/png", Data: strings.Repeat("QUJD", size/4)}
+	}
+	text := func(value string) resultContentBlock { return resultContentBlock{Type: "text", Text: value} }
+	redactedImage := map[string]any{"type": "text", "text": "[image content redacted - not supported by PostHog MCP analytics]"}
+
+	tests := []struct {
+		name     string
+		response *callToolResult
+		want     any
+	}{
+		{
+			name:     "text kept and images redacted",
+			response: &callToolResult{Content: []resultContentBlock{text("hello"), image(900_000), image(900_000)}},
+			want: map[string]any{"content": []any{
+				map[string]any{"type": "text", "text": "hello"}, redactedImage, redactedImage,
+			}},
+		},
+		{
+			name:     "images beyond the hard bound are omitted",
+			response: &callToolResult{Content: []resultContentBlock{text("hello"), image(9 << 20)}},
+			want:     oversizedPayloadValue,
+		},
+		{
+			name:     "oversized text is omitted",
+			response: &callToolResult{Content: []resultContentBlock{text(strings.Repeat("x", maxNormalizeBytes))}},
+			want:     oversizedPayloadValue,
+		},
+		{
+			name:     "redaction that still exceeds the cap is omitted",
+			response: &callToolResult{Content: []resultContentBlock{text(strings.Repeat("x", maxNormalizeBytes)), image(900_000)}},
+			want:     oversizedPayloadValue,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", Response: tt.response}))
+
+			assert.Equal(t, tt.want, requireCapture(t, client.messages[0]).Properties[propertyResponse])
+		})
+	}
+}

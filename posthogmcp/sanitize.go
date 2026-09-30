@@ -61,6 +61,11 @@ func normalizePayload(field string, value any) (normalized any, err error) {
 
 	data, err := encodePayload(value)
 	if err == nil && len(data) > maxNormalizeBytes {
+		if field == "Response" {
+			if redacted, ok := redactOversizedResponse(data); ok {
+				return redacted, nil
+			}
+		}
 		if field == "Parameters" || field == "Response" {
 			return oversizedPayloadValue, nil
 		}
@@ -70,12 +75,38 @@ func normalizePayload(field string, value any) (normalized any, err error) {
 		return nil, packageError("normalize "+field, err)
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&normalized); err != nil {
+	normalized, err = decodeJSON(data)
+	if err != nil {
 		return nil, packageError("normalize "+field, err)
 	}
 	return normalized, nil
+}
+
+func decodeJSON(data []byte) (value any, err error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	err = decoder.Decode(&value)
+	return value, err
+}
+
+// redactOversizedResponse rescues a response whose JSON is over the normalize
+// cap only because of media, such as a typed MCP result that
+// redactMediaBeforeNormalize cannot see into. It decodes the JSON, redacts
+// media as for a decoded response, and reports whether that fits the cap.
+func redactOversizedResponse(data []byte) (any, bool) {
+	if len(data) > maxRedactableBytes {
+		return nil, false
+	}
+	decoded, err := decodeJSON(data)
+	if err != nil {
+		return nil, false
+	}
+	redacted := redactMediaBeforeNormalize(decoded)
+	encoded, err := marshalJSONSafely(redacted)
+	if err != nil || len(encoded) > maxNormalizeBytes {
+		return nil, false
+	}
+	return redacted, true
 }
 
 // encodePayload pays for one json.Marshal in the common case. When that fails,

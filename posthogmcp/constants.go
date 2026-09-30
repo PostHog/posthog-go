@@ -49,6 +49,11 @@ const (
 	largeBinaryGateBytes  = 10_240
 )
 
+// maxRedactableBytes bounds the extra decode of an oversized response: it still
+// holds a few base64 screenshots, while a decoded tree of small nodes stays
+// within tens of megabytes of transient memory.
+const maxRedactableBytes = 8 * maxNormalizeBytes
+
 const (
 	redactedValue         = "[redacted]"
 	binaryRedactedValue   = "[binary data redacted - not supported by PostHog MCP analytics]"
