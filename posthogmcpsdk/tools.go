@@ -55,6 +55,13 @@ func newCatalogGeneration() *catalogGeneration {
 	return &catalogGeneration{tools: map[string]toolInfo{}}
 }
 
+// invalidate starts a new generation that knows no tools.
+func (c *toolCatalog) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.current = newCatalogGeneration()
+}
+
 func (c *toolCatalog) generation() *catalogGeneration {
 	c.mu.Lock()
 	defer c.mu.Unlock()

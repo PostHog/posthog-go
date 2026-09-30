@@ -13,22 +13,39 @@ import (
 )
 
 const (
-	methodCallTool  = "tools/call"
-	methodListTools = "tools/list"
+	methodCallTool              = "tools/call"
+	methodListTools             = "tools/list"
+	notificationToolListChanged = "notifications/tools/list_changed"
 )
 
-// Instrument adds PostHog tool-call analytics to server receiving middleware.
-// Install other receiving middleware before or after Instrument according to
-// whether its work should be included in the measured duration.
+// Instrument adds PostHog tool-call analytics to server receiving middleware,
+// and the sending middleware described in [NewMiddleware]. Install other
+// receiving middleware before or after Instrument according to whether its
+// work should be included in the measured duration.
 func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...Option) {
-	server.AddReceivingMiddleware(NewMiddleware(analytics, opts...))
+	receiving, sending := NewMiddleware(analytics, opts...)
+	server.AddReceivingMiddleware(receiving)
+	server.AddSendingMiddleware(sending)
 }
 
-// NewMiddleware returns receiving middleware that records terminal tools/call
-// requests without changing their result, error, or panic behavior. Unless
-// WithContextParameter(false) is set, it also adds the context argument to
-// tools/list results and removes it from tools/call arguments.
-func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) mcpsdk.Middleware {
+// NewMiddleware returns the middleware [Instrument] installs, for servers that
+// order their middleware by hand. Install receiving with
+// Server.AddReceivingMiddleware and sending with Server.AddSendingMiddleware.
+//
+// receiving records terminal tools/call requests without changing their
+// result, error, or panic behavior. Unless WithContextParameter(false) is set,
+// it also adds the context argument to tools/list results and removes it from
+// tools/call arguments, according to what it learned about each tool from
+// tools/list.
+//
+// sending forgets what receiving learned whenever the server sends
+// notifications/tools/list_changed, so a tool registered again with a new
+// schema is handled by that schema. Without it, the old one still decides
+// whether context is removed. go-sdk sends the notification a few
+// milliseconds after a change, and only to connected sessions when the tools
+// capability allows it. A tool replaced while no session is connected keeps
+// its old entry until a tools/list result includes it again.
+func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) (receiving, sending mcpsdk.Middleware) {
 	cfg := defaultConfig(analytics)
 	for _, opt := range opts {
 		if opt != nil {
@@ -36,38 +53,48 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) mcpsdk.Middl
 		}
 	}
 	m := &middleware{config: cfg, tools: newToolCatalog(cfg.contextParameter)}
-
-	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
-		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
-			switch method {
-			case methodListTools:
-				gen := m.tools.generation()
-				result, err := next(ctx, method, req)
-				if page, ok := result.(*mcpsdk.ListToolsResult); ok && err == nil {
-					return m.advertise(ctx, gen, page), nil
-				}
-				return result, err
-			case methodCallTool:
-				toolRequest, ok := req.(*mcpsdk.CallToolRequest)
-				if !ok || toolRequest == nil || toolRequest.Params == nil {
-					m.report(ctx, errors.New("posthogmcpsdk: tools/call received an unexpected request type"))
-					return next(ctx, method, req)
-				}
-				call := m.prepare(ctx, next, toolRequest)
-				started := time.Now()
-				result, handlerErr := next(ctx, method, call.dispatch)
-				m.observeSafely(ctx, call, result, handlerErr, started, time.Since(started))
-				return result, handlerErr
-			default:
-				return next(ctx, method, req)
-			}
-		}
-	}
+	return m.receive, m.send
 }
 
 type middleware struct {
 	*config
 	tools *toolCatalog
+}
+
+func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+		switch method {
+		case methodListTools:
+			gen := m.tools.generation()
+			result, err := next(ctx, method, req)
+			if page, ok := result.(*mcpsdk.ListToolsResult); ok && err == nil {
+				return m.advertise(ctx, gen, page), nil
+			}
+			return result, err
+		case methodCallTool:
+			toolRequest, ok := req.(*mcpsdk.CallToolRequest)
+			if !ok || toolRequest == nil || toolRequest.Params == nil {
+				m.report(ctx, errors.New("posthogmcpsdk: tools/call received an unexpected request type"))
+				return next(ctx, method, req)
+			}
+			call := m.prepare(ctx, next, toolRequest)
+			started := time.Now()
+			result, handlerErr := next(ctx, method, call.dispatch)
+			m.observeSafely(ctx, call, result, handlerErr, started, time.Since(started))
+			return result, handlerErr
+		default:
+			return next(ctx, method, req)
+		}
+	}
+}
+
+func (m *middleware) send(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+		if method == notificationToolListChanged {
+			m.tools.invalidate()
+		}
+		return next(ctx, method, req)
+	}
 }
 
 // preparedCall is a tools/call as instrumentation sees it before dispatch.

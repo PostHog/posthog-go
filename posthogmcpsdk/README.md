@@ -45,10 +45,26 @@ Schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not changed.
 
 Turn it off with `WithContextParameter(false)`.
 
+The middleware learns each tool's schema from `tools/list` and forgets it
+when the server sends `notifications/tools/list_changed`, so a tool registered
+again with a different schema is handled by the new one. go-sdk sends that
+notification about 10ms after the change, so calls in that window still use
+the old schema. It notifies only connected sessions, so a tool replaced while
+no session is connected keeps its old schema until a `tools/list` result
+includes it.
+
 ## Middleware order
 
-`Instrument` adds receiving middleware. Middleware added before it runs inside
-the measured duration; middleware added after it runs outside.
+`Instrument` adds receiving middleware, and sending middleware that watches for
+`notifications/tools/list_changed`. Receiving middleware added before it runs
+inside the measured duration; middleware added after it runs outside. To place
+the middleware yourself, install both halves that `NewMiddleware` returns:
+
+```go
+receiving, sending := posthogmcpsdk.NewMiddleware(analytics)
+server.AddReceivingMiddleware(receiving)
+server.AddSendingMiddleware(sending)
+```
 
 ## Compatibility and development
 

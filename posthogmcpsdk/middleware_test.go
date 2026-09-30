@@ -470,7 +470,8 @@ func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
 
 func TestMiddlewarePreservesDownstreamPanic(t *testing.T) {
 	want := &struct{}{}
-	handler := NewMiddleware(posthogmcp.New(&fakeQueue{}))(func(
+	receiving, _ := NewMiddleware(posthogmcp.New(&fakeQueue{}))
+	handler := receiving(func(
 		context.Context,
 		string,
 		mcpsdk.Request,
@@ -561,10 +562,15 @@ func newServer() *mcpsdk.Server {
 
 func connectInMemory(t *testing.T, server *mcpsdk.Server) *mcpsdk.ClientSession {
 	t.Helper()
+	return connectInMemoryWith(t, server, nil)
+}
+
+func connectInMemoryWith(t *testing.T, server *mcpsdk.Server, opts *mcpsdk.ClientOptions) *mcpsdk.ClientSession {
+	t.Helper()
 	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
 	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
 	require.NoError(t, err)
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "2.0.0"}, nil)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "2.0.0"}, opts)
 	clientSession, err := client.Connect(t.Context(), clientTransport, nil)
 	if err != nil {
 		_ = serverSession.Close()
@@ -706,4 +712,68 @@ func newPagedServer(n int) (*mcpsdk.Server, *atomic.Int32) {
 		}
 	})
 	return server, pages
+}
+
+func TestInstrumentRelearnsToolsAfterListChanged(t *testing.T) {
+	type ownContextInput struct {
+		Context string `json:"context"`
+	}
+	withoutContext := func(server *mcpsdk.Server) {
+		mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "plan"}, func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+			return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "no context"}}}, nil, nil
+		})
+	}
+	withOwnContext := func(server *mcpsdk.Server) {
+		mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "plan"}, func(_ context.Context, _ *mcpsdk.CallToolRequest, in ownContextInput) (*mcpsdk.CallToolResult, any, error) {
+			return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "own context: " + in.Context}}}, nil, nil
+		})
+	}
+	for _, test := range []struct {
+		name       string
+		before     func(*mcpsdk.Server)
+		after      func(*mcpsdk.Server)
+		wantResult string
+	}{
+		{
+			name:       "the new schema declares context",
+			before:     withoutContext,
+			after:      withOwnContext,
+			wantResult: "own context: Planning a trip",
+		},
+		{
+			name:       "the old schema declared context and the new one does not",
+			before:     withOwnContext,
+			after:      withoutContext,
+			wantResult: "no context",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newServer()
+			Instrument(server, posthogmcp.New(&fakeQueue{}))
+			test.before(server)
+			listChanged := make(chan struct{}, 1)
+			client := connectInMemoryWith(t, server, &mcpsdk.ClientOptions{
+				ToolListChangedHandler: func(context.Context, *mcpsdk.ToolListChangedRequest) {
+					select {
+					case listChanged <- struct{}{}:
+					default:
+					}
+				},
+			})
+			_, err := client.ListTools(t.Context(), nil)
+			require.NoError(t, err)
+
+			server.RemoveTools("plan")
+			test.after(server)
+			<-listChanged
+
+			result, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "plan",
+				Arguments: map[string]any{"context": "Planning a trip"},
+			})
+			require.NoError(t, err)
+			require.False(t, result.IsError, toolResultText(result))
+			assert.Equal(t, test.wantResult, result.Content[0].(*mcpsdk.TextContent).Text)
+		})
+	}
 }
