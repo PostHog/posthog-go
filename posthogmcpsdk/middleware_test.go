@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -75,7 +77,11 @@ type weatherOutput struct {
 }
 
 func addWeatherTool(server *mcpsdk.Server, err error) {
-	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "weather", Description: "Get current weather"}, func(
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "weather",
+		Description: "Get current weather",
+		Meta:        mcpsdk.Meta{"category": "forecasts"},
+	}, func(
 		context.Context,
 		*mcpsdk.CallToolRequest,
 		weatherInput,
@@ -84,7 +90,7 @@ func addWeatherTool(server *mcpsdk.Server, err error) {
 	})
 }
 
-func TestInstrumentCapturesToolCall(t *testing.T) {
+func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	queue := &fakeQueue{}
 	server := newServer()
 	Instrument(server, posthogmcp.New(queue),
@@ -107,12 +113,15 @@ func TestInstrumentCapturesToolCall(t *testing.T) {
 	)
 	addWeatherTool(server, nil)
 
-	result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+	client := connectInMemory(t, server)
+	_, err := client.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	result, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{
 		Name:      "weather",
-		Arguments: map[string]any{"city": "Melbourne"},
+		Arguments: map[string]any{"city": "Melbourne", "context": "Checking the weather before a trip"},
 	})
 	require.NoError(t, err)
-	require.False(t, result.IsError)
+	require.False(t, result.IsError, "the typed tool rejected the injected context argument")
 
 	captures := queue.toolCalls(t)
 	require.Len(t, captures, 1)
@@ -120,21 +129,163 @@ func TestInstrumentCapturesToolCall(t *testing.T) {
 	assert.Equal(t, "user-123", capture.DistinctId)
 	assert.Equal(t, posthog.Groups{"company": "acme"}, capture.Groups)
 	properties := capture.Properties
-	assert.Equal(t, "weather", properties["$mcp_tool_name"])
-	assert.Equal(t, "weather-server", properties["$mcp_server_name"])
-	assert.Equal(t, "1.2.3", properties["$mcp_server_version"])
-	assert.Equal(t, "test-client", properties["$mcp_client_name"])
-	assert.Equal(t, "2.0.0", properties["$mcp_client_version"])
-	assert.Equal(t, "2025-11-25", properties["$mcp_protocol_version"])
-	assert.Equal(t, false, properties["$mcp_is_error"])
-	assert.Equal(t, posthog.Properties{"plan": "pro"}, properties["$set"])
-	assert.Equal(t, "test", properties["environment"])
-	assert.JSONEq(t,
-		`{"request":{"method":"tools/call","params":{"name":"weather","arguments":{"city":"Melbourne"}}}}`,
-		jsonString(t, properties["$mcp_parameters"]))
-	assert.JSONEq(t,
-		`{"content":[{"type":"text","text":"{\"temperature\":21}"}],"structuredContent":{"temperature":21}}`,
-		jsonString(t, properties["$mcp_response"]))
+	assert.IsType(t, float64(0), properties["$mcp_duration_ms"])
+	delete(properties, "$mcp_duration_ms")
+	assert.JSONEq(t, `{
+		"$groups": {"company": "acme"},
+		"$mcp_client_name": "test-client",
+		"$mcp_client_version": "2.0.0",
+		"$mcp_intent": "Checking the weather before a trip",
+		"$mcp_intent_source": "context_parameter",
+		"$mcp_is_error": false,
+		"$mcp_parameters": {"request": {"method": "tools/call", "params": {"name": "weather", "arguments": {"city": "Melbourne"}}}},
+		"$mcp_protocol_version": "2025-11-25",
+		"$mcp_resource_name": "weather",
+		"$mcp_response": {"content": [{"type": "text", "text": "{\"temperature\":21}"}], "structuredContent": {"temperature": 21}},
+		"$mcp_server_name": "weather-server",
+		"$mcp_server_version": "1.2.3",
+		"$mcp_source": "posthog_mcp_analytics",
+		"$mcp_tool_category": "forecasts",
+		"$mcp_tool_description": "Get current weather",
+		"$mcp_tool_name": "weather",
+		"$set": {"plan": "pro"},
+		"environment": "test"
+	}`, jsonString(t, properties))
+	assert.Empty(t, queue.exceptions())
+}
+
+func TestInstrumentAdvertisesContextParameter(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		opts           []Option
+		inputSchema    any
+		wantProperties []string
+		wantRequired   []string
+	}{
+		{
+			name:           "added to a closed schema",
+			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []any{"city"}, "additionalProperties": false},
+			wantProperties: []string{"city", "context"},
+			wantRequired:   []string{"city", "context"},
+		},
+		{
+			name:           "added to an empty schema",
+			inputSchema:    map[string]any{"type": "object"},
+			wantProperties: []string{"context"},
+			wantRequired:   []string{"context"},
+		},
+		{
+			name:           "a tool's own context is kept",
+			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "object"}}},
+			wantProperties: []string{"context"},
+		},
+		{
+			name:        "combinator schemas are left alone",
+			inputSchema: map[string]any{"type": "object", "anyOf": []any{map[string]any{"required": []any{"id"}}}},
+		},
+		{
+			name:        "disabled",
+			opts:        []Option{WithContextParameter(false)},
+			inputSchema: map[string]any{"type": "object"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newServer()
+			Instrument(server, posthogmcp.New(&fakeQueue{}), test.opts...)
+			server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: test.inputSchema}, echoHandler)
+			client := connectInMemory(t, server)
+
+			for range 2 {
+				result, err := client.ListTools(t.Context(), nil)
+				require.NoError(t, err)
+				require.Len(t, result.Tools, 1)
+				var schema struct {
+					Properties map[string]json.RawMessage `json:"properties"`
+					Required   []string                   `json:"required"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(jsonString(t, result.Tools[0].InputSchema)), &schema))
+				assert.ElementsMatch(t, test.wantProperties, slices.Collect(maps.Keys(schema.Properties)))
+				assert.Equal(t, test.wantRequired, schema.Required)
+			}
+		})
+	}
+}
+
+func TestInstrumentDispatchesContextArgument(t *testing.T) {
+	type ownContextInput struct {
+		Context string `json:"context"`
+	}
+	for _, test := range []struct {
+		name        string
+		opts        []Option
+		listFirst   bool
+		ownsContext bool
+		wantResult  string
+		wantIntent  any
+	}{
+		{
+			name:       "removed after a listing",
+			listFirst:  true,
+			wantResult: "",
+			wantIntent: "Planning a trip",
+		},
+		{
+			name:       "removed on a replica that never served the listing",
+			wantResult: "",
+			wantIntent: "Planning a trip",
+		},
+		{
+			name:        "kept for a tool that declares it",
+			listFirst:   true,
+			ownsContext: true,
+			wantResult:  "Planning a trip",
+			wantIntent:  "Planning a trip",
+		},
+		{
+			name:        "kept and not captured as intent when disabled",
+			opts:        []Option{WithContextParameter(false)},
+			listFirst:   true,
+			ownsContext: true,
+			wantResult:  "Planning a trip",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue), test.opts...)
+			tool := &mcpsdk.Tool{Name: "plan", Description: "Plan a trip"}
+			if test.ownsContext {
+				mcpsdk.AddTool(server, tool, func(_ context.Context, _ *mcpsdk.CallToolRequest, in ownContextInput) (*mcpsdk.CallToolResult, any, error) {
+					return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: in.Context}}}, nil, nil
+				})
+			} else {
+				mcpsdk.AddTool(server, tool, func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+					return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{}}}, nil, nil
+				})
+			}
+			client := connectInMemory(t, server)
+			if test.listFirst {
+				_, err := client.ListTools(t.Context(), nil)
+				require.NoError(t, err)
+			}
+
+			result, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "plan",
+				Arguments: map[string]any{"context": "Planning a trip"},
+			})
+			require.NoError(t, err)
+			require.False(t, result.IsError, toolResultText(result))
+			assert.Equal(t, test.wantResult, result.Content[0].(*mcpsdk.TextContent).Text)
+
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantIntent, properties["$mcp_intent"])
+			assert.Equal(t, "Plan a trip", properties["$mcp_tool_description"])
+		})
+	}
+}
+
+func echoHandler(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	return &mcpsdk.CallToolResult{}, nil
 }
 
 func TestInstrumentCapturesFailures(t *testing.T) {
@@ -212,12 +363,7 @@ func TestInstrumentCapturesParametersAndIntent(t *testing.T) {
 			queue := &fakeQueue{}
 			server := newServer()
 			Instrument(server, posthogmcp.New(queue))
-			server.AddTool(
-				&mcpsdk.Tool{Name: "echo", InputSchema: map[string]any{"type": "object"}},
-				func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-					return &mcpsdk.CallToolResult{}, nil
-				},
-			)
+			server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: map[string]any{"type": "object"}}, echoHandler)
 
 			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
 				Name:      "echo",

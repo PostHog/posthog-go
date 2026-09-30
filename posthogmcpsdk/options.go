@@ -15,17 +15,8 @@ type Identity struct {
 	SetProperties posthog.Properties
 }
 
-// ToolMetadata provides application-owned metadata about an MCP tool.
-type ToolMetadata struct {
-	Description string
-	Category    string
-}
-
 // IdentityResolver resolves the PostHog identity for a tool call.
 type IdentityResolver func(context.Context, *mcpsdk.CallToolRequest) (Identity, error)
-
-// ToolMetadataResolver resolves metadata for a tool call.
-type ToolMetadataResolver func(context.Context, *mcpsdk.CallToolRequest) (ToolMetadata, error)
 
 // PropertiesResolver resolves additional PostHog properties for a completed
 // tool call.
@@ -46,11 +37,11 @@ type Option func(*config)
 type config struct {
 	analytics         *posthogmcp.Analytics
 	identity          IdentityResolver
-	toolMetadata      ToolMetadataResolver
 	properties        PropertiesResolver
 	errorHandler      ErrorHandler
 	captureParameters bool
 	captureResponses  bool
+	contextParameter  bool
 	serverName        string
 	serverVersion     string
 }
@@ -60,17 +51,13 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 		analytics:         analytics,
 		captureParameters: true,
 		captureResponses:  true,
+		contextParameter:  true,
 	}
 }
 
 // WithIdentity configures application-specific identity resolution.
 func WithIdentity(resolver IdentityResolver) Option {
 	return func(cfg *config) { cfg.identity = resolver }
-}
-
-// WithToolMetadata configures application-specific tool metadata resolution.
-func WithToolMetadata(resolver ToolMetadataResolver) Option {
-	return func(cfg *config) { cfg.toolMetadata = resolver }
 }
 
 // WithCaptureParameters controls capture of raw tool arguments. It is enabled
@@ -83,6 +70,16 @@ func WithCaptureParameters(enabled bool) Option {
 // enabled by default.
 func WithCaptureResponses(enabled bool) Option {
 	return func(cfg *config) { cfg.captureResponses = enabled }
+}
+
+// WithContextParameter controls whether tools are advertised with a required
+// context argument in which the agent states why it is calling the tool,
+// captured as the event's intent. The argument is removed before the tool's
+// handler and input validation see the call. Tools that declare their own
+// context argument keep it, and their value is still captured as the intent.
+// It is enabled by default.
+func WithContextParameter(enabled bool) Option {
+	return func(cfg *config) { cfg.contextParameter = enabled }
 }
 
 // WithProperties configures application-specific event properties.

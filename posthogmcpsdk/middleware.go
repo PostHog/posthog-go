@@ -2,6 +2,7 @@ package posthogmcpsdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,7 +12,10 @@ import (
 	"github.com/posthog/posthog-go/posthogmcp"
 )
 
-const methodCallTool = "tools/call"
+const (
+	methodCallTool  = "tools/call"
+	methodListTools = "tools/list"
+)
 
 // Instrument adds PostHog tool-call analytics to server receiving middleware.
 // Install other receiving middleware before or after Instrument according to
@@ -21,7 +25,9 @@ func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...
 }
 
 // NewMiddleware returns receiving middleware that records terminal tools/call
-// requests without changing their result, error, or panic behavior.
+// requests without changing their result, error, or panic behavior. Unless
+// WithContextParameter(false) is set, it also adds the context argument to
+// tools/list results and removes it from tools/call arguments.
 func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) mcpsdk.Middleware {
 	cfg := defaultConfig(analytics)
 	for _, opt := range opts {
@@ -29,24 +35,91 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) mcpsdk.Middl
 			opt(cfg)
 		}
 	}
+	m := &middleware{config: cfg, tools: newToolCatalog(cfg.contextParameter)}
 
 	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
-			if method != methodCallTool {
+			switch method {
+			case methodListTools:
+				result, err := next(ctx, method, req)
+				if page, ok := result.(*mcpsdk.ListToolsResult); ok && err == nil {
+					return m.advertise(ctx, page), nil
+				}
+				return result, err
+			case methodCallTool:
+				toolRequest, ok := req.(*mcpsdk.CallToolRequest)
+				if !ok || toolRequest == nil || toolRequest.Params == nil {
+					m.report(ctx, errors.New("posthogmcpsdk: tools/call received an unexpected request type"))
+					return next(ctx, method, req)
+				}
+				call := m.prepare(ctx, next, toolRequest)
+				started := time.Now()
+				result, handlerErr := next(ctx, method, call.dispatch)
+				m.observeSafely(ctx, call, result, handlerErr, started, time.Since(started))
+				return result, handlerErr
+			default:
 				return next(ctx, method, req)
 			}
-
-			started := time.Now()
-			result, handlerErr := next(ctx, method, req)
-			cfg.observeSafely(ctx, req, result, handlerErr, started, time.Since(started))
-			return result, handlerErr
 		}
 	}
 }
 
-func (cfg *config) observeSafely(
+type middleware struct {
+	*config
+	tools *toolCatalog
+}
+
+// preparedCall is a tools/call as instrumentation sees it before dispatch.
+type preparedCall struct {
+	request   *mcpsdk.CallToolRequest
+	dispatch  *mcpsdk.CallToolRequest
+	arguments toolArguments
+	tool      toolInfo
+}
+
+func (m *middleware) advertise(ctx context.Context, page *mcpsdk.ListToolsResult) (advertised *mcpsdk.ListToolsResult) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: tools/list panic (%T)", recovered))
+			advertised = page
+		}
+	}()
+	copied := *page
+	copied.Tools = m.tools.advertise(page.Tools)
+	return &copied
+}
+
+func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (call preparedCall) {
+	call = preparedCall{request: req, dispatch: req, arguments: parseArguments(req.Params.Arguments)}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: tools/call preparation panic (%T)", recovered))
+			call.dispatch = req
+		}
+	}()
+
+	tool, known := m.tools.get(req.Params.Name)
+	if !known {
+		tool = m.tools.learn(ctx, next, req)
+	}
+	call.tool = tool
+	if _, sent := call.arguments[contextArgument]; sent && tool.contextInjected {
+		arguments, err := json.Marshal(call.arguments.without(contextArgument))
+		if err != nil {
+			return call
+		}
+		params := *req.Params
+		params.Arguments = arguments
+		dispatch := *req
+		dispatch.Params = &params
+		call.dispatch = &dispatch
+	}
+	return call
+}
+
+func (m *middleware) observeSafely(
 	ctx context.Context,
-	req mcpsdk.Request,
+	call preparedCall,
 	result mcpsdk.Result,
 	handlerErr error,
 	started time.Time,
@@ -54,53 +127,49 @@ func (cfg *config) observeSafely(
 ) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			cfg.report(ctx, fmt.Errorf("posthogmcpsdk: instrumentation panic (%T)", recovered))
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: instrumentation panic (%T)", recovered))
 		}
 	}()
-	cfg.observe(ctx, req, result, handlerErr, started, duration)
+	m.observe(ctx, call, result, handlerErr, started, duration)
 }
 
-func (cfg *config) observe(
+func (m *middleware) observe(
 	ctx context.Context,
-	req mcpsdk.Request,
+	prepared preparedCall,
 	result mcpsdk.Result,
 	handlerErr error,
 	started time.Time,
 	duration time.Duration,
 ) {
-	toolRequest, ok := req.(*mcpsdk.CallToolRequest)
-	if !ok || toolRequest == nil || toolRequest.Params == nil {
-		cfg.report(ctx, errors.New("posthogmcpsdk: tools/call received an unexpected request type"))
-		return
-	}
-
+	toolRequest := prepared.request
 	var toolResult *mcpsdk.CallToolResult
 	if result != nil {
 		var resultOK bool
 		toolResult, resultOK = result.(*mcpsdk.CallToolResult)
 		if !resultOK {
-			cfg.report(ctx, errors.New("posthogmcpsdk: tools/call returned an unexpected result type"))
+			m.report(ctx, errors.New("posthogmcpsdk: tools/call returned an unexpected result type"))
 			return
 		}
 	}
 
 	call := posthogmcp.ToolCall{
-		ToolName:      toolRequest.Params.Name,
-		ServerName:    cfg.serverName,
-		ServerVersion: cfg.serverVersion,
-		Duration:      duration,
-		Timestamp:     started,
+		ToolName:        toolRequest.Params.Name,
+		ToolDescription: prepared.tool.description,
+		ToolCategory:    prepared.tool.category,
+		ServerName:      m.serverName,
+		ServerVersion:   m.serverVersion,
+		Duration:        duration,
+		Timestamp:       started,
 	}
 
-	arguments := parseArguments(toolRequest.Params.Arguments)
-	if intent := arguments.text(contextArgument); intent != "" {
+	if intent := prepared.arguments.text(contextArgument); intent != "" && m.contextParameter {
 		call.Intent = intent
 		call.IntentSource = posthogmcp.IntentSourceContextParameter
 	}
-	if cfg.captureParameters {
-		call.Parameters = capturedParameters(toolRequest.Params, arguments)
+	if m.captureParameters {
+		call.Parameters = capturedParameters(toolRequest.Params, prepared.arguments)
 	}
-	if cfg.captureResponses && toolResult != nil {
+	if m.captureResponses && toolResult != nil {
 		call.Response = toolResult
 	}
 
@@ -126,36 +195,27 @@ func (cfg *config) observe(
 		call.Error = errors.New(toolResultText(toolResult))
 	}
 
-	if cfg.identity != nil {
-		identity, err := callIdentityResolver(ctx, cfg.identity, toolRequest)
+	if m.identity != nil {
+		identity, err := callIdentityResolver(ctx, m.identity, toolRequest)
 		if err != nil {
-			cfg.report(ctx, fmt.Errorf("posthogmcpsdk: identity resolver: %w", err))
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: identity resolver: %w", err))
 		} else {
 			call.DistinctID = identity.DistinctID
 			call.Groups = identity.Groups
 			call.SetProperties = identity.SetProperties
 		}
 	}
-	if cfg.toolMetadata != nil {
-		metadata, err := callToolMetadataResolver(ctx, cfg.toolMetadata, toolRequest)
+	if m.properties != nil {
+		properties, err := callPropertiesResolver(ctx, m.properties, toolRequest, toolResult, handlerErr)
 		if err != nil {
-			cfg.report(ctx, fmt.Errorf("posthogmcpsdk: tool metadata resolver: %w", err))
-		} else {
-			call.ToolDescription = metadata.Description
-			call.ToolCategory = metadata.Category
-		}
-	}
-	if cfg.properties != nil {
-		properties, err := callPropertiesResolver(ctx, cfg.properties, toolRequest, toolResult, handlerErr)
-		if err != nil {
-			cfg.report(ctx, fmt.Errorf("posthogmcpsdk: properties resolver: %w", err))
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: properties resolver: %w", err))
 		} else {
 			call.Properties = properties
 		}
 	}
 
-	if err := captureToolCall(ctx, cfg.analytics, call); err != nil {
-		cfg.report(ctx, fmt.Errorf("posthogmcpsdk: capture: %w", err))
+	if err := captureToolCall(ctx, m.analytics, call); err != nil {
+		m.report(ctx, fmt.Errorf("posthogmcpsdk: capture: %w", err))
 	}
 }
 
@@ -178,15 +238,6 @@ func callIdentityResolver(
 	req *mcpsdk.CallToolRequest,
 ) (identity Identity, err error) {
 	defer recoverInstrumentationPanic("identity resolver", &err)
-	return resolver(ctx, req)
-}
-
-func callToolMetadataResolver(
-	ctx context.Context,
-	resolver ToolMetadataResolver,
-	req *mcpsdk.CallToolRequest,
-) (metadata ToolMetadata, err error) {
-	defer recoverInstrumentationPanic("tool metadata resolver", &err)
 	return resolver(ctx, req)
 }
 
