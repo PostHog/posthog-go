@@ -304,6 +304,13 @@ func isInconclusiveError(err error) bool {
 	return ok
 }
 
+func inconclusivePropertyMatchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &InconclusiveMatchError{msg: err.Error()}
+}
+
 // FeatureFlagResult represents the result of a feature flag evaluation,
 // containing both the flag value and its payload.
 type FeatureFlagResult struct {
@@ -1457,7 +1464,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "gt" {
 		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
 		if err != nil {
-			return false, err
+			return false, inconclusivePropertyMatchError(err)
 		}
 
 		return overrideValueOrderable > valueOrderable, nil
@@ -1466,7 +1473,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "lt" {
 		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
 		if err != nil {
-			return false, err
+			return false, inconclusivePropertyMatchError(err)
 		}
 
 		return overrideValueOrderable < valueOrderable, nil
@@ -1475,7 +1482,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "gte" {
 		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
 		if err != nil {
-			return false, err
+			return false, inconclusivePropertyMatchError(err)
 		}
 
 		return overrideValueOrderable >= valueOrderable, nil
@@ -1484,7 +1491,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "lte" {
 		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
 		if err != nil {
-			return false, err
+			return false, inconclusivePropertyMatchError(err)
 		}
 
 		return overrideValueOrderable <= valueOrderable, nil
@@ -1493,12 +1500,12 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "is_date_before" || operator == "is_date_after" {
 		overrideTime, err := validateDates(override_value)
 		if err != nil {
-			return false, err
+			return false, inconclusivePropertyMatchError(err)
 		}
 
 		valueTime, err := validateDates(value)
 		if err != nil {
-			return false, err
+			return false, inconclusivePropertyMatchError(err)
 		}
 
 		if operator == "is_date_before" {

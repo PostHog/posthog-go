@@ -377,8 +377,16 @@ func TestMatchPropertyNonNumericStringIsNotOrderable(t *testing.T) {
 			property := FlagProperty{Key: "Number", Value: value, Operator: "gt"}
 			_, err := matchProperty(property, NewProperties().Set("Number", 7))
 			require.Error(t, err)
+			require.True(t, isInconclusiveError(err))
 		})
 	}
+}
+
+func TestMatchPropertyInvalidDateIsInconclusive(t *testing.T) {
+	property := FlagProperty{Key: "created_at", Value: "2020-01-01", Operator: "is_date_before"}
+	_, err := matchProperty(property, NewProperties().Set("created_at", "not-a-date"))
+	require.Error(t, err)
+	require.True(t, isInconclusiveError(err))
 }
 
 func TestMatchPropertyNumber(t *testing.T) {
