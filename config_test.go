@@ -137,6 +137,15 @@ func TestMakeConfigMaxQueueSize(t *testing.T) {
 	}
 }
 
+func TestConfigInvalidMaxEnqueuedRequests(t *testing.T) {
+	c := Config{Endpoint: "https://app.posthog.com", MaxEnqueuedRequests: -1}
+	err := c.Validate()
+	require.Error(t, err)
+	var e ConfigError
+	require.ErrorAs(t, err, &e)
+	require.Equal(t, "MaxEnqueuedRequests", e.Field)
+}
+
 func TestConfigInvalidMaxQueueSize(t *testing.T) {
 	c := Config{MaxQueueSize: -1}
 

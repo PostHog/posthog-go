@@ -326,6 +326,14 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.MaxEnqueuedRequests < 0 {
+		return ConfigError{
+			Reason: "negative batch queue sizes are not supported",
+			Field:  "MaxEnqueuedRequests",
+			Value:  c.MaxEnqueuedRequests,
+		}
+	}
+
 	if _, err := url.Parse(c.Endpoint); err != nil {
 		return ConfigError{
 			Reason: "invalid endpoint",
