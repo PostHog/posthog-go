@@ -30,31 +30,58 @@ const (
 
 // ToolCall describes one completed MCP tool invocation.
 type ToolCall struct {
-	ToolName        string
+	// ToolName is required and not blank. It is captured as $mcp_tool_name and
+	// $mcp_resource_name.
+	ToolName string
+	// ToolDescription is captured as $mcp_tool_description.
 	ToolDescription string
-	ToolCategory    string
+	// ToolCategory is captured as $mcp_tool_category.
+	ToolCategory string
 
-	DistinctID    string
-	SessionID     string
-	Groups        posthog.Groups
+	// DistinctID is the event's distinct ID. When empty, the ID falls back to
+	// the RequestContext's, then SessionID, then "anonymous", and no person
+	// profile is processed.
+	DistinctID string
+	// SessionID is captured as $session_id and is the distinct ID fallback.
+	SessionID string
+	// Groups is captured as $groups on both events.
+	Groups posthog.Groups
+	// SetProperties is captured as $set on $mcp_tool_call. It needs an explicit
+	// DistinctID and is dropped without one.
 	SetProperties posthog.Properties
 
-	ServerName      string
-	ServerVersion   string
-	ClientName      string
-	ClientVersion   string
+	// ServerName is captured as $mcp_server_name on both events.
+	ServerName string
+	// ServerVersion is captured as $mcp_server_version on both events.
+	ServerVersion string
+	// ClientName is captured as $mcp_client_name on both events.
+	ClientName string
+	// ClientVersion is captured as $mcp_client_version on both events.
+	ClientVersion string
+	// ProtocolVersion is captured as $mcp_protocol_version on both events.
 	ProtocolVersion string
 
-	ConversationID  string
+	// ConversationID is captured as $mcp_conversation_id on both events.
+	ConversationID string
+	// ClientUserAgent is the HTTP User-Agent header of the request, captured as
+	// $mcp_client_user_agent on $mcp_tool_call.
 	ClientUserAgent string
-	VendorClient    string
-	LLMModel        string
-	LLMModelSource  ModelSource
+	// VendorClient is the client vendor the transport reported, captured as
+	// $mcp_vendor_client on $mcp_tool_call.
+	VendorClient string
+	// LLMModel is the model that made the call, captured as $mcp_llm_model on
+	// $mcp_tool_call. A blank value or "unknown" is not recorded.
+	LLMModel string
+	// LLMModelSource says where LLMModel came from and defaults to
+	// ModelSourceSelfReported. It is only recorded with a model.
+	LLMModelSource ModelSource
 
 	// Intent is the agent's stated reason for the call. When it arrives as a
 	// tool argument, remove that argument from Parameters: Parameters only has
 	// credentials redacted, while Intent also has personal data redacted.
-	Intent       string
+	Intent string
+	// IntentSource says how Intent was obtained and defaults to
+	// IntentSourceContextParameter. It is only recorded with an Intent.
 	IntentSource IntentSource
 
 	// Parameters is captured as $mcp_parameters as given, like the manual
@@ -62,19 +89,26 @@ type ToolCall struct {
 	// instrumentation passes the JSON-RPC request here, as
 	// {"request": {"method": "tools/call", "params": {"name": ..., "arguments": ...}}}.
 	Parameters any
-	Response   any
+	// Response is captured as $mcp_response with credentials and media content
+	// redacted. A response too large to process is replaced by a marker.
+	Response any
 
+	// Duration is captured as $mcp_duration_ms and must not be negative.
 	Duration time.Duration
 	// IsError marks a failed call that has no Go error, such as an MCP result
 	// with isError set. A non-nil Error implies IsError.
 	IsError bool
 	// Error is the failure, if any. When set, it is also captured as a
 	// $exception unless exception autocapture is disabled.
-	Error     error
+	Error error
+	// ErrorType is captured as $mcp_error_type and the exception type. When
+	// empty it is the Go type of Error, such as fs.PathError, else "Error".
 	ErrorType string
 
 	// Properties adds custom event metadata. $mcp_* and identity control keys
 	// are reserved; use the corresponding ToolCall fields instead.
 	Properties posthog.Properties
-	Timestamp  time.Time
+	// Timestamp is the time of the event. When zero, the PostHog client stamps
+	// the time it enqueues the event.
+	Timestamp time.Time
 }
