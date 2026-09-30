@@ -80,7 +80,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			call := m.prepare(ctx, next, toolRequest)
 			started := time.Now()
 			result, handlerErr := next(ctx, method, call.dispatch)
-			m.observeSafely(ctx, call, result, handlerErr, started, time.Since(started))
+			m.observeSafely(ctx, call, result, handlerErr, started)
 			return result, handlerErr
 		default:
 			return next(ctx, method, req)
@@ -151,14 +151,13 @@ func (m *middleware) observeSafely(
 	result mcpsdk.Result,
 	handlerErr error,
 	started time.Time,
-	duration time.Duration,
 ) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			m.report(ctx, fmt.Errorf("posthogmcpsdk: instrumentation panic (%T)", recovered))
 		}
 	}()
-	m.observe(ctx, call, result, handlerErr, started, duration)
+	m.observe(ctx, call, result, handlerErr, started)
 }
 
 func (m *middleware) observe(
@@ -167,8 +166,8 @@ func (m *middleware) observe(
 	result mcpsdk.Result,
 	handlerErr error,
 	started time.Time,
-	duration time.Duration,
 ) {
+	duration := time.Since(started)
 	toolRequest := prepared.request
 	var toolResult *mcpsdk.CallToolResult
 	if result != nil {
