@@ -91,22 +91,53 @@ func decodeJSON(data []byte) (value any, err error) {
 
 // redactOversizedResponse rescues a response whose JSON is over the normalize
 // cap only because of media, such as a typed MCP result that
-// redactMediaBeforeNormalize cannot see into. It decodes the JSON, redacts
-// media as for a decoded response, and reports whether that fits the cap.
+// redactMediaBeforeNormalize cannot see into. It peeks at each content block's
+// type without decoding the rest, swaps media blocks for their placeholders,
+// and reports whether the result fits the cap.
 func redactOversizedResponse(data []byte) (any, bool) {
-	if len(data) > maxRedactableBytes {
+	var response map[string]json.RawMessage
+	if json.Unmarshal(data, &response) != nil {
 		return nil, false
 	}
-	decoded, err := decodeJSON(data)
-	if err != nil {
+	var content []json.RawMessage
+	if json.Unmarshal(response["content"], &content) != nil {
 		return nil, false
 	}
-	redacted := redactMediaBeforeNormalize(decoded)
-	encoded, err := marshalJSONSafely(redacted)
+
+	swapped := false
+	for i, raw := range content {
+		var block struct {
+			Type     string `json:"type"`
+			Resource struct {
+				Blob json.RawMessage `json:"blob"`
+			} `json:"resource"`
+		}
+		_ = json.Unmarshal(raw, &block)
+		message, ok := mediaRedactionMessage(block.Type, len(block.Resource.Blob) > 0)
+		if !ok {
+			continue
+		}
+		placeholder, err := json.Marshal(redactedContentBlock(message))
+		if err != nil {
+			return nil, false
+		}
+		content[i] = placeholder
+		swapped = true
+	}
+	if !swapped {
+		return nil, false
+	}
+
+	var err error
+	if response["content"], err = json.Marshal(content); err != nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(response)
 	if err != nil || len(encoded) > maxNormalizeBytes {
 		return nil, false
 	}
-	return redacted, true
+	redacted, err := decodeJSON(encoded)
+	return redacted, err == nil
 }
 
 // encodePayload pays for one json.Marshal in the common case. When that fails,
@@ -482,19 +513,28 @@ func redactMediaBeforeNormalize(value any) any {
 }
 
 func redactedMediaBlock(block map[string]any) (map[string]any, bool) {
-	switch block["type"] {
+	blockType, _ := block["type"].(string)
+	resource, _ := block["resource"].(map[string]any)
+	_, hasBlob := resource["blob"]
+	message, ok := mediaRedactionMessage(blockType, hasBlob)
+	if !ok {
+		return nil, false
+	}
+	return redactedContentBlock(message), true
+}
+
+func mediaRedactionMessage(blockType string, hasBlob bool) (string, bool) {
+	switch blockType {
 	case "image":
-		return redactedContentBlock("[image content redacted - not supported by PostHog MCP analytics]"), true
+		return "[image content redacted - not supported by PostHog MCP analytics]", true
 	case "audio":
-		return redactedContentBlock("[audio content redacted - not supported by PostHog MCP analytics]"), true
+		return "[audio content redacted - not supported by PostHog MCP analytics]", true
 	case "resource":
-		if resource, ok := block["resource"].(map[string]any); ok {
-			if _, hasBlob := resource["blob"]; hasBlob {
-				return redactedContentBlock("[binary resource content redacted - not supported by PostHog MCP analytics]"), true
-			}
+		if hasBlob {
+			return "[binary resource content redacted - not supported by PostHog MCP analytics]", true
 		}
 	}
-	return nil, false
+	return "", false
 }
 
 func sanitizeContentBlock(value any) any {

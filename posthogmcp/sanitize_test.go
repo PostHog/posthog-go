@@ -346,10 +346,11 @@ func TestCaptureToolCallSanitizesIntentAndToolName(t *testing.T) {
 }
 
 type resultContentBlock struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	Data     string `json:"data,omitempty"`
-	MIMEType string `json:"mimeType,omitempty"`
+	Type     string         `json:"type"`
+	Text     string         `json:"text,omitempty"`
+	Data     string         `json:"data,omitempty"`
+	MIMEType string         `json:"mimeType,omitempty"`
+	Resource map[string]any `json:"resource,omitempty"`
 }
 
 type callToolResult struct {
@@ -377,9 +378,22 @@ func TestCaptureToolCallTypedResponseWithLargeMedia(t *testing.T) {
 			}},
 		},
 		{
-			name:     "images beyond the hard bound are omitted",
+			name:     "text kept beside an image of any size",
 			response: &callToolResult{Content: []resultContentBlock{text("hello"), image(9 << 20)}},
-			want:     oversizedPayloadValue,
+			want:     map[string]any{"content": []any{map[string]any{"type": "text", "text": "hello"}, redactedImage}},
+		},
+		{
+			name: "binary resources are redacted and text resources kept",
+			response: &callToolResult{Content: []resultContentBlock{
+				{Type: "resource", Resource: map[string]any{"uri": "file:///a.bin", "blob": strings.Repeat("QUJD", 300_000)}},
+				{Type: "resource", Resource: map[string]any{"uri": "file:///a.txt", "text": "hello"}},
+				{Type: "audio", MIMEType: "audio/wav", Data: strings.Repeat("QUJD", 300_000)},
+			}},
+			want: map[string]any{"content": []any{
+				map[string]any{"type": "text", "text": "[binary resource content redacted - not supported by PostHog MCP analytics]"},
+				map[string]any{"type": "resource", "resource": map[string]any{"uri": "file:///a.txt", "text": "hello"}},
+				map[string]any{"type": "text", "text": "[audio content redacted - not supported by PostHog MCP analytics]"},
+			}},
 		},
 		{
 			name:     "oversized text is omitted",
