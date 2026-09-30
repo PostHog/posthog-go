@@ -19,26 +19,27 @@ type captureStage struct {
 	set        bool
 }
 
+// Each optional group dropped by a stage stays dropped in the stages after it.
 var (
-	dropResponse   = captureStage{depth: 1, parameters: true, custom: true, set: true}
-	dropParameters = captureStage{depth: 1, custom: true, set: true}
-	dropCustom     = captureStage{depth: 1, set: true}
-	dropSet        = captureStage{depth: 1}
+	withoutResponse = captureStage{depth: 1, parameters: true, custom: true, set: true}
+	withoutPayloads = captureStage{depth: 1, custom: true, set: true}
+	withoutCustom   = captureStage{depth: 1, set: true}
+	requiredOnly    = captureStage{depth: 1}
 )
 
 // captureStages lists what to try, richest first: full content at every depth
 // from maxDepth down to 1, then each optional group dropped in turn.
-func captureStages() []captureStage {
+var captureStages = func() []captureStage {
 	stages := make([]captureStage, 0, maxDepth+4)
 	for depth := maxDepth; depth >= 1; depth-- {
 		stages = append(stages, captureStage{depth: depth, response: true, parameters: true, custom: true, set: true})
 	}
-	return append(stages, dropResponse, dropParameters, dropCustom, dropSet)
-}
+	return append(stages, withoutResponse, withoutPayloads, withoutCustom, requiredOnly)
+}()
 
 func (p preparedToolCall) buildCapture() (posthog.Capture, error) {
 	base := p.baseProperties()
-	for _, stage := range captureStages() {
+	for _, stage := range captureStages {
 		capture := p.captureAt(base, stage)
 		size, err := messageSize(capture)
 		if err != nil {
@@ -106,12 +107,11 @@ func (p preparedToolCall) buildException() (posthog.Exception, error) {
 	setStringProperty(base, propertyProtocolVersion, truncateUTF8(p.call.ProtocolVersion, maxMetadataBytes))
 
 	build := func(includeCustom bool) posthog.Exception {
-		var properties posthog.Properties
+		var custom posthog.Properties
 		if includeCustom {
-			properties = mergeProperties(base, p.custom)
-		} else {
-			properties = mergeProperties(base, nil)
+			custom = p.custom
 		}
+		properties := mergeProperties(base, custom)
 		applyIdentityProperties(properties, p, false)
 		return posthog.Exception{
 			DistinctId: p.distinctID,
