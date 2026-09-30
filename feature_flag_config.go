@@ -59,7 +59,7 @@ func validateFeatureFlagBase(distinctId string, sendFeatureFlagEvents **bool) er
 }
 
 // FeatureFlagPayloadNoKey configures legacy evaluation of all flags for one user.
-// It is used by Client.GetAllFlags.
+// It is used by Client.GetAllFlags and Client.GetAllFlagsAndPayloads.
 type FeatureFlagPayloadNoKey struct {
 	// DistinctId is the user distinct ID to evaluate flags for. It is required.
 	DistinctId string

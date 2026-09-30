@@ -8,6 +8,7 @@ type noopClient struct {
 
 var (
 	emptyFlagValues            = map[string]interface{}{}
+	emptyFlagPayloads          = map[string]string{}
 	emptyEvaluatedFlagRecords  = map[string]evaluatedFlagRecord{}
 	noopFeatureFlagResult      = &FeatureFlagResult{Enabled: false}
 	noopFeatureFlagEvaluations = &FeatureFlagEvaluations{flags: emptyEvaluatedFlagRecords}
@@ -47,6 +48,10 @@ func (c *noopClient) GetRemoteConfigPayload(string) (string, error) {
 
 func (c *noopClient) GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
 	return emptyFlagValues, ErrSDKDisabled
+}
+
+func (c *noopClient) GetAllFlagsAndPayloads(FeatureFlagPayloadNoKey) (AllFlagsAndPayloads, error) {
+	return AllFlagsAndPayloads{FeatureFlags: emptyFlagValues, FeatureFlagPayloads: emptyFlagPayloads}, ErrSDKDisabled
 }
 
 func (c *noopClient) EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {

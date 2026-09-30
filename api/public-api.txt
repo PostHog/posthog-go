@@ -158,6 +158,11 @@ type AliasInApiProperties struct {
 
 func (ctx AliasInApiProperties) ToProperties() Properties
 
+type AllFlagsAndPayloads struct {
+	FeatureFlags map[string]interface{}
+	FeatureFlagPayloads map[string]string
+}
+
 type Backoff struct {
 }
 
@@ -263,6 +268,8 @@ type Client interface {
 	GetRemoteConfigPayload(string) (string, error)
 
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
+
+	GetAllFlagsAndPayloads(FeatureFlagPayloadNoKey) (AllFlagsAndPayloads, error)
 
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
@@ -593,6 +600,8 @@ type FeatureFlagsPoller struct {
 func (poller *FeatureFlagsPoller) ForceReload()
 
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error)
+
+func (poller *FeatureFlagsPoller) GetAllFlagsAndPayloads(flagConfig FeatureFlagPayloadNoKey) (AllFlagsAndPayloads, error)
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error)
 

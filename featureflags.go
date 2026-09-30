@@ -311,6 +311,15 @@ func inconclusivePropertyMatchError(err error) error {
 	return &InconclusiveMatchError{msg: err.Error()}
 }
 
+// AllFlagsAndPayloads holds bulk feature flag values and payloads returned by
+// GetAllFlagsAndPayloads, matching the paired maps from the /flags API.
+type AllFlagsAndPayloads struct {
+	// FeatureFlags maps flag keys to bool or variant string values.
+	FeatureFlags map[string]interface{}
+	// FeatureFlagPayloads maps flag keys to JSON payload strings for each flag.
+	FeatureFlagPayloads map[string]string
+}
+
 // FeatureFlagResult represents the result of a feature flag evaluation,
 // containing both the flag value and its payload.
 type FeatureFlagResult struct {
@@ -1063,6 +1072,90 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 
 	return response, nil
 }
+
+// GetAllFlagsAndPayloads evaluates every available flag and its payload together.
+func (poller *FeatureFlagsPoller) GetAllFlagsAndPayloads(flagConfig FeatureFlagPayloadNoKey) (AllFlagsAndPayloads, error) {
+	out := AllFlagsAndPayloads{
+		FeatureFlags:        make(map[string]interface{}),
+		FeatureFlagPayloads: make(map[string]string),
+	}
+	state, err := poller.getLoadedState()
+	if err != nil {
+		return out, err
+	}
+	featureFlags := state.featureFlags
+	fallbackToDecide := false
+	cohorts := state.cohorts
+
+	if len(featureFlags) == 0 {
+		fallbackToDecide = true
+	} else {
+		for _, storedFlag := range featureFlags {
+			result, err := poller.computeFlagLocally(
+				storedFlag,
+				flagConfig.DistinctId,
+				flagConfig.DeviceId,
+				flagConfig.Groups,
+				flagConfig.PersonProperties,
+				flagConfig.GroupProperties,
+				cohorts,
+				state,
+			)
+			if err != nil {
+				poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
+				fallbackToDecide = true
+			} else {
+				out.FeatureFlags[storedFlag.Key] = result
+				if payload := localFlagPayload(storedFlag, result); payload != "" {
+					out.FeatureFlagPayloads[storedFlag.Key] = payload
+				}
+			}
+		}
+	}
+
+	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
+		flagsResponse, err := poller.getFeatureFlagVariants(
+			flagConfig.DistinctId,
+			flagConfig.DeviceId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+		)
+		if err != nil {
+			return out, err
+		}
+		if flagsResponse != nil {
+			out.FeatureFlags = make(map[string]interface{}, len(flagsResponse.FeatureFlags))
+			for k, v := range flagsResponse.FeatureFlags {
+				out.FeatureFlags[k] = v
+			}
+			out.FeatureFlagPayloads = payloadsFromFlagsResponse(flagsResponse)
+		}
+	}
+
+	return out, nil
+}
+
+func localFlagPayload(flag FeatureFlag, result interface{}) string {
+	if result == nil || flag.Filters.DecodedPayloads == nil {
+		return ""
+	}
+	return flag.Filters.DecodedPayloads[variantToString(result)]
+}
+
+func payloadsFromFlagsResponse(flagsResponse *FlagsResponse) map[string]string {
+	if flagsResponse == nil || len(flagsResponse.FeatureFlagPayloads) == 0 {
+		return map[string]string{}
+	}
+	payloads := make(map[string]string, len(flagsResponse.FeatureFlagPayloads))
+	for k, raw := range flagsResponse.FeatureFlagPayloads {
+		if s := rawMessageToString(raw); s != "" {
+			payloads[k] = s
+		}
+	}
+	return payloads
+}
+
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,
 	distinctId string,

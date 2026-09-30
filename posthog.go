@@ -120,6 +120,11 @@ type Client interface {
 	// when OnlyEvaluateLocally is true without SecretKey.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
+	// GetAllFlagsAndPayloads evaluates all flags for a user and returns values and
+	// payloads together in one call. It follows the same local/remote rules as
+	// GetAllFlags.
+	GetAllFlagsAndPayloads(FeatureFlagPayloadNoKey) (AllFlagsAndPayloads, error)
+
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
 	// given distinct_id using at most one /flags request. Returns ErrNoDistinctID
 	// if DistinctId is empty. Pass the returned snapshot to a Capture event via
@@ -1167,6 +1172,41 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 	return flagsValue, err
 }
 
+// GetAllFlagsAndPayloads returns all flag values and payloads for a user in one call.
+func (c *client) GetAllFlagsAndPayloads(flagConfig FeatureFlagPayloadNoKey) (AllFlagsAndPayloads, error) {
+	return c.getAllFlagsAndPayloadsWithContext(context.Background(), flagConfig)
+}
+
+func (c *client) getAllFlagsAndPayloadsWithContext(ctx context.Context, flagConfig FeatureFlagPayloadNoKey) (AllFlagsAndPayloads, error) {
+	empty := AllFlagsAndPayloads{
+		FeatureFlags:        emptyFlagValues,
+		FeatureFlagPayloads: map[string]string{},
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	if err := flagConfig.validate(); err != nil {
+		return empty, err
+	}
+	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyMissing("GetAllFlagsAndPayloads")
+		return empty, ErrNoSecretKey
+	}
+
+	var result AllFlagsAndPayloads
+	var err error
+	if c.featureFlagsPoller != nil {
+		result, err = c.featureFlagsPoller.GetAllFlagsAndPayloads(flagConfig)
+	} else {
+		result, err = c.getAllFlagsAndPayloadsFromRemote(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
+			flagConfig.PersonProperties, flagConfig.GroupProperties)
+	}
+	if ctx.Err() != nil {
+		return empty, ctx.Err()
+	}
+	return result, err
+}
+
 // EvaluateFlagsPayload is the input to Client.EvaluateFlags.
 type EvaluateFlagsPayload struct {
 	// DistinctId is the user distinct ID to evaluate flags for. It is required
@@ -2116,4 +2156,26 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 	}
 
 	return flagsResponse.FeatureFlags, nil
+}
+
+func (c *client) getAllFlagsAndPayloadsFromRemote(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (AllFlagsAndPayloads, error) {
+	empty := AllFlagsAndPayloads{
+		FeatureFlags:        emptyFlagValues,
+		FeatureFlagPayloads: map[string]string{},
+	}
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP(), nil)
+	if err != nil {
+		return empty, err
+	}
+	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
+		return empty, nil
+	}
+	flags := flagsResponse.FeatureFlags
+	if flags == nil {
+		flags = emptyFlagValues
+	}
+	return AllFlagsAndPayloads{
+		FeatureFlags:        flags,
+		FeatureFlagPayloads: payloadsFromFlagsResponse(flagsResponse),
+	}, nil
 }
