@@ -67,7 +67,7 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 			if fp.Type == "cohort" {
 				matches, err = poller.matchCohort(*fp, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, aggregationGroupTypeIndex, state)
 			} else if fp.Type == "flag" {
-				matches, err = poller.evaluateFlagDependency(*fp, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts, aggregationGroupTypeIndex, state)
+				matches, err = poller.evaluateFlagDependency(*fp, flagsByKey, evaluationCache, distinctId, deviceId, properties, cohorts, nil, nil, aggregationGroupTypeIndex, state)
 			} else {
 				matches, err = matchProperty(*fp, properties, state.propertyMatchingVersion)
 			}

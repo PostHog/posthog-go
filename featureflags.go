@@ -355,6 +355,8 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	deviceId *string,
 	properties Properties,
 	cohorts map[string]PropertyGroup,
+	groups Groups,
+	groupProperties map[string]Properties,
 	aggregationGroupTypeIndex *uint8,
 	snapshots ...*flagsState,
 ) (bool, error) {
@@ -439,7 +441,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 				return false, &InconclusiveMatchError{"Flag dependency has experience continuity enabled"}
 			}
 			// Recursively evaluate the dependency
-			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
@@ -1255,7 +1257,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			continue
 		}
 
-		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache, state)
+		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
@@ -1342,6 +1344,8 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
+	groups Groups,
+	groupProperties map[string]Properties,
 	snapshots ...*flagsState,
 ) (conditionMatchResult, error) {
 	state := poller.evaluationState(snapshots)
@@ -1364,7 +1368,7 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 			if prop.Type == "cohort" {
 				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, aggregationGroupTypeIndex, state)
 			} else if prop.Type == "flag" {
-				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, cohorts, aggregationGroupTypeIndex, state)
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, cohorts, groups, groupProperties, aggregationGroupTypeIndex, state)
 			} else {
 				isMatch, err = matchProperty(prop, properties, state.propertyMatchingVersion)
 			}
@@ -1420,27 +1424,27 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	}
 
 	if operator == "icontains" {
-		return strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+		return strings.Contains(asciiLower(regexPropertyString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_icontains" {
-		return !strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+		return !strings.Contains(asciiLower(regexPropertyString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "starts_with" {
-		return strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+		return strings.HasPrefix(asciiLower(regexPropertyString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_starts_with" {
-		return !strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+		return !strings.HasPrefix(asciiLower(regexPropertyString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "ends_with" {
-		return strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+		return strings.HasSuffix(asciiLower(regexPropertyString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "not_ends_with" {
-		return !strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+		return !strings.HasSuffix(asciiLower(regexPropertyString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
 	if operator == "regex" || operator == "not_regex" {
@@ -1970,6 +1974,12 @@ func interfaceToFloat(val interface{}) (float64, error) {
 		i = float64(t)
 	case uint64:
 		i = float64(t)
+	case json.Number:
+		parsed, err := t.Float64()
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return 0.0, errors.New("argument not orderable")
+		}
+		i = parsed
 	case string:
 		// The flags API stores a numeric comparison operand as a string, and every other SDK
 		// parses that form. Without this the value is not orderable and the caller falls back

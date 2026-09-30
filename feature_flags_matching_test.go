@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	json "github.com/goccy/go-json"
 	"github.com/stretchr/testify/require"
 )
 
@@ -385,6 +386,31 @@ func TestMatchPropertyNonNumericStringIsNotOrderable(t *testing.T) {
 func TestMatchPropertyInvalidDateIsInconclusive(t *testing.T) {
 	property := FlagProperty{Key: "created_at", Value: "2020-01-01", Operator: "is_date_before"}
 	_, err := matchProperty(property, NewProperties().Set("created_at", "not-a-date"))
+	require.Error(t, err)
+	require.True(t, isInconclusiveError(err))
+}
+
+func TestMatchPropertyStringOperatorsTreatNilAsNull(t *testing.T) {
+	props := NewProperties().Set("k", nil)
+	for _, op := range []string{"icontains", "starts_with", "ends_with"} {
+		t.Run(op+"_null", func(t *testing.T) {
+			m, err := matchProperty(FlagProperty{Key: "k", Value: "null", Operator: op}, props)
+			require.NoError(t, err)
+			require.True(t, m)
+		})
+	}
+	m, err := matchProperty(FlagProperty{Key: "k", Value: "<nil>", Operator: "icontains"}, props)
+	require.NoError(t, err)
+	require.False(t, m)
+}
+
+func TestMatchPropertyJsonNumberIsOrderable(t *testing.T) {
+	property := FlagProperty{Key: "n", Value: 5, Operator: "gt"}
+	matched, err := matchProperty(property, NewProperties().Set("n", json.Number("10")))
+	require.NoError(t, err)
+	require.True(t, matched)
+
+	_, err = matchProperty(property, NewProperties().Set("n", json.Number("not-a-number")))
 	require.Error(t, err)
 	require.True(t, isInconclusiveError(err))
 }
