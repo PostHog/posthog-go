@@ -18,7 +18,9 @@ func normalizeConversationID(id string) string {
 }
 
 // deriveSessionID is "ses_" + H(x) + H(x + "::salt"), where H is two 32-bit
-// FNV-1a lanes, so every SDK derives the same session from the same input.
+// FNV-1a lanes over runes, so every SDK derives the same session from the same
+// input (runes equal posthog-js's UTF-16 code units in the basic multilingual
+// plane, and posthog-python's code points always).
 func deriveSessionID(x string) string {
 	return "ses_" + sessionHash(x) + sessionHash(x+"::salt")
 }
@@ -29,8 +31,8 @@ func sessionHash(x string) string {
 
 func fnv1a(seed, prime uint32, x string) uint32 {
 	lane := seed
-	for i := 0; i < len(x); i++ {
-		lane = (lane ^ uint32(x[i])) * prime
+	for _, char := range x {
+		lane = (lane ^ uint32(char)) * prime
 	}
 	return lane
 }
