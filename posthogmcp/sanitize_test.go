@@ -2,6 +2,7 @@ package posthogmcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -254,6 +255,48 @@ func TestCaptureToolCallRedactsCredentialsInCapturedText(t *testing.T) {
 	assert.Equal(t, "GET https://example.com/x?token=%5Bredacted%5D failed: auth with [redacted] rejected", capture.Properties[propertyErrorMessage])
 }
 
+func TestSanitizeStringRedactsSensitiveJSONMembers(t *testing.T) {
+	for _, test := range []struct {
+		name, value, want string
+	}{
+		{"string", `{"user":"ada","password":"hunter2"}`, `{"user":"ada","password":"[redacted]"}`},
+		{"escaped quote and spacing", "{\n  \"Password\" : \"hun\\\"ter2\",\n  \"n\": 1\n}", "{\n  \"Password\" : \"[redacted]\",\n  \"n\": 1\n}"},
+		{"number", `{"api_key":12345}`, `{"api_key":"[redacted]"}`},
+		{"boolean", `{"access-token":true}`, `{"access-token":"[redacted]"}`},
+		{"cut off at the end of the text", `{"refresh_token":"abcdefgh`, `{"refresh_token":"[redacted]"`},
+		{"cut off after an escape", `{"private_key":"abc\`, `{"private_key":"[redacted]"`},
+		{"array", `{"Authorization":["Bearer x"]}`, `{"Authorization":"[redacted]"}`},
+		{"indented array", "{\"cookie\": [\n  \"a=1\",\n  \"b=2\"\n]}", `{"cookie": "[redacted]"}`},
+		{"array cut off", `{"set-cookie":["a=1","b=2`, `{"set-cookie":"[redacted]"`},
+		{"inside prose", `retry failed: "token": "abc"`, `retry failed: "token": "[redacted]"`},
+		{"unclosed in prose stops at the line", "\"token\": \"abc\nnext \"line\"", "\"token\": \"[redacted]\"\nnext \"line\""},
+		{"escaped key", `{"pass\u0077ord":"hunter2"}`, `{"pass\u0077ord":"[redacted]"}`},
+		{"key only contains a sensitive word", `{"password_hint":"pet"}`, `{"password_hint":"pet"}`},
+		{"null", `{"token":null}`, `{"token":null}`},
+		{"out of scope: nested object", `{"secret":{"v":"x"}}`, `{"secret":{"v":"x"}}`},
+		{"out of scope: JSON inside a JSON string", `{"body":"{\"password\":\"x\"}"}`, `{"body":"{\"password\":\"x\"}"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, sanitizeString(test.value))
+		})
+	}
+}
+
+func TestCaptureToolCallRedactsTheTextCopyOfStructuredContent(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+		ToolName: "get_user",
+		Response: map[string]any{
+			"content":           []any{map[string]any{"type": "text", "text": `{"password":"hunter2","user":"ada"}`}},
+			"structuredContent": map[string]any{"password": "hunter2", "user": "ada"},
+		},
+	}))
+
+	response := requireCapture(t, client.messages[0]).Properties[propertyResponse].(map[string]any)
+	assert.Equal(t, `{"password":"[redacted]","user":"ada"}`, response["content"].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, map[string]any{"password": redactedValue, "user": "ada"}, response["structuredContent"])
+}
+
 func TestSanitizeFreeText(t *testing.T) {
 	for _, test := range []struct {
 		name, value, want string
@@ -343,4 +386,117 @@ func TestCaptureToolCallSanitizesIntentAndToolName(t *testing.T) {
 	capture := requireCapture(t, client.messages[0])
 	assert.Equal(t, "use token [redacted] for [redacted]", capture.Properties[propertyIntent])
 	assert.Equal(t, "https://%5Bredacted%5D@internal.test/tools/search", capture.Properties[propertyToolName])
+}
+
+type resultContentBlock struct {
+	Type     string         `json:"type"`
+	Text     string         `json:"text,omitempty"`
+	Data     string         `json:"data,omitempty"`
+	MIMEType string         `json:"mimeType,omitempty"`
+	Resource map[string]any `json:"resource,omitempty"`
+}
+
+type callToolResult struct {
+	Content []resultContentBlock `json:"content"`
+	IsError bool                 `json:"isError,omitempty"`
+}
+
+func TestCaptureToolCallTypedResponseWithLargeMedia(t *testing.T) {
+	image := func(size int) resultContentBlock {
+		return resultContentBlock{Type: "image", MIMEType: "image/png", Data: strings.Repeat("QUJD", size/4)}
+	}
+	text := func(value string) resultContentBlock { return resultContentBlock{Type: "text", Text: value} }
+	redactedImage := map[string]any{"type": "text", "text": "[image content redacted - not supported by PostHog MCP analytics]"}
+
+	tests := []struct {
+		name     string
+		response any
+		want     any
+	}{
+		{
+			name:     "text kept and images redacted",
+			response: &callToolResult{Content: []resultContentBlock{text("hello"), image(900_000), image(900_000)}},
+			want: map[string]any{"content": []any{
+				map[string]any{"type": "text", "text": "hello"}, redactedImage, redactedImage,
+			}},
+		},
+		{
+			name:     "text kept beside an image of any size",
+			response: &callToolResult{Content: []resultContentBlock{text("hello"), image(9 << 20)}},
+			want:     map[string]any{"content": []any{map[string]any{"type": "text", "text": "hello"}, redactedImage}},
+		},
+		{
+			name: "binary resources are redacted and text resources kept",
+			response: &callToolResult{Content: []resultContentBlock{
+				{Type: "resource", Resource: map[string]any{"uri": "file:///a.bin", "blob": strings.Repeat("QUJD", 300_000)}},
+				{Type: "resource", Resource: map[string]any{"uri": "file:///a.txt", "text": "hello"}},
+				{Type: "audio", MIMEType: "audio/wav", Data: strings.Repeat("QUJD", 300_000)},
+			}},
+			want: map[string]any{"content": []any{
+				map[string]any{"type": "text", "text": "[binary resource content redacted - not supported by PostHog MCP analytics]"},
+				map[string]any{"type": "resource", "resource": map[string]any{"uri": "file:///a.txt", "text": "hello"}},
+				map[string]any{"type": "text", "text": "[audio content redacted - not supported by PostHog MCP analytics]"},
+			}},
+		},
+		{
+			name: "only the exact type key marks a block as media",
+			response: json.RawMessage(`{"content":[{"type":"text","Type":"image","text":"keep"},` +
+				`{"type":"image","mimeType":"image/png","data":"` + strings.Repeat("QUJD", 300_000) + `"}]}`),
+			want: map[string]any{"content": []any{
+				map[string]any{"type": "text", "Type": "image", "text": "keep"}, redactedImage,
+			}},
+		},
+		{
+			name:     "oversized text is omitted",
+			response: &callToolResult{Content: []resultContentBlock{text(strings.Repeat("x", maxNormalizeBytes))}},
+			want:     oversizedPayloadValue,
+		},
+		{
+			name:     "redaction that still exceeds the cap is omitted",
+			response: &callToolResult{Content: []resultContentBlock{text(strings.Repeat("x", maxNormalizeBytes)), image(900_000)}},
+			want:     oversizedPayloadValue,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", Response: tt.response}))
+
+			assert.Equal(t, tt.want, requireCapture(t, client.messages[0]).Properties[propertyResponse])
+		})
+	}
+}
+
+func TestRedactOversizedResponseBudgets(t *testing.T) {
+	image := `{"type":"image","mimeType":"image/png","data":"` + strings.Repeat("QUJD", 300_000) + `"}`
+	blocks := func(count int) []byte {
+		return []byte(`{"content":[` + image + strings.Repeat(`,{"type":"text","text":"a"}`, count) + `]}`)
+	}
+	tests := []struct {
+		name   string
+		data   []byte
+		wantOK bool
+	}{
+		{name: "blocks at the budget are redacted", data: blocks(maxRedactBlocks - 1), wantOK: true},
+		{name: "blocks over the budget are not decoded", data: blocks(maxRedactBlocks)},
+		{
+			name:   "bytes at the budget are redacted",
+			data:   []byte(`{"content":[{"type":"image","data":"` + strings.Repeat("A", maxRedactBytes-len(`{"content":[{"type":"image","data":""}]}`)) + `"}]}`),
+			wantOK: true,
+		},
+		{
+			name: "bytes over the budget are not decoded",
+			data: []byte(`{"content":[{"type":"image","data":"` + strings.Repeat("A", maxRedactBytes) + `"}]}`),
+		},
+		{name: "content that is not an array is not redacted", data: []byte(`{"content":"` + strings.Repeat("A", maxNormalizeBytes) + `"}`)},
+		{name: "null content is not redacted", data: []byte(`{"content":null}`)},
+		{name: "missing content is not redacted", data: []byte(`{}`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := redactOversizedResponse(tt.data)
+
+			assert.Equal(t, tt.wantOK, ok)
+		})
+	}
 }

@@ -13,10 +13,17 @@ type preparedToolCall struct {
 	call                  ToolCall
 	distinctID            string
 	explicitID            bool
+	sessionID             string
+	conversationID        string
+	clientUserAgent       string
+	vendorClient          string
 	toolName              string
 	intent                string
 	intentSource          IntentSource
+	model                 string
+	modelSource           ModelSource
 	errorType             string
+	exceptionType         string
 	errorMessage          string
 	suppressPersonProfile bool
 	parameters            any
@@ -69,11 +76,16 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		suppressPersonProfile: !explicitID || personProfileOptOut(call.Properties),
 		toolName:              truncateUTF8(sanitizeResourceName(call.ToolName), maxResourceNameBytes),
 	}
+	prepared.conversationID = normalizeConversationID(call.ConversationID)
+	prepared.sessionID = call.SessionID
+	if prepared.conversationID != "" {
+		prepared.sessionID = deriveSessionID(prepared.conversationID)
+	}
 	switch {
 	case call.DistinctID != "":
 		prepared.distinctID = call.DistinctID
-	case call.SessionID != "":
-		prepared.distinctID = call.SessionID
+	case prepared.sessionID != "":
+		prepared.distinctID = prepared.sessionID
 	default:
 		prepared.distinctID = "anonymous"
 	}
@@ -84,6 +96,21 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		prepared.intentSource = call.IntentSource
 		if prepared.intentSource == "" {
 			prepared.intentSource = IntentSourceContextParameter
+		}
+	}
+
+	prepared.clientUserAgent = boundedClientHeader(call.ClientUserAgent)
+	prepared.vendorClient = boundedClientHeader(call.VendorClient)
+	prepared.model = normalizeModel(call.LLMModel)
+	if prepared.model != "" {
+		prepared.modelSource = call.LLMModelSource
+		if prepared.modelSource != "" &&
+			prepared.modelSource != ModelSourceClientMetadata &&
+			prepared.modelSource != ModelSourceSelfReported {
+			return preparedToolCall{}, errors.New("posthogmcp: invalid LLMModelSource")
+		}
+		if prepared.modelSource == "" {
+			prepared.modelSource = ModelSourceSelfReported
 		}
 	}
 
@@ -110,7 +137,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 			continue
 		}
 		switch key {
-		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID:
+		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID, propertyExceptionLevel:
 			continue
 		}
 		custom[key] = value
@@ -121,11 +148,15 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 
 	if call.IsError {
-		prepared.errorType = strings.TrimSpace(call.ErrorType)
-		if prepared.errorType == "" {
-			prepared.errorType = "Error"
+		prepared.exceptionType = errorTypeName(call.Error)
+		if prepared.exceptionType == "" {
+			prepared.exceptionType = defaultErrorType
 		}
-		prepared.errorType = truncateUTF8(prepared.errorType, maxMetadataBytes)
+		prepared.exceptionType = truncateUTF8(prepared.exceptionType, maxMetadataBytes)
+		prepared.errorType = truncateUTF8(strings.TrimSpace(call.ErrorType), maxMetadataBytes)
+		if prepared.errorType == "" {
+			prepared.errorType = prepared.exceptionType
+		}
 
 		prepared.errorMessage = fmt.Sprintf("Tool %s returned an error", prepared.toolName)
 		if call.Error != nil {
@@ -142,6 +173,25 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	return prepared, nil
 }
 
+func normalizeModel(model string) string {
+	model = strings.TrimSpace(model)
+	if strings.EqualFold(model, "unknown") {
+		return ""
+	}
+	return boundedMetadata(model)
+}
+
+func boundedMetadata(value string) string {
+	return truncateUTF8(sanitizeString(value), maxMetadataBytes)
+}
+
+// boundedClientHeader redacts known credential shapes without the entropy
+// detector, which reads version tokens such as AppleWebKit/537.36 as secrets
+// and would erase the headers that identify the calling client.
+func boundedClientHeader(value string) string {
+	return truncateUTF8(sanitizeResourceName(value), maxMetadataBytes)
+}
+
 func prepareValue(field string, value any, response bool) (any, error) {
 	if value == nil {
 		return nil, nil
@@ -154,11 +204,9 @@ func prepareValue(field string, value any, response bool) (any, error) {
 		return nil, err
 	}
 	if response {
-		normalized = sanitizeResponse(normalized)
-	} else {
-		normalized = sanitizeCapturedValue(normalized)
+		return truncateValue(sanitizeResponse(normalized)), nil
 	}
-	return truncateValue(normalized), nil
+	return truncateValue(sanitizeCapturedValue(normalized)), nil
 }
 
 func prepareProperties(field string, properties posthog.Properties) (posthog.Properties, error) {
@@ -220,7 +268,14 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 
 	setStringProperty(properties, propertyToolDescription, truncateUTF8(p.call.ToolDescription, maxStringBytes))
 	setStringProperty(properties, propertyToolCategory, truncateUTF8(p.call.ToolCategory, maxMetadataBytes))
-	setStringProperty(properties, propertySessionID, p.call.SessionID)
+	setStringProperty(properties, propertySessionID, p.sessionID)
+	setStringProperty(properties, propertyConversationID, p.conversationID)
+	setStringProperty(properties, propertyClientUserAgent, p.clientUserAgent)
+	setStringProperty(properties, propertyVendorClient, p.vendorClient)
+	setStringProperty(properties, propertyLLMModel, p.model)
+	if p.model != "" {
+		properties[propertyLLMModelSource] = string(p.modelSource)
+	}
 	setStringProperty(properties, propertyServerName, truncateUTF8(p.call.ServerName, maxMetadataBytes))
 	setStringProperty(properties, propertyServerVersion, truncateUTF8(p.call.ServerVersion, maxMetadataBytes))
 	setStringProperty(properties, propertyClientName, truncateUTF8(p.call.ClientName, maxMetadataBytes))

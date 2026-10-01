@@ -4,15 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	posthog "github.com/posthog/posthog-go"
+	testerrors "github.com/posthog/posthog-go/posthogmcp/testdata/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -292,7 +297,7 @@ func TestCaptureToolCallFailureAndException(t *testing.T) {
 	exception := requireException(t, client.messages[1])
 	require.Len(t, exception.ExceptionList, 1)
 	item := exception.ExceptionList[0]
-	assert.Equal(t, "validation", item.Type)
+	assert.Equal(t, "Error", item.Type)
 	assert.Equal(t, "request failed with [redacted]", item.Value)
 	require.NotNil(t, item.Mechanism)
 	assert.Equal(t, true, *item.Mechanism.Handled)
@@ -568,4 +573,329 @@ func TestCaptureToolCallFallbackErrorMessageKeepsToolName(t *testing.T) {
 	client := &fakeEnqueueClient{}
 	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "Get_Organization_Memberships", IsError: true}))
 	assert.Equal(t, "Tool Get_Organization_Memberships returned an error", requireCapture(t, client.messages[0]).Properties[propertyErrorMessage])
+}
+
+func TestCaptureToolCallManualAPIFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		call          ToolCall
+		wantToolCall  map[string]any
+		wantException map[string]any
+	}{
+		{
+			name:          "conversation id lands on both events lowercased",
+			call:          ToolCall{ConversationID: "0190F0E8-7A6B-7C3D-9E4F-5A6B7C8D9E0F"},
+			wantToolCall:  map[string]any{"$mcp_conversation_id": "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"},
+			wantException: map[string]any{"$mcp_conversation_id": "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"},
+		},
+		{
+			name:         "model defaults to self reported and is trimmed",
+			call:         ToolCall{LLMModel: "  claude-opus-4  "},
+			wantToolCall: map[string]any{"$mcp_llm_model": "claude-opus-4", "$mcp_llm_model_source": "self_reported"},
+		},
+		{
+			name: "model keeps an explicit source",
+			call: ToolCall{LLMModel: "gpt-5", LLMModelSource: ModelSourceClientMetadata},
+			wantToolCall: map[string]any{
+				"$mcp_llm_model":        "gpt-5",
+				"$mcp_llm_model_source": "client_metadata",
+			},
+		},
+		{
+			name:         "model has secrets redacted",
+			call:         ToolCall{LLMModel: "phc_abcdefghijklmnopqrstuvwxyz"},
+			wantToolCall: map[string]any{"$mcp_llm_model": "[redacted]", "$mcp_llm_model_source": "self_reported"},
+		},
+		{name: "empty model is not recorded", call: ToolCall{LLMModel: "", LLMModelSource: ModelSourceClientMetadata}},
+		{name: "blank model is not recorded", call: ToolCall{LLMModel: "   "}},
+		{name: "unknown model is not recorded", call: ToolCall{LLMModel: " Unknown "}},
+		{
+			name:         "user agent and vendor client",
+			call:         ToolCall{ClientUserAgent: "claude-code/2.1", VendorClient: "anthropic"},
+			wantToolCall: map[string]any{"$mcp_client_user_agent": "claude-code/2.1", "$mcp_vendor_client": "anthropic"},
+		},
+		{
+			name: "values are bounded to the metadata limit",
+			call: ToolCall{
+				LLMModel:        strings.Repeat("m", 300),
+				ClientUserAgent: strings.Repeat("u", 300),
+				VendorClient:    strings.Repeat("v", 300),
+			},
+			wantToolCall: map[string]any{
+				"$mcp_llm_model":         strings.Repeat("m", 253) + "...",
+				"$mcp_llm_model_source":  "self_reported",
+				"$mcp_client_user_agent": strings.Repeat("u", 253) + "...",
+				"$mcp_vendor_client":     strings.Repeat("v", 253) + "...",
+			},
+		},
+		{
+			name:         "a browser user agent is kept whole",
+			call:         ToolCall{ClientUserAgent: "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"},
+			wantToolCall: map[string]any{"$mcp_client_user_agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"},
+		},
+		{
+			name: "user agent and vendor client have credentials redacted",
+			call: ToolCall{
+				ClientUserAgent: "claude-code/2.1 (token phc_abcdefghijklmnopqrstuvwxyz)",
+				VendorClient:    "https://user:hunter2@vendor.test/",
+			},
+			wantToolCall: map[string]any{
+				"$mcp_client_user_agent": "claude-code/2.1 (token [redacted])",
+				"$mcp_vendor_client":     "https://%5Bredacted%5D@vendor.test/",
+			},
+		},
+		{
+			name: "custom properties cannot set the reserved keys",
+			call: ToolCall{Properties: posthog.Properties{
+				"$mcp_conversation_id":   "wrong",
+				"$mcp_llm_model":         "wrong",
+				"$mcp_llm_model_source":  "wrong",
+				"$mcp_client_user_agent": "wrong",
+				"$mcp_vendor_client":     "wrong",
+			}},
+		},
+	}
+	keys := []string{
+		"$mcp_conversation_id", "$mcp_llm_model", "$mcp_llm_model_source",
+		"$mcp_client_user_agent", "$mcp_vendor_client",
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			tt.call.Error = errors.New("boom")
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), tt.call))
+			require.Len(t, client.messages, 2)
+
+			for _, event := range []struct {
+				properties posthog.Properties
+				want       map[string]any
+			}{
+				{requireCapture(t, client.messages[0]).Properties, tt.wantToolCall},
+				{requireException(t, client.messages[1]).Properties, tt.wantException},
+			} {
+				for _, key := range keys {
+					if value, ok := event.want[key]; ok {
+						assert.Equal(t, value, event.properties[key], key)
+					} else {
+						assert.NotContains(t, event.properties, key)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCaptureToolCallConversationIdentity(t *testing.T) {
+	const handle = "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"
+	const derived = "ses_6df45f0102a182bcd5e8dd5dad6c65a0"
+	tests := []struct {
+		name               string
+		call               ToolCall
+		wantConversationID any
+		wantSessionID      any
+		wantDistinctID     string
+	}{
+		{
+			name:               "handle derives the session",
+			call:               ToolCall{ConversationID: handle},
+			wantConversationID: handle,
+			wantSessionID:      derived,
+			wantDistinctID:     derived,
+		},
+		{
+			name:               "uppercase handle derives the same session",
+			call:               ToolCall{ConversationID: "0190F0E8-7A6B-7C3D-9E4F-5A6B7C8D9E0F"},
+			wantConversationID: handle,
+			wantSessionID:      derived,
+			wantDistinctID:     derived,
+		},
+		{
+			name:               "handle wins over an explicit session",
+			call:               ToolCall{ConversationID: handle, SessionID: "session_1"},
+			wantConversationID: handle,
+			wantSessionID:      derived,
+			wantDistinctID:     derived,
+		},
+		{
+			name:               "explicit distinct id still leads",
+			call:               ToolCall{ConversationID: handle, DistinctID: "user_1"},
+			wantConversationID: handle,
+			wantSessionID:      derived,
+			wantDistinctID:     "user_1",
+		},
+		{
+			name:           "non-uuid is dropped",
+			call:           ToolCall{ConversationID: "conv_1"},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "uuid of another version is dropped",
+			call:           ToolCall{ConversationID: "0190f0e8-7a6b-4c3d-9e4f-5a6b7c8d9e0f"},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "uuidv7 with a trailing suffix is dropped",
+			call:           ToolCall{ConversationID: handle + "x"},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "oversized id is dropped and the event still ships",
+			call:           ToolCall{ConversationID: strings.Repeat("c", 200_000)},
+			wantDistinctID: "anonymous",
+		},
+		{
+			name:           "invalid id keeps the explicit session",
+			call:           ToolCall{ConversationID: "conv_1", SessionID: "session_1"},
+			wantSessionID:  "session_1",
+			wantDistinctID: "session_1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			tt.call.Error = errors.New("boom")
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), tt.call))
+			require.Len(t, client.messages, 2)
+
+			capture := requireCapture(t, client.messages[0])
+			exception := requireException(t, client.messages[1])
+			assert.Equal(t, tt.wantDistinctID, capture.DistinctId)
+			assert.Equal(t, tt.wantDistinctID, exception.DistinctId)
+			for _, properties := range []posthog.Properties{capture.Properties, exception.Properties} {
+				assert.Equal(t, tt.wantConversationID, properties[propertyConversationID])
+				assert.Equal(t, tt.wantSessionID, properties[propertySessionID])
+			}
+		})
+	}
+}
+
+func TestPreparedPayloadsAreBoundedOnce(t *testing.T) {
+	wide := map[string]any{"a_long": strings.Repeat("word ", maxStringBytes/4)}
+	for i := 0; i < 1000; i++ {
+		wide[fmt.Sprintf("key_%04d", i)] = i
+	}
+	prepared, err := prepareToolCall(ToolCall{ToolName: "query", Parameters: wide, Response: wide})
+	require.NoError(t, err)
+
+	for name, payload := range map[string]any{"parameters": prepared.parameters, "response": prepared.response} {
+		object, ok := payload.(map[string]any)
+		require.True(t, ok, name)
+		assert.Len(t, object, 100, name)
+		assert.Equal(t, "[MaxProperties ~]", object["..."], name)
+		assert.Equal(t, strings.Repeat("word ", 6553)+"...", object["a_long"], name)
+		assert.Equal(t, json.Number("97"), object["key_0097"], name)
+		assert.NotContains(t, object, "key_0098", name)
+	}
+}
+
+func TestCaptureToolCallInvalidLLMModelSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		call    ToolCall
+		wantErr string
+	}{
+		{name: "invalid source with a model is rejected", call: ToolCall{LLMModel: "gpt-5", LLMModelSource: "guess"}, wantErr: "posthogmcp: invalid LLMModelSource"},
+		{name: "invalid source without a model is ignored", call: ToolCall{LLMModelSource: "guess"}},
+		{name: "invalid source with a blank model is ignored", call: ToolCall{LLMModel: "  ", LLMModelSource: "guess"}},
+		{name: "invalid source with an unknown model is ignored", call: ToolCall{LLMModel: "unknown", LLMModelSource: "guess"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			err := New(client).CaptureToolCall(context.Background(), tt.call)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				assert.Empty(t, client.messages)
+				return
+			}
+			require.NoError(t, err)
+			capture := requireCapture(t, client.messages[0])
+			assert.NotContains(t, capture.Properties, propertyLLMModel)
+			assert.NotContains(t, capture.Properties, propertyLLMModelSource)
+		})
+	}
+}
+
+func TestCaptureToolCallExceptionLevel(t *testing.T) {
+	tests := []struct {
+		name       string
+		message    int
+		properties posthog.Properties
+		wantLevel  any
+	}{
+		{name: "exception event is an error", message: 1, wantLevel: "error"},
+		{name: "tool call event has no level", message: 0, wantLevel: nil},
+		{name: "custom level cannot override the exception's", message: 1, properties: posthog.Properties{"$exception_level": "info"}, wantLevel: "error"},
+		{name: "custom level is not set on the tool call", message: 0, properties: posthog.Properties{"$exception_level": "info"}, wantLevel: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+				ToolName:   "query",
+				Error:      errors.New("boom"),
+				Properties: tt.properties,
+			}))
+			require.Len(t, client.messages, 2)
+
+			assertSerializedProperty(t, client.messages[tt.message], "$exception_level", tt.wantLevel)
+		})
+	}
+}
+
+type domainError struct{}
+
+func (*domainError) Error() string { return "domain failure" }
+
+type valueError struct{}
+
+func (valueError) Error() string { return "value failure" }
+
+func TestCaptureToolCallErrorTypeAndExceptionType(t *testing.T) {
+	pathErr := &fs.PathError{Op: "open", Path: "/x", Err: errors.New("denied")}
+	opErr := &net.OpError{Op: "dial", Err: errors.New("refused")}
+	tests := []struct {
+		name          string
+		err           error
+		errorType     string
+		wantErrorType string
+		wantException string
+	}{
+		{name: "plain error has no informative type", err: errors.New("boom"), wantErrorType: "Error", wantException: "Error"},
+		{name: "wrapped plain error has no informative type", err: fmt.Errorf("ctx: %w", errors.New("boom")), wantErrorType: "Error", wantException: "Error"},
+		{name: "unwrapped formatted error", err: fmt.Errorf("ctx: %v", pathErr), wantErrorType: "Error", wantException: "Error"},
+		{name: "pointer type drops the star", err: pathErr, wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "single wrapper is skipped", err: fmt.Errorf("ctx: %w", pathErr), wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "stacked wrappers are skipped", err: fmt.Errorf("a: %w", fmt.Errorf("b: %w", opErr)), wantErrorType: "net.OpError", wantException: "net.OpError"},
+		{name: "multi-wrap takes the first informative", err: fmt.Errorf("%w and %w", errors.New("x"), opErr), wantErrorType: "net.OpError", wantException: "net.OpError"},
+		{name: "join takes the first informative", err: errors.Join(errors.New("x"), pathErr, opErr), wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "joined plain errors have no informative type", err: errors.Join(errors.New("x"), errors.New("y")), wantErrorType: "Error", wantException: "Error"},
+		{name: "third-party wrapper is skipped via Cause", err: testerrors.WithStack(pathErr), wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "third-party wrapper is skipped via Unwrap", err: testerrors.WithMessage(opErr, "ctx"), wantErrorType: "net.OpError", wantException: "net.OpError"},
+		{name: "stacked third-party wrappers are skipped", err: testerrors.WithStack(testerrors.WithMessage(pathErr, "ctx")), wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+		{name: "third-party leaf has no informative type", err: testerrors.WithStack(testerrors.New("boom")), wantErrorType: "Error", wantException: "Error"},
+		{name: "application error in a package named errors is named", err: testerrors.WithStack(&testerrors.NotFound{Resource: "doc"}), wantErrorType: "errors.NotFound", wantException: "errors.NotFound"},
+		{name: "custom pointer type", err: &domainError{}, wantErrorType: "posthogmcp.domainError", wantException: "posthogmcp.domainError"},
+		{name: "custom value type", err: valueError{}, wantErrorType: "posthogmcp.valueError", wantException: "posthogmcp.valueError"},
+		{name: "explicit type replaces only the error type", err: pathErr, errorType: "validation", wantErrorType: "validation", wantException: "fs.PathError"},
+		{name: "explicit type over a plain error", err: errors.New("boom"), errorType: "timeout", wantErrorType: "timeout", wantException: "Error"},
+		{name: "blank explicit type is derived", err: pathErr, errorType: "  ", wantErrorType: "fs.PathError", wantException: "fs.PathError"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+				ToolName:  "query",
+				Error:     tt.err,
+				ErrorType: tt.errorType,
+			}))
+			require.Len(t, client.messages, 2)
+
+			assert.Equal(t, tt.wantErrorType, requireCapture(t, client.messages[0]).Properties[propertyErrorType])
+			assert.Equal(t, tt.wantException, requireException(t, client.messages[1]).ExceptionList[0].Type)
+		})
+	}
 }

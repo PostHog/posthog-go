@@ -15,15 +15,29 @@ import (
 	"unicode/utf8"
 )
 
+const (
+	sensitiveKeyNames = `authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key`
+	// A JSON string never holds a raw newline, so one cut off by a tool's or
+	// the spec's pre-scan cut ends at the line or the text instead of
+	// swallowing prose up to the next quote.
+	jsonStringValue = `"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))`
+	jsonScalarValue = jsonStringValue + `|-?\d[\d.eE+-]*|true|false`
+)
+
 var (
 	// RE2's \b is ASCII-only, so a token glued to a letter like é is redacted
 	// here and kept by posthog-python. Over-redacting is the safe side.
 	postHogTokenPattern = regexp.MustCompile(`\bph[a-z]_[A-Za-z0-9_-]{20,}\b`)
-	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key)\n?$`)
-	base64Pattern       = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
-	base64URLPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
-	base64DataPrefix    = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
-	base64DataPayload   = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
+	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyNames + `)\n?$`)
+	// A tool that returns structuredContent also returns it as JSON text, where
+	// a sensitive key is a member inside a string instead of a map key. The key
+	// is decoded before matching, so `"pass\u0077ord"` counts. Values that nest
+	// objects, and JSON inside a JSON string, are out of scope.
+	jsonMemberPattern = regexp.MustCompile(`("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:` + jsonScalarValue + `|\[(?:\s*(?:` + jsonScalarValue + `|null)\s*,?)*\s*(?:\]|$))`)
+	base64Pattern     = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
+	base64URLPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
+	base64DataPrefix  = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
+	base64DataPayload = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
 
 	// Intent-only structured identifiers. Patterns follow the Python and
 	// TypeScript MCP sanitizers: bounded quantifiers, ASCII classes, and
@@ -61,6 +75,11 @@ func normalizePayload(field string, value any) (normalized any, err error) {
 
 	data, err := encodePayload(value)
 	if err == nil && len(data) > maxNormalizeBytes {
+		if field == "Response" {
+			if redacted, ok := redactOversizedResponse(data); ok {
+				return redacted, nil
+			}
+		}
 		if field == "Parameters" || field == "Response" {
 			return oversizedPayloadValue, nil
 		}
@@ -70,12 +89,93 @@ func normalizePayload(field string, value any) (normalized any, err error) {
 		return nil, packageError("normalize "+field, err)
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&normalized); err != nil {
+	normalized, err = decodeJSON(data)
+	if err != nil {
 		return nil, packageError("normalize "+field, err)
 	}
 	return normalized, nil
+}
+
+func decodeJSON(data []byte) (value any, err error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	err = decoder.Decode(&value)
+	return value, err
+}
+
+// redactOversizedResponse rescues a response whose JSON is over the normalize
+// cap only because of media, such as a typed MCP result that
+// redactMediaBeforeNormalize cannot see into. It reads each content block's
+// type through raw JSON without building the decoded tree, swaps media blocks
+// for their placeholders, and reports whether the result fits the cap. A
+// response over maxRedactBytes or with more than maxRedactBlocks content
+// blocks is not rescued, which bounds what a hostile result can make it decode.
+func redactOversizedResponse(data []byte) (any, bool) {
+	if len(data) > maxRedactBytes {
+		return nil, false
+	}
+	var response map[string]json.RawMessage
+	if json.Unmarshal(data, &response) != nil {
+		return nil, false
+	}
+	content, ok := decodeBlocks(response["content"])
+	if !ok {
+		return nil, false
+	}
+
+	swapped := false
+	for i, raw := range content {
+		// Maps, not a struct: struct fields match keys case-insensitively, while
+		// redactedMediaBlock reads the exact "type" key of the decoded block.
+		var block, resource map[string]json.RawMessage
+		var blockType string
+		_ = json.Unmarshal(raw, &block)
+		_ = json.Unmarshal(block["type"], &blockType)
+		_ = json.Unmarshal(block["resource"], &resource)
+		_, hasBlob := resource["blob"]
+		message, ok := mediaRedactionMessage(blockType, hasBlob)
+		if !ok {
+			continue
+		}
+		placeholder, err := json.Marshal(redactedContentBlock(message))
+		if err != nil {
+			return nil, false
+		}
+		content[i] = placeholder
+		swapped = true
+	}
+	if !swapped {
+		return nil, false
+	}
+
+	var err error
+	if response["content"], err = json.Marshal(content); err != nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil || len(encoded) > maxNormalizeBytes {
+		return nil, false
+	}
+	redacted, err := decodeJSON(encoded)
+	return redacted, err == nil
+}
+
+// decodeBlocks reads a JSON array one element at a time, so it stops at
+// maxRedactBlocks instead of growing with the input.
+func decodeBlocks(data json.RawMessage) ([]json.RawMessage, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
+		return nil, false
+	}
+	var blocks []json.RawMessage
+	for decoder.More() {
+		var block json.RawMessage
+		if len(blocks) == maxRedactBlocks || decoder.Decode(&block) != nil {
+			return nil, false
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks, true
 }
 
 // encodePayload pays for one json.Marshal in the common case. When that fails,
@@ -323,7 +423,40 @@ func isBinaryBlob(value string) bool {
 // the text these detectors match: it percent-encodes the `/` in front of a
 // `?ref=/phx_...` token, and can grow a word past the known-format scan window.
 func redactCredentials(value string) string {
+	value = redactSensitiveJSONMembers(value)
 	return redactSecretTokens(postHogTokenPattern.ReplaceAllString(value, redactedValue))
+}
+
+// redactSensitiveJSONMembers replaces the value of each JSON member whose
+// decoded key is sensitive with "[redacted]", keeping the JSON valid.
+func redactSensitiveJSONMembers(value string) string {
+	var result strings.Builder
+	last := 0
+	for _, match := range jsonMemberPattern.FindAllStringSubmatchIndex(value, -1) {
+		prefixEnd, keyStart, keyEnd := match[3], match[4], match[5]
+		if !sensitiveKeyPattern.MatchString(decodeJSONKey(value[keyStart:keyEnd])) {
+			continue
+		}
+		result.WriteString(value[last:prefixEnd])
+		result.WriteString(`"` + redactedValue + `"`)
+		last = match[1]
+	}
+	if last == 0 {
+		return value
+	}
+	result.WriteString(value[last:])
+	return result.String()
+}
+
+func decodeJSONKey(key string) string {
+	if !strings.Contains(key, `\`) {
+		return key
+	}
+	var decoded string
+	if json.Unmarshal([]byte(`"`+key+`"`), &decoded) != nil {
+		return key
+	}
+	return decoded
 }
 
 // redactSecretTokens redacts each space-separated word that reads as a
@@ -451,19 +584,28 @@ func redactMediaBeforeNormalize(value any) any {
 }
 
 func redactedMediaBlock(block map[string]any) (map[string]any, bool) {
-	switch block["type"] {
+	blockType, _ := block["type"].(string)
+	resource, _ := block["resource"].(map[string]any)
+	_, hasBlob := resource["blob"]
+	message, ok := mediaRedactionMessage(blockType, hasBlob)
+	if !ok {
+		return nil, false
+	}
+	return redactedContentBlock(message), true
+}
+
+func mediaRedactionMessage(blockType string, hasBlob bool) (string, bool) {
+	switch blockType {
 	case "image":
-		return redactedContentBlock("[image content redacted - not supported by PostHog MCP analytics]"), true
+		return "[image content redacted - not supported by PostHog MCP analytics]", true
 	case "audio":
-		return redactedContentBlock("[audio content redacted - not supported by PostHog MCP analytics]"), true
+		return "[audio content redacted - not supported by PostHog MCP analytics]", true
 	case "resource":
-		if resource, ok := block["resource"].(map[string]any); ok {
-			if _, hasBlob := resource["blob"]; hasBlob {
-				return redactedContentBlock("[binary resource content redacted - not supported by PostHog MCP analytics]"), true
-			}
+		if hasBlob {
+			return "[binary resource content redacted - not supported by PostHog MCP analytics]", true
 		}
 	}
-	return nil, false
+	return "", false
 }
 
 func sanitizeContentBlock(value any) any {

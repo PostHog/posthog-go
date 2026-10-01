@@ -16,12 +16,18 @@ const (
 	propertyErrorMessage    = "$mcp_error_message"
 	propertyIntent          = "$mcp_intent"
 	propertyIntentSource    = "$mcp_intent_source"
+	propertyConversationID  = "$mcp_conversation_id"
+	propertyLLMModel        = "$mcp_llm_model"
+	propertyLLMModelSource  = "$mcp_llm_model_source"
+	propertyClientUserAgent = "$mcp_client_user_agent"
+	propertyVendorClient    = "$mcp_vendor_client"
 	propertyServerName      = "$mcp_server_name"
 	propertyServerVersion   = "$mcp_server_version"
 	propertyClientName      = "$mcp_client_name"
 	propertyClientVersion   = "$mcp_client_version"
 	propertyProtocolVersion = "$mcp_protocol_version"
 	propertySessionID       = "$session_id"
+	propertyExceptionLevel  = "$exception_level"
 	propertyGroups          = "$groups"
 	propertySet             = "$set"
 	propertyProcessProfile  = "$process_person_profile"
@@ -35,6 +41,8 @@ const (
 	maxStringBytes        = 32_768
 	maxEventBytes         = 102_400
 	maxNormalizeBytes     = 1_048_576
+	maxRedactBytes        = 33_554_432
+	maxRedactBlocks       = 1_000
 	maxIntentBytes        = 2_048
 	maxErrorMessageBytes  = 2_048
 	maxResourceNameBytes  = 256
