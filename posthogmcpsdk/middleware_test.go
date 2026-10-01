@@ -759,9 +759,11 @@ func TestStatelessHTTPSessions(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		getSessionID func() string
+		client       http.RoundTripper
 	}{
-		{"server issues a session id", nil},
-		{"no session id", func() string { return "" }},
+		{name: "the client echoes the server's session id"},
+		{name: "the client drops the server's session id", client: sessionIDDroppingTransport{}},
+		{name: "no session id", getSessionID: func() string { return "" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			queue := &fakeQueue{}
@@ -779,7 +781,10 @@ func TestStatelessHTTPSessions(t *testing.T) {
 			httpServer := httptest.NewServer(handler)
 			t.Cleanup(httpServer.Close)
 			client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
-			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{
+				Endpoint:   httpServer.URL,
+				HTTPClient: &http.Client{Transport: test.client},
+			}, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = session.Close() })
 
@@ -799,7 +804,7 @@ func TestStatelessHTTPSessions(t *testing.T) {
 				assert.Equal(t, session.InitializeResult().ProtocolVersion, capture.Properties["$mcp_protocol_version"])
 			}
 			first, second := captures[0].Properties["$session_id"], captures[1].Properties["$session_id"]
-			if session.ID() != "" {
+			if session.ID() != "" && test.client == nil {
 				assert.Equal(t, deterministicSessionID(session.ID()), first)
 				assert.Equal(t, first, second)
 			} else {

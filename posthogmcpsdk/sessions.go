@@ -18,12 +18,12 @@ const (
 
 // sessionResolver picks the $session_id of a tool call: the transport session
 // id derived into the id every PostHog MCP SDK computes for it, or, without
-// one (stdio and in-memory transports, stateless HTTP), an SDK-generated id
-// per go-sdk session that rotates after [sessionInactivityTimeout] without
-// activity. A request-scoped session, which a stateless HTTP server creates
-// per request, is never remembered: it gets a fresh id on each call, which
-// keeps the many clients of one stateless HTTP server apart at the cost of
-// fragmenting a conversation across requests.
+// one (stdio and in-memory transports), an SDK-generated id per go-sdk session
+// that rotates after [sessionInactivityTimeout] without activity. A
+// request-scoped session, which a stateless HTTP server creates per request,
+// is never remembered: it gets a fresh id on each call, which keeps the many
+// clients of one stateless HTTP server apart at the cost of fragmenting a
+// conversation across requests.
 type sessionResolver struct {
 	now func() time.Time
 
@@ -42,11 +42,11 @@ func newSessionResolver(now func() time.Time) *sessionResolver {
 }
 
 func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped bool) string {
-	if session != nil && session.ID() != "" {
-		return deterministicSessionID(session.ID())
-	}
 	if requestScoped {
 		return newGeneratedSessionID()
+	}
+	if session != nil && session.ID() != "" {
+		return deterministicSessionID(session.ID())
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -64,11 +64,13 @@ func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped b
 	return entry.id
 }
 
-// carriesSession reports whether req arrived on a transport session: one with
-// an id, or a one-client connection such as stdio or in-memory, which go-sdk
-// serves without RequestExtra. A stateless HTTP request carries neither.
+// carriesSession reports whether req arrived on a transport session: a
+// one-client connection such as stdio or in-memory, which go-sdk serves
+// without RequestExtra, or an HTTP request that sends Mcp-Session-Id. A
+// stateless go-sdk server gives a request without that header a random
+// session id of its own, which groups nothing.
 func carriesSession(req *mcpsdk.CallToolRequest) bool {
-	return (req.Session != nil && req.Session.ID() != "") || req.Extra == nil
+	return req.Extra == nil || req.Extra.Header.Get("Mcp-Session-Id") != ""
 }
 
 func newGeneratedSessionID() string {

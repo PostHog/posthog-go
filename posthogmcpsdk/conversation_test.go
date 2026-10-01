@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -114,6 +115,74 @@ func TestStatelessHTTPConversationHandleSharesASession(t *testing.T) {
 	}
 }
 
+// sessionIDDroppingTransport is an HTTP client that never sends the
+// Mcp-Session-Id it was issued.
+type sessionIDDroppingTransport struct{}
+
+func (sessionIDDroppingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Del("Mcp-Session-Id")
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// A default stateless go-sdk server assigns every request a new random
+// session id, which groups nothing unless the client sends it back.
+func TestStatelessHTTPClientWithoutASessionIDGetsAConversationHandle(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		echos bool
+	}{
+		{name: "an agent that echoes the handle shares one session", echos: true},
+		{name: "an agent that does not echo it gets a handle per call"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue))
+			addWeatherTool(server, nil)
+			httpServer := httptest.NewServer(mcpsdk.NewStreamableHTTPHandler(
+				func(*http.Request) *mcpsdk.Server { return server },
+				&mcpsdk.StreamableHTTPOptions{Stateless: true},
+			))
+			t.Cleanup(httpServer.Close)
+			client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
+			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{
+				Endpoint:   httpServer.URL,
+				HTTPClient: &http.Client{Transport: sessionIDDroppingTransport{}},
+			}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = session.Close() })
+
+			first, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "weather",
+				Arguments: map[string]any{"city": "Melbourne"},
+			})
+			require.NoError(t, err)
+			handle := deliveredHandle(t, first)
+			require.Regexp(t, conversationHandle, handle)
+			arguments := map[string]any{"city": "Melbourne"}
+			if test.echos {
+				arguments["conversation_id"] = handle
+			}
+			second, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: arguments})
+			require.NoError(t, err)
+			secondHandle := handle
+			if !test.echos {
+				secondHandle = deliveredHandle(t, second)
+				require.Regexp(t, conversationHandle, secondHandle)
+				require.NotEqual(t, handle, secondHandle)
+			}
+
+			captures := queue.toolCalls()
+			require.Len(t, captures, 2)
+			for i, want := range []string{handle, secondHandle} {
+				assert.Equal(t, want, captures[i].Properties["$mcp_conversation_id"])
+				assert.Equal(t, deterministicSessionID(want), captures[i].Properties["$session_id"])
+			}
+		})
+	}
+}
+
 func TestInstrumentConversationHandle(t *testing.T) {
 	ownConversation := map[string]any{"type": "object", "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}}}
 	for _, test := range []struct {
@@ -170,6 +239,14 @@ func TestInstrumentConversationHandle(t *testing.T) {
 			wantArguments: `{"query":"flags"}`,
 		},
 		{
+			name:             "an echoed handle wins over an HTTP session",
+			over:             statefulHTTP,
+			arguments:        map[string]any{"conversation_id": vectorHandle},
+			wantArguments:    `{}`,
+			wantConversation: vectorHandle,
+			wantSessionID:    vectorSessionID,
+		},
+		{
 			name:          "disabled",
 			over:          statelessHTTP,
 			opts:          []Option{WithConversationID(false)},
@@ -223,6 +300,45 @@ func TestInstrumentConversationHandle(t *testing.T) {
 	}
 }
 
+func TestInstrumentMirrorsTheHandleIntoStructuredContent(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		structured string
+		want       string
+	}{
+		{
+			name:       "added beside the tool's fields",
+			structured: `{"temperature":21}`,
+			want:       `{"temperature":21,"_mcp_instructions":{"conversation_id":"<handle>"}}`,
+		},
+		{
+			name:       "a result that sets _mcp_instructions itself is unchanged",
+			structured: `{"temperature":21,"_mcp_instructions":"the tool's own"}`,
+			want:       `{"temperature":21,"_mcp_instructions":"the tool's own"}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newSessionlessServer()
+			Instrument(server, posthogmcp.New(&fakeQueue{}))
+			server.AddTool(
+				&mcpsdk.Tool{Name: "weather", InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}},
+				func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+					return &mcpsdk.CallToolResult{
+						Content:           []mcpsdk.Content{&mcpsdk.TextContent{Text: test.structured}},
+						StructuredContent: json.RawMessage(test.structured),
+					}, nil
+				},
+			)
+
+			result, err := connect(t, server, statelessHTTP).CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather"})
+			require.NoError(t, err)
+			handle := deliveredHandle(t, result)
+			require.Regexp(t, conversationHandle, handle)
+			assert.JSONEq(t, strings.ReplaceAll(test.want, "<handle>", handle), jsonString(t, result.StructuredContent))
+		})
+	}
+}
+
 func TestInstrumentConversationHandleOnFailures(t *testing.T) {
 	for _, test := range []struct {
 		name          string
@@ -243,6 +359,18 @@ func TestInstrumentConversationHandleOnFailures(t *testing.T) {
 					&mcpsdk.Tool{Name: "weather", InputSchema: map[string]any{"type": "object"}},
 					func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 						return nil, errors.New("handler failed")
+					},
+				)
+			},
+			wantMessage: "handler failed",
+		},
+		{
+			name: "a protocol error with a result still carries none",
+			addTool: func(server *mcpsdk.Server) {
+				server.AddTool(
+					&mcpsdk.Tool{Name: "weather", InputSchema: map[string]any{"type": "object"}},
+					func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+						return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "partial"}}}, errors.New("handler failed")
 					},
 				)
 			},
@@ -315,6 +443,16 @@ func TestInstrumentDeclaresConversationInstructions(t *testing.T) {
 			wantOutputSchema: map[string]any{"type": "object", "oneOf": []any{plain}},
 		},
 		{
+			name:             "an array is left alone",
+			outputSchema:     map[string]any{"type": "array", "items": plain},
+			wantOutputSchema: map[string]any{"type": "array", "items": plain},
+		},
+		{
+			name:             "a schema without a type is left alone",
+			outputSchema:     map[string]any{"properties": plain["properties"]},
+			wantOutputSchema: map[string]any{"properties": plain["properties"]},
+		},
+		{
 			name: "no output schema",
 		},
 		{
@@ -337,7 +475,14 @@ func TestInstrumentDeclaresConversationInstructions(t *testing.T) {
 			if inputSchema == nil {
 				inputSchema = map[string]any{"type": "object"}
 			}
-			server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: inputSchema, OutputSchema: test.outputSchema}, echoHandler)
+			func() {
+				defer func() {
+					if rejected := recover(); rejected != nil {
+						t.Skipf("this go-sdk accepts only object output schemas: %v", rejected)
+					}
+				}()
+				server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: inputSchema, OutputSchema: test.outputSchema}, echoHandler)
+			}()
 
 			result, err := connectInMemory(t, server).ListTools(t.Context(), nil)
 			require.NoError(t, err)
@@ -373,7 +518,5 @@ func TestMiddlewareDoesNotDeliverAHandleOnAnInputRequiredRound(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Same(t, result, got)
-	for _, capture := range queue.toolCalls() {
-		assert.NotContains(t, capture.Properties, "$mcp_conversation_id")
-	}
+	assert.NotContains(t, queue.onlyToolCall(t), "$mcp_conversation_id")
 }

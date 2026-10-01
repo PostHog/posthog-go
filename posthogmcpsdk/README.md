@@ -77,22 +77,26 @@ recognized within ten seconds, when the middleware lists tools again.
 
 ## Conversation anchoring
 
-A stateless HTTP request carries no session, so without help every call of
-one agent conversation lands in its own `$session_id`. The middleware adds an
-optional `conversation_id` string to every tool's input schema. When a call
-arrives with neither a transport session nor a valid handle, it appends a new
-UUIDv7 handle to the result as a final text block,
+A stateless HTTP request carries no session unless the client sends an
+`Mcp-Session-Id`, so without help every call of one agent conversation lands
+in its own `$session_id`. The session ID a stateless go-sdk server assigns a
+request that sends none is new on every request, so it does not count. The
+middleware adds an optional `conversation_id` string to every tool's input
+schema. When a call arrives with neither a transport session nor a valid
+handle, it appends a new UUIDv7 handle to the result as a final text block,
 `{"conversation_id":"<handle>"}`, and the agent passes it back on later calls.
-Tools whose output schema is a plain object also get an optional
-`_mcp_instructions` property, and every result of theirs carries the handle
-there.
+Tools whose output schema is a plain object (`"type": "object"`, without
+`$ref`, `allOf`, `anyOf`, or `oneOf`) also get an optional `_mcp_instructions`
+property. When a call has a handle, new or echoed, their result carries it
+there too, unless the tool set `_mcp_instructions` itself.
 
 A handle the agent sends is used only if it is a UUIDv7. It becomes
 `$mcp_conversation_id`, on the `$exception` of a failed call too, and
 `$session_id` is derived from it the way every PostHog MCP SDK derives it, so
 replicas and servers in other languages agree. A handle wins over a transport
 session. A new handle the result cannot carry, as on a protocol error, is not
-recorded.
+recorded. `$mcp_response` is the result the tool returned, without the
+handle the middleware adds to it.
 
 Like `context`, the argument is removed before the handler and validation
 and left off `$mcp_parameters`, tools that declare their own `conversation_id`

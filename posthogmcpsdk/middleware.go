@@ -99,7 +99,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			call := m.prepare(ctx, next, toolRequest)
 			started := time.Now()
 			result, handlerErr := next(ctx, method, call.dispatch)
-			delivered := m.deliverConversation(ctx, &call, result)
+			delivered := m.deliverConversation(ctx, &call, result, handlerErr)
 			m.observeSafely(ctx, call, result, handlerErr, started)
 			return delivered, handlerErr
 		default:
@@ -199,14 +199,15 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 // deliverConversation returns result carrying the call's conversation handle:
 // mirrored into structuredContent when the tool's output schema declares
 // _mcp_instructions, and appended as a text block when the handle is new. A
-// new handle the result cannot carry is forgotten, so no event names a
+// new handle the result cannot carry, or that never reaches the agent because
+// go-sdk sends only handlerErr, is forgotten, so no event names a
 // conversation the agent never received.
-func (m *middleware) deliverConversation(ctx context.Context, call *preparedCall, result mcpsdk.Result) (delivered mcpsdk.Result) {
+func (m *middleware) deliverConversation(ctx context.Context, call *preparedCall, result mcpsdk.Result, handlerErr error) (delivered mcpsdk.Result) {
 	handle := call.conversation
 	if handle.minted {
 		call.conversation = conversation{}
 	}
-	if handle.id == "" || !(handle.minted || call.tool.instructions) {
+	if handle.id == "" || handlerErr != nil || !(handle.minted || call.tool.instructions) {
 		return result
 	}
 	defer func() {
@@ -320,8 +321,10 @@ func (m *middleware) observe(
 		}
 	}
 
-	call.SessionID = m.sessions.resolve(toolRequest.Session, toolRequest.Extra != nil)
 	call.ConversationID = prepared.conversation.id
+	if call.ConversationID == "" {
+		call.SessionID = m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
+	}
 
 	if m.captureModel {
 		call.LLMModel, call.LLMModelSource = callModel(toolRequest.Params.Meta, prepared)

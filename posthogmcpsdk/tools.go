@@ -315,11 +315,11 @@ func withInstructions(outputSchema any) (any, bool) {
 }
 
 // extensibleSchema decodes a copy of a JSON schema whose properties can be
-// extended safely, and its properties: an object without $ref, allOf, anyOf,
-// or oneOf at its root, whose properties, if any, are an object.
+// extended safely, and its properties: one of type "object" without $ref,
+// allOf, anyOf, or oneOf at its root, whose properties, if any, are an object.
 func extensibleSchema(raw any) (schema, properties map[string]any, ok bool) {
 	encoded, err := json.Marshal(raw)
-	if err != nil || json.Unmarshal(encoded, &schema) != nil || schema == nil {
+	if err != nil || json.Unmarshal(encoded, &schema) != nil || schema["type"] != "object" {
 		return nil, nil, false
 	}
 	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
