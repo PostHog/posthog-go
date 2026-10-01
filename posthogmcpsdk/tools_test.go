@@ -69,13 +69,6 @@ func TestCatalogRetriesAFailedWalk(t *testing.T) {
 			wantErr: "posthogmcpsdk: tools/list through inner handler returned *mcp.CallToolResult",
 		},
 		{
-			name: "page cap",
-			failing: func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
-				return &mcpsdk.ListToolsResult{NextCursor: "more"}, nil
-			},
-			wantErr: "posthogmcpsdk: tools/list through inner handler has more than 100 pages",
-		},
-		{
 			name: "inner panic",
 			failing: func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
 				panic("inner tools/list panic")
@@ -104,6 +97,23 @@ func TestCatalogRetriesAFailedWalk(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+// More pages will not appear on a retry, so a capped walk is remembered like a
+// complete one; otherwise every unknown-tool call would list 100 pages again.
+func TestCatalogRemembersACappedWalk(t *testing.T) {
+	catalog := newToolCatalog(true)
+	var lists atomic.Int32
+	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+		lists.Add(1)
+		return &mcpsdk.ListToolsResult{NextCursor: "more"}, nil
+	}
+
+	_, err := catalog.lookup(t.Context(), next, callRequest("missing"))
+	assert.EqualError(t, err, "posthogmcpsdk: tools/list through inner handler has more than 100 pages")
+	_, err = catalog.lookup(t.Context(), next, callRequest("missing"))
+	assert.NoError(t, err)
+	assert.Equal(t, int32(maxListingPages), lists.Load())
 }
 
 type panickingSchema struct{}

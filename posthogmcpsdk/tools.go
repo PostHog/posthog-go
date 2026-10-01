@@ -54,9 +54,10 @@ type catalogGeneration struct {
 	tools map[string]catalogEntry
 	// walking is non-nil while a learning walk runs, and closed when it ends.
 	walking chan struct{}
-	// walkedAt is when the last complete walk ended. Until catalogTTL later, a
-	// name the catalog does not know is not registered: a later tools/list
-	// result can only add names, which are then known.
+	// walkedAt is when the last finished walk ended. Until catalogTTL later, a
+	// name the catalog does not know is treated as not registered (past the
+	// page cap it may be): a later tools/list result can only add names, which
+	// are then known.
 	walkedAt time.Time
 }
 
@@ -171,8 +172,8 @@ func (c *toolCatalog) lookupIn(ctx context.Context, next mcpsdk.MethodHandler, r
 }
 
 // walk lists every tool into gen and then ends the walk, waking its waiters.
-// Only a walk that reaches the last page lets gen remember misses; otherwise
-// the next lookup walks again.
+// A walk that reaches the last page or the page cap lets gen remember misses;
+// one that fails lets the next lookup walk again.
 func (c *toolCatalog) walk(
 	ctx context.Context,
 	next mcpsdk.MethodHandler,
@@ -180,11 +181,11 @@ func (c *toolCatalog) walk(
 	gen *catalogGeneration,
 	walking chan struct{},
 ) error {
-	complete := false
+	finished := false
 	defer func() {
 		c.mu.Lock()
 		gen.walking = nil
-		if complete {
+		if finished {
 			gen.walkedAt = c.now()
 		}
 		c.mu.Unlock()
@@ -206,11 +207,12 @@ func (c *toolCatalog) walk(
 		}
 		c.advertise(gen, page.Tools)
 		if page.NextCursor == "" {
-			complete = true
+			finished = true
 			return nil
 		}
 		list.Params = &mcpsdk.ListToolsParams{Cursor: page.NextCursor}
 	}
+	finished = true
 	return fmt.Errorf("posthogmcpsdk: tools/list through inner handler has more than %d pages", maxListingPages)
 }
 
