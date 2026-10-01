@@ -1525,6 +1525,12 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 		// no guard, so a per-lane shutdown would panic on the second lane.
 		if c.featureFlagsPoller != nil {
 			c.featureFlagsPoller.shutdownPoller(ctx)
+			// The poller shares the deadline; outliving it is a shutdown timeout.
+			if !timedOut && ctx.Err() != nil {
+				c.cancel()
+				err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
+				c.Warnf("shutdown timeout exceeded, some messages may be lost")
+			}
 		}
 	})
 
