@@ -269,7 +269,7 @@ func listThrough(ctx context.Context, next mcpsdk.MethodHandler, list *mcpsdk.Li
 // argument even under additionalProperties false: go-sdk validates calls
 // against the registered schema, and the argument is removed first.
 func withArguments(inputSchema any, arguments []analyticsArgument) (map[string]any, []string) {
-	schema, properties, ok := extensibleSchema(inputSchema)
+	schema, properties, ok := extensibleSchema(inputSchema, false)
 	if !ok {
 		return nil, nil
 	}
@@ -297,7 +297,7 @@ const instructionsProperty = "_mcp_instructions"
 // _mcp_instructions object that holds the conversation handle, and whether it
 // added it. Otherwise it returns outputSchema unchanged.
 func withInstructions(outputSchema any) (any, bool) {
-	schema, properties, ok := extensibleSchema(outputSchema)
+	schema, properties, ok := extensibleSchema(outputSchema, true)
 	if !ok {
 		return outputSchema, false
 	}
@@ -315,15 +315,31 @@ func withInstructions(outputSchema any) (any, bool) {
 }
 
 // extensibleSchema decodes a copy of a JSON schema whose properties can be
-// extended safely, and its properties: one of type "object" without $ref,
-// allOf, anyOf, or oneOf at its root, whose properties, if any, are an object.
-func extensibleSchema(raw any) (schema, properties map[string]any, ok bool) {
+// extended safely, and its properties: one without $ref, allOf, anyOf, or
+// oneOf at its root, whose properties, if any, are an object. An output schema
+// must also declare type "object" and no constraint an extra property could
+// break (maxProperties, propertyNames), since clients validate delivered
+// results against it. An input schema may omit its type, as go-sdk accepts.
+func extensibleSchema(raw any, output bool) (schema, properties map[string]any, ok bool) {
 	encoded, err := json.Marshal(raw)
-	if err != nil || json.Unmarshal(encoded, &schema) != nil || schema["type"] != "object" {
+	if err != nil || json.Unmarshal(encoded, &schema) != nil || schema == nil {
 		return nil, nil, false
 	}
-	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
-		if _, combined := schema[key]; combined {
+	switch schema["type"] {
+	case "object":
+	case nil:
+		if output {
+			return nil, nil, false
+		}
+	default:
+		return nil, nil, false
+	}
+	blockers := []string{"$ref", "allOf", "anyOf", "oneOf"}
+	if output {
+		blockers = append(blockers, "maxProperties", "propertyNames")
+	}
+	for _, key := range blockers {
+		if _, blocked := schema[key]; blocked {
 			return nil, nil, false
 		}
 	}
