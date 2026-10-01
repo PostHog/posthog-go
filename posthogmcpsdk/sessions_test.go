@@ -96,12 +96,10 @@ func TestConnectionsToOneServerGetDifferentSessions(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for _, client := range []*mcpsdk.ClientSession{first, second, first, second} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
 			assert.NoError(t, err)
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -3,6 +3,7 @@ package posthogmcpsdk
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,9 +34,7 @@ func (a toolArguments) text(name string) string {
 
 func (a toolArguments) without(names ...string) toolArguments {
 	kept := make(toolArguments, len(a))
-	for name, value := range a {
-		kept[name] = value
-	}
+	maps.Copy(kept, a)
 	for _, name := range names {
 		delete(kept, name)
 	}
