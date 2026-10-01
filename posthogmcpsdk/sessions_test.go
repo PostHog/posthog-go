@@ -78,7 +78,7 @@ func TestGeneratedSessionRotatesAfterInactivity(t *testing.T) {
 		_, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
 		require.NoError(t, err, step.name)
 
-		current, _ := queue.toolCalls(t)[i].Properties["$session_id"].(string)
+		current, _ := queue.toolCalls()[i].Properties["$session_id"].(string)
 		assert.Regexp(t, generatedSessionID, current, step.name)
 		if i > 0 {
 			assert.Equal(t, step.sameAsBefore, current == previous, step.name)
@@ -104,7 +104,7 @@ func TestConnectionsToOneServerGetDifferentSessions(t *testing.T) {
 	wg.Wait()
 
 	distinct := map[any]bool{}
-	for _, capture := range queue.toolCalls(t) {
+	for _, capture := range queue.toolCalls() {
 		distinct[capture.Properties["$session_id"]] = true
 	}
 	assert.Len(t, distinct, 2)

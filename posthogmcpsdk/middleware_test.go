@@ -39,8 +39,7 @@ func (q *fakeQueue) Enqueue(message posthog.Message) error {
 	return q.err
 }
 
-func (q *fakeQueue) toolCalls(t *testing.T) []posthog.Capture {
-	t.Helper()
+func (q *fakeQueue) toolCalls() []posthog.Capture {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	var captures []posthog.Capture
@@ -66,7 +65,7 @@ func (q *fakeQueue) exceptions() []posthog.Exception {
 
 func (q *fakeQueue) onlyToolCall(t *testing.T) posthog.Properties {
 	t.Helper()
-	captures := q.toolCalls(t)
+	captures := q.toolCalls()
 	require.Len(t, captures, 1)
 	return captures[0].Properties
 }
@@ -126,7 +125,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.IsError, "the typed tool rejected the injected context argument")
 
-	captures := queue.toolCalls(t)
+	captures := queue.toolCalls()
 	require.Len(t, captures, 1)
 	capture := captures[0]
 	assert.Equal(t, "user-123", capture.DistinctId)
@@ -622,7 +621,7 @@ func TestStatelessHTTPSessions(t *testing.T) {
 				require.False(t, result.IsError, toolResultText(result))
 			}
 
-			captures := queue.toolCalls(t)
+			captures := queue.toolCalls()
 			require.Len(t, captures, 2)
 			for _, capture := range captures {
 				assert.Equal(t, "Checking the weather", capture.Properties["$mcp_intent"])
@@ -723,7 +722,7 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 
 			assert.Equal(t, test.wantPages, int(pages.Load()))
 			var descriptions []any
-			for _, capture := range queue.toolCalls(t) {
+			for _, capture := range queue.toolCalls() {
 				descriptions = append(descriptions, capture.Properties["$mcp_tool_description"])
 			}
 			assert.Equal(t, test.wantDescriptions, descriptions)
@@ -756,7 +755,7 @@ func TestInstrumentRecoversFromATransientListingFailure(t *testing.T) {
 
 	assert.Equal(t, 3, int(pages.Load()))
 	var descriptions []any
-	for _, capture := range queue.toolCalls(t) {
+	for _, capture := range queue.toolCalls() {
 		descriptions = append(descriptions, capture.Properties["$mcp_tool_description"])
 	}
 	assert.Equal(t, []any{nil, "Tool 3", "Tool 3"}, descriptions)

@@ -66,8 +66,8 @@ type catalogEntry struct {
 	learnedAt time.Time
 }
 
-func newToolCatalog(injectContext bool) *toolCatalog {
-	return &toolCatalog{injectContext: injectContext, now: time.Now, current: newCatalogGeneration()}
+func newToolCatalog(injectContext bool, now func() time.Time) *toolCatalog {
+	return &toolCatalog{injectContext: injectContext, now: now, current: newCatalogGeneration()}
 }
 
 func newCatalogGeneration() *catalogGeneration {
@@ -124,9 +124,8 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 // through next, and so does a call for a tool learned catalogTTL ago, which
 // may have been replaced since. Concurrent callers share that walk, and once
 // one completes the generation remembers for catalogTTL which names are not
-// registered. The
-// error reports why a walk did not complete, which never reaches the
-// tools/call.
+// registered. The error reports why a walk did not complete, which never
+// reaches the tools/call.
 func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
 	info, gen, err := c.lookupIn(ctx, next, req)
 	if err == nil && gen != c.generation() {

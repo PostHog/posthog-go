@@ -64,8 +64,7 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 			opt(cfg)
 		}
 	}
-	tools := newToolCatalog(cfg.contextParameter)
-	tools.now = cfg.now
+	tools := newToolCatalog(cfg.contextParameter, cfg.now)
 	m := &middleware{config: cfg, tools: tools, sessions: newSessionResolver(cfg.now)}
 	return Middleware{Receiving: m.receive, Sending: m.send}
 }
@@ -166,7 +165,7 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 
 func (m *middleware) observeSafely(
 	ctx context.Context,
-	call preparedCall,
+	prepared preparedCall,
 	result mcpsdk.Result,
 	handlerErr error,
 	started time.Time,
@@ -176,7 +175,7 @@ func (m *middleware) observeSafely(
 			m.report(ctx, fmt.Errorf("posthogmcpsdk: instrumentation panic (%T)", recovered))
 		}
 	}()
-	m.observe(ctx, call, result, handlerErr, started)
+	m.observe(ctx, prepared, result, handlerErr, started)
 }
 
 func (m *middleware) observe(
@@ -231,8 +230,8 @@ func (m *middleware) observe(
 
 	call.SessionID = m.sessions.resolve(toolRequest.Session, toolRequest.Extra != nil)
 
-	// TODO: once ToolCall has the conversation, model, and transport fields,
-	// set LLMModel from toolRequest.Params.Meta["x-codex-turn-metadata"]["model"]
+	// TODO: once posthogmcpsdk requires a posthog-go release whose ToolCall has
+	// the conversation, model, and transport fields, set LLMModel from toolRequest.Params.Meta["x-codex-turn-metadata"]["model"]
 	// with ModelSourceClientMetadata, ClientUserAgent from the User-Agent header
 	// in toolRequest.Extra, and VendorClient from its X-Anthropic-Client header.
 

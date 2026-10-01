@@ -25,7 +25,7 @@ func listing(names ...string) *mcpsdk.ListToolsResult {
 }
 
 func TestCatalogListingDuringWalkDoesNotStartAnother(t *testing.T) {
-	catalog := newToolCatalog(true)
+	catalog := newToolCatalog(true, time.Now)
 	walkStarted := make(chan struct{})
 	release := make(chan struct{})
 	var lists atomic.Int32
@@ -77,7 +77,7 @@ func TestCatalogRetriesAFailedWalk(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := newToolCatalog(true)
+			catalog := newToolCatalog(true, time.Now)
 			var failing atomic.Bool
 			failing.Store(true)
 			next := func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
@@ -102,7 +102,7 @@ func TestCatalogRetriesAFailedWalk(t *testing.T) {
 // More pages will not appear on a retry, so a capped walk is remembered like a
 // complete one; otherwise every unknown-tool call would list 100 pages again.
 func TestCatalogRemembersACappedWalk(t *testing.T) {
-	catalog := newToolCatalog(true)
+	catalog := newToolCatalog(true, time.Now)
 	var lists atomic.Int32
 	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
 		lists.Add(1)
@@ -121,7 +121,7 @@ type panickingSchema struct{}
 func (panickingSchema) MarshalJSON() ([]byte, error) { panic("schema panic") }
 
 func TestCatalogPropagatesItsOwnPanicAndStaysRetryable(t *testing.T) {
-	catalog := newToolCatalog(true)
+	catalog := newToolCatalog(true, time.Now)
 	schema := any(panickingSchema{})
 	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
 		return &mcpsdk.ListToolsResult{Tools: []*mcpsdk.Tool{{Name: "tool", InputSchema: schema}}}, nil
@@ -146,7 +146,7 @@ func TestCatalogForgetsMissesAfterTenSeconds(t *testing.T) {
 		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 2, wantInfo: toolInfo{description: "about added", contextInjected: true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := newToolCatalog(true)
+			catalog := newToolCatalog(true, time.Now)
 			now := time.Unix(1_700_000_000, 0)
 			catalog.now = func() time.Time { return now }
 			registered := listing()
@@ -179,7 +179,7 @@ func TestCatalogRelearnsKnownToolsAfterTenSeconds(t *testing.T) {
 		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 1, wantInfo: toolInfo{description: "replaced"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := newToolCatalog(true)
+			catalog := newToolCatalog(true, time.Now)
 			now := time.Unix(1_700_000_000, 0)
 			catalog.now = func() time.Time { return now }
 			catalog.advertise(catalog.generation(), listing("plan").Tools)
@@ -204,7 +204,7 @@ func TestCatalogRelearnsKnownToolsAfterTenSeconds(t *testing.T) {
 }
 
 func TestCatalogListingKeepsRememberedMisses(t *testing.T) {
-	catalog := newToolCatalog(true)
+	catalog := newToolCatalog(true, time.Now)
 	var lists atomic.Int32
 	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
 		lists.Add(1)
@@ -220,7 +220,7 @@ func TestCatalogListingKeepsRememberedMisses(t *testing.T) {
 }
 
 func TestCatalogWalkInvalidatedMidwayLearnsTheCurrentGeneration(t *testing.T) {
-	catalog := newToolCatalog(true)
+	catalog := newToolCatalog(true, time.Now)
 	var lists atomic.Int32
 	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
 		if lists.Add(1) == 1 {
@@ -236,7 +236,7 @@ func TestCatalogWalkInvalidatedMidwayLearnsTheCurrentGeneration(t *testing.T) {
 }
 
 func TestCatalogCancelledWalkIsNotReportedAndStaysRetryable(t *testing.T) {
-	catalog := newToolCatalog(true)
+	catalog := newToolCatalog(true, time.Now)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancelling := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
 		cancel()
