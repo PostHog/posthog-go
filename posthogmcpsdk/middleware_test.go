@@ -141,7 +141,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	delete(properties, "$mcp_protocol_version")
 	received := *result
 	received.Meta = nil // go-sdk v1.8+ stamps serverInfo on the way out, after the middleware
-	assert.JSONEq(t, jsonString(t, received), jsonString(t, properties["$mcp_response"]))
+	assert.JSONEq(t, jsonString(t, &received), jsonString(t, properties["$mcp_response"]))
 	delete(properties, "$mcp_response")
 	assert.JSONEq(t, `{
 		"$groups": {"company": "acme"},
