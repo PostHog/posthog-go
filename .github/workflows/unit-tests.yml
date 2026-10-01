@@ -60,13 +60,15 @@ jobs:
           go test -race -count=1 -timeout=5m ./...
 
   mcp-go-sdk:
-    name: MCP Go SDK adapter (Go ${{ matrix.go-version }})
+    name: MCP Go SDK adapter (Go ${{ matrix.go-version }}, go-sdk ${{ matrix.go-sdk }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
         go-version: ['1.25', '1.x']
+        # The go-sdk floor from go.mod speaks 2025-11-25; v1.8.0 speaks 2026-07-28.
+        go-sdk: ['v1.6.1', 'v1.8.0']
     steps:
       - name: Check out source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,6 +77,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
+
+      - name: Use go-sdk ${{ matrix.go-sdk }}
+        working-directory: posthogmcpsdk
+        run: go get github.com/modelcontextprotocol/go-sdk@${{ matrix.go-sdk }} && go mod tidy
 
       - name: Build, vet, and test
         working-directory: posthogmcpsdk

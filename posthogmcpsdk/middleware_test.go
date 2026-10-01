@@ -136,6 +136,13 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	delete(properties, "$mcp_duration_ms")
 	assert.Regexp(t, generatedSessionID, properties["$session_id"])
 	delete(properties, "$session_id")
+	// Protocol version and result shape follow the go-sdk version under test.
+	assert.Equal(t, client.InitializeResult().ProtocolVersion, properties["$mcp_protocol_version"])
+	delete(properties, "$mcp_protocol_version")
+	received := *result
+	received.Meta = nil // go-sdk v1.8+ stamps serverInfo on the way out, after the middleware
+	assert.JSONEq(t, jsonString(t, received), jsonString(t, properties["$mcp_response"]))
+	delete(properties, "$mcp_response")
 	assert.JSONEq(t, `{
 		"$groups": {"company": "acme"},
 		"$mcp_client_name": "test-client",
@@ -144,9 +151,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 		"$mcp_intent_source": "context_parameter",
 		"$mcp_is_error": false,
 		"$mcp_parameters": {"request": {"method": "tools/call", "params": {"name": "weather", "arguments": {"city": "Melbourne"}}}},
-		"$mcp_protocol_version": "2025-11-25",
 		"$mcp_resource_name": "weather",
-		"$mcp_response": {"content": [{"type": "text", "text": "{\"temperature\":21}"}], "structuredContent": {"temperature": 21}},
 		"$mcp_server_name": "weather-server",
 		"$mcp_server_version": "1.2.3",
 		"$mcp_source": "posthog_mcp_analytics",
@@ -575,6 +580,64 @@ func TestStreamableHTTPMapsSessionID(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "ses_346bdc9a6b5cb06913bb476a65021eb5", queue.onlyToolCall(t)["$session_id"])
+}
+
+// A stateless HTTP server shares a session across requests only through an
+// Mcp-Session-Id the client echoes; without one, each request is its own
+// session. Which one a client holds depends on the negotiated revision.
+func TestStatelessHTTPSessions(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		getSessionID func() string
+	}{
+		{"server issues a session id", nil},
+		{"no session id", func() string { return "" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := mcpsdk.NewServer(
+				&mcpsdk.Implementation{Name: "test-server", Version: "1.0.0"},
+				&mcpsdk.ServerOptions{GetSessionID: test.getSessionID},
+			)
+			Instrument(server, posthogmcp.New(queue))
+			addWeatherTool(server, nil)
+
+			handler := mcpsdk.NewStreamableHTTPHandler(
+				func(*http.Request) *mcpsdk.Server { return server },
+				&mcpsdk.StreamableHTTPOptions{Stateless: true},
+			)
+			httpServer := httptest.NewServer(handler)
+			t.Cleanup(httpServer.Close)
+			client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
+			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = session.Close() })
+
+			for range 2 {
+				result, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+					Name:      "weather",
+					Arguments: map[string]any{"city": "Melbourne", "context": "Checking the weather"},
+				})
+				require.NoError(t, err)
+				require.False(t, result.IsError, toolResultText(result))
+			}
+
+			captures := queue.toolCalls(t)
+			require.Len(t, captures, 2)
+			for _, capture := range captures {
+				assert.Equal(t, "Checking the weather", capture.Properties["$mcp_intent"])
+				assert.Equal(t, session.InitializeResult().ProtocolVersion, capture.Properties["$mcp_protocol_version"])
+			}
+			first, second := captures[0].Properties["$session_id"], captures[1].Properties["$session_id"]
+			if session.ID() != "" {
+				assert.Equal(t, deterministicSessionID(session.ID()), first)
+				assert.Equal(t, first, second)
+			} else {
+				assert.Regexp(t, generatedSessionID, first)
+				assert.NotEqual(t, first, second)
+			}
+		})
+	}
 }
 
 func newServer() *mcpsdk.Server {
