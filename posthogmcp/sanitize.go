@@ -30,13 +30,14 @@ var (
 	postHogTokenPattern = regexp.MustCompile(`\bph[a-z]_[A-Za-z0-9_-]{20,}\b`)
 	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyNames + `)\n?$`)
 	// A tool that returns structuredContent also returns it as JSON text, where
-	// a sensitive key is a member inside a string instead of a map key. Values
-	// that nest objects, and JSON inside a JSON string, are out of scope.
-	sensitiveJSONMemberPattern = regexp.MustCompile(`("(?i:` + sensitiveKeyNames + `)"\s*:\s*)(?:` + jsonScalarValue + `|\[(?:\s*(?:` + jsonScalarValue + `|null)\s*,?)*\s*(?:\]|$))`)
-	base64Pattern              = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
-	base64URLPattern           = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
-	base64DataPrefix           = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
-	base64DataPayload          = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
+	// a sensitive key is a member inside a string instead of a map key. The key
+	// is decoded before matching, so `"pass\u0077ord"` counts. Values that nest
+	// objects, and JSON inside a JSON string, are out of scope.
+	jsonMemberPattern = regexp.MustCompile(`("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:` + jsonScalarValue + `|\[(?:\s*(?:` + jsonScalarValue + `|null)\s*,?)*\s*(?:\]|$))`)
+	base64Pattern     = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
+	base64URLPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
+	base64DataPrefix  = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
+	base64DataPayload = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
 
 	// Intent-only structured identifiers. Patterns follow the Python and
 	// TypeScript MCP sanitizers: bounded quantifiers, ASCII classes, and
@@ -422,8 +423,40 @@ func isBinaryBlob(value string) bool {
 // the text these detectors match: it percent-encodes the `/` in front of a
 // `?ref=/phx_...` token, and can grow a word past the known-format scan window.
 func redactCredentials(value string) string {
-	value = sensitiveJSONMemberPattern.ReplaceAllString(value, `${1}"`+redactedValue+`"`)
+	value = redactSensitiveJSONMembers(value)
 	return redactSecretTokens(postHogTokenPattern.ReplaceAllString(value, redactedValue))
+}
+
+// redactSensitiveJSONMembers replaces the value of each JSON member whose
+// decoded key is sensitive with "[redacted]", keeping the JSON valid.
+func redactSensitiveJSONMembers(value string) string {
+	var result strings.Builder
+	last := 0
+	for _, match := range jsonMemberPattern.FindAllStringSubmatchIndex(value, -1) {
+		prefixEnd, keyStart, keyEnd := match[3], match[4], match[5]
+		if !sensitiveKeyPattern.MatchString(decodeJSONKey(value[keyStart:keyEnd])) {
+			continue
+		}
+		result.WriteString(value[last:prefixEnd])
+		result.WriteString(`"` + redactedValue + `"`)
+		last = match[1]
+	}
+	if last == 0 {
+		return value
+	}
+	result.WriteString(value[last:])
+	return result.String()
+}
+
+func decodeJSONKey(key string) string {
+	if !strings.Contains(key, `\`) {
+		return key
+	}
+	var decoded string
+	if json.Unmarshal([]byte(`"`+key+`"`), &decoded) != nil {
+		return key
+	}
+	return decoded
 }
 
 // redactSecretTokens redacts each space-separated word that reads as a

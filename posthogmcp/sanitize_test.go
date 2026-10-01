@@ -270,6 +270,7 @@ func TestSanitizeStringRedactsSensitiveJSONMembers(t *testing.T) {
 		{"array cut off", `{"set-cookie":["a=1","b=2`, `{"set-cookie":"[redacted]"`},
 		{"inside prose", `retry failed: "token": "abc"`, `retry failed: "token": "[redacted]"`},
 		{"unclosed in prose stops at the line", "\"token\": \"abc\nnext \"line\"", "\"token\": \"[redacted]\"\nnext \"line\""},
+		{"escaped key", `{"pass\u0077ord":"hunter2"}`, `{"pass\u0077ord":"[redacted]"}`},
 		{"key only contains a sensitive word", `{"password_hint":"pet"}`, `{"password_hint":"pet"}`},
 		{"null", `{"token":null}`, `{"token":null}`},
 		{"out of scope: nested object", `{"secret":{"v":"x"}}`, `{"secret":{"v":"x"}}`},
