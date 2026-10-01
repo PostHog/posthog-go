@@ -75,3 +75,28 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code . || (echo "otel/go.mod or otel/go.sum are not tidy. Run \`go mod tidy\` in otel/ and commit the changes." && exit 1)
+
+  mcp-go-sdk-fmt-tidy:
+    name: Check MCP Go SDK adapter formatting and go.mod
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: posthogmcpsdk
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: posthogmcpsdk/go.mod
+
+      - name: Check formatting
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          test -z "$UNFORMATTED" || (echo "Files are not formatted:" && echo "$UNFORMATTED" && echo "Run \`gofmt -w .\` in posthogmcpsdk/ and commit the changes." && exit 1)
+
+      - name: Check go.mod/go.sum
+        run: |
+          go mod tidy
+          git diff --exit-code . || (echo "posthogmcpsdk/go.mod or posthogmcpsdk/go.sum are not tidy. Run \`go mod tidy\` in posthogmcpsdk/ and commit the changes." && exit 1)

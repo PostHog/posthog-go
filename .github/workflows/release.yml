@@ -136,26 +136,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
-      - name: Create OTel module tag
+      - name: Create nested module tags
         if: steps.commit-version-bump.outputs.commit-hash != ''
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          TAG="otel/v${NEW_VERSION}"
-          EXISTING_SHA=$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)
-          if [ -n "$EXISTING_SHA" ]; then
-            if [ "$EXISTING_SHA" != "$RELEASE_COMMIT" ]; then
-              echo "Tag ${TAG} already exists at ${EXISTING_SHA}, expected ${RELEASE_COMMIT}" >&2
-              exit 1
+          for MODULE in otel posthogmcpsdk; do
+            TAG="${MODULE}/v${NEW_VERSION}"
+            EXISTING_SHA=$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)
+            if [ -n "$EXISTING_SHA" ]; then
+              if [ "$EXISTING_SHA" != "$RELEASE_COMMIT" ]; then
+                echo "Tag ${TAG} already exists at ${EXISTING_SHA}, expected ${RELEASE_COMMIT}" >&2
+                exit 1
+              fi
+              echo "Tag ${TAG} already exists at the release commit"
+            else
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                -f ref="refs/tags/${TAG}" \
+                -f sha="$RELEASE_COMMIT"
             fi
-            echo "Tag ${TAG} already exists at the release commit"
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref="refs/tags/${TAG}" \
-              -f sha="$RELEASE_COMMIT"
-          fi
+          done
 
       - name: Create GitHub release
         if: steps.commit-version-bump.outputs.commit-hash != ''
