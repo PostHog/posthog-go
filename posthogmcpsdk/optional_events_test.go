@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	posthog "github.com/posthog/posthog-go"
 	"github.com/posthog/posthog-go/posthogmcp"
@@ -406,6 +407,17 @@ func TestInstrumentClassifiesUnknownToolsByTheFrameworksError(t *testing.T) {
 			wantEvents: []string{"$mcp_tool_call", "$mcp_tool_call", "$exception"},
 		},
 		{
+			name: "a tool forwarding another tool's unknown tool error",
+			change: func(server *mcpsdk.Server) {
+				server.AddTool(&mcpsdk.Tool{Name: "proxy", InputSchema: map[string]any{"type": "object"}},
+					func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+						return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: `unknown tool "upstream"`}
+					})
+			},
+			call:       "proxy",
+			wantEvents: []string{"$mcp_tool_call", "$mcp_tool_call", "$exception"},
+		},
+		{
 			name:       "a tool removed after the last listing",
 			change:     func(server *mcpsdk.Server) { server.RemoveTools("weather") },
 			call:       "weather",
@@ -427,4 +439,26 @@ func TestInstrumentClassifiesUnknownToolsByTheFrameworksError(t *testing.T) {
 			assert.Equal(t, test.wantEvents, queue.eventNames())
 		})
 	}
+}
+
+// A result that asks for input next to an error is not a round the client
+// receives, so the call is a failure like any other.
+func TestInstrumentRecordsAFailedCallWhenARoundComesWithAnError(t *testing.T) {
+	queue := &fakeQueue{}
+	server := newServer()
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			result, err := next(ctx, method, req)
+			if method == "tools/call" && err == nil {
+				return result, errors.New("boom")
+			}
+			return result, err
+		}
+	})
+	Instrument(server, posthogmcp.New(queue), WithServerInfo("test-server", "1.0.0"))
+	addAskingTool(t, server, map[string]any{"ask": &mcpsdk.ElicitParams{Message: "Deploy?"}})
+
+	_, _ = connectClient(t, server, clientOptions{protocol: latestProtocol}).CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "deploy"})
+
+	assert.Equal(t, []string{"$mcp_tool_call", "$exception"}, queue.eventNames())
 }

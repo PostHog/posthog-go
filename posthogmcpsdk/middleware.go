@@ -311,15 +311,14 @@ func inputRequestMethods(result *mcpsdk.CallToolResult) ([]string, error) {
 	return methods, nil
 }
 
-// unknownToolMessage starts the error go-sdk returns for an unregistered name.
-const unknownToolMessage = "unknown tool "
-
 // isUnknownTool reports whether err is go-sdk's answer to a call naming a tool
-// the server does not have. Invalid arguments share its code, not its message.
-func isUnknownTool(err error) bool {
+// the server does not have: its InvalidParams error `unknown tool "<name>"`
+// for the requested name. Invalid arguments share the code, not the message,
+// and a registered tool that forwards another tool's error names that tool.
+func isUnknownTool(err error, name string) bool {
 	var rpcErr *jsonrpc.Error
 	return errors.As(err, &rpcErr) && rpcErr.Code == jsonrpc.CodeInvalidParams &&
-		strings.HasPrefix(rpcErr.Message, unknownToolMessage)
+		rpcErr.Message == fmt.Sprintf("unknown tool %q", name)
 }
 
 func (m *middleware) observeSafely(
@@ -356,7 +355,7 @@ func (m *middleware) observe(
 		}
 	}
 
-	unknown := isUnknownTool(handlerErr)
+	unknown := isUnknownTool(handlerErr, toolRequest.Params.Name)
 	if unknown && prepared.conversation.id == "" {
 		// The catalog has no entry to say the tool carries a handle, but an
 		// echoed one still names the conversation. One is never minted.
@@ -365,7 +364,7 @@ func (m *middleware) observe(
 	event := m.eventContext(ctx, prepared, started)
 	var err error
 	switch {
-	case awaitsInput(toolResult):
+	case handlerErr == nil && awaitsInput(toolResult):
 		err = m.captureInputRequired(ctx, toolResult, posthogmcp.InputRequired{
 			EventContext: event,
 			ToolName:     toolRequest.Params.Name,
