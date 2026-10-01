@@ -84,9 +84,10 @@ type Client interface {
 	EnqueueAI(Message) error
 
 	// Flush sends queued messages and waits for the current delivery cycle without
-	// closing the client. Retryable failures end the cycle while the transport
-	// retains the events for its scheduled retry. Flush does not bypass retry
-	// backoff. Delivery failures use the existing retry policy and
+	// closing the client. It covers the AI lane once EnqueueAI has started it,
+	// and never starts that lane itself. Retryable failures end the cycle while
+	// the transport retains the events for its scheduled retry. Flush does not
+	// bypass retry backoff. Delivery failures use the existing retry policy and
 	// Callback.Failure; a nil result does not guarantee successful ingestion.
 	// Use FlushWithContext to bound the wait. Do not call a blocking Flush from
 	// a delivery callback, which is itself part of the delivery cycle.

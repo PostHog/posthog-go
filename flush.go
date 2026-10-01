@@ -6,6 +6,9 @@ func (c *client) Flush() error {
 	return c.FlushWithContext(context.Background())
 }
 
+// FlushWithContext covers every started lane. Each lane's loop handles its own
+// barrier, so lanes flush concurrently and one slow lane does not delay the
+// other's drain.
 func (c *client) FlushWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -16,19 +19,30 @@ func (c *client) FlushWithContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	reply := make(chan []<-chan struct{}, 1)
-	select {
-	case c.analytics.flushRequests <- reply:
-	case <-c.quit:
-		return ErrClosed
-	case <-ctx.Done():
-		return ctx.Err()
+	lanes := []*lane{c.analytics}
+	if ai := c.ai.Load(); ai != nil {
+		lanes = append(lanes, ai)
+	}
+	replies := make([]chan []<-chan struct{}, 0, len(lanes))
+	for _, l := range lanes {
+		reply := make(chan []<-chan struct{}, 1)
+		select {
+		case l.flushRequests <- reply:
+		case <-c.quit:
+			return ErrClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		replies = append(replies, reply)
 	}
 	var pending []<-chan struct{}
-	select {
-	case pending = <-reply:
-	case <-ctx.Done():
-		return ctx.Err()
+	for _, reply := range replies {
+		select {
+		case p := <-reply:
+			pending = append(pending, p...)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	for _, done := range pending {
 		select {

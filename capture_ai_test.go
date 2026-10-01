@@ -125,6 +125,73 @@ func TestAILaneNotStartedUnlessUsed(t *testing.T) {
 	require.NoError(t, c2.Close())
 }
 
+// TestFlushCoversAILane pins that Flush drains and waits for the AI lane as
+// well as the analytics lane, and that it never starts an unused AI lane.
+func TestFlushCoversAILane(t *testing.T) {
+	aiStarted := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	var mu sync.Mutex
+	delivered := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		if req.URL.Path == aiCapturePath {
+			select {
+			case aiStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-release:
+			case <-req.Context().Done():
+				return
+			}
+		}
+		mu.Lock()
+		delivered[req.URL.Path]++
+		mu.Unlock()
+		writeCaptureOK(w, body)
+	}))
+	defer srv.Close()
+
+	c := aiTestClient(t, srv.URL, func(cfg *Config) {
+		cfg.BatchSize = 100
+		cfg.Interval = time.Hour
+	})
+	defer c.Close()
+	defer unblock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.NoError(t, c.FlushWithContext(ctx))
+	require.Nil(t, c.(*client).ai.Load(), "Flush must not start an unused AI lane")
+
+	require.NoError(t, c.Enqueue(Capture{DistinctId: "d", Event: "ordinary"}))
+	require.NoError(t, c.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation"}))
+	result := make(chan error, 1)
+	go func() { result <- c.FlushWithContext(ctx) }()
+	select {
+	case <-aiStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Flush did not dispatch the AI batch")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("Flush returned before the AI delivery completed: %v", err)
+	default:
+	}
+	unblock()
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Flush did not return after the AI delivery completed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, map[string]int{capturePath: 1, aiCapturePath: 1}, delivered)
+}
+
 // TestAILaneUsesItsOwnCompression pins that the analytics codec never applies
 // to the AI lane and vice versa.
 func TestAILaneUsesItsOwnCompression(t *testing.T) {
