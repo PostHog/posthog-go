@@ -129,14 +129,17 @@ func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build fu
 }
 
 // buildOptionalEvent builds an event of the tool name, the identity every MCP
-// event carries, and specific. Custom properties are dropped when the event is
-// too large.
+// event carries, and specific. Custom properties, then $set, are dropped when the
+// event is too large.
 func (p preparedToolCall) buildOptionalEvent(event string, specific posthog.Properties) (posthog.Capture, error) {
 	base := mergeProperties(specific, posthog.Properties{propertyToolName: p.toolName})
 	p.setIdentityProperties(base)
-	for _, custom := range []posthog.Properties{p.custom, nil} {
-		properties := mergeProperties(base, custom)
-		applyIdentityProperties(properties, p, true)
+	for _, attempt := range []struct {
+		custom     posthog.Properties
+		includeSet bool
+	}{{p.custom, true}, {nil, true}, {nil, false}} {
+		properties := mergeProperties(base, attempt.custom)
+		applyIdentityProperties(properties, p, attempt.includeSet)
 		capture := posthog.Capture{
 			DistinctId: p.distinctID,
 			Event:      event,

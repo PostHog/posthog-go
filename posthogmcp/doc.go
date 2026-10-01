@@ -10,6 +10,6 @@
 // exceeding 1 MiB after media redaction is replaced with an omission marker.
 //
 // MCP events carry $lib posthog-go-mcp. A client in CaptureModeAnalyticsV1 sends
-// one library name per request, so there its MCP events report posthog-go;
-// create a dedicated client for MCP analytics to keep the two apart.
+// one library name per request, taken from the SDK, so there its MCP events
+// report posthog-go.
 package posthogmcp

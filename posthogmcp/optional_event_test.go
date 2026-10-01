@@ -212,6 +212,26 @@ func TestCaptureOptionalEventsValidateAndStayBounded(t *testing.T) {
 		assert.Equal(t, "deploy", capture.Properties["$mcp_tool_name"])
 	})
 
+	for _, test := range []struct {
+		name    string
+		capture func(*Analytics) error
+	}{
+		{"unknown tool", func(a *Analytics) error {
+			return a.CaptureUnknownTool(context.Background(), UnknownTool{
+				EventContext: EventContext{DistinctID: "user_1", SetProperties: oversized}, ToolName: "nope"})
+		}},
+		{"input required", func(a *Analytics) error {
+			return a.CaptureInputRequired(context.Background(), InputRequired{
+				EventContext: EventContext{DistinctID: "user_1", SetProperties: oversized}, ToolName: "deploy"})
+		}},
+	} {
+		t.Run(test.name+" drops an oversized $set last", func(t *testing.T) {
+			capture := captureOptional(t, test.capture)
+			assert.Equal(t, "user_1", capture.DistinctId)
+			assert.NotContains(t, capture.Properties, "$set")
+		})
+	}
+
 	t.Run("nil analytics", func(t *testing.T) {
 		var a *Analytics
 		require.Error(t, a.CaptureUnknownTool(context.Background(), UnknownTool{ToolName: "nope"}))
