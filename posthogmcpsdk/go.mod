@@ -1,4 +1,4 @@
-module github.com/posthog/posthog-go/posthogmcpsdk
+module github.com/posthog/posthog-go/posthogmcpsdk/v2
 
 go 1.25.0
 
