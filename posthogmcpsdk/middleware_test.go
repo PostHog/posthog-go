@@ -163,7 +163,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	assert.Empty(t, queue.exceptions())
 }
 
-func TestInstrumentAdvertisesContextParameter(t *testing.T) {
+func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		opts           []Option
@@ -174,28 +174,37 @@ func TestInstrumentAdvertisesContextParameter(t *testing.T) {
 		{
 			name:           "added to a closed schema",
 			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []any{"city"}, "additionalProperties": false},
-			wantProperties: []string{"city", "context"},
-			wantRequired:   []string{"city", "context"},
+			wantProperties: []string{"city", "context", "llm_model"},
+			wantRequired:   []string{"city", "context", "llm_model"},
 		},
 		{
 			name:           "added to an empty schema",
 			inputSchema:    map[string]any{"type": "object"},
-			wantProperties: []string{"context"},
-			wantRequired:   []string{"context"},
+			wantProperties: []string{"context", "llm_model"},
+			wantRequired:   []string{"context", "llm_model"},
 		},
 		{
-			name:           "a tool's own context is kept",
-			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "object"}}},
-			wantProperties: []string{"context"},
+			name:           "a tool's own arguments are kept",
+			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "object"}, "llm_model": map[string]any{"type": "object"}}},
+			wantProperties: []string{"context", "llm_model"},
 		},
 		{
 			name:        "combinator schemas are left alone",
 			inputSchema: map[string]any{"type": "object", "anyOf": []any{map[string]any{"required": []any{"id"}}}},
 		},
 		{
-			name:        "disabled",
-			opts:        []Option{WithContextParameter(false)},
-			inputSchema: map[string]any{"type": "object"},
+			name:           "context disabled",
+			opts:           []Option{WithContextParameter(false)},
+			inputSchema:    map[string]any{"type": "object"},
+			wantProperties: []string{"llm_model"},
+			wantRequired:   []string{"llm_model"},
+		},
+		{
+			name:           "model capture disabled",
+			opts:           []Option{WithCaptureModel(false)},
+			inputSchema:    map[string]any{"type": "object"},
+			wantProperties: []string{"context"},
+			wantRequired:   []string{"context"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -216,6 +225,102 @@ func TestInstrumentAdvertisesContextParameter(t *testing.T) {
 				assert.ElementsMatch(t, test.wantProperties, slices.Collect(maps.Keys(schema.Properties)))
 				assert.Equal(t, test.wantRequired, schema.Required)
 			}
+		})
+	}
+}
+
+// argumentsEchoTool registers a tool without input validation that returns
+// the arguments it received as text.
+func argumentsEchoTool(server *mcpsdk.Server, inputSchema any) {
+	server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: inputSchema}, func(_ context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: string(req.Params.Arguments)}}}, nil
+	})
+}
+
+func TestInstrumentCapturesModel(t *testing.T) {
+	ownModel := map[string]any{"type": "object", "properties": map[string]any{"llm_model": map[string]any{"type": "string"}}}
+	for _, test := range []struct {
+		name          string
+		opts          []Option
+		inputSchema   any
+		meta          mcpsdk.Meta
+		arguments     map[string]any
+		wantModel     any
+		wantSource    any
+		wantArguments string
+	}{
+		{
+			name:          "self-reported through the injected argument",
+			arguments:     map[string]any{"q": "flags", "llm_model": " claude-opus-4-8 "},
+			wantModel:     "claude-opus-4-8",
+			wantSource:    "self_reported",
+			wantArguments: `{"q":"flags"}`,
+		},
+		{
+			name:          "codex turn metadata wins over the argument",
+			meta:          mcpsdk.Meta{"x-codex-turn-metadata": map[string]any{"model": "gpt-5.2"}},
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantModel:     "gpt-5.2",
+			wantSource:    "client_metadata",
+			wantArguments: `{}`,
+		},
+		{
+			name:          "the proposed aiInvocation metadata",
+			meta:          mcpsdk.Meta{"io.modelcontextprotocol/aiInvocation": map[string]any{"model": "gemini-3-pro"}},
+			arguments:     map[string]any{},
+			wantModel:     "gemini-3-pro",
+			wantSource:    "client_metadata",
+			wantArguments: `{}`,
+		},
+		{
+			name:          "unknown metadata falls back to the argument",
+			meta:          mcpsdk.Meta{"x-codex-turn-metadata": map[string]any{"model": "Unknown"}},
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantModel:     "claude-opus-4-8",
+			wantSource:    "self_reported",
+			wantArguments: `{}`,
+		},
+		{
+			name:          "an unknown self-report is not a model",
+			arguments:     map[string]any{"llm_model": "unknown"},
+			wantArguments: `{}`,
+		},
+		{
+			name:          "a tool's own llm_model is its data",
+			inputSchema:   ownModel,
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantArguments: `{"llm_model":"claude-opus-4-8"}`,
+		},
+		{
+			name:          "disabled",
+			opts:          []Option{WithCaptureModel(false)},
+			meta:          mcpsdk.Meta{"x-codex-turn-metadata": map[string]any{"model": "gpt-5.2"}},
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantArguments: `{"llm_model":"claude-opus-4-8"}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue), test.opts...)
+			inputSchema := test.inputSchema
+			if inputSchema == nil {
+				inputSchema = map[string]any{"type": "object"}
+			}
+			argumentsEchoTool(server, inputSchema)
+
+			result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Meta:      test.meta,
+				Name:      "echo",
+				Arguments: test.arguments,
+			})
+			require.NoError(t, err)
+			assert.JSONEq(t, test.wantArguments, result.Content[0].(*mcpsdk.TextContent).Text)
+
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantModel, properties["$mcp_llm_model"])
+			assert.Equal(t, test.wantSource, properties["$mcp_llm_model_source"])
+			assert.JSONEq(t, test.wantArguments, jsonString(t, properties["$mcp_parameters"].(map[string]any)["request"].(map[string]any)["params"].(map[string]any)["arguments"]))
 		})
 	}
 }
@@ -579,6 +684,64 @@ func TestStreamableHTTPMapsSessionID(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "ses_346bdc9a6b5cb06913bb476a65021eb5", queue.onlyToolCall(t)["$session_id"])
+}
+
+type headerTransport struct{ header http.Header }
+
+func (h headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	for name, values := range h.header {
+		req.Header[name] = values
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestStreamableHTTPCapturesClientHeaders(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		header        http.Header
+		wantUserAgent any
+		wantVendor    any
+	}{
+		{
+			name:          "both headers",
+			header:        http.Header{"User-Agent": {"claude-code/2.1.0 (claude-vscode)"}, "X-Anthropic-Client": {"claude-vscode"}},
+			wantUserAgent: "claude-code/2.1.0 (claude-vscode)",
+			wantVendor:    "claude-vscode",
+		},
+		{
+			name:          "no vendor header",
+			header:        http.Header{"User-Agent": {"cursor/1.0"}},
+			wantUserAgent: "cursor/1.0",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue))
+			addWeatherTool(server, nil)
+
+			handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, nil)
+			httpServer := httptest.NewServer(handler)
+			t.Cleanup(httpServer.Close)
+			client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
+			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{
+				Endpoint:   httpServer.URL,
+				HTTPClient: &http.Client{Transport: headerTransport{test.header}},
+			}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = session.Close() })
+
+			_, err = session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "weather",
+				Arguments: map[string]any{"city": "Melbourne"},
+			})
+			require.NoError(t, err)
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantUserAgent, properties["$mcp_client_user_agent"])
+			assert.Equal(t, test.wantVendor, properties["$mcp_vendor_client"])
+		})
+	}
 }
 
 // A stateless HTTP server shares a session across requests only through an

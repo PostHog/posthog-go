@@ -34,15 +34,15 @@ func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...
 // Sending with Server.AddSendingMiddleware.
 //
 // Receiving records terminal tools/call requests without changing their
-// result, error, or panic behavior. Unless WithContextParameter(false) is set,
-// it also adds the context argument to tools/list results and removes it from
-// tools/call arguments, according to what it learned about each tool from
+// result, error, or panic behavior. It also adds the enabled analytics
+// arguments (context and llm_model) to tools/list results and removes them
+// from tools/call arguments, according to what it learned about each tool from
 // tools/list.
 //
 // Sending forgets what Receiving learned whenever the server sends
 // notifications/tools/list_changed, so a tool registered again with a new
 // schema is handled by that schema. Without it, the old one still decides
-// whether context is removed. go-sdk sends the notification a few
+// which arguments are removed. go-sdk sends the notification a few
 // milliseconds after a change, and only to connected sessions when the tools
 // capability allows it. A tool added or replaced while no session is
 // connected is recognized within ten seconds, when Receiving lists tools
@@ -64,7 +64,7 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 			opt(cfg)
 		}
 	}
-	tools := newToolCatalog(cfg.contextParameter, cfg.now)
+	tools := newToolCatalog(cfg.injectedArguments(), cfg.now)
 	m := &middleware{config: cfg, tools: tools, sessions: newSessionResolver(cfg.now)}
 	return Middleware{Receiving: m.receive, Sending: m.send}
 }
@@ -149,8 +149,8 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 		m.report(ctx, err)
 	}
 	call.tool = tool
-	if _, sent := call.arguments[contextArgument]; sent && call.tool.contextInjected {
-		arguments, err := json.Marshal(call.arguments.without(contextArgument))
+	if call.arguments.hasAny(tool.injected) {
+		arguments, err := json.Marshal(call.arguments.without(tool.injected...))
 		if err != nil {
 			return call
 		}
@@ -212,7 +212,7 @@ func (m *middleware) observe(
 		call.IntentSource = posthogmcp.IntentSourceContextParameter
 	}
 	if m.captureParameters {
-		call.Parameters = capturedParameters(toolRequest.Params, prepared.arguments)
+		call.Parameters = capturedParameters(toolRequest.Params, prepared.arguments, prepared.tool.injected)
 	}
 	if m.captureResponses && toolResult != nil {
 		call.Response = toolResult
@@ -230,10 +230,13 @@ func (m *middleware) observe(
 
 	call.SessionID = m.sessions.resolve(toolRequest.Session, toolRequest.Extra != nil)
 
-	// TODO: once posthogmcpsdk requires a posthog-go release whose ToolCall has
-	// the conversation, model, and transport fields, set LLMModel from toolRequest.Params.Meta["x-codex-turn-metadata"]["model"]
-	// with ModelSourceClientMetadata, ClientUserAgent from the User-Agent header
-	// in toolRequest.Extra, and VendorClient from its X-Anthropic-Client header.
+	if m.captureModel {
+		call.LLMModel, call.LLMModelSource = callModel(toolRequest.Params.Meta, prepared)
+	}
+	if extra := toolRequest.Extra; extra != nil {
+		call.ClientUserAgent = extra.Header.Get("User-Agent")
+		call.VendorClient = extra.Header.Get("X-Anthropic-Client")
+	}
 
 	if handlerErr != nil {
 		call.Error = handlerErr
@@ -263,6 +266,30 @@ func (m *middleware) observe(
 	if err := captureToolCall(ctx, m.analytics, call); err != nil {
 		m.report(ctx, fmt.Errorf("posthogmcpsdk: capture: %w", err))
 	}
+}
+
+// clientModelMetadata are the request _meta keys whose model field a client
+// sets itself, in order of preference.
+var clientModelMetadata = []string{"io.modelcontextprotocol/aiInvocation", "x-codex-turn-metadata"}
+
+// callModel is the model the client's metadata names, else the one the agent
+// reported in the injected llm_model argument. "unknown" names no model.
+func callModel(meta mcpsdk.Meta, prepared preparedCall) (string, posthogmcp.ModelSource) {
+	for _, key := range clientModelMetadata {
+		metadata, _ := meta[key].(map[string]any)
+		if model, _ := metadata["model"].(string); knownModel(model) {
+			return model, posthogmcp.ModelSourceClientMetadata
+		}
+	}
+	if model := prepared.arguments.text(modelArgument); prepared.tool.injects(modelArgument) && knownModel(model) {
+		return model, posthogmcp.ModelSourceSelfReported
+	}
+	return "", ""
+}
+
+func knownModel(model string) bool {
+	model = strings.TrimSpace(model)
+	return model != "" && !strings.EqualFold(model, "unknown")
 }
 
 func toolResultText(result *mcpsdk.CallToolResult) string {

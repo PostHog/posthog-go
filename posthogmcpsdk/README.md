@@ -30,9 +30,14 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   (stdio, in-memory, stateless HTTP), the adapter generates `ses_<UUIDv7>` per
   go-sdk session and starts a new one after 30 minutes without a tool call
   in that session.
-- The client name and version, and the protocol version.
+- The client name and version, and the protocol version. On HTTP, also the
+  `User-Agent` and `X-Anthropic-Client` headers, which tell apart the
+  products of one vendor that share a client name.
 - The tool's description and `_meta.category`, read from `tools/list`.
 - The agent's intent, from the `context` argument described below.
+- The model that made the call, from the client's request `_meta`
+  (`io.modelcontextprotocol/aiInvocation` or `x-codex-turn-metadata`) when it
+  names one, else from the `llm_model` argument described below.
 
 Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
 `WithProperties` to add event properties.
@@ -59,6 +64,15 @@ reject unknown properties, keep working. Tools that declare their own
 Schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not changed.
 
 Turn it off with `WithContextParameter(false)`.
+
+## The llm_model argument
+
+MCP has no standard way for a client to say which model is calling, so the
+middleware also adds a required `llm_model` string, asking the agent for its
+exact model identifier or `"unknown"`. It is handled like `context`: removed
+before the handler and validation, kept by tools that declare their own, and
+left off `$mcp_parameters`. A model named in the client's `_meta` wins over it.
+Turn both sources off with `WithCaptureModel(false)`.
 
 The middleware learns each tool's schema from `tools/list` and forgets it
 when the server sends `notifications/tools/list_changed`, so a tool registered
