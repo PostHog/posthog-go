@@ -140,6 +140,7 @@ func (p preparedToolCall) buildOptionalEvent(event string, specific posthog.Prop
 		capture := posthog.Capture{
 			DistinctId: p.distinctID,
 			Event:      event,
+			Library:    library,
 			Timestamp:  p.call.Timestamp,
 			Properties: properties,
 			Groups:     p.groups,
