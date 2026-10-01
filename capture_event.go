@@ -8,10 +8,11 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-// captureV1Path is the capture-v1 analytics batch endpoint.
-const captureV1Path = "/i/v1/analytics/events"
+// capturePath is the analytics capture endpoint. The "v1" is the backend's
+// wire-protocol version, not an internal marker.
+const capturePath = "/i/v1/analytics/events"
 
-// Magic event-property keys lifted out of properties into the v1 wire shape.
+// Magic event-property keys lifted out of properties into the wire shape.
 // propertyProcessPersonProfile and propertySessionID are defined in
 // request_context.go; reuse them here.
 const (
@@ -20,7 +21,7 @@ const (
 	propertyProductTourId  = "$product_tour_id"
 )
 
-// v1 per-event result codes (the only four the backend emits, see
+// Per-event result codes (the only four the backend emits, see
 // rust/capture/src/v1/analytics/types.rs EventResult).
 const (
 	resultOk      = "ok"
@@ -30,14 +31,14 @@ const (
 )
 
 // propertyExtraction defines a magic property that is lifted out of the
-// properties map during v1 serialization. If topLevel is true, the value is
+// properties map during serialization. If topLevel is true, the value is
 // placed into a top-level event field (session_id, window_id); otherwise it
 // goes into the options object under wireKey.
 //
 // For options entries (topLevel=false), coerce validates and normalizes the
-// caller's Go value into the type the v1 backend expects (bool or string).
+// caller's Go value into the type the backend expects (bool or string).
 // The magic property is always removed from properties — these sentinel keys
-// must never reach v1 backend properties. If coercion fails, the option key
+// must never reach backend properties. If coercion fails, the option key
 // is omitted (backend applies its default) and a debug log is emitted.
 type propertyExtraction struct {
 	propKey  string
@@ -118,7 +119,7 @@ func coerceString(v interface{}) (interface{}, bool) {
 	return s, true
 }
 
-// propertyExtractionTable maps magic event properties to their v1 wire
+// propertyExtractionTable maps magic event properties to their wire
 // destinations. Order mirrors posthog-rs. A key is lifted only when present in
 // properties (i.e. the caller overrode a backend default). Options entries
 // carry a coerce function matching the backend's expected type; top-level
@@ -132,7 +133,7 @@ var propertyExtractionTable = []propertyExtraction{
 	{propertyWindowID, "window_id", true, nil},
 }
 
-// eventBatch is the v1 request envelope. Unlike the legacy batch it carries no
+// eventBatch is the request envelope. It carries no
 // api_key/token (Bearer auth) and no sent_at.
 type eventBatch struct {
 	CreatedAt           string            `json:"created_at"`
@@ -140,7 +141,7 @@ type eventBatch struct {
 	Batch               []json.RawMessage `json:"batch"`
 }
 
-// eventPayload is a single v1 wire event. Options is always non-nil so it
+// eventPayload is a single wire event. Options is always non-nil so it
 // renders as "{}" rather than null when empty.
 type eventPayload struct {
 	Event      string                 `json:"event"`
@@ -153,8 +154,8 @@ type eventPayload struct {
 	Properties Properties             `json:"properties"`
 }
 
-// captureV1Response is the 200 body: a per-uuid map of outcomes.
-type captureV1Response struct {
+// captureResponse is the 200 body: a per-uuid map of outcomes.
+type captureResponse struct {
 	Results map[string]eventResult `json:"results"`
 }
 
@@ -164,15 +165,15 @@ type eventResult struct {
 	Details *string `json:"details,omitempty"`
 }
 
-// v1ErrorResponse is the best-effort body parsed from a non-2xx response.
-type v1ErrorResponse struct {
+// captureErrorResponse is the best-effort body parsed from a non-2xx response.
+type captureErrorResponse struct {
 	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
 	ErrorUri         string `json:"error_uri"`
 }
 
 // apiEvent is the intermediate, pre-options-extraction view of a message. Each
-// Message produces one via apifyEvent; buildV1Event turns it into the wire shape.
+// Message produces one via apifyEvent; buildEvent turns it into the wire shape.
 type apiEvent struct {
 	event      string
 	uuid       string
@@ -181,15 +182,15 @@ type apiEvent struct {
 	properties Properties
 }
 
-// buildV1Event extracts magic properties into options or top-level fields and
+// buildEvent extracts magic properties into options or top-level fields and
 // returns the wire payload. It mutates e.properties by deleting the lifted keys;
 // callers must ensure the properties map is not shared.
 //
 // Options entries are always removed from properties (these sentinel keys must
-// never appear in v1 backend properties) and type-coerced to match the
+// never appear in backend properties) and type-coerced to match the
 // backend's strict serde schema. If coercion fails the option key is omitted
 // so the backend applies its default. logger may be nil (tests).
-func buildV1Event(e apiEvent, logger Logger) eventPayload {
+func buildEvent(e apiEvent, logger Logger) eventPayload {
 	props := e.properties
 	if props == nil {
 		props = Properties{}
@@ -220,7 +221,7 @@ func buildV1Event(e apiEvent, logger Logger) eventPayload {
 			coerced, ok := m.coerce(v)
 			if !ok {
 				if logger != nil {
-					logger.Debugf("v1 options: dropping %s (uncoercible %T value), backend will apply default", m.propKey, v)
+					logger.Debugf("options: dropping %s (uncoercible %T value), backend will apply default", m.propKey, v)
 				}
 				continue
 			}
@@ -239,8 +240,8 @@ func buildV1Event(e apiEvent, logger Logger) eventPayload {
 	}
 }
 
-// baseV1Props returns the common properties shared by all v1 event types.
-func baseV1Props(isServer bool, disableGeoIP bool) Properties {
+// baseProperties returns the common properties shared by all event types.
+func baseProperties(isServer bool, disableGeoIP bool) Properties {
 	props := Properties{}
 	if isServer {
 		props.Set("$is_server", true)
@@ -251,12 +252,12 @@ func baseV1Props(isServer bool, disableGeoIP bool) Properties {
 	return props
 }
 
-// prepareForSendV1 is the v1 sibling of prepareForSend: it builds the callback
-// APIMessage (unchanged legacy shape), serializes the v1 wire event, and returns
-// the event uuid for result correlation. logger may be nil (tests).
-func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
+// prepareForSend builds the callback APIMessage, serializes the wire event,
+// and returns the event uuid for per-event result correlation. logger may be
+// nil (tests).
+func prepareForSend(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
-	ev := buildV1Event(msg.apifyEvent(), logger)
+	ev := buildEvent(msg.apifyEvent(), logger)
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return nil, apiMsg, ev.Uuid, err
@@ -264,11 +265,11 @@ func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, 
 	return json.RawMessage(data), apiMsg, ev.Uuid, nil
 }
 
-// apifyEvent builds the v1 intermediate event for a Capture. It mirrors the
+// apifyEvent builds the intermediate event for a Capture. It mirrors the
 // properties APIfy assembles, minus $lib/$lib_version (the PostHog-Sdk-Info
-// header is the authoritative SDK identity in v1).
+// header is the authoritative SDK identity).
 func (msg Capture) apifyEvent() apiEvent {
-	myProperties := baseV1Props(msg.IsServer, false).
+	myProperties := baseProperties(msg.IsServer, false).
 		Merge(msg.selectedProperties()).
 		mergeDefaults(getSystemContext().ToProperties())
 
@@ -285,10 +286,10 @@ func (msg Capture) apifyEvent() apiEvent {
 	}
 }
 
-// apifyEvent builds the v1 intermediate event for an Identify. The person
-// properties are folded into properties.$set (v1 has no top-level $set).
+// apifyEvent builds the intermediate event for an Identify. The person
+// properties are folded into properties.$set (there is no top-level $set).
 func (msg Identify) apifyEvent() apiEvent {
-	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
+	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
 		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Properties != nil {
@@ -304,11 +305,11 @@ func (msg Identify) apifyEvent() apiEvent {
 	}
 }
 
-// apifyEvent builds the v1 intermediate event for a GroupIdentify. The group
+// apifyEvent builds the intermediate event for a GroupIdentify. The group
 // identifiers and $group_set stay in properties (the ingestion groups step reads
 // them from there).
 func (msg GroupIdentify) apifyEvent() apiEvent {
-	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
+	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
 		mergeDefaults(getSystemContext().ToProperties())
@@ -326,12 +327,12 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 	}
 }
 
-// apifyEvent builds the v1 intermediate event for an Alias. The canonical
-// distinct_id is the top-level field (v1 requirement); the alias merge reads the
+// apifyEvent builds the intermediate event for an Alias. The canonical
+// distinct_id is the top-level field; the alias merge reads the
 // "alias" property and the top-level distinct_id, so no distinct_id is duplicated
 // into properties.
 func (msg Alias) apifyEvent() apiEvent {
-	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
+	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
 		mergeDefaults(getSystemContext().ToProperties()).
 		Set("alias", msg.Alias)
 
@@ -344,11 +345,11 @@ func (msg Alias) apifyEvent() apiEvent {
 	}
 }
 
-// apifyEvent builds the v1 intermediate event for an Exception. The typed
+// apifyEvent builds the intermediate event for an Exception. The typed
 // exception fields win over custom properties on collision (matching the legacy
 // ExceptionInApiProperties marshal precedence).
 func (msg Exception) apifyEvent() apiEvent {
-	myProperties := baseV1Props(msg.IsServer, msg.DisableGeoIP).
+	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
 		Merge(msg.Properties).
 		mergeDefaults(getSystemContext().ToProperties()).
 		Set("$exception_list", msg.ExceptionList)

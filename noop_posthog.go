@@ -25,6 +25,14 @@ func (c *noopClient) EnqueueWithContext(context.Context, Message) error {
 	return ErrSDKDisabled
 }
 
+func (c *noopClient) EnqueueAI(Message) error {
+	return ErrSDKDisabled
+}
+
+func (c *noopClient) EnqueueAIWithContext(context.Context, Message) error {
+	return ErrSDKDisabled
+}
+
 func (c *noopClient) IsFeatureEnabled(FeatureFlagPayload) (interface{}, error) {
 	return false, ErrSDKDisabled
 }

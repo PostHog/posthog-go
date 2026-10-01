@@ -6,7 +6,7 @@ package posthogmcp
 import (
 	"errors"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 // captureStage says what a $mcp_tool_call keeps: nested values are cut to depth

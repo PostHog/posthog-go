@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/orian/flakyhttp"
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,13 +27,19 @@ func TestEOFScenarios(t *testing.T) {
 			scenario:        flakyhttp.ScenarioHeadersOnlyClose,
 			partialBodySize: 10,
 			disableRetries:  true,
-			expectFailure:   false, // may succeed or fail depending on timing
+			// A truncated response body is now terminal: the capture response
+			// must parse as a per-event results map, so a half-sent body fails
+			// the batch instead of counting as a success.
+			expectFailure: true,
 		},
 		{
 			name:           "HeadersOnlyClose_NoBody",
 			scenario:       flakyhttp.ScenarioHeadersOnlyClose,
 			disableRetries: true,
-			expectFailure:  false, // may succeed or fail
+			// Headers with no body cannot parse as a results map, so this is a
+			// deterministic failure rather than the timing-dependent outcome
+			// the legacy endpoint produced.
+			expectFailure: true,
 		},
 		{
 			name:           "NoResponse",

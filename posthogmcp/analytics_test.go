@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
-	testerrors "github.com/posthog/posthog-go/posthogmcp/testdata/errors"
+	posthog "github.com/posthog/posthog-go/v2"
+	testerrors "github.com/posthog/posthog-go/v2/posthogmcp/testdata/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -165,6 +165,18 @@ func TestCaptureToolCallPersonProfileOptOutSurvivesClientDefaults(t *testing.T) 
 			return
 		}
 		payloads <- body
+		var request struct {
+			Batch []struct {
+				UUID string `json:"uuid"`
+			} `json:"batch"`
+		}
+		results := map[string]any{}
+		if json.Unmarshal(body, &request) == nil {
+			for _, event := range request.Batch {
+				results[event.UUID] = map[string]string{"result": "ok"}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
 	}))
 	defer server.Close()
 
@@ -195,13 +207,15 @@ func TestCaptureToolCallPersonProfileOptOutSurvivesClientDefaults(t *testing.T) 
 				var payload struct {
 					Batch []struct {
 						Properties map[string]any `json:"properties"`
+						Options    map[string]any `json:"options"`
 					} `json:"batch"`
 				}
 				require.NoError(t, json.Unmarshal(body, &payload))
 				require.Len(t, payload.Batch, 1)
-				properties := payload.Batch[0].Properties
-				assert.Equal(t, test.want, properties[propertyProcessProfile])
-				assert.Equal(t, "api", properties["service"])
+				event := payload.Batch[0]
+				assert.Equal(t, test.want, event.Options["process_person_profile"])
+				assert.NotContains(t, event.Properties, propertyProcessProfile)
+				assert.Equal(t, "api", event.Properties["service"])
 			case <-time.After(5 * time.Second):
 				t.Fatal("timeout waiting for capture request")
 			}

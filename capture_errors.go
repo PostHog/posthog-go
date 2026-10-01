@@ -3,7 +3,7 @@ package posthog
 import "fmt"
 
 // CaptureEventError is delivered to Callback.Failure for a single event that the
-// capture-v1 endpoint rejected: either a terminal "drop" result, or an event
+// capture endpoint rejected: either a terminal "drop" result, or an event
 // still asking to "retry" once the attempt budget is exhausted. Callers can use
 // errors.As to inspect the per-event outcome.
 //
@@ -21,6 +21,9 @@ type CaptureEventError struct {
 	// Exhausted is true when the event was still retryable but the SDK ran out
 	// of attempts, false for a server-directed terminal drop.
 	Exhausted bool
+	// Endpoint is the capture path the event was sent to, so one Callback can
+	// tell the analytics and AI lanes apart.
+	Endpoint string
 }
 
 func (e *CaptureEventError) Error() string {
@@ -36,7 +39,7 @@ func (e *CaptureEventError) Error() string {
 	return fmt.Sprintf("capture event %s: %s", e.EventUUID, e.Result)
 }
 
-// CaptureRequestError is delivered to Callback.Failure when an entire capture-v1
+// CaptureRequestError is delivered to Callback.Failure when an entire capture
 // request fails: a non-2xx status, a transport error, or a malformed 2xx body.
 // It carries the HTTP status and any structured error body the endpoint returned,
 // and unwraps to the underlying transport/parse error when there is one.
@@ -54,6 +57,9 @@ type CaptureRequestError struct {
 	Description string
 	// Err is the underlying transport or body-parse error, if any.
 	Err error
+	// Endpoint is the capture path the request was sent to, so one Callback can
+	// tell the analytics and AI lanes apart.
+	Endpoint string
 }
 
 func (e *CaptureRequestError) Error() string {
@@ -70,3 +76,24 @@ func (e *CaptureRequestError) Error() string {
 }
 
 func (e *CaptureRequestError) Unwrap() error { return e.Err }
+
+// CaptureLocalError is delivered to Callback.Failure for an event the SDK
+// refused itself, before any request: an oversized event, a full batch queue, a
+// serialization failure, or a panic in the batch processor. It names the lane so
+// one Callback can tell them apart, and unwraps to the cause, so errors.Is
+// against ErrMessageTooBig and friends still works.
+//
+// A full in-memory queue is not reported here: Enqueue returns ErrQueueFull to
+// the caller instead.
+type CaptureLocalError struct {
+	// Endpoint is the capture path the event was bound for.
+	Endpoint string
+	// Err is the underlying cause.
+	Err error
+}
+
+func (e *CaptureLocalError) Error() string {
+	return fmt.Sprintf("capture dropped before sending (%s): %s", e.Endpoint, e.Err)
+}
+
+func (e *CaptureLocalError) Unwrap() error { return e.Err }

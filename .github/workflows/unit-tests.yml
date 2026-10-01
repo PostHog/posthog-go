@@ -91,11 +91,24 @@ jobs:
 
       # Consumers ignore go.mod's replace and get the pinned posthog-go release,
       # so prove the adapter builds against it and not only the checkout.
+      # A pinned version that is not tagged yet (an unreleased major) cannot
+      # resolve, so the check skips with a warning until the release exists.
       - name: Build and vet against the pinned posthog-go
+        working-directory: posthogmcpsdk
         run: |
-          cp -r posthogmcpsdk "$RUNNER_TEMP/pinned"
+          CORE=github.com/posthog/posthog-go/v2
+          PINNED=$(go list -m -f '{{.Version}}' "$CORE")
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/${PINNED}" > /dev/null || status=$?
+          if [ "$status" -eq 2 ]; then
+            echo "::warning title=Pinned posthog-go build skipped::${CORE}@${PINNED} is not tagged yet, so consumers cannot resolve it."
+            exit 0
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          cp -r . "$RUNNER_TEMP/pinned"
           cd "$RUNNER_TEMP/pinned"
-          go mod edit -dropreplace github.com/posthog/posthog-go
+          go mod edit -dropreplace "$CORE"
           GOFLAGS=-mod=mod go build ./...
           GOFLAGS=-mod=mod go vet ./...
 

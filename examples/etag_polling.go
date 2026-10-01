@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/v2"
 )
 
 const etagPollInterval = 5 * time.Second
@@ -128,7 +128,7 @@ func TestETagPolling(projectAPIKey, secretKey, endpointURL string) {
 func logETagFlagState(client posthog.Client) {
 	fmt.Println(strings.Repeat("-", 40))
 
-	// Disable $feature_flag_called events to avoid /batch/ requests
+	// Disable $feature_flag_called events to avoid capture requests
 	sendEvents := false
 
 	// Test a flag to verify the client is working

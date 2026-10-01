@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 // Option configures Analytics.

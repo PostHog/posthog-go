@@ -3,7 +3,6 @@ package posthog
 import (
 	"time"
 
-	json "github.com/goccy/go-json"
 	"github.com/google/uuid"
 )
 
@@ -52,9 +51,9 @@ type Message interface {
 	// APIfy converts the message into its PostHog batch API representation.
 	APIfy() APIMessage
 
-	// apifyEvent converts the message into the capture-v1 intermediate event.
+	// apifyEvent converts the message into the capture intermediate event.
 	// Unexported so it does not widen the public surface. The returned properties
-	// are caller-owned; buildV1Event may mutate them in place.
+	// are caller-owned; buildEvent may mutate them in place.
 	apifyEvent() apiEvent
 
 	// internal prevents external packages from satisfying Message. Calling it panics.
@@ -77,16 +76,13 @@ func makeUUID(u string) string {
 	if u != "" && uuid.Validate(u) == nil {
 		return u
 	}
+	// v7 is time-ordered, matching what capture generates server-side when a
+	// client omits the uuid, and what posthog-rs sends. Falls back to v4 if the
+	// clock-based path fails rather than failing the event.
+	if v7, err := uuid.NewV7(); err == nil {
+		return v7.String()
+	}
 	return uuid.New().String()
-}
-
-// batch represents objects sent to the /batch/ endpoint with pre-serialized messages.
-// Messages are pre-serialized as json.RawMessage for efficient batch building -
-// json.Marshal embeds them directly without re-encoding.
-type batch struct {
-	ApiKey              string            `json:"api_key"`
-	HistoricalMigration bool              `json:"historical_migration,omitempty"`
-	Messages            []json.RawMessage `json:"batch"`
 }
 
 // APIMessage is a wire-format message produced by Message.APIfy and passed to callbacks.
@@ -95,21 +91,3 @@ type batch struct {
 // ingestion uses event plus properties such as $lib, $lib_version,
 // $feature/<key>, and $active_feature_flags instead.
 type APIMessage interface{}
-
-// prepareForSend creates the API message and serializes it to JSON.
-// Returns pre-serialized JSON for efficient batch building, the original
-// APIMessage for callbacks, and any serialization error.
-// Size is derived from len(json.RawMessage) when needed - O(1) operation.
-func prepareForSend(msg Message) (json.RawMessage, APIMessage, error) {
-	apiMsg := msg.APIfy()
-	data, err := json.Marshal(apiMsg)
-	if err != nil {
-		return nil, apiMsg, err
-	}
-	return json.RawMessage(data), apiMsg, nil
-}
-
-const (
-	maxBatchBytes   = 500000
-	maxMessageBytes = 500000
-)

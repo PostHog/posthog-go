@@ -1,11 +1,11 @@
-module github.com/posthog/posthog-go/posthogmcpsdk
+module github.com/posthog/posthog-go/posthogmcpsdk/v2
 
 go 1.25.0
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/posthog/posthog-go v1.28.0
+	github.com/posthog/posthog-go/v2 v2.0.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -26,4 +26,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/posthog/posthog-go => ../
+replace github.com/posthog/posthog-go/v2 => ../
