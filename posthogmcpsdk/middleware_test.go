@@ -879,3 +879,20 @@ func TestNilAnalyticsPanicsAtConstruction(t *testing.T) {
 		})
 	}
 }
+
+func TestToolResultText(t *testing.T) {
+	var nilText *mcpsdk.TextContent
+	for _, test := range []struct {
+		name    string
+		content []mcpsdk.Content
+		want    string
+	}{
+		{"joins text blocks", []mcpsdk.Content{&mcpsdk.TextContent{Text: "upstream"}, &mcpsdk.ImageContent{}, &mcpsdk.TextContent{Text: "timed out"}}, "upstream timed out"},
+		{"skips a typed nil text block", []mcpsdk.Content{nilText, &mcpsdk.TextContent{Text: "denied"}}, "denied"},
+		{"no text", []mcpsdk.Content{&mcpsdk.ImageContent{}}, "Unknown error"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, toolResultText(&mcpsdk.CallToolResult{Content: test.content}))
+		})
+	}
+}

@@ -269,7 +269,7 @@ func (m *middleware) observe(
 func toolResultText(result *mcpsdk.CallToolResult) string {
 	var texts []string
 	for _, content := range result.Content {
-		if text, ok := content.(*mcpsdk.TextContent); ok {
+		if text, ok := content.(*mcpsdk.TextContent); ok && text != nil {
 			texts = append(texts, text.Text)
 		}
 	}
