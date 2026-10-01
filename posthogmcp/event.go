@@ -236,7 +236,15 @@ func prepareGroups(groups posthog.Groups) (posthog.Groups, error) {
 	if !ok {
 		return nil, errors.New("posthogmcp: normalized groups must be an object")
 	}
-	return posthog.Groups(value), nil
+	prepared := make(posthog.Groups, len(value))
+	for groupType, groupKey := range value {
+		key, ok := groupKey.(string)
+		if !ok {
+			return nil, errors.New("posthogmcp: normalized group keys must be strings")
+		}
+		prepared[groupType] = key
+	}
+	return prepared, nil
 }
 
 func safeErrorMessage(err error) (message string, resultErr error) {

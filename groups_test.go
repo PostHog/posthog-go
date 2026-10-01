@@ -6,7 +6,7 @@ import (
 )
 
 func TestGroups(t *testing.T) {
-	number := 5
+	key := "acme-inc"
 
 	tests := []struct {
 		name string
@@ -15,8 +15,8 @@ func TestGroups(t *testing.T) {
 	}{
 		{
 			"company",
-			Groups{"company": number},
-			func(g Groups) { g.Set("company", number) },
+			Groups{"company": key},
+			func(g Groups) { g.Set("company", key) },
 		},
 	}
 

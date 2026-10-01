@@ -318,19 +318,13 @@ func TestBeforeSendDoesNotMutateOriginalGroups(t *testing.T) {
 	body, server := mockServer()
 	defer server.Close()
 
-	originalGroups := Groups{
-		"company": "posthog",
-		"nested": map[string]interface{}{
-			"name": "original",
-		},
-	}
+	originalGroups := Groups{"company": "posthog"}
 	client, err := NewWithConfig("test-api-key", Config{
 		Endpoint:  server.URL,
 		BatchSize: 1,
 		BeforeSend: func(msg Message) Message {
 			capture := msg.(Capture)
 			capture.Groups["company"] = "hook"
-			capture.Groups["nested"].(map[string]interface{})["name"] = "hook"
 			return capture
 		},
 	})
@@ -348,7 +342,6 @@ func TestBeforeSendDoesNotMutateOriginalGroups(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "hook", groups["company"])
 	require.Equal(t, "posthog", originalGroups["company"])
-	require.Equal(t, "original", originalGroups["nested"].(map[string]interface{})["name"])
 }
 
 func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {

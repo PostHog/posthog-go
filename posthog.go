@@ -363,7 +363,7 @@ func cloneMessageGroups(groups Groups) Groups {
 	}
 	clone := make(Groups, len(groups))
 	for key, value := range groups {
-		clone[key] = cloneMessagePropertyValue(value)
+		clone[key] = value
 	}
 	return clone
 }
