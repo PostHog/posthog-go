@@ -899,3 +899,24 @@ func TestCaptureToolCallErrorTypeAndExceptionType(t *testing.T) {
 		})
 	}
 }
+
+func TestCaptureToolCallSendsMCPLibrary(t *testing.T) {
+	for name, properties := range map[string]posthog.Properties{
+		"no caller properties": nil,
+		"caller $lib":          {"$lib": "caller-lib", "$lib_version": "9.9.9"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+				ToolName:   "query",
+				Error:      errors.New("boom"),
+				Properties: properties,
+			}))
+			require.Len(t, client.messages, 2)
+			for _, message := range client.messages {
+				assertSerializedProperty(t, message, "$lib", "posthog-go-mcp")
+				assertSerializedProperty(t, message, "$lib_version", "1.0.0")
+			}
+		})
+	}
+}

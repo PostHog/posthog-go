@@ -33,6 +33,7 @@ const (
 	propertyProcessProfile  = "$process_person_profile"
 
 	analyticsSource = "posthog_mcp_analytics"
+	library         = "posthog-go-mcp"
 )
 
 const (

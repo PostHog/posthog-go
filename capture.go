@@ -118,6 +118,12 @@ type Capture struct {
 	// IsServer controls whether the event includes the $is_server property.
 	// Enqueue overwrites it from Config.GetIsServer.
 	IsServer bool
+	// Library, when non-empty, replaces SDKName as this event's $lib so an
+	// integration built on posthog-go is attributed to itself without
+	// relabelling the application's other events. $lib_version stays the
+	// posthog-go version. CaptureModeAnalyticsV1 ignores it, because the server takes
+	// $lib from the per-request PostHog-Sdk-Info header there.
+	Library string
 	// minimalFlagCalledEvent marks a $feature_flag_called event for the minimal
 	// shape: serialization keeps only the allowlisted evaluation properties and
 	// skips system context. It is set only when the server enabled
@@ -240,11 +246,12 @@ func (msg Capture) selectedProperties() Properties {
 
 // APIfy converts a Capture message into the PostHog batch API representation.
 func (msg Capture) APIfy() APIMessage {
+	library := libraryOrSDKName(msg.Library)
 	libraryVersion := getVersion()
 
 	myProperties := Properties{}.
 		Merge(msg.selectedProperties()).
-		Set("$lib", SDKName).
+		Set("$lib", library).
 		Set("$lib_version", libraryVersion).
 		Merge(getSystemContext().ToProperties())
 
@@ -259,7 +266,7 @@ func (msg Capture) APIfy() APIMessage {
 	apified := CaptureInApi{
 		Type:             msg.Type,
 		Uuid:             msg.Uuid,
-		Library:          SDKName,
+		Library:          library,
 		LibraryVersion:   libraryVersion,
 		Timestamp:        msg.Timestamp.UTC(),
 		DistinctId:       msg.DistinctId,
@@ -269,4 +276,11 @@ func (msg Capture) APIfy() APIMessage {
 	}
 
 	return apified
+}
+
+func libraryOrSDKName(library string) string {
+	if library == "" {
+		return SDKName
+	}
+	return library
 }

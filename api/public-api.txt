@@ -195,6 +195,7 @@ type Capture struct {
 	SendFeatureFlags SendFeatureFlagsValue
 	Flags *FeatureFlagEvaluations
 	IsServer bool
+	Library string
 
 }
 
@@ -449,6 +450,7 @@ type Exception struct {
 	Properties Properties
 	DisableGeoIP bool
 	IsServer bool
+	Library string
 
 	ExceptionList []ExceptionItem
 	ExceptionFingerprint *string
