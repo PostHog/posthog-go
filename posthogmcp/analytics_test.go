@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestCaptureToolCallMinimal(t *testing.T) {
 	require.Len(t, client.messages, 1)
 
 	capture := requireCapture(t, client.messages[0])
-	assert.Equal(t, "anonymous", capture.DistinctId)
+	assertDistinctID(t, minted, capture.DistinctId)
 	assert.Equal(t, eventToolCall, capture.Event)
 	assert.Equal(t, analyticsSource, capture.Properties[propertySource])
 	assert.Equal(t, "search_docs", capture.Properties[propertyResourceName])
@@ -52,7 +53,7 @@ func TestCaptureToolCallMinimal(t *testing.T) {
 	assert.Equal(t, float64(0), capture.Properties[propertyDurationMS])
 	assert.Equal(t, false, capture.Properties[propertyIsError])
 	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
-	assert.NotContains(t, capture.Properties, propertySessionID)
+	assert.Equal(t, capture.DistinctId, capture.Properties[propertySessionID])
 	assert.NotContains(t, capture.Properties, propertySet)
 	assert.Nil(t, capture.Groups)
 }
@@ -223,9 +224,9 @@ func TestCaptureToolCallSessionFallbackAndAnonymousSetSuppression(t *testing.T) 
 			personless: true,
 		},
 		{
-			name:       "anonymous fallback",
+			name:       "minted session fallback",
 			call:       ToolCall{ToolName: "tool", SetProperties: posthog.Properties{"email": "ignored"}},
-			distinctID: "anonymous",
+			distinctID: minted,
 			personless: true,
 		},
 		{
@@ -238,7 +239,7 @@ func TestCaptureToolCallSessionFallbackAndAnonymousSetSuppression(t *testing.T) 
 			client := &fakeEnqueueClient{}
 			require.NoError(t, New(client).CaptureToolCall(context.Background(), test.call))
 			capture := requireCapture(t, client.messages[0])
-			assert.Equal(t, test.distinctID, capture.DistinctId)
+			assertDistinctID(t, test.distinctID, capture.DistinctId)
 			assert.NotContains(t, capture.Properties, propertySet)
 			if test.personless {
 				assert.Equal(t, false, capture.Properties[propertyProcessProfile])
@@ -520,6 +521,20 @@ func requireCapture(t *testing.T, message posthog.Message) posthog.Capture {
 	return capture
 }
 
+// minted stands for the "ses_<UUIDv7>" a call without any session gets.
+const minted = "<minted>"
+
+var mintedSessionPattern = regexp.MustCompile(`^ses_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func assertDistinctID(t *testing.T, want, got string) {
+	t.Helper()
+	if want == minted {
+		assert.Regexp(t, mintedSessionPattern, got)
+		return
+	}
+	assert.Equal(t, want, got)
+}
+
 func requireException(t *testing.T, message posthog.Message) posthog.Exception {
 	t.Helper()
 	exception, ok := message.(posthog.Exception)
@@ -538,13 +553,13 @@ func TestCaptureToolCallDistinctIDFromRequestContext(t *testing.T) {
 		{name: "request context fills missing ID", ctx: requestCtx, wantDistinctID: "request_user"},
 		{name: "request session ID stands in for a missing distinct ID", ctx: posthog.WithRequestContext(context.Background(), posthog.RequestContext{SessionId: "request_session"}), wantDistinctID: "request_session"},
 		{name: "explicit ID wins", ctx: requestCtx, distinctID: "user_1", wantDistinctID: "user_1"},
-		{name: "no request context", ctx: context.Background(), wantDistinctID: "anonymous"},
+		{name: "no request context mints a session", ctx: context.Background(), wantDistinctID: minted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &fakeEnqueueClient{}
 			require.NoError(t, New(client).CaptureToolCall(tt.ctx, ToolCall{ToolName: "query", DistinctID: tt.distinctID}))
-			assert.Equal(t, tt.wantDistinctID, requireCapture(t, client.messages[0]).DistinctId)
+			assertDistinctID(t, tt.wantDistinctID, requireCapture(t, client.messages[0]).DistinctId)
 		})
 	}
 }
@@ -727,22 +742,22 @@ func TestCaptureToolCallConversationIdentity(t *testing.T) {
 		{
 			name:           "non-uuid is dropped",
 			call:           ToolCall{ConversationID: "conv_1"},
-			wantDistinctID: "anonymous",
+			wantDistinctID: minted,
 		},
 		{
 			name:           "uuid of another version is dropped",
 			call:           ToolCall{ConversationID: "0190f0e8-7a6b-4c3d-9e4f-5a6b7c8d9e0f"},
-			wantDistinctID: "anonymous",
+			wantDistinctID: minted,
 		},
 		{
 			name:           "uuidv7 with a trailing suffix is dropped",
 			call:           ToolCall{ConversationID: handle + "x"},
-			wantDistinctID: "anonymous",
+			wantDistinctID: minted,
 		},
 		{
 			name:           "oversized id is dropped and the event still ships",
 			call:           ToolCall{ConversationID: strings.Repeat("c", 200_000)},
-			wantDistinctID: "anonymous",
+			wantDistinctID: minted,
 		},
 		{
 			name:           "invalid id keeps the explicit session",
@@ -761,11 +776,20 @@ func TestCaptureToolCallConversationIdentity(t *testing.T) {
 
 			capture := requireCapture(t, client.messages[0])
 			exception := requireException(t, client.messages[1])
-			assert.Equal(t, tt.wantDistinctID, capture.DistinctId)
-			assert.Equal(t, tt.wantDistinctID, exception.DistinctId)
+			assertDistinctID(t, tt.wantDistinctID, capture.DistinctId)
+			assert.Equal(t, capture.Properties[propertySessionID], exception.Properties[propertySessionID])
 			for _, properties := range []posthog.Properties{capture.Properties, exception.Properties} {
 				assert.Equal(t, tt.wantConversationID, properties[propertyConversationID])
-				assert.Equal(t, tt.wantSessionID, properties[propertySessionID])
+				if tt.wantSessionID != nil {
+					assert.Equal(t, tt.wantSessionID, properties[propertySessionID])
+				} else {
+					assert.Regexp(t, mintedSessionPattern, properties[propertySessionID])
+				}
+			}
+			if tt.wantDistinctID == minted {
+				assert.Equal(t, capture.DistinctId, exception.DistinctId)
+			} else {
+				assert.Equal(t, tt.wantDistinctID, exception.DistinctId)
 			}
 		})
 	}
@@ -919,4 +943,39 @@ func TestCaptureToolCallSendsMCPLibrary(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCaptureToolCallOmitsAnEmptyIntent(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		intent     string
+		wantIntent any
+	}{
+		{"empty", "", nil},
+		{"blank", "   ", nil},
+		{"empty object", "{}", nil},
+		{"empty object with spaces", " {} ", nil},
+		{"a real intent", "find docs", "find docs"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", Intent: test.intent}))
+			capture := requireCapture(t, client.messages[0])
+			assert.Equal(t, test.wantIntent, capture.Properties[propertyIntent])
+			if test.wantIntent == nil {
+				assert.NotContains(t, capture.Properties, propertyIntentSource)
+			}
+		})
+	}
+}
+
+func TestCaptureToolCallMintsADifferentSessionForEachSessionlessCall(t *testing.T) {
+	client := &fakeEnqueueClient{}
+	analytics := New(client)
+	for i := 0; i < 2; i++ {
+		require.NoError(t, analytics.CaptureToolCall(context.Background(), ToolCall{ToolName: "query"}))
+	}
+	first, second := requireCapture(t, client.messages[0]), requireCapture(t, client.messages[1])
+	assert.Regexp(t, mintedSessionPattern, first.Properties[propertySessionID])
+	assert.NotEqual(t, first.Properties[propertySessionID], second.Properties[propertySessionID])
 }

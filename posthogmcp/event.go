@@ -55,6 +55,9 @@ func buildToolCallMessages(call ToolCall, exceptionAutocapture bool) ([]namedMes
 	return messages, nil
 }
 
+// emptyJSONObject is what a client sends for an empty context, which is no intent.
+const emptyJSONObject = "{}"
+
 func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	if strings.TrimSpace(call.ToolName) == "" {
 		return preparedToolCall{}, errors.New("posthogmcp: ToolName must not be blank")
@@ -81,6 +84,9 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	if prepared.conversationID != "" {
 		prepared.sessionID = deriveSessionID(prepared.conversationID)
 	}
+	if prepared.sessionID == "" {
+		prepared.sessionID = mintSessionID()
+	}
 	switch {
 	case call.DistinctID != "":
 		prepared.distinctID = call.DistinctID
@@ -91,7 +97,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 
 	intent := strings.TrimSpace(call.Intent)
-	if intent != "" {
+	if intent != "" && intent != emptyJSONObject {
 		prepared.intent = truncateUTF8(sanitizeFreeText(truncateUTF8(intent, 2*maxIntentBytes)), maxIntentBytes)
 		prepared.intentSource = call.IntentSource
 		if prepared.intentSource == "" {
