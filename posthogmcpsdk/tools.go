@@ -23,6 +23,11 @@ const modelParameterDescription = "The exact model identifier you (the assistant
 	`system prompt or environment (e.g. "claude-opus-4-8", "gpt-5.2"). Used for analytics only. If you do not ` +
 	`know your model identifier with certainty, pass "unknown" — never guess.`
 
+const conversationParameterDescription = "Pass the exact conversation_id from the server's previous response, unchanged. " +
+	"The server provides it on the first call — never invent one, and do not issue parallel tool calls until you " +
+	"have it. Keep passing the same conversation_id for the rest of the conversation, including after later user " +
+	"messages or on a different task; do not reset it when the user starts a new request."
+
 // analyticsArgument is an argument the middleware advertises on every tool
 // that does not declare it, and removes from calls before dispatch.
 type analyticsArgument struct {
@@ -34,6 +39,9 @@ type analyticsArgument struct {
 var (
 	contextParameter = analyticsArgument{name: contextArgument, description: contextParameterDescription, required: true}
 	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription, required: true}
+	// conversationParameter is optional because the agent has no handle on its
+	// first call.
+	conversationParameter = analyticsArgument{name: conversationArgument, description: conversationParameterDescription}
 )
 
 // toolInfo is what instrumentation knows about a registered tool from its
@@ -44,6 +52,9 @@ type toolInfo struct {
 	// injected names the analytics arguments the advertised schema adds to the
 	// tool's own, which are removed before dispatch.
 	injected []string
+	// instructions means the advertised output schema declares
+	// _mcp_instructions, so results carry the conversation handle there too.
+	instructions bool
 }
 
 func (info toolInfo) injects(argument string) bool {
@@ -119,12 +130,17 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 		advertised[i] = tool
 		infos[i] = toolInfo{description: tool.Description}
 		infos[i].category, _ = tool.Meta["category"].(string)
-		if schema, injected := withArguments(tool.InputSchema, c.inject); len(injected) > 0 {
-			copied := *tool
-			copied.InputSchema = schema
-			advertised[i] = &copied
-			infos[i].injected = injected
+		schema, injected := withArguments(tool.InputSchema, c.inject)
+		if len(injected) == 0 {
+			continue
 		}
+		copied := *tool
+		copied.InputSchema = schema
+		infos[i].injected = injected
+		if slices.Contains(injected, conversationArgument) {
+			copied.OutputSchema, infos[i].instructions = withInstructions(tool.OutputSchema)
+		}
+		advertised[i] = &copied
 	}
 
 	c.mu.Lock()
@@ -253,30 +269,10 @@ func listThrough(ctx context.Context, next mcpsdk.MethodHandler, list *mcpsdk.Li
 // argument even under additionalProperties false: go-sdk validates calls
 // against the registered schema, and the argument is removed first.
 func withArguments(inputSchema any, arguments []analyticsArgument) (map[string]any, []string) {
-	if len(arguments) == 0 {
-		return nil, nil
-	}
-	encoded, err := json.Marshal(inputSchema)
-	if err != nil {
-		return nil, nil
-	}
-	var schema map[string]any
-	if json.Unmarshal(encoded, &schema) != nil || schema == nil {
-		return nil, nil
-	}
-	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
-		if _, ok := schema[key]; ok {
-			return nil, nil
-		}
-	}
-	properties, ok := schema["properties"].(map[string]any)
+	schema, properties, ok := extensibleSchema(inputSchema)
 	if !ok {
-		if schema["properties"] != nil {
-			return nil, nil
-		}
-		properties = map[string]any{}
+		return nil, nil
 	}
-
 	required, _ := schema["required"].([]any)
 	var injected []string
 	for _, argument := range arguments {
@@ -289,9 +285,55 @@ func withArguments(inputSchema any, arguments []analyticsArgument) (map[string]a
 		}
 		injected = append(injected, argument.name)
 	}
-	schema["properties"] = properties
 	if len(required) > 0 {
 		schema["required"] = required
 	}
 	return schema, injected
+}
+
+const instructionsProperty = "_mcp_instructions"
+
+// withInstructions returns outputSchema declaring an optional
+// _mcp_instructions object that holds the conversation handle, and whether it
+// added it. Otherwise it returns outputSchema unchanged.
+func withInstructions(outputSchema any) (any, bool) {
+	schema, properties, ok := extensibleSchema(outputSchema)
+	if !ok {
+		return outputSchema, false
+	}
+	if _, declared := properties[instructionsProperty]; declared {
+		return outputSchema, false
+	}
+	properties[instructionsProperty] = map[string]any{
+		"type":        "object",
+		"description": "Server-issued metadata for this conversation.",
+		"properties": map[string]any{
+			conversationArgument: map[string]any{"type": "string", "description": "The server-issued conversation identifier."},
+		},
+	}
+	return schema, true
+}
+
+// extensibleSchema decodes a copy of a JSON schema whose properties can be
+// extended safely, and its properties: an object without $ref, allOf, anyOf,
+// or oneOf at its root, whose properties, if any, are an object.
+func extensibleSchema(raw any) (schema, properties map[string]any, ok bool) {
+	encoded, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(encoded, &schema) != nil || schema == nil {
+		return nil, nil, false
+	}
+	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
+		if _, combined := schema[key]; combined {
+			return nil, nil, false
+		}
+	}
+	properties, ok = schema["properties"].(map[string]any)
+	if !ok {
+		if schema["properties"] != nil {
+			return nil, nil, false
+		}
+		properties = map[string]any{}
+		schema["properties"] = properties
+	}
+	return schema, properties, true
 }

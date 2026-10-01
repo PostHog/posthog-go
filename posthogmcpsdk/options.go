@@ -44,6 +44,7 @@ type config struct {
 	captureResponses  bool
 	contextParameter  bool
 	captureModel      bool
+	conversationID    bool
 	serverName        string
 	serverVersion     string
 	now               func() time.Time
@@ -56,6 +57,7 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 		captureResponses:  true,
 		contextParameter:  true,
 		captureModel:      true,
+		conversationID:    true,
 		now:               time.Now,
 	}
 }
@@ -99,6 +101,22 @@ func WithCaptureModel(enabled bool) Option {
 	return func(cfg *config) { cfg.captureModel = enabled }
 }
 
+// WithConversationID controls conversation anchoring, which keeps the calls
+// of one agent conversation in one $session_id where the transport carries no
+// session, as on stateless HTTP. Tools are advertised with an optional
+// conversation_id argument. A call that arrives with neither a transport
+// session nor a valid handle gets a new UUIDv7 handle, appended to its result
+// as a {"conversation_id": ...} text block, and the agent echoes it on later
+// calls. A valid handle sets $mcp_conversation_id and the $session_id derived
+// from it, also over a transport session. The handle is mirrored into
+// structuredContent under _mcp_instructions for tools whose output schema can
+// declare it. The argument is removed before the tool's handler and input
+// validation see the call, and tools that declare their own conversation_id
+// keep it. It is enabled by default.
+func WithConversationID(enabled bool) Option {
+	return func(cfg *config) { cfg.conversationID = enabled }
+}
+
 // injectedArguments are the analytics arguments the configuration advertises.
 func (cfg *config) injectedArguments() []analyticsArgument {
 	var arguments []analyticsArgument
@@ -107,6 +125,9 @@ func (cfg *config) injectedArguments() []analyticsArgument {
 	}
 	if cfg.captureModel {
 		arguments = append(arguments, modelParameter)
+	}
+	if cfg.conversationID {
+		arguments = append(arguments, conversationParameter)
 	}
 	return arguments
 }

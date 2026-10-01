@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	contextArgument = "context"
-	modelArgument   = "llm_model"
+	contextArgument      = "context"
+	modelArgument        = "llm_model"
+	conversationArgument = "conversation_id"
 )
 
 // toolArguments is a tools/call arguments object decoded one level deep, so
@@ -55,7 +56,8 @@ func (a toolArguments) without(names ...string) toolArguments {
 // capturedParameters shapes $mcp_parameters as the JSON-RPC request, like the
 // Python and TypeScript SDKs. context is left out, since intent is captured
 // separately with personal data redacted, and so are the injected arguments.
-// Every other argument, including a tool's own llm_model, is the tool's data.
+// Every other argument, including a tool's own llm_model or conversation_id, is
+// the tool's data.
 func capturedParameters(params *mcpsdk.CallToolParamsRaw, arguments toolArguments, injected []string) map[string]any {
 	var captured any = arguments.without(slices.Concat([]string{contextArgument}, injected)...)
 	if raw := bytes.TrimSpace(params.Arguments); arguments == nil && len(raw) > 0 && string(raw) != "null" {

@@ -174,19 +174,19 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 		{
 			name:           "added to a closed schema",
 			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []any{"city"}, "additionalProperties": false},
-			wantProperties: []string{"city", "context", "llm_model"},
+			wantProperties: []string{"city", "context", "llm_model", "conversation_id"},
 			wantRequired:   []string{"city", "context", "llm_model"},
 		},
 		{
 			name:           "added to an empty schema",
 			inputSchema:    map[string]any{"type": "object"},
-			wantProperties: []string{"context", "llm_model"},
+			wantProperties: []string{"context", "llm_model", "conversation_id"},
 			wantRequired:   []string{"context", "llm_model"},
 		},
 		{
 			name:           "a tool's own arguments are kept",
-			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "object"}, "llm_model": map[string]any{"type": "object"}}},
-			wantProperties: []string{"context", "llm_model"},
+			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "object"}, "llm_model": map[string]any{"type": "object"}, "conversation_id": map[string]any{"type": "object"}}},
+			wantProperties: []string{"context", "llm_model", "conversation_id"},
 		},
 		{
 			name:        "combinator schemas are left alone",
@@ -196,15 +196,22 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			name:           "context disabled",
 			opts:           []Option{WithContextParameter(false)},
 			inputSchema:    map[string]any{"type": "object"},
-			wantProperties: []string{"llm_model"},
+			wantProperties: []string{"llm_model", "conversation_id"},
 			wantRequired:   []string{"llm_model"},
 		},
 		{
 			name:           "model capture disabled",
 			opts:           []Option{WithCaptureModel(false)},
 			inputSchema:    map[string]any{"type": "object"},
-			wantProperties: []string{"context"},
+			wantProperties: []string{"context", "conversation_id"},
 			wantRequired:   []string{"context"},
+		},
+		{
+			name:           "conversation anchoring disabled",
+			opts:           []Option{WithConversationID(false)},
+			inputSchema:    map[string]any{"type": "object"},
+			wantProperties: []string{"context", "llm_model"},
+			wantRequired:   []string{"context", "llm_model"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -457,9 +464,9 @@ func TestInstrumentCapturesParametersAndIntent(t *testing.T) {
 		wantSource     any
 	}{
 		{
-			name:           "context is captured as intent, not parameters, and a tool's own conversation_id stays a parameter",
-			arguments:      map[string]any{"city": "Melbourne", "context": "  Checking the weather for a trip  ", "conversation_id": "c-1"},
-			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"city":"Melbourne","conversation_id":"c-1"}}}}`,
+			name:           "context is captured as intent, not parameters, and the injected arguments are left out",
+			arguments:      map[string]any{"city": "Melbourne", "context": "  Checking the weather for a trip  ", "conversation_id": "c-1", "llm_model": "unknown"},
+			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"city":"Melbourne"}}}}`,
 			wantIntent:     "Checking the weather for a trip",
 			wantSource:     "context_parameter",
 		},
@@ -744,9 +751,10 @@ func TestStreamableHTTPCapturesClientHeaders(t *testing.T) {
 	}
 }
 
-// A stateless HTTP server shares a session across requests only through an
-// Mcp-Session-Id the client echoes; without one, each request is its own
-// session. Which one a client holds depends on the negotiated revision.
+// Without a conversation handle, a stateless HTTP server shares a session
+// across requests only through an Mcp-Session-Id the client echoes; without
+// one, each request is its own session. Which one a client holds depends on
+// the negotiated revision.
 func TestStatelessHTTPSessions(t *testing.T) {
 	for _, test := range []struct {
 		name         string
@@ -761,7 +769,7 @@ func TestStatelessHTTPSessions(t *testing.T) {
 				&mcpsdk.Implementation{Name: "test-server", Version: "1.0.0"},
 				&mcpsdk.ServerOptions{GetSessionID: test.getSessionID},
 			)
-			Instrument(server, posthogmcp.New(queue))
+			Instrument(server, posthogmcp.New(queue), WithConversationID(false))
 			addWeatherTool(server, nil)
 
 			handler := mcpsdk.NewStreamableHTTPHandler(

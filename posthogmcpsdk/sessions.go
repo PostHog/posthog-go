@@ -64,6 +64,13 @@ func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped b
 	return entry.id
 }
 
+// carriesSession reports whether req arrived on a transport session: one with
+// an id, or a one-client connection such as stdio or in-memory, which go-sdk
+// serves without RequestExtra. A stateless HTTP request carries neither.
+func carriesSession(req *mcpsdk.CallToolRequest) bool {
+	return (req.Session != nil && req.Session.ID() != "") || req.Extra == nil
+}
+
 func newGeneratedSessionID() string {
 	return "ses_" + uuid.Must(uuid.NewV7()).String()
 }
