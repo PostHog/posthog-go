@@ -102,7 +102,7 @@ func (a *Analytics) CaptureInputRequired(ctx context.Context, event InputRequire
 	call.Duration = event.Duration
 	methods := make([]string, 0, min(len(event.Methods), maxInputRequestMethods))
 	for _, method := range event.Methods[:min(len(event.Methods), maxInputRequestMethods)] {
-		methods = append(methods, truncateUTF8(method, maxMetadataBytes))
+		methods = append(methods, truncateUTF8(sanitizeString(method), maxMetadataBytes))
 	}
 	return a.captureOptional(ctx, call, func(p preparedToolCall) (posthog.Capture, error) {
 		specific := posthog.NewProperties().

@@ -232,6 +232,20 @@ func TestCaptureOptionalEventsValidateAndStayBounded(t *testing.T) {
 		})
 	}
 
+	t.Run("input request methods are redacted like other strings", func(t *testing.T) {
+		capture := captureOptional(t, func(a *Analytics) error {
+			return a.CaptureInputRequired(context.Background(), InputRequired{
+				ToolName: "deploy",
+				Methods:  []string{"elicitation/create", "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"},
+			})
+		})
+		methods, ok := capture.Properties["$mcp_input_request_methods"].([]string)
+		require.True(t, ok)
+		require.Len(t, methods, 2)
+		assert.Equal(t, "elicitation/create", methods[0])
+		assert.NotContains(t, methods[1], "16C7e42F292c6912E7710c838347Ae178B4a")
+	})
+
 	t.Run("nil analytics", func(t *testing.T) {
 		var a *Analytics
 		require.Error(t, a.CaptureUnknownTool(context.Background(), UnknownTool{ToolName: "nope"}))
