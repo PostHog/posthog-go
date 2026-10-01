@@ -897,6 +897,7 @@ func TestSendTerminalNonRetryableBodyError(t *testing.T) {
 	var requestErr *CaptureRequestError
 	require.ErrorAs(t, cb.failures[0].err, &requestErr)
 	require.Equal(t, http.StatusBadRequest, requestErr.StatusCode)
+	require.ErrorIs(t, cb.failures[0].err, bodyErr)
 }
 
 func containsAll(s string, substrs ...string) bool {
