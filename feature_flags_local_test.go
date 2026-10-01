@@ -178,6 +178,9 @@ func TestFlagGroup(t *testing.T) {
 // must do the same instead of panicking on a non-string key.
 func TestFlagNumericGroupKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 			return
@@ -185,9 +188,6 @@ func TestFlagNumericGroupKey(t *testing.T) {
 		if r.URL.Path == "/flags/" {
 			// Capture's other flag needs person properties, so it falls back to the API.
 			w.Write([]byte(`{"flags":{}}`))
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/batch/") {
 			return
 		}
 		t.Errorf("unexpected request to %s", r.URL.Path)
