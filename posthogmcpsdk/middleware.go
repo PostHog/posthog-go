@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"regexp"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/posthog/posthog-go/posthogmcp"
 )
@@ -144,13 +146,21 @@ var conversationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7
 // invents the same string. Without one, a request that carries no transport
 // session gets a new handle.
 func resolveConversation(req *mcpsdk.CallToolRequest, arguments toolArguments) conversation {
-	if id := arguments.text(conversationArgument); conversationIDPattern.MatchString(id) {
-		return conversation{id: strings.ToLower(id)}
+	if echoed := echoedConversation(arguments); echoed.id != "" {
+		return echoed
 	}
 	if carriesSession(req) {
 		return conversation{}
 	}
 	return conversation{id: uuid.Must(uuid.NewV7()).String(), minted: true}
+}
+
+// echoedConversation is the handle the agent sent, if it is UUIDv7-shaped.
+func echoedConversation(arguments toolArguments) conversation {
+	if id := arguments.text(conversationArgument); conversationIDPattern.MatchString(id) {
+		return conversation{id: strings.ToLower(id)}
+	}
+	return conversation{}
 }
 
 func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page *mcpsdk.ListToolsResult) (advertised *mcpsdk.ListToolsResult) {
@@ -248,12 +258,68 @@ func withConversationInstructions(structured any, id string) any {
 	return object
 }
 
-// awaitsInput reports whether result is an input_required round, which go-sdk
-// v1.8 and later return with InputRequests set and no content. The field is
-// read by name so the adapter still builds against go-sdk v1.6.1.
+// awaitsInput reports whether result is an input_required round the client
+// receives, which go-sdk v1.8 and later return for clients of the 2026-07-28
+// revision. A round the server fulfils for an older client never reaches
+// middleware. The method is asserted by name so the adapter still builds
+// against go-sdk v1.6.1.
 func awaitsInput(result *mcpsdk.CallToolResult) bool {
-	inputRequests := reflect.ValueOf(result).Elem().FieldByName("InputRequests")
-	return inputRequests.IsValid() && !inputRequests.IsZero()
+	round, ok := any(result).(interface{ NeedsInput() bool })
+	return ok && result != nil && round.NeedsInput()
+}
+
+// inputRequests is the InputRequests field of result. It is read by name so
+// the adapter still builds against go-sdk v1.6.1, which has no such field.
+func inputRequests(result *mcpsdk.CallToolResult) reflect.Value {
+	if result == nil {
+		return reflect.Value{}
+	}
+	return reflect.ValueOf(result).Elem().FieldByName("InputRequests")
+}
+
+// shimExhausted reports whether result still asks for input although the
+// client is of a revision that cannot be asked: go-sdk fulfils the requests of
+// such a client once and calls the handler again, and a handler that asks again
+// ends the call without a final outcome.
+func shimExhausted(result *mcpsdk.CallToolResult) bool {
+	requests := inputRequests(result)
+	return requests.IsValid() && !requests.IsNil() && !awaitsInput(result)
+}
+
+// inputRequestMethods is the method of each of the round's input requests,
+// ordered by request id. Only the requests are marshalled, never the rest of
+// the result.
+func inputRequestMethods(result *mcpsdk.CallToolResult) ([]string, error) {
+	requests := inputRequests(result)
+	if !requests.IsValid() {
+		return nil, errors.New("the result has no InputRequests")
+	}
+	encoded, err := json.Marshal(requests.Interface())
+	if err != nil {
+		return nil, err
+	}
+	var wire map[string]struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		return nil, err
+	}
+	methods := make([]string, 0, len(wire))
+	for _, id := range slices.Sorted(maps.Keys(wire)) {
+		methods = append(methods, wire[id].Method)
+	}
+	return methods, nil
+}
+
+// unknownToolMessage starts the error go-sdk returns for an unregistered name.
+const unknownToolMessage = "unknown tool "
+
+// isUnknownTool reports whether err is go-sdk's answer to a call naming a tool
+// the server does not have. Invalid arguments share its code, not its message.
+func isUnknownTool(err error) bool {
+	var rpcErr *jsonrpc.Error
+	return errors.As(err, &rpcErr) && rpcErr.Code == jsonrpc.CodeInvalidParams &&
+		strings.HasPrefix(rpcErr.Message, unknownToolMessage)
 }
 
 func (m *middleware) observeSafely(
@@ -290,14 +356,117 @@ func (m *middleware) observe(
 		}
 	}
 
+	unknown := isUnknownTool(handlerErr)
+	if unknown && prepared.conversation.id == "" {
+		// The catalog has no entry to say the tool carries a handle, but an
+		// echoed one still names the conversation. One is never minted.
+		prepared.conversation = echoedConversation(prepared.arguments)
+	}
+	event := m.eventContext(ctx, prepared, started)
+	var err error
+	switch {
+	case awaitsInput(toolResult):
+		err = m.captureInputRequired(ctx, toolResult, posthogmcp.InputRequired{
+			EventContext: event,
+			ToolName:     toolRequest.Params.Name,
+			Duration:     duration,
+		})
+	case unknown:
+		if strings.TrimSpace(toolRequest.Params.Name) != "" {
+			err = capture(ctx, func(ctx context.Context) error {
+				return m.analytics.CaptureUnknownTool(ctx, posthogmcp.UnknownTool{EventContext: event, ToolName: toolRequest.Params.Name})
+			})
+		}
+	default:
+		err = m.captureToolCall(ctx, prepared, toolResult, handlerErr, event, duration)
+	}
+	if err != nil {
+		m.report(ctx, fmt.Errorf("posthogmcpsdk: capture: %w", err))
+	}
+}
+
+func (m *middleware) captureInputRequired(
+	ctx context.Context,
+	round *mcpsdk.CallToolResult,
+	event posthogmcp.InputRequired,
+) error {
+	methods, err := inputRequestMethods(round)
+	if err != nil {
+		return fmt.Errorf("input request methods: %w", err)
+	}
+	event.Methods = methods
+	return capture(ctx, func(ctx context.Context) error { return m.analytics.CaptureInputRequired(ctx, event) })
+}
+
+// eventContext is what every event of a tools/call carries: the client and
+// server it describes, its session, and the caller's identity.
+func (m *middleware) eventContext(ctx context.Context, prepared preparedCall, started time.Time) posthogmcp.EventContext {
+	toolRequest := prepared.request
+	event := posthogmcp.EventContext{
+		ServerName:     m.serverName,
+		ServerVersion:  m.serverVersion,
+		ConversationID: prepared.conversation.id,
+		Timestamp:      started,
+	}
+
+	if session := toolRequest.Session; session != nil {
+		if initialize := session.InitializeParams(); initialize != nil {
+			event.ProtocolVersion = initialize.ProtocolVersion
+			if initialize.ClientInfo != nil {
+				event.ClientName = initialize.ClientInfo.Name
+				event.ClientVersion = initialize.ClientInfo.Version
+			}
+		}
+	}
+
+	if event.ConversationID == "" {
+		event.SessionID = m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
+	}
+	if extra := toolRequest.Extra; extra != nil {
+		event.ClientUserAgent = extra.Header.Get("User-Agent")
+		event.VendorClient = extra.Header.Get("X-Anthropic-Client")
+	}
+
+	if m.identity != nil {
+		identity, err := callIdentityResolver(ctx, m.identity, toolRequest)
+		if err != nil {
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: identity resolver: %w", err))
+		} else {
+			event.DistinctID = identity.DistinctID
+			event.Groups = identity.Groups
+			event.SetProperties = identity.SetProperties
+		}
+	}
+	return event
+}
+
+func (m *middleware) captureToolCall(
+	ctx context.Context,
+	prepared preparedCall,
+	toolResult *mcpsdk.CallToolResult,
+	handlerErr error,
+	event posthogmcp.EventContext,
+	duration time.Duration,
+) error {
+	toolRequest := prepared.request
 	call := posthogmcp.ToolCall{
 		ToolName:        toolRequest.Params.Name,
 		ToolDescription: prepared.tool.description,
 		ToolCategory:    prepared.tool.category,
-		ServerName:      m.serverName,
-		ServerVersion:   m.serverVersion,
+		DistinctID:      event.DistinctID,
+		SessionID:       event.SessionID,
+		Groups:          event.Groups,
+		SetProperties:   event.SetProperties,
+		ServerName:      event.ServerName,
+		ServerVersion:   event.ServerVersion,
+		ClientName:      event.ClientName,
+		ClientVersion:   event.ClientVersion,
+		ProtocolVersion: event.ProtocolVersion,
+		ConversationID:  event.ConversationID,
+		ClientUserAgent: event.ClientUserAgent,
+		VendorClient:    event.VendorClient,
 		Duration:        duration,
-		Timestamp:       started,
+		Timestamp:       event.Timestamp,
 	}
 
 	if intent := prepared.arguments.text(contextArgument); intent != "" && m.contextParameter {
@@ -310,46 +479,19 @@ func (m *middleware) observe(
 	if m.captureResponses && toolResult != nil {
 		call.Response = toolResult
 	}
-
-	if session := toolRequest.Session; session != nil {
-		if initialize := session.InitializeParams(); initialize != nil {
-			call.ProtocolVersion = initialize.ProtocolVersion
-			if initialize.ClientInfo != nil {
-				call.ClientName = initialize.ClientInfo.Name
-				call.ClientVersion = initialize.ClientInfo.Version
-			}
-		}
-	}
-
-	call.ConversationID = prepared.conversation.id
-	if call.ConversationID == "" {
-		call.SessionID = m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
-	}
-
 	if m.captureModel {
 		call.LLMModel, call.LLMModelSource = callModel(toolRequest.Params.Meta, prepared)
-	}
-	if extra := toolRequest.Extra; extra != nil {
-		call.ClientUserAgent = extra.Header.Get("User-Agent")
-		call.VendorClient = extra.Header.Get("X-Anthropic-Client")
 	}
 
 	if handlerErr != nil {
 		call.Error = handlerErr
 	} else if toolResult != nil && toolResult.IsError {
 		call.Error = toolResultError(toolResult)
+	} else if shimExhausted(toolResult) {
+		call.Error = errors.New("the handler still asked for input after go-sdk ran it again with the answers")
+		call.ErrorType = errorTypeInputRequired
 	}
 
-	if m.identity != nil {
-		identity, err := callIdentityResolver(ctx, m.identity, toolRequest)
-		if err != nil {
-			m.report(ctx, fmt.Errorf("posthogmcpsdk: identity resolver: %w", err))
-		} else {
-			call.DistinctID = identity.DistinctID
-			call.Groups = identity.Groups
-			call.SetProperties = identity.SetProperties
-		}
-	}
 	if m.properties != nil {
 		properties, err := callPropertiesResolver(ctx, m.properties, toolRequest, toolResult, handlerErr)
 		if err != nil {
@@ -359,10 +501,12 @@ func (m *middleware) observe(
 		}
 	}
 
-	if err := captureToolCall(ctx, m.analytics, call); err != nil {
-		m.report(ctx, fmt.Errorf("posthogmcpsdk: capture: %w", err))
-	}
+	return capture(ctx, func(ctx context.Context) error { return m.analytics.CaptureToolCall(ctx, call) })
 }
+
+// errorTypeInputRequired is the $mcp_error_type of a call whose input_required
+// rounds ended without a final outcome.
+const errorTypeInputRequired = "input_required"
 
 // clientModelMetadata are the request _meta keys whose model field a client
 // sets itself, in order of preference.
@@ -431,9 +575,9 @@ func callPropertiesResolver(
 	return resolver(ctx, req, result, handlerErr)
 }
 
-func captureToolCall(ctx context.Context, analytics *posthogmcp.Analytics, call posthogmcp.ToolCall) (err error) {
+func capture(ctx context.Context, send func(context.Context) error) (err error) {
 	defer recoverInstrumentationPanic("capture", &err)
-	return analytics.CaptureToolCall(ctx, call)
+	return send(ctx)
 }
 
 func recoverInstrumentationPanic(stage string, err *error) {

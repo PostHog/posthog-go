@@ -856,6 +856,7 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 		calls            []string
 		wantPages        int
 		wantDescriptions []any
+		wantUnknown      int
 	}{
 		{
 			name:             "a tool on the last page",
@@ -872,11 +873,11 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 			wantDescriptions: []any{"Tool 1", "Tool 5"},
 		},
 		{
-			name:             "repeated unknown names",
-			toolCount:        5,
-			calls:            []string{"nope", "nope", "other"},
-			wantPages:        5,
-			wantDescriptions: []any{nil, nil, nil},
+			name:        "repeated unknown names",
+			toolCount:   5,
+			calls:       []string{"nope", "nope", "other"},
+			wantPages:   5,
+			wantUnknown: 3,
 		},
 		{
 			name:             "a tool beyond the page cap",
@@ -902,6 +903,7 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 				descriptions = append(descriptions, capture.Properties["$mcp_tool_description"])
 			}
 			assert.Equal(t, test.wantDescriptions, descriptions)
+			assert.Len(t, queue.captures("$mcp_unknown_tool"), test.wantUnknown)
 		})
 	}
 }
