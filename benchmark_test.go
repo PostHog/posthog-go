@@ -179,8 +179,8 @@ func NoOpHandler() noOpHandler { return noOpHandler{} }
 type noOpHandler struct{}
 
 func (noOpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	_, _ = io.Copy(io.Discard, r.Body)
 	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, captureOKResponse(r))
 }
 
 var benchmarkPoolSink *EventPool

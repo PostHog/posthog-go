@@ -26,46 +26,45 @@ import (
 // SDK emitted a well-formed stream for that codec.
 func decodeCaptureBody(t *testing.T, encoding string, raw []byte) []byte {
 	t.Helper()
+	out, err := decodeCaptureRequest(encoding, raw)
+	if err != nil {
+		t.Errorf("decode %q body: %v", encoding, err)
+		return raw
+	}
+	return out
+}
+
+// decodeCaptureRequest is decodeCaptureBody for callers without a *testing.T,
+// such as benchmark servers.
+func decodeCaptureRequest(encoding string, raw []byte) ([]byte, error) {
 	switch encoding {
 	case "":
-		return raw
+		return raw, nil
 	case "gzip":
 		gr, err := gzip.NewReader(bytes.NewReader(raw))
 		if err != nil {
-			t.Errorf("gzip reader: %v", err)
-			return raw
+			return nil, err
 		}
 		defer gr.Close()
-		out, _ := io.ReadAll(gr)
-		return out
+		return io.ReadAll(gr)
 	case "deflate":
 		zr, err := zlib.NewReader(bytes.NewReader(raw))
 		if err != nil {
-			t.Errorf("zlib reader: %v", err)
-			return raw
+			return nil, err
 		}
 		defer zr.Close()
-		out, _ := io.ReadAll(zr)
-		return out
+		return io.ReadAll(zr)
 	case "zstd":
 		zr, err := zstd.NewReader(bytes.NewReader(raw))
 		if err != nil {
-			t.Errorf("zstd reader: %v", err)
-			return raw
+			return nil, err
 		}
 		defer zr.Close()
-		out, _ := io.ReadAll(zr)
-		return out
+		return io.ReadAll(zr)
 	case "br":
-		out, err := io.ReadAll(brotli.NewReader(bytes.NewReader(raw)))
-		if err != nil {
-			t.Errorf("brotli reader: %v", err)
-			return raw
-		}
-		return out
+		return io.ReadAll(brotli.NewReader(bytes.NewReader(raw)))
 	default:
-		t.Errorf("unexpected Content-Encoding %q", encoding)
-		return raw
+		return nil, fmt.Errorf("unexpected Content-Encoding %q", encoding)
 	}
 }
 

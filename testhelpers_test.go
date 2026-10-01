@@ -249,6 +249,18 @@ func writeCaptureOK(w http.ResponseWriter, requestBody []byte) {
 	_, _ = w.Write([]byte(allOkResultsBody(requestBody)))
 }
 
+// captureOKResponse reads a capture request, decompressing it per its
+// Content-Encoding, and returns an all-"ok" results body. A body that does not
+// decode gets an empty results map, which fails every event in it.
+func captureOKResponse(r *http.Request) string {
+	raw, _ := io.ReadAll(r.Body)
+	body, err := decodeCaptureRequest(r.Header.Get("Content-Encoding"), raw)
+	if err != nil {
+		return `{"results":{}}`
+	}
+	return allOkResultsBody(body)
+}
+
 // serveCaptureOK handles a capture request, reporting whether it did. Call it
 // first in flag-focused servers, which also receive $feature_flag_called events.
 func serveCaptureOK(w http.ResponseWriter, r *http.Request) bool {
@@ -294,14 +306,13 @@ func NewTestTransport(scenario TestScenario) http.RoundTripper {
 // Useful for benchmarking enqueue throughput without HTTP overhead
 func NoOpTransport() http.RoundTripper {
 	return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-		io.Copy(io.Discard, r.Body)
 		return &http.Response{
 			Status:     http.StatusText(http.StatusOK),
 			StatusCode: http.StatusOK,
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       io.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader(captureOKResponse(r))),
 			Request:    r,
 		}, nil
 	})
