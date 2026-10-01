@@ -263,10 +263,17 @@ func TestSanitizeStringRedactsSensitiveJSONMembers(t *testing.T) {
 		{"escaped quote and spacing", "{\n  \"Password\" : \"hun\\\"ter2\",\n  \"n\": 1\n}", "{\n  \"Password\" : \"[redacted]\",\n  \"n\": 1\n}"},
 		{"number", `{"api_key":12345}`, `{"api_key":"[redacted]"}`},
 		{"boolean", `{"access-token":true}`, `{"access-token":"[redacted]"}`},
-		{"cut off by truncation", `{"refresh_token":"abcdefgh`, `{"refresh_token":"[redacted]"`},
+		{"cut off at the end of the text", `{"refresh_token":"abcdefgh`, `{"refresh_token":"[redacted]"`},
+		{"cut off after an escape", `{"private_key":"abc\`, `{"private_key":"[redacted]"`},
+		{"array", `{"Authorization":["Bearer x"]}`, `{"Authorization":"[redacted]"}`},
+		{"indented array", "{\"cookie\": [\n  \"a=1\",\n  \"b=2\"\n]}", `{"cookie": "[redacted]"}`},
+		{"array cut off", `{"set-cookie":["a=1","b=2`, `{"set-cookie":"[redacted]"`},
 		{"inside prose", `retry failed: "token": "abc"`, `retry failed: "token": "[redacted]"`},
+		{"unclosed in prose stops at the line", "\"token\": \"abc\nnext \"line\"", "\"token\": \"[redacted]\"\nnext \"line\""},
 		{"key only contains a sensitive word", `{"password_hint":"pet"}`, `{"password_hint":"pet"}`},
 		{"null", `{"token":null}`, `{"token":null}`},
+		{"out of scope: nested object", `{"secret":{"v":"x"}}`, `{"secret":{"v":"x"}}`},
+		{"out of scope: JSON inside a JSON string", `{"body":"{\"password\":\"x\"}"}`, `{"body":"{\"password\":\"x\"}"}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			assert.Equal(t, test.want, sanitizeString(test.value))

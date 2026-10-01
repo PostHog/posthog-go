@@ -15,7 +15,14 @@ import (
 	"unicode/utf8"
 )
 
-const sensitiveKeyNames = `authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key`
+const (
+	sensitiveKeyNames = `authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key`
+	// A JSON string never holds a raw newline, so one cut off by a tool's or
+	// the spec's pre-scan cut ends at the line or the text instead of
+	// swallowing prose up to the next quote.
+	jsonStringValue = `"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))`
+	jsonScalarValue = jsonStringValue + `|-?\d[\d.eE+-]*|true|false`
+)
 
 var (
 	// RE2's \b is ASCII-only, so a token glued to a letter like é is redacted
@@ -23,9 +30,9 @@ var (
 	postHogTokenPattern = regexp.MustCompile(`\bph[a-z]_[A-Za-z0-9_-]{20,}\b`)
 	sensitiveKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyNames + `)\n?$`)
 	// A tool that returns structuredContent also returns it as JSON text, where
-	// a sensitive key is a member inside a string instead of a map key. A string
-	// value may run to the end of the text, because truncation can cut it off.
-	sensitiveJSONMemberPattern = regexp.MustCompile(`("(?i:` + sensitiveKeyNames + `)"\s*:\s*)(?:"(?:[^"\\]|\\.)*(?:"|$)|-?\d[\d.eE+-]*|true|false)`)
+	// a sensitive key is a member inside a string instead of a map key. Values
+	// that nest objects, and JSON inside a JSON string, are out of scope.
+	sensitiveJSONMemberPattern = regexp.MustCompile(`("(?i:` + sensitiveKeyNames + `)"\s*:\s*)(?:` + jsonScalarValue + `|\[(?:\s*(?:` + jsonScalarValue + `|null)\s*,?)*\s*(?:\]|$))`)
 	base64Pattern              = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
 	base64URLPattern           = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
 	base64DataPrefix           = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
