@@ -275,14 +275,7 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 	setStringProperty(properties, propertyToolDescription, truncateUTF8(p.call.ToolDescription, maxStringBytes))
 	setStringProperty(properties, propertyToolCategory, truncateUTF8(p.call.ToolCategory, maxMetadataBytes))
 	p.setIdentityProperties(properties)
-	setStringProperty(properties, propertyLLMModel, p.model)
-	if p.model != "" {
-		properties[propertyLLMModelSource] = string(p.modelSource)
-	}
-	setStringProperty(properties, propertyIntent, p.intent)
-	if p.intent != "" {
-		properties[propertyIntentSource] = string(p.intentSource)
-	}
+	p.setModelAndIntentProperties(properties)
 	if p.parameters != nil {
 		properties[propertyParameters] = p.parameters
 	}
@@ -294,6 +287,17 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 		properties[propertyErrorMessage] = p.errorMessage
 	}
 	return properties
+}
+
+func (p preparedToolCall) setModelAndIntentProperties(properties posthog.Properties) {
+	setStringProperty(properties, propertyLLMModel, p.model)
+	if p.model != "" {
+		properties[propertyLLMModelSource] = string(p.modelSource)
+	}
+	setStringProperty(properties, propertyIntent, p.intent)
+	if p.intent != "" {
+		properties[propertyIntentSource] = string(p.intentSource)
+	}
 }
 
 // setIdentityProperties sets the session, conversation, client and server

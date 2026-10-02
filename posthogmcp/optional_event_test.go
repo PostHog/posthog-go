@@ -52,6 +52,14 @@ func TestCaptureOptionalEventsCarryIdentityAndSession(t *testing.T) {
 			extra: map[string]any{"$mcp_tool_name": "nope"},
 		},
 		{
+			name:  "missing capability",
+			event: "$mcp_missing_capability",
+			capture: func(a *Analytics) error {
+				return a.CaptureMissingCapability(context.Background(), MissingCapability{EventContext: shared, ToolName: "get_more_tools"})
+			},
+			extra: map[string]any{"$mcp_resource_name": "get_more_tools"},
+		},
+		{
 			name:  "input required",
 			event: "$mcp_input_required",
 			capture: func(a *Analytics) error {
@@ -99,6 +107,70 @@ func TestCaptureOptionalEventsCarryIdentityAndSession(t *testing.T) {
 			}
 			for _, absent := range []string{"$mcp_is_error", "$mcp_source", "$mcp_parameters", "$mcp_response"} {
 				assert.NotContains(t, capture.Properties, absent)
+			}
+		})
+	}
+}
+
+func TestCaptureMissingCapabilityProperties(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		event  MissingCapability
+		want   map[string]any
+		absent []string
+	}{
+		{
+			name:  "intent and model",
+			event: MissingCapability{ToolName: "get_more_tools", Intent: "  export a dashboard to PDF ", LLMModel: "claude-opus-4-8"},
+			want: map[string]any{
+				"$mcp_resource_name":    "get_more_tools",
+				"$mcp_intent":           "export a dashboard to PDF",
+				"$mcp_intent_source":    "context_parameter",
+				"$mcp_llm_model":        "claude-opus-4-8",
+				"$mcp_llm_model_source": "self_reported",
+			},
+			absent: []string{"$mcp_tool_name", "$mcp_parameters", "$mcp_duration_ms", "$mcp_is_error", "$mcp_source", "$mcp_response"},
+		},
+		{
+			name:  "model from client metadata",
+			event: MissingCapability{ToolName: "get_more_tools", LLMModel: "gpt-5.2", LLMModelSource: ModelSourceClientMetadata},
+			want:  map[string]any{"$mcp_llm_model": "gpt-5.2", "$mcp_llm_model_source": "client_metadata"},
+		},
+		{
+			name:   "blank intent and unknown model are omitted",
+			event:  MissingCapability{ToolName: "get_more_tools", Intent: " \n", LLMModel: "unknown"},
+			absent: []string{"$mcp_intent", "$mcp_intent_source", "$mcp_llm_model", "$mcp_llm_model_source"},
+		},
+		{
+			name:   "an empty JSON object is no intent",
+			event:  MissingCapability{ToolName: "get_more_tools", Intent: "{}"},
+			absent: []string{"$mcp_intent", "$mcp_intent_source"},
+		},
+		{
+			name:  "intent is redacted as free text",
+			event: MissingCapability{ToolName: "get_more_tools", Intent: "need a way to email jane.doe@example.com"},
+			want:  map[string]any{"$mcp_intent": "need a way to email [redacted]"},
+		},
+		{
+			name:  "intent is bounded",
+			event: MissingCapability{ToolName: "get_more_tools", Intent: strings.Repeat("a", 3000)},
+			want:  map[string]any{"$mcp_intent": strings.Repeat("a", 2045) + "..."},
+		},
+		{
+			name:  "tool name is bounded",
+			event: MissingCapability{ToolName: strings.Repeat("a", 300)},
+			want:  map[string]any{"$mcp_resource_name": strings.Repeat("a", 253) + "..."},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture := captureOptional(t, func(a *Analytics) error {
+				return a.CaptureMissingCapability(context.Background(), test.event)
+			})
+			for key, value := range test.want {
+				assert.Equal(t, value, capture.Properties[key], key)
+			}
+			for _, key := range test.absent {
+				assert.NotContains(t, capture.Properties, key)
 			}
 		})
 	}
@@ -186,6 +258,13 @@ func TestCaptureOptionalEventsValidateAndStayBounded(t *testing.T) {
 			wantErr: "ToolName must not be blank",
 		},
 		{
+			name: "missing capability without a name",
+			capture: func(a *Analytics) error {
+				return a.CaptureMissingCapability(context.Background(), MissingCapability{ToolName: " "})
+			},
+			wantErr: "ToolName must not be blank",
+		},
+		{
 			name: "input required with a negative duration",
 			capture: func(a *Analytics) error {
 				return a.CaptureInputRequired(context.Background(), InputRequired{ToolName: "deploy", Duration: -1})
@@ -224,6 +303,10 @@ func TestCaptureOptionalEventsValidateAndStayBounded(t *testing.T) {
 			return a.CaptureInputRequired(context.Background(), InputRequired{
 				EventContext: EventContext{DistinctID: "user_1", SetProperties: oversized}, ToolName: "deploy"})
 		}},
+		{"missing capability", func(a *Analytics) error {
+			return a.CaptureMissingCapability(context.Background(), MissingCapability{
+				EventContext: EventContext{DistinctID: "user_1", SetProperties: oversized}, ToolName: "get_more_tools"})
+		}},
 	} {
 		t.Run(test.name+" drops an oversized $set last", func(t *testing.T) {
 			capture := captureOptional(t, test.capture)
@@ -250,5 +333,6 @@ func TestCaptureOptionalEventsValidateAndStayBounded(t *testing.T) {
 		var a *Analytics
 		require.Error(t, a.CaptureUnknownTool(context.Background(), UnknownTool{ToolName: "nope"}))
 		require.Error(t, a.CaptureInputRequired(context.Background(), InputRequired{ToolName: "deploy"}))
+		require.Error(t, a.CaptureMissingCapability(context.Background(), MissingCapability{ToolName: "get_more_tools"}))
 	})
 }
