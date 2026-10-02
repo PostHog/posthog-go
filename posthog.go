@@ -389,11 +389,18 @@ func hookOptions(options Options) Options {
 }
 
 func cloneMessagePropertyValue(value interface{}) interface{} {
+	// A nil map or slice must stay nil: it serializes as null, which an empty
+	// copy would turn into {} or [].
+	if isNilValue(value) {
+		return value
+	}
 	switch v := value.(type) {
 	case Properties:
 		return cloneMessageProperties(v)
 	case Groups:
 		return cloneMessageGroups(v)
+	case Options:
+		return cloneMessageOptions(v)
 	case map[string]interface{}:
 		clone := make(map[string]interface{}, len(v))
 		for key, nested := range v {
