@@ -6,7 +6,10 @@
 // as parameters, the result as the response, the duration, the session and
 // client from the MCP session, and the tool's description and _meta.category
 // from its tools/list entry. An isError result or a returned error marks the
-// call as failed. Analytics errors and panics never change the MCP response.
+// call as failed. A call naming an unregistered tool is a $mcp_unknown_tool
+// event instead, and an input_required round the client receives is a
+// $mcp_input_required event. Analytics errors and panics never change the MCP
+// response.
 //
 // Like the Python and TypeScript SDKs, the middleware advertises a required
 // context argument on each tool, in which the agent states why it is calling

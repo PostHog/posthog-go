@@ -2,8 +2,9 @@
 
 `posthogmcpsdk` captures PostHog MCP analytics for servers built with
 [`github.com/modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk).
-Every `tools/call` becomes a `$mcp_tool_call` event, the same event the Python
-and TypeScript SDKs send.
+Every `tools/call` that reaches a final outcome becomes a `$mcp_tool_call`
+event, the same event the Python and TypeScript SDKs send. Calls that do not
+get their own events, described below.
 
 ```go
 client := posthog.New("phc_project_api_key")
@@ -42,6 +43,37 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
 
 Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
 `WithProperties` to add event properties.
+
+## Calls that are not tool calls
+
+Two kinds of `tools/call` are not counted as `$mcp_tool_call`, since counting
+them would put tools that do not exist, or calls that have not finished, in the
+per-tool views. Each gets its own event, with the client, server, and session
+properties of a tool call, and no `$exception`.
+
+- **`$mcp_unknown_tool`** for a call naming a tool the server has not
+  registered, with the requested name as `$mcp_tool_name`, redacted as free
+  text. It carries `$mcp_conversation_id` when the agent sent a valid handle,
+  and never mints one. A call naming no tool, or only whitespace, sends
+  nothing. A tool is unregistered when go-sdk answers the call with its
+  unknown tool error, so a tool added or removed since the last listing is
+  classified correctly. Invalid arguments for a registered tool are a failed
+  call.
+- **`$mcp_input_required`** for each `input_required` round a client of the
+  2026-07-28 revision receives (go-sdk v1.8 and later), with `$mcp_tool_name`,
+  the round's `$mcp_duration_ms`, and `$mcp_input_request_methods`: the method
+  of each input request, ordered by request id, duplicates kept, at most 100,
+  and `[]` for a round with no input requests. Never the requests or answers.
+  A round whose requests cannot be read sends nothing and reports the error.
+  The retry that completes the call sends the `$mcp_tool_call`. When the
+  client is on an earlier revision, go-sdk fulfils the requests itself and the
+  middleware sees one call. If the handler asks again after go-sdk's single
+  re-entry, that call is a failed `$mcp_tool_call` with `$mcp_error_type` of
+  `input_required`. A round never carries a conversation handle, so
+  `$mcp_conversation_id` is set only for a handle the agent sent.
+
+`WithProperties` applies to `$mcp_tool_call` only. `WithIdentity` applies to
+all three events.
 
 ## The context argument
 

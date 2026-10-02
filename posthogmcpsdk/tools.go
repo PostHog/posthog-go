@@ -88,8 +88,8 @@ type catalogGeneration struct {
 	// walking is non-nil while a learning walk runs, and closed when it ends.
 	walking chan struct{}
 	// walkedAt is when the last finished walk ended. Until catalogTTL later, a
-	// name the catalog does not know is treated as not registered (past the
-	// page cap it may be): a later tools/list result can only add names, which
+	// name the catalog does not know is not listed again (past the page cap it
+	// may be registered): a later tools/list result can only add names, which
 	// are then known.
 	walkedAt time.Time
 }
@@ -158,8 +158,8 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 // sends a client's listing and its calls to different replicas, lists tools
 // through next, and so does a call for a tool learned catalogTTL ago, which
 // may have been replaced since. Concurrent callers share that walk, and once
-// one completes the generation remembers for catalogTTL which names are not
-// registered. The error reports why a walk did not complete, which never
+// one completes the generation remembers for catalogTTL that it did not know a
+// name. The error reports why a walk did not complete, which never
 // reaches the tools/call.
 func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
 	info, gen, err := c.lookupIn(ctx, next, req)

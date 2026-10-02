@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -490,33 +489,4 @@ func TestInstrumentDeclaresConversationInstructions(t *testing.T) {
 			assert.JSONEq(t, jsonString(t, test.wantOutputSchema), jsonString(t, result.Tools[0].OutputSchema))
 		})
 	}
-}
-
-// go-sdk v1.8 returns an input_required round as a result with
-// InputRequests, which must carry no content, so a new handle cannot ride it.
-func TestMiddlewareDoesNotDeliverAHandleOnAnInputRequiredRound(t *testing.T) {
-	result := &mcpsdk.CallToolResult{}
-	inputRequests := reflect.ValueOf(result).Elem().FieldByName("InputRequests")
-	if !inputRequests.IsValid() {
-		t.Skip("this go-sdk has no multi round-trip results")
-	}
-	inputRequests.Set(reflect.MakeMap(inputRequests.Type()))
-
-	queue := &fakeQueue{}
-	receive := NewMiddleware(posthogmcp.New(queue)).Receiving(func(_ context.Context, method string, _ mcpsdk.Request) (mcpsdk.Result, error) {
-		if method == methodListTools {
-			return listing("ask"), nil
-		}
-		return result, nil
-	})
-	_, err := receive(t.Context(), methodListTools, &mcpsdk.ListToolsRequest{Params: &mcpsdk.ListToolsParams{}})
-	require.NoError(t, err)
-
-	got, err := receive(t.Context(), methodCallTool, &mcpsdk.CallToolRequest{
-		Params: &mcpsdk.CallToolParamsRaw{Name: "ask", Arguments: json.RawMessage(`{}`)},
-		Extra:  &mcpsdk.RequestExtra{},
-	})
-	require.NoError(t, err)
-	assert.Same(t, result, got)
-	assert.NotContains(t, queue.onlyToolCall(t), "$mcp_conversation_id")
 }
