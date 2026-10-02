@@ -241,7 +241,7 @@ func (m *middleware) observe(
 	if handlerErr != nil {
 		call.Error = handlerErr
 	} else if toolResult != nil && toolResult.IsError {
-		call.Error = errors.New(toolResultText(toolResult))
+		call.Error = toolResultError(toolResult)
 	}
 
 	if m.identity != nil {
@@ -290,6 +290,16 @@ func callModel(meta mcpsdk.Meta, prepared preparedCall) (string, posthogmcp.Mode
 func knownModel(model string) bool {
 	model = strings.TrimSpace(model)
 	return model != "" && !strings.EqualFold(model, "unknown")
+}
+
+// toolResultError is the error behind an isError result: the one a typed
+// mcp.AddTool handler returned, which go-sdk keeps on the result, else an error
+// of the result's text.
+func toolResultError(result *mcpsdk.CallToolResult) error {
+	if err := result.GetError(); err != nil {
+		return err
+	}
+	return errors.New(toolResultText(result))
 }
 
 func toolResultText(result *mcpsdk.CallToolResult) string {

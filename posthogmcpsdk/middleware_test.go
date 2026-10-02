@@ -1121,3 +1121,55 @@ func TestToolResultText(t *testing.T) {
 		})
 	}
 }
+
+type upstreamTimeout struct{}
+
+func (upstreamTimeout) Error() string { return "upstream timed out" }
+
+func TestInstrumentRecoversATypedHandlersError(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		handler       func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error)
+		wantErrorType string
+		wantMessage   string
+	}{
+		{
+			name: "typed handler returns its own error type",
+			handler: func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+				return nil, nil, upstreamTimeout{}
+			},
+			wantErrorType: "posthogmcpsdk.upstreamTimeout",
+			wantMessage:   "upstream timed out",
+		},
+		{
+			name: "typed handler returns a plain error",
+			handler: func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+				return nil, nil, errors.New("boom")
+			},
+			wantErrorType: "Error",
+			wantMessage:   "boom",
+		},
+		{
+			name: "handler returns an error result of its own",
+			handler: func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+				return &mcpsdk.CallToolResult{IsError: true, Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "403 Forbidden"}}}, nil, nil
+			},
+			wantErrorType: "Error",
+			wantMessage:   "403 Forbidden",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue))
+			mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "query"}, test.handler)
+
+			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "query"})
+			require.NoError(t, err)
+
+			call := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantErrorType, call["$mcp_error_type"])
+			assert.Equal(t, test.wantMessage, call["$mcp_error_message"])
+		})
+	}
+}
