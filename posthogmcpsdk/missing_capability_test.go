@@ -298,8 +298,6 @@ func TestMissingCapabilityToolCall(t *testing.T) {
 	}
 }
 
-// The listing the middleware learns names from can fail, but it advertised the
-// tool, so the call is still the virtual tool's.
 func TestMissingCapabilityToolCallSurvivesAFailedListing(t *testing.T) {
 	queue := &fakeQueue{}
 	server := newServer()
@@ -391,9 +389,6 @@ func TestMissingCapabilityToolNamedByTheServerIsTheServers(t *testing.T) {
 	}
 }
 
-// Middleware installed inside Instrument, such as authentication, runs for the
-// virtual tool like any other, and a call it rejects reports nothing as a
-// missing capability.
 func TestMissingCapabilityToolCallIsGuardedByInnerMiddleware(t *testing.T) {
 	queue := &fakeQueue{}
 	server := newServer()

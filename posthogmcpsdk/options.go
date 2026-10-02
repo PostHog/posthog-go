@@ -37,16 +37,15 @@ type ErrorHandler func(context.Context, error)
 type Option func(*config)
 
 type config struct {
-	analytics         *posthogmcp.Analytics
-	identity          IdentityResolver
-	properties        PropertiesResolver
-	errorHandler      ErrorHandler
-	captureParameters bool
-	captureResponses  bool
-	contextParameter  bool
-	captureModel      bool
-	conversationID    bool
-	// missingCapabilityTool is the name of the virtual tool, empty when it is off.
+	analytics             *posthogmcp.Analytics
+	identity              IdentityResolver
+	properties            PropertiesResolver
+	errorHandler          ErrorHandler
+	captureParameters     bool
+	captureResponses      bool
+	contextParameter      bool
+	captureModel          bool
+	conversationID        bool
 	missingCapabilityTool string
 	serverName            string
 	serverVersion         string
@@ -124,8 +123,8 @@ func WithConversationID(enabled bool) Option {
 // "get_more_tools" when name is blank, that agents call to report a capability
 // the server lacks. The report is the tool's required context argument,
 // captured as $mcp_intent on a $mcp_missing_capability event, which is not a
-// $mcp_tool_call. The call goes down the middleware chain, and when go-sdk
-// answers it as an unknown tool the middleware replies itself, so the server's
+// $mcp_tool_call. The call passes through the middleware installed inside
+// Instrument, and the middleware answers it itself, so the server's
 // handlers never see it. The tool also gets the llm_model and conversation_id
 // arguments the configuration enables. It is not advertised, and its name is
 // the server's, when the server registers a tool of that name. It is off by

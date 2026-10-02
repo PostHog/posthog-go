@@ -86,8 +86,6 @@ var (
 // toolInfo is what instrumentation knows about a registered tool from its
 // tools/list entry.
 type toolInfo struct {
-	// registered means the server listed the tool, as opposed to a name the
-	// catalog has not learned.
 	registered  bool
 	description string
 	category    string
@@ -183,8 +181,6 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 	return advertised
 }
 
-// present returns tool as clients should see it, and what instrumentation
-// learns from it.
 func (c *toolCatalog) present(tool *mcpsdk.Tool) (*mcpsdk.Tool, toolInfo) {
 	info := toolInfo{description: tool.Description}
 	info.category, _ = tool.Meta["category"].(string)
@@ -201,7 +197,6 @@ func (c *toolCatalog) present(tool *mcpsdk.Tool) (*mcpsdk.Tool, toolInfo) {
 	return &copied, info
 }
 
-// registers reports whether gen learned a tool of that name.
 func (c *toolCatalog) registers(gen *catalogGeneration, name string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

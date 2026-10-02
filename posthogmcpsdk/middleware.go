@@ -81,10 +81,8 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 
 type middleware struct {
 	*config
-	tools    *toolCatalog
-	sessions *sessionResolver
-	// virtual is the missing-capability tool as clients see it, nil when it is
-	// off, and virtualInfo what instrumentation knows of it.
+	tools       *toolCatalog
+	sessions    *sessionResolver
 	virtual     *mcpsdk.Tool
 	virtualInfo toolInfo
 }
@@ -110,8 +108,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			result, handlerErr := next(ctx, method, call.dispatch)
 			if call.missingCapability {
 				// go-sdk answers a name it does not know with its unknown tool
-				// error, after the middleware inside Instrument has run. Any
-				// other outcome means the server handled the call itself.
+				// error, after the middleware inside Instrument has run.
 				if isUnknownTool(handlerErr, toolRequest.Params.Name) {
 					result, handlerErr = missingCapabilityResult(), nil
 				} else {
@@ -142,13 +139,11 @@ func (m *middleware) send(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 
 // preparedCall is a tools/call as instrumentation sees it before dispatch.
 type preparedCall struct {
-	request      *mcpsdk.CallToolRequest
-	dispatch     *mcpsdk.CallToolRequest
-	arguments    toolArguments
-	tool         toolInfo
-	conversation conversation
-	// missingCapability means the call names the virtual tool, which the
-	// middleware answers when the server does not know the name.
+	request           *mcpsdk.CallToolRequest
+	dispatch          *mcpsdk.CallToolRequest
+	arguments         toolArguments
+	tool              toolInfo
+	conversation      conversation
 	missingCapability bool
 }
 
@@ -198,10 +193,8 @@ func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page
 	return &copied
 }
 
-// serverRegistersVirtualName reports whether the server registered a tool named
-// like the virtual one, in the last page or one the catalog learned earlier.
-// The last page is checked itself because the catalog does not learn it when
-// the generation was invalidated during the listing.
+// The last page is checked itself because the catalog does not learn it when the
+// generation was invalidated during the listing.
 func (m *middleware) serverRegistersVirtualName(gen *catalogGeneration, lastPage []*mcpsdk.Tool) bool {
 	return m.tools.registers(gen, m.missingCapabilityTool) ||
 		slices.ContainsFunc(lastPage, func(tool *mcpsdk.Tool) bool { return tool.Name == m.missingCapabilityTool })
