@@ -24,12 +24,13 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   redacted. Turn either off with `WithCaptureParameters(false)` or
   `WithCaptureResponses(false)`. The error text of a failed call is captured
   either way.
-- The session as `$session_id`, always set. A transport session ID (streamable
-  HTTP) becomes `ses_` plus a hash every PostHog MCP SDK computes the same way,
-  so one session served from several languages groups together. Without one
-  (stdio, in-memory, stateless HTTP), the adapter generates `ses_<UUIDv7>` per
+- The session as `$session_id`, always set. A conversation handle, described
+  below, comes first. Next, a transport session ID (streamable HTTP) becomes
+  `ses_` plus a hash every PostHog MCP SDK computes the same way, so one
+  session served from several languages groups together. On a one-client
+  connection (stdio, in-memory), the adapter generates `ses_<UUIDv7>` per
   go-sdk session and starts a new one after 30 minutes without a tool call
-  in that session.
+  in that session. A stateless HTTP request with neither gets its own.
 - The client name and version, and the protocol version. On HTTP, also the
   `User-Agent` and `X-Anthropic-Client` headers, which tell apart the
   products of one vendor that share a client name.
@@ -41,14 +42,6 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
 
 Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
 `WithProperties` to add event properties.
-
-## Not yet
-
-Conversation anchoring, the optional `conversation_id` argument that keeps a
-stateless client's calls in one session, is not implemented. The other SDKs
-have it. Until it lands, each request to a stateless HTTP server is its own
-go-sdk session and so gets its own `$session_id`, which fragments a
-conversation across sessions.
 
 ## The context argument
 
@@ -81,6 +74,34 @@ notification about 10ms after the change, so calls in that window still use
 the old schema. It notifies only connected sessions, so a tool added or
 replaced while no session is connected, as on a stateless server, is
 recognized within ten seconds, when the middleware lists tools again.
+
+## Conversation anchoring
+
+A stateless HTTP request carries no session unless the client sends an
+`Mcp-Session-Id`, so without help every call of one agent conversation lands
+in its own `$session_id`. The session ID a stateless go-sdk server assigns a
+request that sends none is new on every request, so it does not count. The
+middleware adds an optional `conversation_id` string to every tool's input
+schema. When a call arrives with neither a transport session nor a valid
+handle, it appends a new UUIDv7 handle to the result as a final text block,
+`{"conversation_id":"<handle>"}`, and the agent passes it back on later calls.
+Tools whose output schema is a plain object (`"type": "object"`, without
+`$ref`, `allOf`, `anyOf`, or `oneOf`) also get an optional `_mcp_instructions`
+property. When a call has a handle, new or echoed, their result carries it
+there too, unless the tool set `_mcp_instructions` itself.
+
+A handle the agent sends is used only if it is a UUIDv7. It becomes
+`$mcp_conversation_id`, on the `$exception` of a failed call too, and
+`$session_id` is derived from it the way every PostHog MCP SDK derives it, so
+replicas and servers in other languages agree. A handle wins over a transport
+session. A new handle the result cannot carry, as on a protocol error, is not
+recorded. `$mcp_response` is the result the tool returned, without the
+handle the middleware adds to it.
+
+Like `context`, the argument is removed before the handler and validation
+and left off `$mcp_parameters`, tools that declare their own `conversation_id`
+keep it, and schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not
+changed. Turn it off with `WithConversationID(false)`.
 
 ## Middleware order
 

@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/posthog/posthog-go/posthogmcp"
 )
@@ -34,10 +38,11 @@ func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...
 // Sending with Server.AddSendingMiddleware.
 //
 // Receiving records terminal tools/call requests without changing their
-// result, error, or panic behavior. It also adds the enabled analytics
-// arguments (context and llm_model) to tools/list results and removes them
-// from tools/call arguments, according to what it learned about each tool from
-// tools/list.
+// error or panic behavior, or their result beyond the conversation handle
+// described at [WithConversationID]. It also adds the enabled analytics
+// arguments (context, llm_model, and conversation_id) to tools/list results
+// and removes them from tools/call arguments, according to what it learned
+// about each tool from tools/list.
 //
 // Sending forgets what Receiving learned whenever the server sends
 // notifications/tools/list_changed, so a tool registered again with a new
@@ -94,8 +99,9 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			call := m.prepare(ctx, next, toolRequest)
 			started := time.Now()
 			result, handlerErr := next(ctx, method, call.dispatch)
+			delivered := m.deliverConversation(ctx, &call, result, handlerErr)
 			m.observeSafely(ctx, call, result, handlerErr, started)
-			return result, handlerErr
+			return delivered, handlerErr
 		default:
 			return next(ctx, method, req)
 		}
@@ -117,10 +123,34 @@ func (m *middleware) send(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 
 // preparedCall is a tools/call as instrumentation sees it before dispatch.
 type preparedCall struct {
-	request   *mcpsdk.CallToolRequest
-	dispatch  *mcpsdk.CallToolRequest
-	arguments toolArguments
-	tool      toolInfo
+	request      *mcpsdk.CallToolRequest
+	dispatch     *mcpsdk.CallToolRequest
+	arguments    toolArguments
+	tool         toolInfo
+	conversation conversation
+}
+
+// conversation is the conversation handle of a tools/call, and whether the
+// middleware minted it for this call, so the agent has yet to receive it.
+type conversation struct {
+	id     string
+	minted bool
+}
+
+var conversationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+
+// resolveConversation keeps an echoed handle only if it is UUIDv7-shaped,
+// since its derived $session_id would otherwise merge every caller that
+// invents the same string. Without one, a request that carries no transport
+// session gets a new handle.
+func resolveConversation(req *mcpsdk.CallToolRequest, arguments toolArguments) conversation {
+	if id := arguments.text(conversationArgument); conversationIDPattern.MatchString(id) {
+		return conversation{id: strings.ToLower(id)}
+	}
+	if carriesSession(req) {
+		return conversation{}
+	}
+	return conversation{id: uuid.Must(uuid.NewV7()).String(), minted: true}
 }
 
 func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page *mcpsdk.ListToolsResult) (advertised *mcpsdk.ListToolsResult) {
@@ -149,6 +179,9 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 		m.report(ctx, err)
 	}
 	call.tool = tool
+	if tool.injects(conversationArgument) {
+		call.conversation = resolveConversation(req, call.arguments)
+	}
 	if call.arguments.hasAny(tool.injected) {
 		arguments, err := json.Marshal(call.arguments.without(tool.injected...))
 		if err != nil {
@@ -161,6 +194,66 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 		call.dispatch = &dispatch
 	}
 	return call
+}
+
+// deliverConversation returns result carrying the call's conversation handle:
+// mirrored into structuredContent when the tool's output schema declares
+// _mcp_instructions, and appended as a text block when the handle is new. A
+// new handle the result cannot carry, or that never reaches the agent because
+// go-sdk sends only handlerErr, is forgotten, so no event names a
+// conversation the agent never received.
+func (m *middleware) deliverConversation(ctx context.Context, call *preparedCall, result mcpsdk.Result, handlerErr error) (delivered mcpsdk.Result) {
+	handle := call.conversation
+	if handle.minted {
+		call.conversation = conversation{}
+	}
+	if handle.id == "" || handlerErr != nil || !(handle.minted || call.tool.instructions) {
+		return result
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: conversation delivery panic (%T)", recovered))
+			delivered = result
+		}
+	}()
+	toolResult, _ := result.(*mcpsdk.CallToolResult)
+	if toolResult == nil || awaitsInput(toolResult) {
+		return result
+	}
+	copied := *toolResult
+	if call.tool.instructions {
+		copied.StructuredContent = withConversationInstructions(copied.StructuredContent, handle.id)
+	}
+	if handle.minted {
+		block, _ := json.Marshal(map[string]string{conversationArgument: handle.id})
+		copied.Content = append(slices.Clip(copied.Content), &mcpsdk.TextContent{Text: string(block)})
+	}
+	call.conversation = handle
+	return &copied
+}
+
+// withConversationInstructions returns structured with the conversation
+// handle under _mcp_instructions, or unchanged when it is not a JSON object or
+// the tool set _mcp_instructions itself.
+func withConversationInstructions(structured any, id string) any {
+	encoded, err := json.Marshal(structured)
+	var object map[string]json.RawMessage
+	if err != nil || json.Unmarshal(encoded, &object) != nil || object == nil {
+		return structured
+	}
+	if _, set := object[instructionsProperty]; set {
+		return structured
+	}
+	object[instructionsProperty], _ = json.Marshal(map[string]string{conversationArgument: id})
+	return object
+}
+
+// awaitsInput reports whether result is an input_required round, which go-sdk
+// v1.8 and later return with InputRequests set and no content. The field is
+// read by name so the adapter still builds against go-sdk v1.6.1.
+func awaitsInput(result *mcpsdk.CallToolResult) bool {
+	inputRequests := reflect.ValueOf(result).Elem().FieldByName("InputRequests")
+	return inputRequests.IsValid() && !inputRequests.IsZero()
 }
 
 func (m *middleware) observeSafely(
@@ -228,7 +321,10 @@ func (m *middleware) observe(
 		}
 	}
 
-	call.SessionID = m.sessions.resolve(toolRequest.Session, toolRequest.Extra != nil)
+	call.ConversationID = prepared.conversation.id
+	if call.ConversationID == "" {
+		call.SessionID = m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
+	}
 
 	if m.captureModel {
 		call.LLMModel, call.LLMModelSource = callModel(toolRequest.Params.Meta, prepared)
