@@ -1,9 +1,10 @@
 package posthogmcp
 
 const (
-	eventToolCall      = "$mcp_tool_call"
-	eventUnknownTool   = "$mcp_unknown_tool"
-	eventInputRequired = "$mcp_input_required"
+	eventToolCall          = "$mcp_tool_call"
+	eventUnknownTool       = "$mcp_unknown_tool"
+	eventInputRequired     = "$mcp_input_required"
+	eventMissingCapability = "$mcp_missing_capability"
 
 	propertySource              = "$mcp_source"
 	propertyResourceName        = "$mcp_resource_name"
