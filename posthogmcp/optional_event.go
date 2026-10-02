@@ -12,8 +12,8 @@ import (
 const maxInputRequestMethods = 100
 
 // EventContext is what $mcp_unknown_tool, $mcp_input_required, and
-// $mcp_missing_capability carry besides their own fields. Each field is captured, redacted, and bounded like the
-// ToolCall field of the same name.
+// $mcp_missing_capability carry besides their own fields. Each field is
+// captured, redacted, and bounded like the ToolCall field of the same name.
 type EventContext struct {
 	// DistinctID falls back to the RequestContext's, then SessionID, then "anonymous".
 	DistinctID string
@@ -96,7 +96,7 @@ type MissingCapability struct {
 	Intent string
 	// LLMModel is captured as $mcp_llm_model, like ToolCall.LLMModel.
 	LLMModel string
-	// LLMModelSource says where LLMModel came from, like ToolCall.LLMModelSource.
+	// LLMModelSource is like ToolCall.LLMModelSource.
 	LLMModelSource ModelSource
 }
 

@@ -289,7 +289,6 @@ func (p preparedToolCall) baseProperties() posthog.Properties {
 	return properties
 }
 
-// setModelAndIntentProperties sets the model and the intent, each with its source.
 func (p preparedToolCall) setModelAndIntentProperties(properties posthog.Properties) {
 	setStringProperty(properties, propertyLLMModel, p.model)
 	if p.model != "" {
