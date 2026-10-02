@@ -107,12 +107,16 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			}
 			call := m.prepare(ctx, next, toolRequest)
 			started := time.Now()
-			var result mcpsdk.Result
-			var handlerErr error
+			result, handlerErr := next(ctx, method, call.dispatch)
 			if call.missingCapability {
-				result = missingCapabilityResult()
-			} else {
-				result, handlerErr = next(ctx, method, call.dispatch)
+				// go-sdk answers a name it does not know with its unknown tool
+				// error, after the middleware inside Instrument has run. Any
+				// other outcome means the server handled the call itself.
+				if isUnknownTool(handlerErr, toolRequest.Params.Name) {
+					result, handlerErr = missingCapabilityResult(), nil
+				} else {
+					call.missingCapability = false
+				}
 			}
 			delivered := m.deliverConversation(ctx, &call, result, handlerErr)
 			m.observeSafely(ctx, call, result, handlerErr, started)
@@ -144,7 +148,7 @@ type preparedCall struct {
 	tool         toolInfo
 	conversation conversation
 	// missingCapability means the call names the virtual tool, which the
-	// middleware answers itself.
+	// middleware answers when the server does not know the name.
 	missingCapability bool
 }
 

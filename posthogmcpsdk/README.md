@@ -145,26 +145,24 @@ name to change it), that agents call when the server lacks a capability they
 need. Its required `context` argument is the report, sent as `$mcp_intent` on a
 `$mcp_missing_capability` event, with the tool's name as `$mcp_resource_name`.
 It gets the `llm_model` and `conversation_id` arguments you enable, and
-follows session and conversation handling like any tool. The middleware
-answers the call itself with a short acknowledgement, so your handlers never
-see it, and it is not a `$mcp_tool_call`. A server that registers a tool of
-that name keeps its own, and the virtual tool is not advertised. It is off by
-default. A blank name is the default name.
+follows session and conversation handling like any tool. The call goes down
+the middleware chain like any other, so authentication and rate limiting
+installed inside `Instrument` run first. When go-sdk answers it as an unknown
+tool, the middleware replies with a short acknowledgement and sends the event,
+so your handlers never see it and it is not a `$mcp_tool_call`. A server that
+registers a tool of that name keeps its own, and the virtual tool is not
+advertised. It is off by default. A blank name is the default name.
 
 A server that registers no tools of its own must still declare the tools
 capability, with `ServerOptions.HasTools` (or `Capabilities.Tools`), or
 compliant clients never list tools and never see the virtual one.
 
-Known limits. A name the server registered and later removed stays hidden
-until go-sdk sends `list_changed` or the process restarts. On a load-balanced
-stateless deployment, the last page may not know about a collision on an
-earlier page.
+Known limits of the listing. A name the server registered and later removed
+stays unadvertised until go-sdk sends `list_changed` or the process restarts.
+On a load-balanced stateless deployment, the last page may not know about a
+collision on an earlier page.
 
 ## Middleware order
-
-The middleware answers a call to the virtual tool itself, so receiving
-middleware installed inside `Instrument` (authentication, rate limiting) does
-not see it.
 
 `Instrument` adds receiving middleware, and sending middleware that watches for
 `notifications/tools/list_changed`. Receiving middleware added before it runs

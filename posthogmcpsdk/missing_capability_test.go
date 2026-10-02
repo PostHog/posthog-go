@@ -303,14 +303,7 @@ func TestMissingCapabilityToolCall(t *testing.T) {
 func TestMissingCapabilityToolCallSurvivesAFailedListing(t *testing.T) {
 	queue := &fakeQueue{}
 	server := newServer()
-	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
-		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
-			if method == methodListTools {
-				return nil, errors.New("listing unavailable")
-			}
-			return next(ctx, method, req)
-		}
-	})
+	server.AddReceivingMiddleware(failListings)
 	Instrument(server, posthogmcp.New(queue), WithMissingCapabilityTool(""))
 	addWeatherTool(server, nil)
 
@@ -360,18 +353,65 @@ func TestMissingCapabilityToolCallIsUnknownUnlessEnabledByName(t *testing.T) {
 	}
 }
 
+func failListings(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+		if method == methodListTools {
+			return nil, errors.New("listing unavailable")
+		}
+		return next(ctx, method, req)
+	}
+}
+
 func TestMissingCapabilityToolNamedByTheServerIsTheServers(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		middleware []mcpsdk.Middleware
+	}{
+		{"the listing is learned", nil},
+		{"the listing cannot be learned", []mcpsdk.Middleware{failListings}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			for _, middleware := range test.middleware {
+				server.AddReceivingMiddleware(middleware)
+			}
+			Instrument(server, posthogmcp.New(queue), WithMissingCapabilityTool(""))
+			server.AddTool(&mcpsdk.Tool{Name: "get_more_tools", InputSchema: map[string]any{"type": "object"}},
+				func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+					return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "the server's own"}}}, nil
+				})
+
+			result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "get_more_tools"})
+
+			require.NoError(t, err)
+			assert.Equal(t, "the server's own", result.Content[0].(*mcpsdk.TextContent).Text)
+			assert.Equal(t, []string{"$mcp_tool_call"}, queue.eventNames())
+		})
+	}
+}
+
+// Middleware installed inside Instrument, such as authentication, runs for the
+// virtual tool like any other, and a call it rejects reports nothing as a
+// missing capability.
+func TestMissingCapabilityToolCallIsGuardedByInnerMiddleware(t *testing.T) {
 	queue := &fakeQueue{}
 	server := newServer()
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			if method == methodCallTool {
+				return nil, errors.New("unauthenticated")
+			}
+			return next(ctx, method, req)
+		}
+	})
 	Instrument(server, posthogmcp.New(queue), WithMissingCapabilityTool(""))
-	server.AddTool(&mcpsdk.Tool{Name: "get_more_tools", InputSchema: map[string]any{"type": "object"}},
-		func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-			return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "the server's own"}}}, nil
-		})
+	addWeatherTool(server, nil)
 
-	result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "get_more_tools"})
+	_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+		Name: "get_more_tools", Arguments: map[string]any{"context": "export a dashboard to PDF"},
+	})
 
-	require.NoError(t, err)
-	assert.Equal(t, "the server's own", result.Content[0].(*mcpsdk.TextContent).Text)
-	assert.Equal(t, []string{"$mcp_tool_call"}, queue.eventNames())
+	require.ErrorContains(t, err, "unauthenticated")
+	assert.NotContains(t, queue.eventNames(), "$mcp_missing_capability")
 }
