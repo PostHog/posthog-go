@@ -1404,3 +1404,86 @@ func TestCaptureWithFlags_UserPropertiesOverrideGenerated(t *testing.T) {
 		t.Errorf("expected non-overridden $feature/multi-variate-flag to remain 'hello', got %v", event.Properties["$feature/multi-variate-flag"])
 	}
 }
+
+func TestIsEnabled_ResolvesMissingFlagToCallerDefault(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	if !snap.IsEnabled("not-a-flag", true) {
+		t.Error("expected a missing flag to resolve to the true default")
+	}
+	if snap.IsEnabled("not-a-flag", false) {
+		t.Error("expected a missing flag to resolve to the false default")
+	}
+	if snap.IsEnabled("not-a-flag") {
+		t.Error("expected a missing flag with no default to stay false")
+	}
+}
+
+func TestIsEnabled_PrefersFlagValueOverCallerDefault(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	if snap.IsEnabled("disabled-flag", true) {
+		t.Error("expected a disabled flag to win over the true default")
+	}
+	if !snap.IsEnabled("multi-variate-flag", false) {
+		t.Error("expected a variant flag to win over the false default")
+	}
+	if !snap.IsEnabled("enabled-flag", false) {
+		t.Error("expected an enabled flag to win over the false default")
+	}
+}
+
+func TestIsEnabled_NilSnapshotUsesCallerDefault(t *testing.T) {
+	t.Parallel()
+	var snap *FeatureFlagEvaluations
+
+	if !snap.IsEnabled("anything", true) {
+		t.Error("expected a nil snapshot to resolve to the true default")
+	}
+	if snap.IsEnabled("anything") {
+		t.Error("expected a nil snapshot with no default to stay false")
+	}
+}
+
+func TestIsEnabled_EventReportsEvaluatedResponseNotCallerDefault(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, capture, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	snap.IsEnabled("not-a-flag", true)
+	flushEvaluationEvents(t, client)
+
+	events := waitForEventCount(capture, 1, 5*time.Second)
+	event := findEvent(events, "$feature_flag_called", "not-a-flag")
+	if event == nil {
+		t.Fatalf("expected $feature_flag_called event for not-a-flag, got %+v", events)
+	}
+	if event.Properties["$feature_flag_response"] != nil {
+		t.Errorf("expected $feature_flag_response to stay nil, got %v", event.Properties["$feature_flag_response"])
+	}
+	if got := event.Properties["$feature_flag_error"]; got != FeatureFlagErrorFlagMissing {
+		t.Errorf("expected $feature_flag_error=%q, got %v", FeatureFlagErrorFlagMissing, got)
+	}
+}
