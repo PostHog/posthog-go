@@ -1,5 +1,28 @@
 ## Unreleased
 
+## 1.30.0
+
+### Minor Changes
+
+- fbf6733: `posthogmcp` gains `CaptureUnknownTool` and `CaptureInputRequired` to send `$mcp_unknown_tool` and `$mcp_input_required` from a manual integration. A call that names an unregistered tool, and an `input_required` round the client receives, are not tool calls, so they have their own events.
+- cf530d3: `posthogmcpsdk` anchors conversations like the Python and TypeScript SDKs: tools get an optional `conversation_id`
+  argument, a call with neither a transport session nor a valid handle gets a new UUIDv7 handle in its result, and an
+  echoed handle sets `$mcp_conversation_id` and the `$session_id` derived from it, so a stateless HTTP client's calls
+  share one session. Turn it off with `WithConversationID(false)`.
+- 0f4d122: `posthogmcpsdk` captures the calling model as `$mcp_llm_model`, from the client's request `_meta` or an injected
+  `llm_model` argument, and the HTTP `User-Agent` and `X-Anthropic-Client` headers as `$mcp_client_user_agent` and
+  `$mcp_vendor_client`. Turn model capture off with `WithCaptureModel(false)`.
+- fbf6733: `posthogmcp.CaptureToolCall` follows two rules of the mcp-analytics spec that it skipped. A call with neither a `SessionID` nor a valid `ConversationID` now gets a new `ses_<UUIDv7>` as `$session_id`, and `distinct_id` falls back to it instead of `"anonymous"` (events stay personless without an explicit `DistinctID`). An `Intent` of `{}`, which a client sends for an empty context, is no intent and is omitted.
+- fbf6733: Add `Capture.Library` and `Exception.Library`. When set, the value replaces `posthog-go` as that
+  event's `$lib`, while `$lib_version` stays the posthog-go version and every other event keeps
+  `posthog-go`. `posthogmcp` uses it, so MCP analytics events now report `$lib` `posthog-go-mcp`.
+  Capture v1 mode still reports `posthog-go`, because the server reads `$lib` from the per-request
+  `PostHog-Sdk-Info` header there.
+
+### Patch Changes
+
+- a294b7a: Quote semver values in local-evaluation error messages with Go string quoting, so a value containing a quote cannot break the message.
+
 ## 1.29.0
 
 ### Minor Changes
