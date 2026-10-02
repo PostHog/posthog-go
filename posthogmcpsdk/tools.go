@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,14 +19,35 @@ const contextParameterDescription = "Explain in 15-25 words, in third person, wh
 	`"the customer", or "an account". Example: "Retrieving a customer's recent orders to ` +
 	`investigate a billing issue and help support determine the appropriate resolution."`
 
+const modelParameterDescription = "The exact model identifier you (the assistant) are running as, taken from your " +
+	`system prompt or environment (e.g. "claude-opus-4-8", "gpt-5.2"). Used for analytics only. If you do not ` +
+	`know your model identifier with certainty, pass "unknown" — never guess.`
+
+// analyticsArgument is an argument the middleware advertises on every tool
+// that does not declare it, and removes from calls before dispatch.
+type analyticsArgument struct {
+	name        string
+	description string
+	required    bool
+}
+
+var (
+	contextParameter = analyticsArgument{name: contextArgument, description: contextParameterDescription, required: true}
+	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription, required: true}
+)
+
 // toolInfo is what instrumentation knows about a registered tool from its
 // tools/list entry.
 type toolInfo struct {
 	description string
 	category    string
-	// contextInjected means the advertised schema has a context argument the
-	// tool itself does not declare, so it is removed before dispatch.
-	contextInjected bool
+	// injected names the analytics arguments the advertised schema adds to the
+	// tool's own, which are removed before dispatch.
+	injected []string
+}
+
+func (info toolInfo) injects(argument string) bool {
+	return slices.Contains(info.injected, argument)
 }
 
 // maxListingPages bounds the tools/list pages one learning walk requests.
@@ -42,8 +64,8 @@ const catalogTTL = 10 * time.Second
 // toolCatalog remembers every tool seen in a tools/list result. go-sdk has no
 // public tool registry, so listings are the only source of tool metadata.
 type toolCatalog struct {
-	injectContext bool
-	now           func() time.Time
+	inject []analyticsArgument
+	now    func() time.Time
 
 	mu      sync.Mutex
 	current *catalogGeneration
@@ -66,8 +88,8 @@ type catalogEntry struct {
 	learnedAt time.Time
 }
 
-func newToolCatalog(injectContext bool, now func() time.Time) *toolCatalog {
-	return &toolCatalog{injectContext: injectContext, now: now, current: newCatalogGeneration()}
+func newToolCatalog(inject []analyticsArgument, now func() time.Time) *toolCatalog {
+	return &toolCatalog{inject: inject, now: now, current: newCatalogGeneration()}
 }
 
 func newCatalogGeneration() *catalogGeneration {
@@ -97,14 +119,11 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 		advertised[i] = tool
 		infos[i] = toolInfo{description: tool.Description}
 		infos[i].category, _ = tool.Meta["category"].(string)
-		if !c.injectContext {
-			continue
-		}
-		if schema, ok := withContextParameter(tool.InputSchema); ok {
+		if schema, injected := withArguments(tool.InputSchema, c.inject); len(injected) > 0 {
 			copied := *tool
 			copied.InputSchema = schema
 			advertised[i] = &copied
-			infos[i].contextInjected = true
+			infos[i].injected = injected
 		}
 	}
 
@@ -228,39 +247,51 @@ func listThrough(ctx context.Context, next mcpsdk.MethodHandler, list *mcpsdk.Li
 	return result, nil
 }
 
-// withContextParameter returns a copy of inputSchema that declares a required
-// context string. Schemas whose properties cannot be extended safely, or that
-// already declare context, are left alone. The advertised schema may require
-// context even under additionalProperties false: go-sdk validates calls
+// withArguments returns a copy of inputSchema that declares each of arguments
+// the schema does not, and the names it added. Schemas whose properties cannot
+// be extended safely are left alone. The advertised schema may require an
+// argument even under additionalProperties false: go-sdk validates calls
 // against the registered schema, and the argument is removed first.
-func withContextParameter(inputSchema any) (map[string]any, bool) {
+func withArguments(inputSchema any, arguments []analyticsArgument) (map[string]any, []string) {
+	if len(arguments) == 0 {
+		return nil, nil
+	}
 	encoded, err := json.Marshal(inputSchema)
 	if err != nil {
-		return nil, false
+		return nil, nil
 	}
 	var schema map[string]any
 	if json.Unmarshal(encoded, &schema) != nil || schema == nil {
-		return nil, false
+		return nil, nil
 	}
 	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
 		if _, ok := schema[key]; ok {
-			return nil, false
+			return nil, nil
 		}
 	}
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		if schema["properties"] != nil {
-			return nil, false
+			return nil, nil
 		}
 		properties = map[string]any{}
 	}
-	if _, declared := properties[contextArgument]; declared {
-		return nil, false
-	}
 
-	properties[contextArgument] = map[string]any{"type": "string", "description": contextParameterDescription}
-	schema["properties"] = properties
 	required, _ := schema["required"].([]any)
-	schema["required"] = append(required, contextArgument)
-	return schema, true
+	var injected []string
+	for _, argument := range arguments {
+		if _, declared := properties[argument.name]; declared {
+			continue
+		}
+		properties[argument.name] = map[string]any{"type": "string", "description": argument.description}
+		if argument.required {
+			required = append(required, argument.name)
+		}
+		injected = append(injected, argument.name)
+	}
+	schema["properties"] = properties
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema, injected
 }
