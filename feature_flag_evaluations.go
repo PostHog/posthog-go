@@ -66,17 +66,30 @@ type featureFlagEvaluationsHost struct {
 }
 
 // IsEnabled reports whether the flag is enabled for this snapshot's user.
-// Unknown flags return false. The first call for a given key fires
-// $feature_flag_called with full evaluation metadata; subsequent calls with
-// the same response are deduped against the client's per-distinct_id cache.
-func (e *FeatureFlagEvaluations) IsEnabled(key string) bool {
+//
+// The optional defaultValue is returned when the flag has no value in this
+// snapshot: no flag with that key was evaluated, or the snapshot itself is nil
+// because flags were never loaded or the request failed. A flag that does have
+// a value -- including a disabled flag and a multivariate variant -- always
+// wins over the default. Pass at most one value; any extra values are ignored.
+// Omitting it keeps the historical false result for an unknown flag.
+//
+// The first call for a given key fires $feature_flag_called with full
+// evaluation metadata; subsequent calls with the same response are deduped
+// against the client's per-distinct_id cache. The event always reports the
+// evaluated response, never the caller-supplied default.
+func (e *FeatureFlagEvaluations) IsEnabled(key string, defaultValue ...bool) bool {
+	fallback := false
+	if len(defaultValue) > 0 {
+		fallback = defaultValue[0]
+	}
 	if e == nil {
-		return false
+		return fallback
 	}
 	flag, ok := e.flags[key]
 	e.recordAccess(key)
 	if !ok {
-		return false
+		return fallback
 	}
 	return flag.Enabled
 }
