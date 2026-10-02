@@ -24,7 +24,7 @@ func TestEventTimestampSerializationUsesUTC(t *testing.T) {
 
 	for _, tc := range messages {
 		t.Run(tc.name, func(t *testing.T) {
-			data, _, _, err := prepareForSend(tc.msg, nil)
+			data, _, _, err := prepareForSend(tc.msg)
 			if err != nil {
 				t.Fatalf("prepareForSend: %v", err)
 			}
@@ -53,7 +53,7 @@ func TestTimestampNormalizationDoesNotRewriteCallerProperties(t *testing.T) {
 		DistinctId: "user",
 		Timestamp:  callerTime,
 		Properties: Properties{"caller_time": callerTime},
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}

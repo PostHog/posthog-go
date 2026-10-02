@@ -418,7 +418,7 @@ func TestBatch_EmptyAndLarge(t *testing.T) {
 func TestPrepareForSend_EdgeCases(t *testing.T) {
 	t.Run("empty_capture", func(t *testing.T) {
 		capture := Capture{Type: "capture"}
-		data, apiMsg, _, err := prepareForSend(capture, nil)
+		data, apiMsg, _, err := prepareForSend(capture)
 		require.NoError(t, err)
 		require.Greater(t, len(data), 0, "Even empty capture should have non-zero serialized size")
 		require.NotNil(t, apiMsg, "APIMessage should not be nil")
@@ -432,7 +432,7 @@ func TestPrepareForSend_EdgeCases(t *testing.T) {
 			Properties: nil,
 			Groups:     nil,
 		}
-		data, apiMsg, _, err := prepareForSend(capture, nil)
+		data, apiMsg, _, err := prepareForSend(capture)
 		require.NoError(t, err)
 		require.Greater(t, len(data), 0)
 		require.NotNil(t, apiMsg)
@@ -446,7 +446,7 @@ func TestPrepareForSend_EdgeCases(t *testing.T) {
 			Properties: Properties{},
 			Groups:     Groups{},
 		}
-		data, apiMsg, _, err := prepareForSend(capture, nil)
+		data, apiMsg, _, err := prepareForSend(capture)
 		require.NoError(t, err)
 		require.Greater(t, len(data), 0)
 		require.NotNil(t, apiMsg)
@@ -463,7 +463,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 			Event:      "event",
 			Properties: Properties{"channel": ch},
 		}
-		data, apiMsg, _, err := prepareForSend(capture, nil)
+		data, apiMsg, _, err := prepareForSend(capture)
 		require.Error(t, err, "Should fail to serialize channel")
 		require.Nil(t, data, "Data should be nil on error")
 		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
@@ -477,7 +477,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 			Event:      "event",
 			Properties: Properties{"func": fn},
 		}
-		data, apiMsg, _, err := prepareForSend(capture, nil)
+		data, apiMsg, _, err := prepareForSend(capture)
 		require.Error(t, err, "Should fail to serialize function")
 		require.Nil(t, data)
 		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
@@ -491,7 +491,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 			Event:      "event",
 			Groups:     Groups{"company": ch},
 		}
-		data, apiMsg, _, err := prepareForSend(capture, nil)
+		data, apiMsg, _, err := prepareForSend(capture)
 		require.Error(t, err, "Should fail to serialize channel in groups")
 		require.Nil(t, data)
 		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
@@ -503,7 +503,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 			DistinctId: "user",
 			Properties: Properties{"channel": ch},
 		}
-		data, apiMsg, _, err := prepareForSend(identify, nil)
+		data, apiMsg, _, err := prepareForSend(identify)
 		require.Error(t, err, "Identify should fail with unencodable value")
 		require.Nil(t, data)
 		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
@@ -515,7 +515,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 			DistinctId: "user",
 			Alias:      "alias",
 		}
-		data, apiMsg, _, err := prepareForSend(alias, nil)
+		data, apiMsg, _, err := prepareForSend(alias)
 		require.NoError(t, err, "Alias should serialize successfully")
 		require.NotNil(t, data)
 		require.NotNil(t, apiMsg)
@@ -528,7 +528,7 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 			Key:        "company_1",
 			Properties: Properties{"func": fn},
 		}
-		data, apiMsg, _, err := prepareForSend(groupIdentify, nil)
+		data, apiMsg, _, err := prepareForSend(groupIdentify)
 		require.Error(t, err, "GroupIdentify should fail with unencodable value")
 		require.Nil(t, data)
 		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")

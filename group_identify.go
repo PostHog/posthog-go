@@ -24,6 +24,8 @@ type GroupIdentify struct {
 	Timestamp time.Time
 	// Properties are sent as the $group_set properties for the group.
 	Properties Properties
+	// Options are per-event capture options, sent unchanged. See Options.
+	Options Options
 	// DisableGeoIP controls whether this group-identify event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool

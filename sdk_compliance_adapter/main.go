@@ -167,10 +167,9 @@ type CaptureRequest struct {
 	Properties map[string]interface{} `json:"properties,omitempty"`
 	Timestamp  *string                `json:"timestamp,omitempty"`
 	// Options carries capture event options (cookieless_mode,
-	// disable_skew_correction, process_person_profile, product_tour_id, ...).
-	// The adapter folds them back into magic event properties so the SDK lifts
-	// them onto the wire options object.
-	Options map[string]interface{} `json:"options,omitempty"`
+	// disable_skew_correction, process_person_profile, product_tour_id, ...),
+	// passed to the SDK unchanged.
+	Options posthog.Options `json:"options,omitempty"`
 }
 
 // FeatureFlagRequest represents /get_feature_flag endpoint request
@@ -330,28 +329,7 @@ func captureHandler(w http.ResponseWriter, r *http.Request) {
 		DistinctId: req.DistinctID,
 		Event:      req.Event,
 		Properties: req.Properties,
-	}
-
-	// Fold capture options back into magic event properties; the SDK lifts
-	// them onto the wire options object. Unknown keys get a "$" prefix.
-	if len(req.Options) > 0 {
-		if capture.Properties == nil {
-			capture.Properties = posthog.Properties{}
-		}
-		for k, v := range req.Options {
-			switch k {
-			case "cookieless_mode":
-				capture.Properties["$cookieless_mode"] = v
-			case "disable_skew_correction":
-				capture.Properties["$ignore_sent_at"] = v
-			case "process_person_profile":
-				capture.Properties["$process_person_profile"] = v
-			case "product_tour_id":
-				capture.Properties["$product_tour_id"] = v
-			default:
-				capture.Properties["$"+k] = v
-			}
-		}
+		Options:    req.Options,
 	}
 
 	if req.Timestamp != nil {

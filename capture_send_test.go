@@ -227,7 +227,7 @@ func captureBatch(t *testing.T, msgs ...Message) preparedBatch {
 	t.Helper()
 	var pb preparedBatch
 	for _, m := range msgs {
-		data, apiMsg, uuid, err := prepareForSend(m, nil)
+		data, apiMsg, uuid, err := prepareForSend(m)
 		if err != nil {
 			t.Fatalf("prepareForSend: %v", err)
 		}

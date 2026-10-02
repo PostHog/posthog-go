@@ -368,12 +368,39 @@ func cloneMessageGroups(groups Groups) Groups {
 	return clone
 }
 
+func cloneMessageOptions(options Options) Options {
+	if options == nil {
+		return nil
+	}
+	clone := make(Options, len(options))
+	for key, value := range options {
+		clone[key] = cloneMessagePropertyValue(value)
+	}
+	return clone
+}
+
+// hookOptions clones options for a BeforeSend hook, and returns an empty map
+// for nil so a hook can call Set without checking.
+func hookOptions(options Options) Options {
+	if options == nil {
+		return NewOptions()
+	}
+	return cloneMessageOptions(options)
+}
+
 func cloneMessagePropertyValue(value interface{}) interface{} {
+	// A nil map or slice must stay nil: it serializes as null, which an empty
+	// copy would turn into {} or [].
+	if isNilValue(value) {
+		return value
+	}
 	switch v := value.(type) {
 	case Properties:
 		return cloneMessageProperties(v)
 	case Groups:
 		return cloneMessageGroups(v)
+	case Options:
+		return cloneMessageOptions(v)
 	case map[string]interface{}:
 		clone := make(map[string]interface{}, len(v))
 		for key, nested := range v {
@@ -470,20 +497,27 @@ func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
 
 func isolateBeforeSendMessage(msg Message) Message {
 	switch m := msg.(type) {
+	case Alias:
+		m.Options = hookOptions(m.Options)
+		return m
 	case Identify:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.Options = hookOptions(m.Options)
 		return m
 	case GroupIdentify:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.Options = hookOptions(m.Options)
 		return m
 	case Capture:
 		m.Properties = cloneMessageProperties(m.Properties)
 		m.Groups = cloneMessageGroups(m.Groups)
+		m.Options = hookOptions(m.Options)
 		m.SendFeatureFlags = nil
 		m.Flags = nil
 		return m
 	case Exception:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.Options = hookOptions(m.Options)
 		m.ExceptionList = cloneExceptionList(m.ExceptionList)
 		m.ExceptionFingerprint = cloneExceptionFingerprint(m.ExceptionFingerprint)
 		// DebugImage is a flat value struct, so copying the slice is a deep clone.
@@ -645,7 +679,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Alias)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -667,7 +701,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Identify)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -688,7 +722,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(GroupIdentify)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -787,7 +821,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		} else if m.Properties != nil {
 			m.IsServer = false
 		}
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -816,7 +850,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Exception)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return

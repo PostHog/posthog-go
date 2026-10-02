@@ -149,8 +149,61 @@ surface as `*CaptureEventError`:
 - distinct IDs longer than 200 bytes
 - `$performance_event`
 - properties that are not a JSON object
+- an event option value PostHog cannot read (`Details` is `invalid_options`,
+  see [Event options](#new-event-options))
 
 A duplicate, empty or malformed event `uuid` still fails the whole batch.
+
+## New: event options
+
+Capture v1 reads per-event processing controls, such as person profile
+processing, from an `options` object sent next to `properties`. Every message
+type (`Capture`, `Identify`, `Alias`, `GroupIdentify` and `Exception`) has an
+`Options` field, and it works the same with `Enqueue` and `EnqueueAI`:
+
+```go
+client.Enqueue(posthog.Capture{
+    DistinctId: "user-123",
+    Event:      "signed_up",
+    Options:    posthog.NewOptions().Set("process_person_profile", false),
+})
+```
+
+Keys are strings and values are any JSON-serializable value. The SDK sends
+options unchanged, so an option that PostHog adds later needs no SDK upgrade.
+PostHog validates them: it ignores keys it does not know, reads common forms
+of a known key's value (for a boolean, `"yes"`, `"off"` or `0`), and drops the
+event if a known key has a value it cannot read. That drop reaches
+`Callback.Failure` as a `*CaptureEventError` whose `Details` is
+`invalid_options`. A `BeforeSend` hook can read and change `Options` like
+`Properties`, and `Options` is never nil inside the hook.
+
+The legacy properties still work. The SDK removes each one from `properties`
+and moves it into its option:
+
+| Legacy property | Option |
+| --- | --- |
+| `$process_person_profile` | `process_person_profile` |
+| `$cookieless_mode` | `cookieless_mode` |
+| `$ignore_sent_at` | `disable_skew_correction` |
+| `$product_tour_id` | `product_tour_id` |
+
+When both are set, the option wins. An option set to `nil` counts as not
+set, so the legacy property applies.
+
+Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
+
+- PostHog now reads common forms of the value, so
+  `"$process_person_profile": "false"` turns person processing off. 1.x
+  ignored that string.
+- A value PostHog cannot read, such as `"$process_person_profile": "maybe"`,
+  now drops the event as `invalid_options`. 1.x kept the event and ignored the
+  value, except for `$cookieless_mode`, where any non-boolean value failed the
+  whole batch.
+
+If you used `CaptureModeAnalyticsV1`, note that the SDK no longer converts
+these values or silently removes the ones it cannot read. PostHog validates
+them as described above.
 
 ## New: AI events
 
