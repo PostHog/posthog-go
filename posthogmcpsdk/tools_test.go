@@ -93,7 +93,7 @@ func TestCatalogRetriesAFailedWalk(t *testing.T) {
 
 			failing.Store(false)
 			info, err = catalog.lookup(t.Context(), next, callRequest("tool"))
-			assert.Equal(t, toolInfo{description: "about tool", injected: []string{"context"}}, info)
+			assert.Equal(t, toolInfo{registered: true, description: "about tool", injected: []string{"context"}}, info)
 			assert.NoError(t, err)
 		})
 	}
@@ -131,7 +131,7 @@ func TestCatalogPropagatesItsOwnPanicAndStaysRetryable(t *testing.T) {
 
 	schema = map[string]any{"type": "object"}
 	info, err := catalog.lookup(t.Context(), next, callRequest("tool"))
-	assert.Equal(t, toolInfo{injected: []string{"context"}}, info)
+	assert.Equal(t, toolInfo{registered: true, injected: []string{"context"}}, info)
 	assert.NoError(t, err)
 }
 
@@ -143,7 +143,7 @@ func TestCatalogForgetsMissesAfterTenSeconds(t *testing.T) {
 		wantInfo  toolInfo
 	}{
 		{name: "just before", elapsed: 10*time.Second - time.Nanosecond, wantLists: 1, wantInfo: toolInfo{}},
-		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 2, wantInfo: toolInfo{description: "about added", injected: []string{"context"}}},
+		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 2, wantInfo: toolInfo{registered: true, description: "about added", injected: []string{"context"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := newToolCatalog([]analyticsArgument{contextParameter}, time.Now)
@@ -175,8 +175,8 @@ func TestCatalogRelearnsKnownToolsAfterTenSeconds(t *testing.T) {
 		wantLists int32
 		wantInfo  toolInfo
 	}{
-		{name: "just before", elapsed: 10*time.Second - time.Nanosecond, wantLists: 0, wantInfo: toolInfo{description: "about plan", injected: []string{"context"}}},
-		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 1, wantInfo: toolInfo{description: "replaced"}},
+		{name: "just before", elapsed: 10*time.Second - time.Nanosecond, wantLists: 0, wantInfo: toolInfo{registered: true, description: "about plan", injected: []string{"context"}}},
+		{name: "at ten seconds", elapsed: 10 * time.Second, wantLists: 1, wantInfo: toolInfo{registered: true, description: "replaced"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := newToolCatalog([]analyticsArgument{contextParameter}, time.Now)
@@ -232,7 +232,7 @@ func TestCatalogWalkInvalidatedMidwayLearnsTheCurrentGeneration(t *testing.T) {
 	info, err := catalog.lookup(t.Context(), next, callRequest("a"))
 
 	assert.NoError(t, err)
-	assert.Equal(t, toolInfo{description: "about a", injected: []string{"context"}}, info)
+	assert.Equal(t, toolInfo{registered: true, description: "about a", injected: []string{"context"}}, info)
 }
 
 func TestCatalogCancelledWalkIsNotReportedAndStaysRetryable(t *testing.T) {

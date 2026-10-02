@@ -2,6 +2,7 @@ package posthogmcpsdk
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -36,18 +37,19 @@ type ErrorHandler func(context.Context, error)
 type Option func(*config)
 
 type config struct {
-	analytics         *posthogmcp.Analytics
-	identity          IdentityResolver
-	properties        PropertiesResolver
-	errorHandler      ErrorHandler
-	captureParameters bool
-	captureResponses  bool
-	contextParameter  bool
-	captureModel      bool
-	conversationID    bool
-	serverName        string
-	serverVersion     string
-	now               func() time.Time
+	analytics             *posthogmcp.Analytics
+	identity              IdentityResolver
+	properties            PropertiesResolver
+	errorHandler          ErrorHandler
+	captureParameters     bool
+	captureResponses      bool
+	contextParameter      bool
+	captureModel          bool
+	conversationID        bool
+	missingCapabilityTool string
+	serverName            string
+	serverVersion         string
+	now                   func() time.Time
 }
 
 func defaultConfig(analytics *posthogmcp.Analytics) *config {
@@ -115,6 +117,25 @@ func WithCaptureModel(enabled bool) Option {
 // keep it. It is enabled by default.
 func WithConversationID(enabled bool) Option {
 	return func(cfg *config) { cfg.conversationID = enabled }
+}
+
+// WithMissingCapabilityTool advertises a virtual tool, named name (trimmed) or
+// "get_more_tools" when name is blank, that agents call to report a capability
+// the server lacks. The report is the tool's required context argument,
+// captured as $mcp_intent on a $mcp_missing_capability event, which is not a
+// $mcp_tool_call. The call passes through the middleware installed inside
+// Instrument, and the middleware answers it itself, so the server's
+// handlers never see it. The tool also gets the llm_model and conversation_id
+// arguments the configuration enables. It is not advertised, and its name is
+// the server's, when the server registers a tool of that name. It is off by
+// default.
+func WithMissingCapabilityTool(name string) Option {
+	return func(cfg *config) {
+		cfg.missingCapabilityTool = strings.TrimSpace(name)
+		if cfg.missingCapabilityTool == "" {
+			cfg.missingCapabilityTool = defaultMissingCapabilityTool
+		}
+	}
 }
 
 // injectedArguments are the analytics arguments the configuration advertises.
