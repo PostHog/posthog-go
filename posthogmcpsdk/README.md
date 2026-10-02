@@ -46,9 +46,9 @@ Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
 
 ## Calls that are not tool calls
 
-Two kinds of `tools/call` are not counted as `$mcp_tool_call`, since counting
-them would put tools that do not exist, or calls that have not finished, in the
-per-tool views. Each gets its own event, with the client, server, and session
+Some `tools/call` requests are not counted as `$mcp_tool_call`, since counting
+them would put tools that do not exist, calls that have not finished, or
+reports to the virtual tool in the per-tool views. Each gets its own event, with the client, server, and session
 properties of a tool call, and no `$exception`.
 
 - **`$mcp_unknown_tool`** for a call naming a tool the server has not
@@ -72,8 +72,11 @@ properties of a tool call, and no `$exception`.
   `input_required`. A round never carries a conversation handle, so
   `$mcp_conversation_id` is set only for a handle the agent sent.
 
+- **`$mcp_missing_capability`** for a call to the opt-in virtual tool, described
+  under "Reporting a missing capability".
+
 `WithProperties` applies to `$mcp_tool_call` only. `WithIdentity` applies to
-all three events.
+all of these events.
 
 ## The context argument
 
@@ -135,7 +138,33 @@ and left off `$mcp_parameters`, tools that declare their own `conversation_id`
 keep it, and schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not
 changed. Turn it off with `WithConversationID(false)`.
 
+## Reporting a missing capability
+
+`WithMissingCapabilityTool("")` adds a virtual tool, `get_more_tools` (pass a
+name to change it), that agents call when the server lacks a capability they
+need. Its required `context` argument is the report, sent as `$mcp_intent` on a
+`$mcp_missing_capability` event, with the tool's name as `$mcp_resource_name`.
+It gets the `llm_model` and `conversation_id` arguments you enable, and
+follows session and conversation handling like any tool. The middleware
+answers the call itself with a short acknowledgement, so your handlers never
+see it, and it is not a `$mcp_tool_call`. A server that registers a tool of
+that name keeps its own, and the virtual tool is not advertised. It is off by
+default. A blank name is the default name.
+
+A server that registers no tools of its own must still declare the tools
+capability, with `ServerOptions.HasTools` (or `Capabilities.Tools`), or
+compliant clients never list tools and never see the virtual one.
+
+Known limits. A name the server registered and later removed stays hidden
+until go-sdk sends `list_changed` or the process restarts. On a load-balanced
+stateless deployment, the last page may not know about a collision on an
+earlier page.
+
 ## Middleware order
+
+The middleware answers a call to the virtual tool itself, so receiving
+middleware installed inside `Instrument` (authentication, rate limiting) does
+not see it.
 
 `Instrument` adds receiving middleware, and sending middleware that watches for
 `notifications/tools/list_changed`. Receiving middleware added before it runs

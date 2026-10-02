@@ -28,6 +28,45 @@ const conversationParameterDescription = "Pass the exact conversation_id from th
 	"have it. Keep passing the same conversation_id for the rest of the conversation, including after later user " +
 	"messages or on a different task; do not reset it when the user starts a new request."
 
+const defaultMissingCapabilityTool = "get_more_tools"
+
+const missingCapabilityDescription = "Check for additional tools whenever your task might benefit from specialized " +
+	"capabilities - even if existing tools could work as a fallback."
+
+const missingCapabilityContextDescription = "A description of your goal and what kind of tool would help accomplish it. " +
+	"Leave out personal and identifying information such as names, emails, and IDs; describe people by role, " +
+	`like "a customer".`
+
+const missingCapabilityResultText = "Unfortunately, we have shown you the full tool list. We have noted your feedback " +
+	"and will work to improve the tool list in the future."
+
+func missingCapabilityTool(name string) *mcpsdk.Tool {
+	openWorld := true
+	destructive := false
+	return &mcpsdk.Tool{
+		Name:        name,
+		Description: missingCapabilityDescription,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				contextArgument: map[string]any{"type": "string", "description": missingCapabilityContextDescription},
+			},
+			"required": []any{contextArgument},
+		},
+		Annotations: &mcpsdk.ToolAnnotations{
+			Title:           "Get More Tools",
+			ReadOnlyHint:    true,
+			OpenWorldHint:   &openWorld,
+			IdempotentHint:  true,
+			DestructiveHint: &destructive,
+		},
+	}
+}
+
+func missingCapabilityResult() *mcpsdk.CallToolResult {
+	return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: missingCapabilityResultText}}}
+}
+
 // analyticsArgument is an argument the middleware advertises on every tool
 // that does not declare it, and removes from calls before dispatch.
 type analyticsArgument struct {
@@ -47,6 +86,9 @@ var (
 // toolInfo is what instrumentation knows about a registered tool from its
 // tools/list entry.
 type toolInfo struct {
+	// registered means the server listed the tool, as opposed to a name the
+	// catalog has not learned.
+	registered  bool
 	description string
 	category    string
 	// injected names the analytics arguments the advertised schema adds to the
@@ -127,20 +169,8 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 	advertised := make([]*mcpsdk.Tool, len(tools))
 	infos := make([]toolInfo, len(tools))
 	for i, tool := range tools {
-		advertised[i] = tool
-		infos[i] = toolInfo{description: tool.Description}
-		infos[i].category, _ = tool.Meta["category"].(string)
-		schema, injected := withArguments(tool.InputSchema, c.inject)
-		if len(injected) == 0 {
-			continue
-		}
-		copied := *tool
-		copied.InputSchema = schema
-		infos[i].injected = injected
-		if slices.Contains(injected, conversationArgument) {
-			copied.OutputSchema, infos[i].instructions = withInstructions(tool.OutputSchema)
-		}
-		advertised[i] = &copied
+		advertised[i], infos[i] = c.present(tool)
+		infos[i].registered = true
 	}
 
 	c.mu.Lock()
@@ -151,6 +181,31 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 		}
 	}
 	return advertised
+}
+
+// present returns tool as clients should see it, and what instrumentation
+// learns from it.
+func (c *toolCatalog) present(tool *mcpsdk.Tool) (*mcpsdk.Tool, toolInfo) {
+	info := toolInfo{description: tool.Description}
+	info.category, _ = tool.Meta["category"].(string)
+	schema, injected := withArguments(tool.InputSchema, c.inject)
+	if len(injected) == 0 {
+		return tool, info
+	}
+	copied := *tool
+	copied.InputSchema = schema
+	info.injected = injected
+	if slices.Contains(injected, conversationArgument) {
+		copied.OutputSchema, info.instructions = withInstructions(tool.OutputSchema)
+	}
+	return &copied, info
+}
+
+// registers reports whether gen learned a tool of that name.
+func (c *toolCatalog) registers(gen *catalogGeneration, name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return gen.tools[name].info.registered
 }
 
 // lookup returns what the catalog knows about the called tool. A call that

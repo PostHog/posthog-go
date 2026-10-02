@@ -8,7 +8,9 @@
 // from its tools/list entry. An isError result or a returned error marks the
 // call as failed. A call naming an unregistered tool is a $mcp_unknown_tool
 // event instead, and an input_required round the client receives is a
-// $mcp_input_required event. Analytics errors and panics never change the MCP
+// $mcp_input_required event. With [WithMissingCapabilityTool], a call to the
+// virtual tool that reports a missing capability is a $mcp_missing_capability
+// event. Analytics errors and panics never change the MCP
 // response.
 //
 // Like the Python and TypeScript SDKs, the middleware advertises a required
