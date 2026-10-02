@@ -30,12 +30,13 @@ type Callback interface {
 // message is dropped.
 //
 // The SDK passes an isolated copy of SDK-owned mutable fields where practical:
-// Properties, Groups and Options clone common JSON-like maps and slices, and Exception
-// clones its exception list, stack traces, mechanisms, fingerprint, and debug
-// images. Arbitrary
-// reference values stored inside Properties, Groups or Options (for example, pointers or
-// custom mutable structs held as interface{} values) are not deep-cloned and can
-// still share state with the caller.
+// Properties, Groups and Options clone common JSON-like maps and slices, and
+// Exception clones its exception list, stack traces, mechanisms, fingerprint,
+// and debug images. Arbitrary reference values stored inside Properties,
+// Groups or Options (for example, pointers or custom mutable structs held as
+// interface{} values) are not deep-cloned and can still share state with the
+// caller. Options is never nil inside the hook, so the hook can call Set
+// directly.
 type BeforeSendFunc func(Message) Message
 
 // Message represents a PostHog object that can be queued with Client.Enqueue.

@@ -379,6 +379,15 @@ func cloneMessageOptions(options Options) Options {
 	return clone
 }
 
+// hookOptions clones options for a BeforeSend hook, and returns an empty map
+// for nil so a hook can call Set without checking.
+func hookOptions(options Options) Options {
+	if options == nil {
+		return NewOptions()
+	}
+	return cloneMessageOptions(options)
+}
+
 func cloneMessagePropertyValue(value interface{}) interface{} {
 	switch v := value.(type) {
 	case Properties:
@@ -482,26 +491,26 @@ func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
 func isolateBeforeSendMessage(msg Message) Message {
 	switch m := msg.(type) {
 	case Alias:
-		m.Options = cloneMessageOptions(m.Options)
+		m.Options = hookOptions(m.Options)
 		return m
 	case Identify:
 		m.Properties = cloneMessageProperties(m.Properties)
-		m.Options = cloneMessageOptions(m.Options)
+		m.Options = hookOptions(m.Options)
 		return m
 	case GroupIdentify:
 		m.Properties = cloneMessageProperties(m.Properties)
-		m.Options = cloneMessageOptions(m.Options)
+		m.Options = hookOptions(m.Options)
 		return m
 	case Capture:
 		m.Properties = cloneMessageProperties(m.Properties)
 		m.Groups = cloneMessageGroups(m.Groups)
-		m.Options = cloneMessageOptions(m.Options)
+		m.Options = hookOptions(m.Options)
 		m.SendFeatureFlags = nil
 		m.Flags = nil
 		return m
 	case Exception:
 		m.Properties = cloneMessageProperties(m.Properties)
-		m.Options = cloneMessageOptions(m.Options)
+		m.Options = hookOptions(m.Options)
 		m.ExceptionList = cloneExceptionList(m.ExceptionList)
 		m.ExceptionFingerprint = cloneExceptionFingerprint(m.ExceptionFingerprint)
 		// DebugImage is a flat value struct, so copying the slice is a deep clone.

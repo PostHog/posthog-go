@@ -176,7 +176,7 @@ of a known key's value (for a boolean, `"yes"`, `"off"` or `0`), and drops the
 event if a known key has a value it cannot read. That drop reaches
 `Callback.Failure` as a `*CaptureEventError` whose `Details` is
 `invalid_options`. A `BeforeSend` hook can read and change `Options` like
-`Properties`.
+`Properties`, and `Options` is never nil inside the hook.
 
 The legacy properties still work. The SDK removes each one from `properties`
 and moves it into its option:

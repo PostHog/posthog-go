@@ -583,3 +583,34 @@ func TestBeforeSendIsolatesOptionsOnEveryMessageType(t *testing.T) {
 		})
 	}
 }
+
+func TestBeforeSendGetsNonNilOptionsOnEveryMessageType(t *testing.T) {
+	messages := []Message{
+		Capture{DistinctId: "d", Event: "e"},
+		Identify{DistinctId: "d"},
+		Alias{DistinctId: "d", Alias: "a"},
+		GroupIdentify{Type: "company", Key: "k"},
+		Exception{DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}},
+	}
+	for _, msg := range messages {
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				Logger:    quietTestLogger{t},
+				BeforeSend: func(msg Message) Message {
+					messageOptions(msg).Set("future_option", "hook")
+					return msg
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(msg))
+			require.Equal(t, map[string]interface{}{"future_option": "hook"}, firstMessage(t, readBatch(t, body))["options"])
+		})
+	}
+}
