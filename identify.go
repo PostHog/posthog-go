@@ -24,6 +24,8 @@ type Identify struct {
 	Timestamp time.Time
 	// Properties are sent as the $set person properties for DistinctId.
 	Properties Properties
+	// Options are per-event capture options, sent unchanged. See Options.
+	Options Options
 	// DisableGeoIP controls whether this identify event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool

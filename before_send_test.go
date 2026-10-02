@@ -493,3 +493,93 @@ func containsLog(logs []string, want string) bool {
 	}
 	return false
 }
+
+func TestBeforeSendCanChangeOptions(t *testing.T) {
+	body, server := mockServer()
+	defer server.Close()
+
+	originalOptions := Options{
+		"cookieless_mode": true,
+		"nested":          map[string]interface{}{"name": "original"},
+	}
+	client, err := NewWithConfig("test-api-key", Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		BeforeSend: func(msg Message) Message {
+			capture := msg.(Capture)
+			delete(capture.Options, "cookieless_mode")
+			capture.Options["nested"].(map[string]interface{})["name"] = "hook"
+			capture.Options.Set("product_tour_id", "tour-hook")
+			// A legacy property a hook adds still moves into its option.
+			capture.Properties[propertyProcessPersonProfile] = false
+			return capture
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.Enqueue(Capture{
+		DistinctId: "user-123",
+		Event:      "test-event",
+		Options:    originalOptions,
+	}))
+
+	message := firstMessage(t, readBatch(t, body))
+	require.Equal(t, map[string]interface{}{
+		"nested":                 map[string]interface{}{"name": "hook"},
+		"product_tour_id":        "tour-hook",
+		"process_person_profile": false,
+	}, message["options"])
+	require.NotContains(t, message["properties"], propertyProcessPersonProfile)
+	require.Equal(t, Options{
+		"cookieless_mode": true,
+		"nested":          map[string]interface{}{"name": "original"},
+	}, originalOptions, "the hook must not change the caller's Options")
+}
+
+func messageOptions(msg Message) Options {
+	switch m := msg.(type) {
+	case Capture:
+		return m.Options
+	case Identify:
+		return m.Options
+	case Alias:
+		return m.Options
+	case GroupIdentify:
+		return m.Options
+	case Exception:
+		return m.Options
+	}
+	panic(fmt.Sprintf("unexpected message type %T", msg))
+}
+
+func TestBeforeSendIsolatesOptionsOnEveryMessageType(t *testing.T) {
+	messages := []func(Options) Message{
+		func(o Options) Message { return Capture{DistinctId: "d", Event: "e", Options: o} },
+		func(o Options) Message { return Identify{DistinctId: "d", Options: o} },
+		func(o Options) Message { return Alias{DistinctId: "d", Alias: "a", Options: o} },
+		func(o Options) Message { return GroupIdentify{Type: "company", Key: "k", Options: o} },
+		func(o Options) Message {
+			return Exception{DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}, Options: o}
+		},
+	}
+	for _, build := range messages {
+		original := Options{"cookieless_mode": true}
+		msg := build(original)
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint: "http://127.0.0.1:0",
+				Logger:   quietTestLogger{t},
+				BeforeSend: func(msg Message) Message {
+					messageOptions(msg)["cookieless_mode"] = false
+					return nil
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(msg))
+			require.Equal(t, Options{"cookieless_mode": true}, original)
+		})
+	}
+}

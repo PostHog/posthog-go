@@ -104,6 +104,8 @@ type Capture struct {
 	Properties Properties
 	// Groups associates the event with group analytics groups.
 	Groups Groups
+	// Options are per-event capture options, sent unchanged. See Options.
+	Options Options
 	// SendFeatureFlags requests legacy feature flag enrichment on this event.
 	// Deprecated: Prefer Client.EvaluateFlags and pass the returned snapshot via Flags.
 	// Flags writes the canonical $feature/<key> and $active_feature_flags properties.

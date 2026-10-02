@@ -569,11 +569,11 @@ func TestAILaneSendsEventAtTheEndpointCeiling(t *testing.T) {
 	// Measure the non-blob overhead, then size the blob so the whole event lands
 	// just past the endpoint's ceiling -- the window the headroom covers.
 	probe, _, _, err := prepareForSend(
-		Capture{DistinctId: "d", Event: "$ai_generation", Properties: NewProperties().Set("blob", "")}, nil)
+		Capture{DistinctId: "d", Event: "$ai_generation", Properties: NewProperties().Set("blob", "")})
 	require.NoError(t, err)
 	props := NewProperties().Set("blob", strings.Repeat("x", aiMaxEventBytes-len(probe)+256))
 
-	data, _, _, err := prepareForSend(Capture{DistinctId: "d", Event: "$ai_generation", Properties: props}, nil)
+	data, _, _, err := prepareForSend(Capture{DistinctId: "d", Event: "$ai_generation", Properties: props})
 	require.NoError(t, err)
 	require.Greater(t, len(data), aiMaxEventBytes,
 		"precondition: the whole event must exceed the endpoint ceiling")
@@ -694,6 +694,50 @@ func TestLocalDropsNameTheirLane(t *testing.T) {
 			require.ErrorAs(t, failures[0], &localErr, "a pre-send drop must be a CaptureLocalError")
 			require.Equal(t, tc.wantEndpoint, localErr.Endpoint)
 			require.ErrorIs(t, failures[0], ErrMessageTooBig, "must still unwrap to the sentinel")
+		})
+	}
+}
+
+// TestOptionsReachBothLanes pins that Enqueue and EnqueueAI send the same
+// options object: caller options unchanged and legacy properties moved in.
+func TestOptionsReachBothLanes(t *testing.T) {
+	lanes := []struct {
+		path    string
+		enqueue func(Client, Message) error
+	}{
+		{capturePath, Client.Enqueue},
+		{aiCapturePath, Client.EnqueueAI},
+	}
+	for _, lane := range lanes {
+		t.Run(lane.path, func(t *testing.T) {
+			rec := newLaneRecorder()
+			srv := rec.server(t)
+			defer srv.Close()
+
+			c := aiTestClient(t, srv.URL, nil)
+			require.NoError(t, lane.enqueue(c, Capture{
+				DistinctId: "d",
+				Event:      "$ai_generation",
+				Options:    NewOptions().Set("process_person_profile", "no").Set("future_option", "x"),
+				Properties: NewProperties().
+					Set(propertyProcessPersonProfile, true).
+					Set(propertyIgnoreSentAt, "maybe"),
+			}))
+			require.NoError(t, c.Close())
+
+			var env eventBatch
+			require.NoError(t, json.Unmarshal(rec.bodyFor(lane.path), &env))
+			require.Len(t, env.Batch, 1)
+			var ev map[string]interface{}
+			require.NoError(t, json.Unmarshal(env.Batch[0], &ev))
+			require.Equal(t, map[string]interface{}{
+				"process_person_profile":  "no",
+				"disable_skew_correction": "maybe",
+				"future_option":           "x",
+			}, ev["options"])
+			props := ev["properties"].(map[string]interface{})
+			require.NotContains(t, props, propertyProcessPersonProfile)
+			require.NotContains(t, props, propertyIgnoreSentAt)
 		})
 	}
 }

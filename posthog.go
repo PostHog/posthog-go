@@ -368,6 +368,17 @@ func cloneMessageGroups(groups Groups) Groups {
 	return clone
 }
 
+func cloneMessageOptions(options Options) Options {
+	if options == nil {
+		return nil
+	}
+	clone := make(Options, len(options))
+	for key, value := range options {
+		clone[key] = cloneMessagePropertyValue(value)
+	}
+	return clone
+}
+
 func cloneMessagePropertyValue(value interface{}) interface{} {
 	switch v := value.(type) {
 	case Properties:
@@ -470,20 +481,27 @@ func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
 
 func isolateBeforeSendMessage(msg Message) Message {
 	switch m := msg.(type) {
+	case Alias:
+		m.Options = cloneMessageOptions(m.Options)
+		return m
 	case Identify:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.Options = cloneMessageOptions(m.Options)
 		return m
 	case GroupIdentify:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.Options = cloneMessageOptions(m.Options)
 		return m
 	case Capture:
 		m.Properties = cloneMessageProperties(m.Properties)
 		m.Groups = cloneMessageGroups(m.Groups)
+		m.Options = cloneMessageOptions(m.Options)
 		m.SendFeatureFlags = nil
 		m.Flags = nil
 		return m
 	case Exception:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.Options = cloneMessageOptions(m.Options)
 		m.ExceptionList = cloneExceptionList(m.ExceptionList)
 		m.ExceptionFingerprint = cloneExceptionFingerprint(m.ExceptionFingerprint)
 		// DebugImage is a flat value struct, so copying the slice is a deep clone.
@@ -645,7 +663,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Alias)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -667,7 +685,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Identify)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -688,7 +706,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(GroupIdentify)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -787,7 +805,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		} else if m.Properties != nil {
 			m.IsServer = false
 		}
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -816,7 +834,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Exception)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
