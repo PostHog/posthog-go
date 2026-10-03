@@ -4,7 +4,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/posthog/posthog-go/v2"
 )
 
 func TestPostFlagsWithRetryRetriesRetryableStatusThenSucceeds(t *testing.T) {
@@ -81,5 +85,53 @@ func TestPostFlagsWithRetryDoesNotRetryNonRetryableStatus(t *testing.T) {
 
 	if requests != 1 {
 		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
+func TestBuildCaptureKeepsSuppliedUUIDAndGeneratesOneOtherwise(t *testing.T) {
+	supplied := "0190d4a3-8f2b-7c3e-9a1d-5b6c7d8e9f00"
+	if got := buildCapture(CaptureRequest{DistinctID: "u", Event: "e", UUID: supplied}).Uuid; got != supplied {
+		t.Fatalf("uuid = %q, want the supplied %q", got, supplied)
+	}
+
+	generated := buildCapture(CaptureRequest{DistinctID: "u", Event: "e"}).Uuid
+	parsed, err := uuid.Parse(generated)
+	if err != nil {
+		t.Fatalf("generated uuid %q does not parse: %v", generated, err)
+	}
+	if parsed.Version() != 7 {
+		t.Fatalf("generated uuid version = %d, want 7", parsed.Version())
+	}
+}
+
+func TestBuildCapturePassesOptionsUnchanged(t *testing.T) {
+	options := posthog.Options{"process_person_profile": "no", "future_option": map[string]interface{}{"nested": true}}
+	got := buildCapture(CaptureRequest{DistinctID: "u", Event: "e", Options: options}).Options
+	if !reflect.DeepEqual(got, options) {
+		t.Fatalf("options = %v, want %v", got, options)
+	}
+}
+
+func TestCompressionFromEnv(t *testing.T) {
+	cases := []struct {
+		env    string
+		want   string
+		wantOk bool
+	}{
+		{"", "gzip", true},
+		{"gzip", "gzip", true},
+		{"deflate", "deflate", true},
+		{"br", "br", true},
+		{"zstd", "zstd", true},
+		{"brotli", "brotli", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv("COMPRESSION", tc.env)
+			got, ok := compressionFromEnv()
+			if got != tc.want || ok != tc.wantOk {
+				t.Fatalf("compressionFromEnv() = (%q, %v), want (%q, %v)", got, ok, tc.want, tc.wantOk)
+			}
+		})
 	}
 }
