@@ -88,19 +88,23 @@ func TestPostFlagsWithRetryDoesNotRetryNonRetryableStatus(t *testing.T) {
 	}
 }
 
-func TestBuildCaptureKeepsSuppliedUUIDAndGeneratesOneOtherwise(t *testing.T) {
+func TestBuildCaptureKeepsAValidUUIDAndReplacesOthers(t *testing.T) {
 	supplied := "0190d4a3-8f2b-7c3e-9a1d-5b6c7d8e9f00"
 	if got := buildCapture(CaptureRequest{DistinctID: "u", Event: "e", UUID: supplied}).Uuid; got != supplied {
 		t.Fatalf("uuid = %q, want the supplied %q", got, supplied)
 	}
 
-	generated := buildCapture(CaptureRequest{DistinctID: "u", Event: "e"}).Uuid
-	parsed, err := uuid.Parse(generated)
-	if err != nil {
-		t.Fatalf("generated uuid %q does not parse: %v", generated, err)
-	}
-	if parsed.Version() != 7 {
-		t.Fatalf("generated uuid version = %d, want 7", parsed.Version())
+	// The SDK replaces an invalid UUID, so the adapter must too, or its
+	// response would name a UUID that was never sent.
+	for _, supplied := range []string{"", "not-a-uuid"} {
+		generated := buildCapture(CaptureRequest{DistinctID: "u", Event: "e", UUID: supplied}).Uuid
+		parsed, err := uuid.Parse(generated)
+		if err != nil {
+			t.Fatalf("uuid for %q = %q, which does not parse: %v", supplied, generated, err)
+		}
+		if parsed.Version() != 7 {
+			t.Fatalf("uuid for %q has version %d, want 7", supplied, parsed.Version())
+		}
 	}
 }
 

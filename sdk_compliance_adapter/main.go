@@ -381,9 +381,18 @@ func handleCapture(w http.ResponseWriter, r *http.Request, enqueue func(posthog.
 	})
 }
 
+// newEventUUID returns a v7 UUID, or a v4 one if the clock-based path fails,
+// like the SDK does.
+func newEventUUID() string {
+	if v7, err := uuid.NewV7(); err == nil {
+		return v7.String()
+	}
+	return uuid.New().String()
+}
+
 // buildCapture maps a harness capture request onto the SDK message. Options
-// pass through unchanged, and the UUID is the caller's or a new one, so the
-// response can name the event that was sent.
+// pass through unchanged, and the UUID is the caller's valid one or a new one,
+// so the response can name the event that was sent.
 func buildCapture(req CaptureRequest) posthog.Capture {
 	capture := posthog.Capture{
 		Uuid:       req.UUID,
@@ -392,8 +401,10 @@ func buildCapture(req CaptureRequest) posthog.Capture {
 		Properties: req.Properties,
 		Options:    req.Options,
 	}
-	if capture.Uuid == "" {
-		capture.Uuid = uuid.Must(uuid.NewV7()).String()
+	// The SDK replaces an empty or invalid UUID, so replace it here first and
+	// return the UUID that is actually sent.
+	if capture.Uuid == "" || uuid.Validate(capture.Uuid) != nil {
+		capture.Uuid = newEventUUID()
 	}
 	if req.Timestamp != nil {
 		if t, err := time.Parse(time.RFC3339, *req.Timestamp); err == nil {
