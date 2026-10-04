@@ -624,6 +624,8 @@ func (c *client) EnqueueWithContext(ctx context.Context, msg Message) (err error
 		}()
 		select {
 		case c.msgs <- prepared:
+		case <-c.quit:
+			err = ErrClosed
 		default:
 			err = ErrQueueFull
 		}

@@ -523,24 +523,15 @@ func TestMatchPropertyRegex(t *testing.T) {
 		}
 	}
 
-	// invalid regex
+	// invalid regex pattern is inconclusive so later condition groups can match
 	property = FlagProperty{
 		Key:      "key",
 		Value:    "?*",
 		Operator: "regex",
 	}
-
-	shouldNotMatch = []interface{}{"value", "valu2"}
-	for _, val := range shouldNotMatch {
-		isMatch, err := matchProperty(property, NewProperties().Set("key", val))
-		if err != nil {
-			t.Error(err)
-		}
-
-		if isMatch {
-			t.Error("Value is not a match")
-		}
-	}
+	_, err := matchProperty(property, NewProperties().Set("key", "value"))
+	require.Error(t, err)
+	require.True(t, isInconclusiveError(err))
 
 	// non string value
 

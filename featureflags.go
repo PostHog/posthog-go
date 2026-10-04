@@ -1125,7 +1125,6 @@ func (poller *FeatureFlagsPoller) GetAllFlagsAndPayloads(flagConfig FeatureFlagP
 			return out, err
 		}
 		if flagsResponse != nil {
-			out.FeatureFlags = make(map[string]interface{}, len(flagsResponse.FeatureFlags))
 			for k, v := range flagsResponse.FeatureFlags {
 				out.FeatureFlags[k] = v
 			}
@@ -1546,9 +1545,8 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 		// Coerce both sides with valueToString so every property type is handled,
 		// including float64, which is what JSON numbers deserialize to.
 		r, err := getOrCompileRegex(valueToString(value))
-		// invalid regex
 		if err != nil {
-			return false, nil
+			return false, &InconclusiveMatchError{msg: "invalid regex: " + err.Error()}
 		}
 
 		matched := r.MatchString(regexPropertyString(override_value))
