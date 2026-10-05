@@ -30,7 +30,7 @@ Root `go test ./...` and Makefile checks do not enter the separate `otel/` and `
 
 Run the checks for the affected modules; core API changes may also affect their consumers. CI tests the supported toolchain and MCP SDK versions in [.github/workflows/unit-tests.yml](.github/workflows/unit-tests.yml).
 
-The MCP adapter's local `replace` tests the checkout, but consumers use the pinned released core. For adapter changes, also build and vet a temporary copy with that replacement removed, as CI does; do not modify the checkout's `go.mod` for this check. See the adapter's [compatibility and development guide](posthogmcpsdk/README.md#compatibility-and-development) for this constraint and release ordering.
+The MCP adapter's local `replace` tests the checkout, but consumers use the pinned released core. For adapter changes, also build and vet a temporary copy with that replacement removed, using `GOFLAGS=-mod=mod go build ./...` and `GOFLAGS=-mod=mod go vet ./...`, as CI does. This allows missing checksums to be populated in the temporary copy; do not modify the checkout's `go.mod` or `go.sum` for this check. See the adapter's [compatibility and development guide](posthogmcpsdk/README.md#compatibility-and-development) for this constraint and release ordering.
 
 ## Testing local changes in another app
 
