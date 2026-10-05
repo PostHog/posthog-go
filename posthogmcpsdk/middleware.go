@@ -73,13 +73,18 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 	}
 	tools := newToolCatalog(cfg.injectedArguments(), cfg.now)
 	m := &middleware{config: cfg, tools: tools, sessions: newSessionResolver(cfg.now)}
+	if cfg.missingCapabilityTool != "" {
+		m.virtual, m.virtualInfo = tools.present(missingCapabilityTool(cfg.missingCapabilityTool))
+	}
 	return Middleware{Receiving: m.receive, Sending: m.send}
 }
 
 type middleware struct {
 	*config
-	tools    *toolCatalog
-	sessions *sessionResolver
+	tools       *toolCatalog
+	sessions    *sessionResolver
+	virtual     *mcpsdk.Tool
+	virtualInfo toolInfo
 }
 
 func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
@@ -101,6 +106,15 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			call := m.prepare(ctx, next, toolRequest)
 			started := time.Now()
 			result, handlerErr := next(ctx, method, call.dispatch)
+			if call.missingCapability {
+				// go-sdk answers a name it does not know with its unknown tool
+				// error, after the middleware inside Instrument has run.
+				if isUnknownTool(handlerErr, toolRequest.Params.Name) {
+					result, handlerErr = missingCapabilityResult(), nil
+				} else {
+					call.missingCapability = false
+				}
+			}
 			delivered := m.deliverConversation(ctx, &call, result, handlerErr)
 			m.observeSafely(ctx, call, result, handlerErr, started)
 			return delivered, handlerErr
@@ -125,11 +139,12 @@ func (m *middleware) send(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 
 // preparedCall is a tools/call as instrumentation sees it before dispatch.
 type preparedCall struct {
-	request      *mcpsdk.CallToolRequest
-	dispatch     *mcpsdk.CallToolRequest
-	arguments    toolArguments
-	tool         toolInfo
-	conversation conversation
+	request           *mcpsdk.CallToolRequest
+	dispatch          *mcpsdk.CallToolRequest
+	arguments         toolArguments
+	tool              toolInfo
+	conversation      conversation
+	missingCapability bool
 }
 
 // conversation is the conversation handle of a tools/call, and whether the
@@ -172,7 +187,17 @@ func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page
 	}()
 	copied := *page
 	copied.Tools = m.tools.advertise(gen, page.Tools)
+	if m.virtual != nil && page.NextCursor == "" && !m.serverRegistersVirtualName(gen, page.Tools) {
+		copied.Tools = append(copied.Tools, m.virtual)
+	}
 	return &copied
+}
+
+// The last page is checked itself because the catalog does not learn it when the
+// generation was invalidated during the listing.
+func (m *middleware) serverRegistersVirtualName(gen *catalogGeneration, lastPage []*mcpsdk.Tool) bool {
+	return m.tools.registers(gen, m.missingCapabilityTool) ||
+		slices.ContainsFunc(lastPage, func(tool *mcpsdk.Tool) bool { return tool.Name == m.missingCapabilityTool })
 }
 
 func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (call preparedCall) {
@@ -189,11 +214,14 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 		m.report(ctx, err)
 	}
 	call.tool = tool
-	if tool.injects(conversationArgument) {
+	if m.virtual != nil && !tool.registered && req.Params.Name == m.missingCapabilityTool {
+		call.tool, call.missingCapability = m.virtualInfo, true
+	}
+	if call.tool.injects(conversationArgument) {
 		call.conversation = resolveConversation(req, call.arguments)
 	}
-	if call.arguments.hasAny(tool.injected) {
-		arguments, err := json.Marshal(call.arguments.without(tool.injected...))
+	if call.arguments.hasAny(call.tool.injected) {
+		arguments, err := json.Marshal(call.arguments.without(call.tool.injected...))
 		if err != nil {
 			return call
 		}
@@ -364,6 +392,8 @@ func (m *middleware) observe(
 	event := m.eventContext(ctx, prepared, started)
 	var err error
 	switch {
+	case prepared.missingCapability:
+		err = m.captureMissingCapability(ctx, prepared, event)
 	case handlerErr == nil && awaitsInput(toolResult):
 		err = m.captureInputRequired(ctx, toolResult, posthogmcp.InputRequired{
 			EventContext: event,
@@ -382,6 +412,18 @@ func (m *middleware) observe(
 	if err != nil {
 		m.report(ctx, fmt.Errorf("posthogmcpsdk: capture: %w", err))
 	}
+}
+
+func (m *middleware) captureMissingCapability(ctx context.Context, prepared preparedCall, event posthogmcp.EventContext) error {
+	report := posthogmcp.MissingCapability{
+		EventContext: event,
+		ToolName:     prepared.request.Params.Name,
+		Intent:       prepared.arguments.text(contextArgument),
+	}
+	if m.captureModel {
+		report.LLMModel, report.LLMModelSource = callModel(prepared.request.Params.Meta, prepared)
+	}
+	return capture(ctx, func(ctx context.Context) error { return m.analytics.CaptureMissingCapability(ctx, report) })
 }
 
 func (m *middleware) captureInputRequired(
