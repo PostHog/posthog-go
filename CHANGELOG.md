@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.33.0
+
+### Minor Changes
+
+- 5da854f: `posthogmcpsdk` can advertise an opt-in `get_more_tools` virtual tool with `WithMissingCapabilityTool`. Calling it sends `$mcp_missing_capability`, with the agent's report as `$mcp_intent`, and the middleware answers the call itself.
+
 ## 1.32.0
 
 ### Minor Changes
