@@ -390,7 +390,8 @@ func hookOptions(options Options) Options {
 
 func cloneMessagePropertyValue(value interface{}) interface{} {
 	// A nil map or slice must stay nil: it serializes as null, which an empty
-	// copy would turn into {} or [].
+	// copy would turn into {} or []. The typed-slice copies below use
+	// append(v[:0:0], ...) so an empty slice also stays [] rather than null.
 	if isNilValue(value) {
 		return value
 	}
@@ -444,15 +445,15 @@ func cloneMessagePropertyValue(value interface{}) interface{} {
 		}
 		return clone
 	case []string:
-		return append([]string(nil), v...)
+		return append(v[:0:0], v...)
 	case []bool:
-		return append([]bool(nil), v...)
+		return append(v[:0:0], v...)
 	case []int:
-		return append([]int(nil), v...)
+		return append(v[:0:0], v...)
 	case []int64:
-		return append([]int64(nil), v...)
+		return append(v[:0:0], v...)
 	case []float64:
-		return append([]float64(nil), v...)
+		return append(v[:0:0], v...)
 	}
 	return value
 }

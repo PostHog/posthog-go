@@ -620,8 +620,9 @@ func TestBeforeSendGetsNonNilOptionsOnEveryMessageType(t *testing.T) {
 }
 
 // TestPassThroughBeforeSendKeepsTheWireEventUnchanged pins that enabling a hook
-// that returns its message changes nothing on the wire. A cloned nil value must
-// stay null so a nil option still falls back to its legacy property.
+// that returns its message changes nothing on the wire, on both lanes. A cloned
+// nil value must stay null so a nil option still falls back to its legacy
+// property, and a cloned empty slice must stay [] so it does not.
 func TestPassThroughBeforeSendKeepsTheWireEventUnchanged(t *testing.T) {
 	newCapture := func() Capture {
 		return Capture{
@@ -630,35 +631,59 @@ func TestPassThroughBeforeSendKeepsTheWireEventUnchanged(t *testing.T) {
 			Event:      "e",
 			Timestamp:  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 			Options: Options{
-				"process_person_profile": []interface{}(nil),
-				"cookieless_mode":        map[string]interface{}(nil),
-				"future_option":          map[string]string(nil),
+				"process_person_profile":  []interface{}(nil),
+				"cookieless_mode":         map[string]interface{}(nil),
+				"future_option":           map[string]string(nil),
+				"disable_skew_correction": []string{},
 			},
 			Properties: Properties{
 				propertyProcessPersonProfile: false,
+				propertyIgnoreSentAt:         true,
 				"typed_nil_map":              map[string]interface{}(nil),
 				"typed_nil_slice":            []interface{}(nil),
+				"typed_nil_strings":          []string(nil),
+				"empty_strings":              []string{},
+				"empty_bools":                []bool{},
+				"empty_ints":                 []int{},
+				"empty_int64s":               []int64{},
+				"empty_float64s":             []float64{},
+				"$set":                       map[string]interface{}{"tags": []string{}},
 			},
 		}
 	}
-	send := func(hook BeforeSendFunc) map[string]interface{} {
-		body, server := mockServer()
-		defer server.Close()
-		client, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL, BatchSize: 1, BeforeSend: hook})
-		require.NoError(t, err)
-		defer client.Close()
-		require.NoError(t, client.Enqueue(newCapture()))
-		return firstMessage(t, readBatch(t, body))
+	routes := map[string]func(Client, Capture) error{
+		"Enqueue":   func(c Client, m Capture) error { return c.Enqueue(m) },
+		"EnqueueAI": func(c Client, m Capture) error { return c.EnqueueAI(m) },
 	}
+	for name, enqueue := range routes {
+		t.Run(name, func(t *testing.T) {
+			send := func(hook BeforeSendFunc) map[string]interface{} {
+				body, server := mockServer()
+				defer server.Close()
+				client, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL, BatchSize: 1, BeforeSend: hook})
+				require.NoError(t, err)
+				defer client.Close()
+				require.NoError(t, enqueue(client, newCapture()))
+				return firstMessage(t, readBatch(t, body))
+			}
 
-	withoutHook := send(nil)
-	withHook := send(func(msg Message) Message { return msg })
+			withoutHook := send(nil)
+			withHook := send(func(msg Message) Message { return msg })
 
-	require.Equal(t, map[string]interface{}{
-		"process_person_profile": false,
-		"cookieless_mode":        nil,
-		"future_option":          nil,
-	}, withHook["options"])
-	require.Equal(t, withoutHook["options"], withHook["options"])
-	require.Equal(t, withoutHook["properties"], withHook["properties"])
+			require.Equal(t, map[string]interface{}{
+				"process_person_profile":  false,
+				"cookieless_mode":         nil,
+				"future_option":           nil,
+				"disable_skew_correction": []interface{}{},
+			}, withHook["options"])
+			properties := withHook["properties"].(map[string]interface{})
+			require.Nil(t, properties["typed_nil_strings"])
+			for _, key := range []string{"empty_strings", "empty_bools", "empty_ints", "empty_int64s", "empty_float64s"} {
+				require.Equal(t, []interface{}{}, properties[key], key)
+			}
+			require.Equal(t, map[string]interface{}{"tags": []interface{}{}}, properties["$set"])
+			require.Equal(t, withoutHook["options"], withHook["options"])
+			require.Equal(t, withoutHook["properties"], withHook["properties"])
+		})
+	}
 }
