@@ -19,6 +19,19 @@ make build
 make test
 ```
 
+## Nested modules
+
+Root `go test ./...` and Makefile checks do not enter the separate `otel/` and `posthogmcpsdk/` modules. For changes affecting either module, use its `go.mod` toolchain requirement and run the module-specific checks from the repository root:
+
+```bash
+(cd otel && go build ./... && go vet ./... && go test -race -count=1 -timeout=5m ./...)
+(cd posthogmcpsdk && go build ./... && go vet ./... && go test -race -count=1 -timeout=5m ./...)
+```
+
+Run the checks for the affected modules; core API changes may also affect their consumers. CI tests the supported toolchain and MCP SDK versions in [.github/workflows/unit-tests.yml](.github/workflows/unit-tests.yml).
+
+The MCP adapter's local `replace` tests the checkout, but consumers use the pinned released core. For adapter changes, also build and vet a temporary copy with that replacement removed, as CI does; do not modify the checkout's `go.mod` for this check. See the adapter's [compatibility and development guide](posthogmcpsdk/README.md#compatibility-and-development) for this constraint and release ordering.
+
 ## Testing local changes in another app
 
 You can run your Go app against a local build of `posthog-go` by updating your app's `go.mod`, for example:
