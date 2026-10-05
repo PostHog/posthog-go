@@ -1162,9 +1162,7 @@ func TestCaptureFlagCalled_FiresPerGroupContext(t *testing.T) {
 		count++
 		groups, _ := ev.Properties["$groups"].(Groups)
 		if v, ok := groups["company"]; ok {
-			if s, ok := v.(string); ok {
-				seen[s] = true
-			}
+			seen[v] = true
 		}
 	}
 	if count != 2 {

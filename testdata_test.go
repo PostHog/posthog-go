@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -145,7 +146,7 @@ type templateData struct {
 func cloneProperties(src Properties) Properties { return cloneStringInterfaceMap(src) }
 
 // cloneGroups creates a shallow copy of a Groups map.
-func cloneGroups(src Groups) Groups { return cloneStringInterfaceMap(src) }
+func cloneGroups(src Groups) Groups { return maps.Clone(src) }
 
 func cloneStringInterfaceMap[M ~map[string]interface{}](src M) M {
 	if src == nil {
