@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -173,24 +174,15 @@ func TestFlagGroup(t *testing.T) {
 	}
 }
 
-// Groups values are free-form, and the flags service accepts a JSON number as a
-// group key, bucketing it by its decimal form. Local evaluation of a group flag
-// must do the same instead of panicking on a non-string key.
-func TestFlagNumericGroupKey(t *testing.T) {
+// posthog-go v1 accepted numeric group keys and bucketed them by their decimal form. A caller
+// migrating a numeric ID with strconv.FormatInt must keep every group in its rollout bucket: these
+// are the IDs that v1.28.1 enabled for this flag when the same IDs were passed as int64.
+func TestFlagGroupKeyFromNumericID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveCaptureOK(w, r) {
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
-			w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
-			return
-		}
-		if r.URL.Path == "/flags/" {
-			// Capture's other flag needs person properties, so it falls back to the API.
-			w.Write([]byte(`{"flags":{}}`))
-			return
-		}
-		t.Errorf("unexpected request to %s", r.URL.Path)
+		w.Write([]byte(fixture("feature_flag/test-flag-group-properties.json")))
 	}))
 	defer server.Close()
 
@@ -202,48 +194,21 @@ func TestFlagNumericGroupKey(t *testing.T) {
 	defer client.Close()
 
 	groupProperties := map[string]Properties{"company": NewProperties().Set("name", "Project Name 1")}
-	enabled := 0
-	for id := 0; id < 20; id++ {
-		want, err := client.GetFeatureFlag(FeatureFlagPayload{
+	var enabled []int64
+	for id := int64(0); id < 20; id++ {
+		got, err := client.GetFeatureFlag(FeatureFlagPayload{
 			Key:                 "group-flag",
 			DistinctId:          "some-distinct-id",
-			Groups:              Groups{"company": fmt.Sprint(id)},
+			Groups:              Groups{"company": strconv.FormatInt(id, 10)},
 			GroupProperties:     groupProperties,
 			OnlyEvaluateLocally: true,
 		})
 		require.NoError(t, err)
-		if want == true {
-			enabled++
-		}
-
-		for _, key := range []interface{}{id, int64(id), float64(id)} {
-			var got interface{}
-			require.NotPanics(t, func() {
-				got, err = client.GetFeatureFlag(FeatureFlagPayload{
-					Key:                 "group-flag",
-					DistinctId:          "some-distinct-id",
-					Groups:              Groups{"company": key},
-					GroupProperties:     groupProperties,
-					OnlyEvaluateLocally: true,
-				})
-			}, "group key %T(%v)", key, key)
-			require.NoError(t, err)
-			require.Equal(t, want, got, "group key %T(%v)", key, key)
+		if got == true {
+			enabled = append(enabled, id)
 		}
 	}
-	// The flag rolls out to 35% of groups, so both outcomes are covered.
-	require.NotZero(t, enabled)
-	require.Less(t, enabled, 20)
-
-	// Capture evaluates every flag locally for SendFeatureFlags on the caller's goroutine.
-	require.NotPanics(t, func() {
-		require.NoError(t, client.Enqueue(Capture{
-			DistinctId:       "some-distinct-id",
-			Event:            "event",
-			Groups:           Groups{"company": 42},
-			SendFeatureFlags: SendFeatureFlags(true),
-		}))
-	})
+	require.Equal(t, []int64{1, 3, 5, 6, 8, 12, 16, 18, 19}, enabled)
 }
 
 func TestFlagGroupProperty(t *testing.T) {

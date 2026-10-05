@@ -773,11 +773,11 @@ type GroupIdentifyInApi struct {
 	Properties Properties `json:"properties"`
 }
 
-type Groups map[string]interface{}
+type Groups map[string]string
 
 func NewGroups() Groups
 
-func (p Groups) Set(name string, value interface{}) Groups
+func (p Groups) Set(name string, value string) Groups
 
 type Identify struct {
 	Type string

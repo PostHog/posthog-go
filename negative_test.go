@@ -483,20 +483,6 @@ func TestPrepareForSend_SerializationErrors(t *testing.T) {
 		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
 	})
 
-	t.Run("channel_in_groups", func(t *testing.T) {
-		ch := make(chan string)
-		capture := Capture{
-			Type:       "capture",
-			DistinctId: "user",
-			Event:      "event",
-			Groups:     Groups{"company": ch},
-		}
-		data, apiMsg, _, err := prepareForSend(capture)
-		require.Error(t, err, "Should fail to serialize channel in groups")
-		require.Nil(t, data)
-		require.NotNil(t, apiMsg, "APIMessage should be returned for callback")
-	})
-
 	t.Run("identify_with_unencodable", func(t *testing.T) {
 		ch := make(chan int)
 		identify := Identify{

@@ -54,6 +54,25 @@ unaffected.
 require an opt-in. A config that previously failed `Validate()` with
 `"zstd compression requires CaptureModeAnalyticsV1"` now succeeds.
 
+## Groups
+
+`Groups` is now `map[string]string`, and `Groups.Set` takes a string value. A
+group key identifies a group, so numbers, maps and other values no longer
+compile. This matches `GroupIdentify.Key`, which was already a string.
+
+Convert a numeric group ID to its decimal string:
+
+```go
+// before
+groups := posthog.NewGroups().Set("company", companyID) // companyID is an int64
+
+// after
+groups := posthog.NewGroups().Set("company", strconv.FormatInt(companyID, 10))
+```
+
+v1 bucketed a numeric group key for feature flags by its decimal form, so a key
+converted this way keeps every group in the same rollout bucket and variant.
+
 ## Behavior changes
 
 None of these produce a compile error, so read them even if your code builds
