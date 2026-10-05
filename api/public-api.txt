@@ -139,6 +139,7 @@ type Alias struct {
 	Alias string
 	DistinctId string
 	Timestamp time.Time
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
 }
@@ -205,6 +206,7 @@ type Capture struct {
 	Timestamp time.Time
 	Properties Properties
 	Groups Groups
+	Options Options
 	SendFeatureFlags SendFeatureFlagsValue
 	Flags *FeatureFlagEvaluations
 	IsServer bool
@@ -478,6 +480,7 @@ type Exception struct {
 	DebugImages []DebugImage
 	Timestamp time.Time
 	Properties Properties
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
 
@@ -750,6 +753,7 @@ type GroupIdentify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
 }
@@ -782,6 +786,7 @@ type Identify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
 }
@@ -829,6 +834,17 @@ type Message interface {
 
 }
 
+
+type Options map[string]interface{}
+
+
+
+
+
+
+func NewOptions() Options
+
+func (o Options) Set(name string, value interface{}) Options
 
 type Properties map[string]interface{}
 

@@ -12,10 +12,34 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/posthog/posthog-go/v2"
 )
 
 const VERSION = "1.0.0"
+
+// compressionCodecs maps the COMPRESSION env var to the codec that /init's
+// enable_compression turns on. The harness has one enable_compression flag but
+// a test per codec, so CI runs one adapter per codec and each one advertises
+// only its own encoding_<codec> capability.
+var compressionCodecs = map[string]posthog.CompressionMode{
+	"gzip":    posthog.CompressionGzip,
+	"deflate": posthog.CompressionDeflate,
+	"br":      posthog.CompressionBrotli,
+	"zstd":    posthog.CompressionZstd,
+}
+
+// compressionName is the COMPRESSION codec this adapter uses, set in main.
+var compressionName = "gzip"
+
+func compressionFromEnv() (string, bool) {
+	name := os.Getenv("COMPRESSION")
+	if name == "" {
+		return "gzip", true
+	}
+	_, ok := compressionCodecs[name]
+	return name, ok
+}
 
 // TrackedTransport wraps http.RoundTripper to track requests
 type TrackedTransport struct {
@@ -167,10 +191,12 @@ type CaptureRequest struct {
 	Properties map[string]interface{} `json:"properties,omitempty"`
 	Timestamp  *string                `json:"timestamp,omitempty"`
 	// Options carries capture event options (cookieless_mode,
-	// disable_skew_correction, process_person_profile, product_tour_id, ...).
-	// The adapter folds them back into magic event properties so the SDK lifts
-	// them onto the wire options object.
-	Options map[string]interface{} `json:"options,omitempty"`
+	// disable_skew_correction, process_person_profile, product_tour_id, ...),
+	// passed to the SDK unchanged.
+	Options posthog.Options `json:"options,omitempty"`
+	// UUID is the caller's event UUID, which must stay on the wire. Without
+	// one the adapter generates it, so /capture can return the UUID it sent.
+	UUID string `json:"uuid,omitempty"`
 }
 
 // FeatureFlagRequest represents /get_feature_flag endpoint request
@@ -216,10 +242,11 @@ func validateHarnessHost(raw string) (string, bool) {
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	// capture_v1 is the harness contract key that selects the
-	// capture_analytics_v1 suite; it is an external string, not an internal
-	// version marker.
-	capabilities := []string{"capture_v1", "encoding_gzip"}
+	// Harness contract keys: capture_v1 and capture_ai_v1 select the v1 suites,
+	// event_options selects the option pass-through tests, and encoding_<codec>
+	// selects the compression test for this adapter's codec. They are external
+	// strings, not internal version markers.
+	capabilities := []string{"capture_v1", "capture_ai_v1", "event_options", "encoding_" + compressionName}
 	response := HealthResponse{
 		SDKName:        "posthog-go",
 		SDKVersion:     posthog.Version,
@@ -280,12 +307,9 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	if req.MaxRetries != nil {
 		config.MaxRetries = req.MaxRetries
 	}
-	if req.EnableCompression != nil {
-		if *req.EnableCompression {
-			config.Compression = posthog.CompressionGzip
-		} else {
-			config.Compression = posthog.CompressionNone
-		}
+	if req.EnableCompression != nil && *req.EnableCompression {
+		config.Compression = compressionCodecs[compressionName]
+		config.CaptureAICompression = compressionCodecs[compressionName]
 	}
 	if req.DisableGeoIP != nil {
 		config.DisableGeoIP = req.DisableGeoIP
@@ -311,6 +335,15 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func captureHandler(w http.ResponseWriter, r *http.Request) {
+	handleCapture(w, r, posthog.Client.Enqueue)
+}
+
+// captureAIHandler sends through EnqueueAI, the SDK's AI capture lane.
+func captureAIHandler(w http.ResponseWriter, r *http.Request) {
+	handleCapture(w, r, posthog.Client.EnqueueAI)
+}
+
+func handleCapture(w http.ResponseWriter, r *http.Request, enqueue func(posthog.Client, posthog.Message) error) {
 	var req CaptureRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -318,66 +351,67 @@ func captureHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state.mu.Lock()
-	if state.client == nil {
-		state.mu.Unlock()
+	client := state.client
+	state.mu.Unlock()
+	if client == nil {
 		http.Error(w, "SDK not initialized", http.StatusBadRequest)
 		return
 	}
-	state.mu.Unlock()
 
-	// Create capture event
-	capture := posthog.Capture{
-		DistinctId: req.DistinctID,
-		Event:      req.Event,
-		Properties: req.Properties,
-	}
-
-	// Fold capture options back into magic event properties; the SDK lifts
-	// them onto the wire options object. Unknown keys get a "$" prefix.
-	if len(req.Options) > 0 {
-		if capture.Properties == nil {
-			capture.Properties = posthog.Properties{}
-		}
-		for k, v := range req.Options {
-			switch k {
-			case "cookieless_mode":
-				capture.Properties["$cookieless_mode"] = v
-			case "disable_skew_correction":
-				capture.Properties["$ignore_sent_at"] = v
-			case "process_person_profile":
-				capture.Properties["$process_person_profile"] = v
-			case "product_tour_id":
-				capture.Properties["$product_tour_id"] = v
-			default:
-				capture.Properties["$"+k] = v
-			}
-		}
-	}
-
-	if req.Timestamp != nil {
-		// Parse timestamp if provided
-		t, err := time.Parse(time.RFC3339, *req.Timestamp)
-		if err == nil {
-			capture.Timestamp = t
-		}
-	}
-
-	// Enqueue event
-	if err := state.client.Enqueue(capture); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
+	// Count the event before enqueueing it: the transport can deliver it and
+	// decrement pendingEvents before Enqueue returns.
 	state.mu.Lock()
 	state.totalEventsCaptured++
 	state.pendingEvents++
 	state.mu.Unlock()
 
-	// TODO: Get actual UUID from SDK
+	capture := buildCapture(req)
+	if err := enqueue(client, capture); err != nil {
+		state.mu.Lock()
+		state.totalEventsCaptured--
+		state.pendingEvents--
+		state.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	jsonResponse(w, map[string]interface{}{
 		"success": true,
-		"uuid":    "generated-uuid",
+		"uuid":    capture.Uuid,
 	})
+}
+
+// newEventUUID returns a v7 UUID, or a v4 one if the clock-based path fails,
+// like the SDK does.
+func newEventUUID() string {
+	if v7, err := uuid.NewV7(); err == nil {
+		return v7.String()
+	}
+	return uuid.New().String()
+}
+
+// buildCapture maps a harness capture request onto the SDK message. Options
+// pass through unchanged, and the UUID is the caller's valid one or a new one,
+// so the response can name the event that was sent.
+func buildCapture(req CaptureRequest) posthog.Capture {
+	capture := posthog.Capture{
+		Uuid:       req.UUID,
+		DistinctId: req.DistinctID,
+		Event:      req.Event,
+		Properties: req.Properties,
+		Options:    req.Options,
+	}
+	// The SDK replaces an empty or invalid UUID, so replace it here first and
+	// return the UUID that is actually sent.
+	if capture.Uuid == "" || uuid.Validate(capture.Uuid) != nil {
+		capture.Uuid = newEventUUID()
+	}
+	if req.Timestamp != nil {
+		if t, err := time.Parse(time.RFC3339, *req.Timestamp); err == nil {
+			capture.Timestamp = t
+		}
+	}
+	return capture
 }
 
 func flushHandler(w http.ResponseWriter, r *http.Request) {
@@ -630,15 +664,21 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+	name, ok := compressionFromEnv()
+	if !ok {
+		log.Fatalf("unsupported COMPRESSION %q: want gzip, deflate, br or zstd", name)
+	}
+	compressionName = name
 
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/init", initHandler)
 	http.HandleFunc("/capture", captureHandler)
+	http.HandleFunc("/capture_ai", captureAIHandler)
 	http.HandleFunc("/flush", flushHandler)
 	http.HandleFunc("/state", stateHandler)
 	http.HandleFunc("/reset", resetHandler)
 	http.HandleFunc("/get_feature_flag", featureFlagHandler)
 
-	log.Printf("Starting PostHog Go SDK adapter on port %s", port)
+	log.Printf("Starting PostHog Go SDK adapter on port %s (compression=%s)", port, compressionName)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

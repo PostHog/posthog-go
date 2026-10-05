@@ -2,7 +2,7 @@ package posthog
 
 import (
 	"fmt"
-	"strings"
+	"reflect"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -12,9 +12,9 @@ import (
 // wire-protocol version, not an internal marker.
 const capturePath = "/i/v1/analytics/events"
 
-// Magic event-property keys lifted out of properties into the wire shape.
-// propertyProcessPersonProfile and propertySessionID are defined in
-// request_context.go; reuse them here.
+// Legacy event-property keys moved out of properties into the wire shape.
+// propertyProcessPersonProfile, propertySessionID and propertyWindowID are
+// defined in request_context.go; reuse them here.
 const (
 	propertyCookielessMode = "$cookieless_mode"
 	propertyIgnoreSentAt   = "$ignore_sent_at"
@@ -30,107 +30,16 @@ const (
 	resultRetry   = "retry"
 )
 
-// propertyExtraction defines a magic property that is lifted out of the
-// properties map during serialization. If topLevel is true, the value is
-// placed into a top-level event field (session_id, window_id); otherwise it
-// goes into the options object under wireKey.
-//
-// For options entries (topLevel=false), coerce validates and normalizes the
-// caller's Go value into the type the backend expects (bool or string).
-// The magic property is always removed from properties — these sentinel keys
-// must never reach backend properties. If coercion fails, the option key
-// is omitted (backend applies its default) and a debug log is emitted.
-type propertyExtraction struct {
-	propKey  string
-	wireKey  string
-	topLevel bool
-	coerce   func(interface{}) (interface{}, bool) // nil = accept as-is (top-level entries)
-}
-
-// numericToFloat converts any built-in Go numeric type (or json.Number) to
-// float64, mirroring Rust's serde_json Value::Number::as_f64(). Returns
-// (0, false) for non-numeric types.
-func numericToFloat(v interface{}) (float64, bool) {
-	switch n := v.(type) {
-	case int:
-		return float64(n), true
-	case int8:
-		return float64(n), true
-	case int16:
-		return float64(n), true
-	case int32:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case uint:
-		return float64(n), true
-	case uint8:
-		return float64(n), true
-	case uint16:
-		return float64(n), true
-	case uint32:
-		return float64(n), true
-	case uint64:
-		return float64(n), true
-	case float32:
-		return float64(n), true
-	case float64:
-		return n, true
-	case json.Number:
-		f, err := n.Float64()
-		return f, err == nil
-	}
-	return 0, false
-}
-
-// coerceBool converts a value to bool using the same truthiness rules the
-// backend would apply: real bool passes through; common string forms are
-// accepted ("true"/"1" → true, "false"/"0" → false); any numeric type
-// (int*, uint*, float*, json.Number) coerces via nonzero == true, matching
-// posthog-rs's Value::Number arm. Returns (zero, false) when the value is
-// not interpretable as a boolean.
-func coerceBool(v interface{}) (interface{}, bool) {
-	switch t := v.(type) {
-	case bool:
-		return t, true
-	case string:
-		switch strings.ToLower(strings.TrimSpace(t)) {
-		case "true", "1":
-			return true, true
-		case "false", "0":
-			return false, true
-		}
-		return nil, false
-	default:
-		if f, ok := numericToFloat(v); ok {
-			return f != 0, true
-		}
-		return nil, false
-	}
-}
-
-// coerceString accepts only string values. The backend's product_tour_id is
-// Option<String>; non-string types are not interpretable.
-func coerceString(v interface{}) (interface{}, bool) {
-	s, ok := v.(string)
-	if !ok {
-		return nil, false
-	}
-	return s, true
-}
-
-// propertyExtractionTable maps magic event properties to their wire
-// destinations. Order mirrors posthog-rs. A key is lifted only when present in
-// properties (i.e. the caller overrode a backend default). Options entries
-// carry a coerce function matching the backend's expected type; top-level
-// entries leave coerce nil.
-var propertyExtractionTable = []propertyExtraction{
-	{propertyCookielessMode, "cookieless_mode", false, coerceBool},
-	{propertyIgnoreSentAt, "disable_skew_correction", false, coerceBool},
-	{propertyProductTourId, "product_tour_id", false, coerceString},
-	{propertyProcessPersonProfile, "process_person_profile", false, coerceBool},
-	{propertySessionID, "session_id", true, nil},
-	{propertyWindowID, "window_id", true, nil},
+// legacyOptionProperties pairs each legacy property with the option it fills.
+// Order mirrors posthog-rs.
+var legacyOptionProperties = []struct {
+	propKey   string
+	optionKey string
+}{
+	{propertyCookielessMode, "cookieless_mode"},
+	{propertyIgnoreSentAt, "disable_skew_correction"},
+	{propertyProductTourId, "product_tour_id"},
+	{propertyProcessPersonProfile, "process_person_profile"},
 }
 
 // eventBatch is the request envelope. It carries no
@@ -172,7 +81,7 @@ type captureErrorResponse struct {
 	ErrorUri         string `json:"error_uri"`
 }
 
-// apiEvent is the intermediate, pre-options-extraction view of a message. Each
+// apiEvent is the intermediate, pre-options-merge view of a message. Each
 // Message produces one via apifyEvent; buildEvent turns it into the wire shape.
 type apiEvent struct {
 	event      string
@@ -180,54 +89,21 @@ type apiEvent struct {
 	distinctId string
 	timestamp  time.Time
 	properties Properties
+	options    Options
 }
 
-// buildEvent extracts magic properties into options or top-level fields and
-// returns the wire payload. It mutates e.properties by deleting the lifted keys;
-// callers must ensure the properties map is not shared.
-//
-// Options entries are always removed from properties (these sentinel keys must
-// never appear in backend properties) and type-coerced to match the
-// backend's strict serde schema. If coercion fails the option key is omitted
-// so the backend applies its default. logger may be nil (tests).
-func buildEvent(e apiEvent, logger Logger) eventPayload {
+// buildEvent moves legacy properties into options, lifts $session_id and
+// $window_id into top-level fields, and returns the wire payload. It mutates
+// e.properties by deleting the moved keys; callers must ensure the properties
+// map is not shared. e.options is copied, never mutated.
+func buildEvent(e apiEvent) eventPayload {
 	props := e.properties
 	if props == nil {
 		props = Properties{}
 	}
-	options := map[string]interface{}{}
-	var sessionId, windowId string
-	for _, m := range propertyExtractionTable {
-		v, ok := props[m.propKey]
-		if !ok {
-			continue
-		}
-		if m.topLevel {
-			delete(props, m.propKey)
-			if s, ok := v.(string); ok {
-				switch m.wireKey {
-				case "session_id":
-					sessionId = s
-				case "window_id":
-					windowId = s
-				}
-			}
-		} else {
-			delete(props, m.propKey)
-			if m.coerce == nil {
-				options[m.wireKey] = v
-				continue
-			}
-			coerced, ok := m.coerce(v)
-			if !ok {
-				if logger != nil {
-					logger.Debugf("options: dropping %s (uncoercible %T value), backend will apply default", m.propKey, v)
-				}
-				continue
-			}
-			options[m.wireKey] = coerced
-		}
-	}
+	options := mergeOptions(e.options, props)
+	sessionId := liftStringProperty(props, propertySessionID)
+	windowId := liftStringProperty(props, propertyWindowID)
 	return eventPayload{
 		Event:      e.event,
 		Uuid:       e.uuid,
@@ -238,6 +114,53 @@ func buildEvent(e apiEvent, logger Logger) eventPayload {
 		Options:    options,
 		Properties: props,
 	}
+}
+
+// mergeOptions returns the caller's options with each legacy property moved
+// in. Values are sent unchanged because PostHog validates them. A legacy
+// property is always removed from props and fills its option only when that
+// option is missing or nil. An option set by neither stays absent.
+func mergeOptions(callerOptions Options, props Properties) map[string]interface{} {
+	options := make(map[string]interface{}, len(callerOptions)+len(legacyOptionProperties))
+	for key, value := range callerOptions {
+		options[key] = value
+	}
+	for _, pair := range legacyOptionProperties {
+		legacy, ok := props[pair.propKey]
+		if !ok {
+			continue
+		}
+		delete(props, pair.propKey)
+		if current, set := options[pair.optionKey]; !set || isNilValue(current) {
+			options[pair.optionKey] = legacy
+		}
+	}
+	return options
+}
+
+// isNilValue reports whether v is nil or a nil pointer, map, slice or
+// interface, all of which serialize as JSON null.
+func isNilValue(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
+}
+
+// liftStringProperty removes key from props and returns its value when it is a
+// string, or "" otherwise.
+func liftStringProperty(props Properties, key string) string {
+	v, ok := props[key]
+	if !ok {
+		return ""
+	}
+	delete(props, key)
+	s, _ := v.(string)
+	return s
 }
 
 // baseProperties returns the common properties shared by all event types.
@@ -253,11 +176,10 @@ func baseProperties(isServer bool, disableGeoIP bool) Properties {
 }
 
 // prepareForSend builds the callback APIMessage, serializes the wire event,
-// and returns the event uuid for per-event result correlation. logger may be
-// nil (tests).
-func prepareForSend(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
+// and returns the event uuid for per-event result correlation.
+func prepareForSend(msg Message) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
-	ev := buildEvent(msg.apifyEvent(), logger)
+	ev := buildEvent(msg.apifyEvent())
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return nil, apiMsg, ev.Uuid, err
@@ -283,6 +205,7 @@ func (msg Capture) apifyEvent() apiEvent {
 		distinctId: msg.DistinctId,
 		timestamp:  msg.Timestamp,
 		properties: myProperties,
+		options:    msg.Options,
 	}
 }
 
@@ -302,6 +225,7 @@ func (msg Identify) apifyEvent() apiEvent {
 		distinctId: msg.DistinctId,
 		timestamp:  msg.Timestamp,
 		properties: myProperties,
+		options:    msg.Options,
 	}
 }
 
@@ -324,6 +248,7 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 		distinctId: fmt.Sprintf("$%s_%s", msg.Type, msg.Key),
 		timestamp:  msg.Timestamp,
 		properties: myProperties,
+		options:    msg.Options,
 	}
 }
 
@@ -342,6 +267,7 @@ func (msg Alias) apifyEvent() apiEvent {
 		distinctId: msg.DistinctId,
 		timestamp:  msg.Timestamp,
 		properties: myProperties,
+		options:    msg.Options,
 	}
 }
 
@@ -367,5 +293,6 @@ func (msg Exception) apifyEvent() apiEvent {
 		distinctId: msg.DistinctId,
 		timestamp:  msg.Timestamp,
 		properties: myProperties,
+		options:    msg.Options,
 	}
 }

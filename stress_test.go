@@ -429,7 +429,7 @@ func TestStress_PrepareForSendUnderLoad(t *testing.T) {
 					for i := 0; i < 100; i++ {
 						capture := pool.Get(i)
 						capture.Type = "capture"
-						data, apiMsg, _, err := prepareForSend(capture, nil)
+						data, apiMsg, _, err := prepareForSend(capture)
 						if err != nil {
 							errorCount.Add(1)
 						}

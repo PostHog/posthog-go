@@ -24,6 +24,8 @@ type Alias struct {
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
+	// Options are per-event capture options, sent unchanged. See Options.
+	Options Options
 	// DisableGeoIP controls whether this alias event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool

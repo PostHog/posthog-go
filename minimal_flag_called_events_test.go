@@ -356,7 +356,7 @@ func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 		minimalFlagCalledEvent: true,
 	}
 
-	ev := buildEvent(msg.apifyEvent(), nil)
+	ev := buildEvent(msg.apifyEvent())
 
 	got := make([]string, 0, len(ev.Properties))
 	for k := range ev.Properties {
@@ -389,7 +389,7 @@ func TestMinimalFlagCalledEvent_LiftsSessionId(t *testing.T) {
 		minimalFlagCalledEvent: true,
 	}
 
-	ev := buildEvent(msg.apifyEvent(), nil)
+	ev := buildEvent(msg.apifyEvent())
 
 	if ev.SessionId != "sess-1" {
 		t.Errorf("expected $session_id to be lifted to the top-level session_id field, got %q", ev.SessionId)

@@ -29,6 +29,8 @@ type Exception struct {
 	Timestamp time.Time
 	// Properties are custom event properties flattened into the exception event.
 	Properties Properties
+	// Options are per-event capture options, sent unchanged. See Options.
+	Options Options
 	// DisableGeoIP controls whether this exception event disables GeoIP lookup.
 	// Enqueue overwrites it from Config.GetDisableGeoIP.
 	DisableGeoIP bool

@@ -626,3 +626,49 @@ func (w *allOptionalResponseWriter) ReadFrom(reader io.Reader) (int64, error) {
 	w.readFromCalled = true
 	return io.Copy(w.minimalResponseWriter, reader)
 }
+
+func TestCallerOptionWinsOverSDKPersonProfileDefaults(t *testing.T) {
+	tests := []struct {
+		name     string
+		defaults Properties
+		ctx      func() context.Context
+		capture  Capture
+		want     interface{}
+	}{
+		{
+			name:     "over DefaultEventProperties",
+			defaults: NewProperties().Set(propertyProcessPersonProfile, true),
+			ctx:      context.Background,
+			capture:  Capture{DistinctId: "user-1", Event: "e", Options: NewOptions().Set("process_person_profile", false)},
+			want:     false,
+		},
+		{
+			name: "over the personless default",
+			ctx: func() context.Context {
+				return WithFreshRequestContext(context.Background(), RequestContext{})
+			},
+			capture: Capture{Event: "e", Options: NewOptions().Set("process_person_profile", true)},
+			want:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: tt.defaults,
+			})
+			defer client.Close()
+
+			require.NoError(t, EnqueueWithContext(tt.ctx(), client, tt.capture))
+
+			event := readSingleBatchEvent(t, body)
+			require.Equal(t, tt.want, requireOptions(t, event)["process_person_profile"])
+			require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
+		})
+	}
+}

@@ -13,7 +13,7 @@ import (
 // generic map so tests can assert the on-the-wire shape.
 func marshalEvent(t *testing.T, msg Message) map[string]interface{} {
 	t.Helper()
-	data, _, uuid, err := prepareForSend(msg, nil)
+	data, _, uuid, err := prepareForSend(msg)
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}
@@ -165,180 +165,194 @@ func TestSystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
 	}
 }
 
-func TestOptionsExtractedOnlyWhenPresent(t *testing.T) {
-	// No magic props -> empty options object.
-	ev := marshalEvent(t, Capture{Uuid: "u", Event: "e", DistinctId: "d"})
-	if opts := wireOptions(t, ev); len(opts) != 0 {
-		t.Errorf("expected empty options, got %v", opts)
+// wireOptionsRaw returns the wire options of msg as raw JSON, so tests can
+// prove a value is sent exactly as the caller set it.
+func wireOptionsRaw(t *testing.T, msg Message) map[string]json.RawMessage {
+	t.Helper()
+	data, _, _, err := prepareForSend(msg)
+	if err != nil {
+		t.Fatalf("prepareForSend: %v", err)
 	}
-
-	// Overridden magic props -> lifted into options with renamed keys and
-	// removed from properties.
-	ev = marshalEvent(t, Capture{
-		Uuid: "u", Event: "e", DistinctId: "d",
-		Properties: Properties{
-			propertyCookielessMode:       true,
-			propertyIgnoreSentAt:         true,
-			propertyProductTourId:        "tour-7",
-			propertyProcessPersonProfile: false,
-			"plan":                       "pro",
-		},
-	})
-	opts := wireOptions(t, ev)
-	if opts["cookieless_mode"] != true {
-		t.Errorf("cookieless_mode = %v", opts["cookieless_mode"])
+	var ev struct {
+		Options map[string]json.RawMessage `json:"options"`
 	}
-	if opts["disable_skew_correction"] != true {
-		t.Errorf("disable_skew_correction (from $ignore_sent_at) = %v", opts["disable_skew_correction"])
+	if err := json.Unmarshal(data, &ev); err != nil {
+		t.Fatalf("unmarshal wire event: %v", err)
 	}
-	if opts["product_tour_id"] != "tour-7" {
-		t.Errorf("product_tour_id = %v", opts["product_tour_id"])
-	}
-	if opts["process_person_profile"] != false {
-		t.Errorf("process_person_profile = %v", opts["process_person_profile"])
-	}
-	props := wireProps(t, ev)
-	for _, k := range []string{propertyCookielessMode, propertyIgnoreSentAt, propertyProductTourId, propertyProcessPersonProfile} {
-		if _, ok := props[k]; ok {
-			t.Errorf("%s must be removed from properties after lifting", k)
-		}
-	}
-	// Unknown $-prefixed and plain props stay in properties.
-	if props["plan"] != "pro" {
-		t.Errorf("custom prop should remain in properties, got %v", props["plan"])
-	}
+	return ev.Options
 }
 
-func TestOptionsBoolCoercion(t *testing.T) {
-	boolOptions := []struct {
-		propKey string
-		wireKey string
-	}{
-		{propertyCookielessMode, "cookieless_mode"},
-		{propertyIgnoreSentAt, "disable_skew_correction"},
-		{propertyProcessPersonProfile, "process_person_profile"},
+func mustMarshalJSON(t *testing.T, v interface{}) string {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal %v: %v", v, err)
 	}
-	coercionCases := []struct {
-		name     string
-		input    interface{}
-		wantBool bool
-		wantOk   bool
-	}{
-		{"native_true", true, true, true},
-		{"native_false", false, false, true},
-		{"string_true", "true", true, true},
-		{"string_TRUE", "TRUE", true, true},
-		{"string_1", "1", true, true},
-		{"string_false", "false", false, true},
-		{"string_FALSE", "FALSE", false, true},
-		{"string_0", "0", false, true},
-		{"int_1", int(1), true, true},
-		{"int_0", int(0), false, true},
-		{"int_neg", int(-1), true, true},
-		{"int8_1", int8(1), true, true},
-		{"int8_0", int8(0), false, true},
-		{"int16_1", int16(1), true, true},
-		{"int32_1", int32(1), true, true},
-		{"int64_1", int64(1), true, true},
-		{"int64_0", int64(0), false, true},
-		{"int64_neg", int64(-5), true, true},
-		{"uint_1", uint(1), true, true},
-		{"uint_0", uint(0), false, true},
-		{"uint8_1", uint8(1), true, true},
-		{"uint16_1", uint16(1), true, true},
-		{"uint32_1", uint32(1), true, true},
-		{"uint64_1", uint64(1), true, true},
-		{"uint64_0", uint64(0), false, true},
-		{"float32_1", float32(1.0), true, true},
-		{"float32_0", float32(0.0), false, true},
-		{"float_1", float64(1), true, true},
-		{"float_0", float64(0), false, true},
-		{"float_neg", float64(-0.5), true, true},
-		{"json_number_1", json.Number("1"), true, true},
-		{"json_number_2", json.Number("2"), true, true},
-		{"json_number_0", json.Number("0"), false, true},
-		{"json_number_neg", json.Number("-3"), true, true},
-		{"string_yes_omitted", "yes", false, false},
-		{"map_omitted", map[string]string{"k": "v"}, false, false},
-		{"nil_omitted", nil, false, false},
-	}
+	return string(data)
+}
 
-	for _, opt := range boolOptions {
-		for _, tc := range coercionCases {
-			t.Run(opt.wireKey+"/"+tc.name, func(t *testing.T) {
-				ev := marshalEvent(t, Capture{
+func TestOptionsSentUnchanged(t *testing.T) {
+	// PostHog validates option values, so the SDK must not convert or drop
+	// any of them: not the forms PostHog reads leniently, not the ones it
+	// rejects, and not unknown keys.
+	values := []struct {
+		name  string
+		value interface{}
+	}{
+		{"bool", true},
+		{"string_no", "no"},
+		{"string_YES", "YES"},
+		{"string_off", "off"},
+		{"unreadable_string", "maybe"},
+		{"empty_string", ""},
+		{"int", 5},
+		{"int64", int64(-3)},
+		{"float", 0.5},
+		{"json_number", json.Number("0.0")},
+		{"array", []interface{}{1, "two"}},
+		{"object", map[string]interface{}{"nested": []interface{}{1, "two"}}},
+	}
+	keys := []string{"process_person_profile", "cookieless_mode", "disable_skew_correction", "product_tour_id", "future_option"}
+	for _, key := range keys {
+		for _, tc := range values {
+			t.Run(key+"/"+tc.name, func(t *testing.T) {
+				opts := wireOptionsRaw(t, Capture{
 					Uuid: "u", Event: "e", DistinctId: "d",
-					Properties: Properties{opt.propKey: tc.input, "keep": "yes"},
+					Options: NewOptions().Set(key, tc.value),
 				})
-				opts := wireOptions(t, ev)
-				props := wireProps(t, ev)
-
-				if _, inProps := props[opt.propKey]; inProps {
-					t.Errorf("%s must be stripped from properties regardless of coercion", opt.propKey)
+				if len(opts) != 1 {
+					t.Fatalf("options = %v, want only %s", opts, key)
 				}
-				if props["keep"] != "yes" {
-					t.Errorf("unrelated prop should remain in properties")
+				if got, want := string(opts[key]), mustMarshalJSON(t, tc.value); got != want {
+					t.Errorf("%s = %s, want %s unchanged", key, got, want)
 				}
-
-				val, present := opts[opt.wireKey]
-				if tc.wantOk {
-					if !present {
-						t.Fatalf("%s should be present in options, got absent", opt.wireKey)
-					}
-					if val != tc.wantBool {
-						t.Errorf("%s = %v (%T), want %v", opt.wireKey, val, val, tc.wantBool)
-					}
-				} else {
-					if present {
-						t.Errorf("%s should be omitted from options on failed coercion, got %v", opt.wireKey, val)
-					}
+			})
+		}
+	}
+	for _, pair := range legacyOptionProperties {
+		for _, tc := range values {
+			t.Run(pair.propKey+"/"+tc.name, func(t *testing.T) {
+				opts := wireOptionsRaw(t, Capture{
+					Uuid: "u", Event: "e", DistinctId: "d",
+					Properties: Properties{pair.propKey: tc.value},
+				})
+				if got, want := string(opts[pair.optionKey]), mustMarshalJSON(t, tc.value); got != want {
+					t.Errorf("%s from %s = %s, want %s unchanged", pair.optionKey, pair.propKey, got, want)
 				}
 			})
 		}
 	}
 }
 
-func TestOptionsProductTourIdCoercion(t *testing.T) {
+func TestLegacyPropertyFillsOnlyUnsetOption(t *testing.T) {
+	var nilBool *bool
+	optionFalse := false
+	absent := struct{}{}
 	cases := []struct {
 		name   string
-		input  interface{}
-		want   string
-		wantOk bool
+		option interface{} // absent: option not set
+		legacy interface{} // absent: legacy property not set
+		want   string      // "": option key absent from the wire
 	}{
-		{"string", "tour-42", "tour-42", true},
-		{"int_omitted", 42, "", false},
-		{"bool_omitted", true, "", false},
+		{"neither_set_leaves_key_out", absent, absent, ""},
+		{"option_only", false, absent, "false"},
+		{"legacy_only", absent, "maybe", `"maybe"`},
+		{"option_wins_over_legacy", false, true, "false"},
+		{"pointer_option_wins_over_legacy", &optionFalse, true, "false"},
+		{"nil_option_falls_back_to_legacy", nil, "tour-1", `"tour-1"`},
+		{"typed_nil_option_falls_back_to_legacy", nilBool, "tour-1", `"tour-1"`},
+		{"nil_option_without_legacy_is_sent_as_null", nil, absent, "null"},
+		{"nil_legacy_fills_unset_option_as_null", absent, nil, "null"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ev := marshalEvent(t, Capture{
-				Uuid: "u", Event: "e", DistinctId: "d",
-				Properties: Properties{propertyProductTourId: tc.input, "keep": "yes"},
+	for _, pair := range legacyOptionProperties {
+		for _, tc := range cases {
+			t.Run(pair.optionKey+"/"+tc.name, func(t *testing.T) {
+				msg := Capture{Uuid: "u", Event: "e", DistinctId: "d", Properties: Properties{"keep": "yes"}}
+				if tc.option != absent {
+					msg.Options = Options{pair.optionKey: tc.option}
+				}
+				if tc.legacy != absent {
+					msg.Properties[pair.propKey] = tc.legacy
+				}
+				ev := marshalEvent(t, msg)
+				props := wireProps(t, ev)
+				if _, ok := props[pair.propKey]; ok {
+					t.Errorf("%s must always be removed from properties", pair.propKey)
+				}
+				if props["keep"] != "yes" {
+					t.Errorf("unrelated property must stay in properties, got %v", props["keep"])
+				}
+
+				opts := wireOptionsRaw(t, msg)
+				got, present := opts[pair.optionKey]
+				if tc.want == "" {
+					if present {
+						t.Errorf("%s = %s, want the key left out", pair.optionKey, got)
+					}
+					return
+				}
+				if string(got) != tc.want {
+					t.Errorf("%s = %s, want %s", pair.optionKey, got, tc.want)
+				}
 			})
-			opts := wireOptions(t, ev)
-			props := wireProps(t, ev)
+		}
+	}
+}
 
-			if _, inProps := props[propertyProductTourId]; inProps {
-				t.Errorf("%s must be stripped from properties", propertyProductTourId)
-			}
-			if props["keep"] != "yes" {
-				t.Errorf("unrelated prop should remain in properties")
-			}
+func TestOptionsMergeDoesNotMutateCallerOptions(t *testing.T) {
+	options := Options{"process_person_profile": nil}
+	msg := Capture{
+		Uuid: "u", Event: "e", DistinctId: "d",
+		Options:    options,
+		Properties: Properties{propertyProcessPersonProfile: false, propertyCookielessMode: true},
+	}
+	opts := wireOptions(t, marshalEvent(t, msg))
+	if opts["process_person_profile"] != false || opts["cookieless_mode"] != true {
+		t.Fatalf("legacy properties must fill the wire options, got %v", opts)
+	}
+	if len(options) != 1 || options["process_person_profile"] != nil {
+		t.Errorf("caller Options must not change, got %v", options)
+	}
+}
 
-			val, present := opts["product_tour_id"]
-			if tc.wantOk {
-				if !present {
-					t.Fatal("product_tour_id should be present in options")
-				}
-				if val != tc.want {
-					t.Errorf("product_tour_id = %v, want %v", val, tc.want)
-				}
-			} else {
-				if present {
-					t.Errorf("product_tour_id should be omitted on failed coercion, got %v", val)
-				}
+func TestOptionsOnEveryMessageType(t *testing.T) {
+	options := func() Options { return NewOptions().Set("disable_skew_correction", "yes").Set("future_option", 1) }
+	messages := []Message{
+		Capture{Uuid: "u", Event: "e", DistinctId: "d", Options: options()},
+		Identify{Uuid: "u", DistinctId: "d", Options: options()},
+		Alias{Uuid: "u", DistinctId: "d", Alias: "a", Options: options()},
+		GroupIdentify{Uuid: "u", Type: "company", Key: "k", Options: options()},
+		Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}, Options: options()},
+	}
+	for _, msg := range messages {
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			opts := wireOptionsRaw(t, msg)
+			if len(opts) != 2 || string(opts["disable_skew_correction"]) != `"yes"` || string(opts["future_option"]) != "1" {
+				t.Errorf("options = %v, want both caller options unchanged", opts)
 			}
 		})
+	}
+}
+
+func TestExceptionLegacyPropertiesMoveIntoOptions(t *testing.T) {
+	ev := marshalEvent(t, Exception{
+		Uuid: "u", DistinctId: "d",
+		ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}},
+		Options:       Options{"cookieless_mode": "off"},
+		Properties:    Properties{propertyCookielessMode: true, propertyProcessPersonProfile: false},
+	})
+	opts := wireOptions(t, ev)
+	if opts["cookieless_mode"] != "off" {
+		t.Errorf("cookieless_mode = %v, want the option to win", opts["cookieless_mode"])
+	}
+	if opts["process_person_profile"] != false {
+		t.Errorf("process_person_profile = %v, want the legacy value", opts["process_person_profile"])
+	}
+	props := wireProps(t, ev)
+	for _, key := range []string{propertyCookielessMode, propertyProcessPersonProfile} {
+		if _, ok := props[key]; ok {
+			t.Errorf("%s must be removed from exception properties", key)
+		}
 	}
 }
 
@@ -434,7 +448,7 @@ func TestAliasIdentityPlacement(t *testing.T) {
 }
 
 func TestOptionsRendersEmptyObjectNotNull(t *testing.T) {
-	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
+	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"})
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}
@@ -444,7 +458,7 @@ func TestOptionsRendersEmptyObjectNotNull(t *testing.T) {
 }
 
 func TestEnvelopeShape(t *testing.T) {
-	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
+	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"})
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}
