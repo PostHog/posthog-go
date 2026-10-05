@@ -463,7 +463,7 @@ func TestRequestContextMiddleware_PanicWriterDoesNotAdvertiseUnsupportedOptional
 	var report optionalInterfaceReport
 	handler := NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		report = captureOptionalInterfaceReport(w)
-	}), WithCapturePanics(&noopClient{}))
+	}), WithCapturePanics(&fakeEnqueueClient{}))
 
 	handler.ServeHTTP(newMinimalResponseWriter(), httptest.NewRequest(http.MethodGet, "https://example.com", nil))
 
@@ -483,7 +483,7 @@ func TestRequestContextMiddleware_PanicWriterPreservesSupportedOptionalInterface
 		require.NoError(t, w.(http.Pusher).Push("/asset.css", nil))
 		_, err := w.(io.ReaderFrom).ReadFrom(strings.NewReader("body"))
 		require.NoError(t, err)
-	}), WithCapturePanics(&noopClient{}))
+	}), WithCapturePanics(&fakeEnqueueClient{}))
 
 	handler.ServeHTTP(writer, httptest.NewRequest(http.MethodGet, "https://example.com", nil))
 

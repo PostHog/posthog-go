@@ -1,6 +1,8 @@
 package posthogmcpsdk_test
 
 import (
+	"log"
+
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/posthog/posthog-go/posthogmcpsdk/v2"
 	posthog "github.com/posthog/posthog-go/v2"
@@ -8,7 +10,10 @@ import (
 )
 
 func ExampleInstrument() {
-	client := posthog.New("phc_project_api_key")
+	client, err := posthog.New("phc_project_api_key")
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer client.Close()
 
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "weather-server", Version: "1.0.0"}, nil)
@@ -16,7 +21,10 @@ func ExampleInstrument() {
 }
 
 func ExampleNewMiddleware() {
-	client := posthog.New("phc_project_api_key")
+	client, err := posthog.New("phc_project_api_key")
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer client.Close()
 
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "weather-server", Version: "1.0.0"}, nil)

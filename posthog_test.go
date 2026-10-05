@@ -71,137 +71,45 @@ func (l testLogger) writeLog(fn func(string, ...interface{}), format string, arg
 	}
 }
 
-func TestNewWithConfig_LogsErrorForBlankAPIKeyAfterTrim(t *testing.T) {
-	var logged string
-
-	client, err := NewWithConfig(" \n\t ", Config{
-		Logger: testLogger{
-			logf: t.Logf,
-			errorf: func(format string, args ...interface{}) {
-				logged = fmt.Sprintf(format, args...)
-			},
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	defer client.Close()
-
-	require.Contains(t, logged, "apiKey is empty after trimming whitespace")
-	require.Contains(t, logged, ErrSDKDisabled.Error())
+func TestNew_BlankAPIKeyReturnsError(t *testing.T) {
+	for _, apiKey := range []string{"", " ", " \n\t "} {
+		t.Run(fmt.Sprintf("%q", apiKey), func(t *testing.T) {
+			client, err := New(apiKey)
+			require.ErrorIs(t, err, ErrSDKDisabled)
+			require.Nil(t, client)
+		})
+	}
 }
 
-func TestNew_BlankAPIKeyReturnsNoopClient(t *testing.T) {
-	client := New(" \n\t ")
-	require.NotNil(t, client)
-
-	_, ok := client.(*noopClient)
-	require.True(t, ok)
-	require.ErrorIs(t, client.Enqueue(Capture{}), ErrSDKDisabled)
-
-	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Equal(t, false, isEnabled)
-
-	flag, err := client.GetFeatureFlag(FeatureFlagPayload{})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Equal(t, false, flag)
-
-	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.NotNil(t, result)
-	require.False(t, result.Enabled)
-
-	payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, payload)
-
-	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, allFlags)
-
-	evaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.NotNil(t, evaluations)
-	require.Empty(t, evaluations.Keys())
-
-	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrSDKDisabled)
-	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
-	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
+func TestNew_TrimsAPIKey(t *testing.T) {
+	c, err := New(" \n test-api-key\t ")
+	require.NoError(t, err)
+	require.Equal(t, "test-api-key", c.(*client).key)
+	require.NoError(t, c.Close())
 }
 
-func TestNewWithConfig_BlankAPIKeyReturnsNoopClientWithoutRequests(t *testing.T) {
-	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		body, _ := io.ReadAll(r.Body)
-		writeCaptureOK(w, body)
-	}))
-	defer server.Close()
+func TestNewWithConfig_BlankAPIKeyReturnsErrorWithoutRequests(t *testing.T) {
+	for _, apiKey := range []string{"", " ", " \n\t "} {
+		for _, secretConfig := range []Config{
+			{},
+			{SecretKey: "test-secret-key"},
+			{PersonalApiKey: "test-personal-key"},
+		} {
+			t.Run(fmt.Sprintf("%q/secret=%s/personal=%s", apiKey, secretConfig.SecretKey, secretConfig.PersonalApiKey), func(t *testing.T) {
+				var requests atomic.Int64
+				config := secretConfig
+				config.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
+					requests.Add(1)
+					return nil, testError
+				})
 
-	var successes atomic.Int64
-	var failures atomic.Int64
-	client, err := NewWithConfig(" \n\t ", Config{
-		Endpoint:       server.URL,
-		PersonalApiKey: "personal-api-key",
-		BatchSize:      1,
-		Interval:       time.Millisecond,
-		Callback: testCallback{
-			success: func(APIMessage) { successes.Add(1) },
-			failure: func(APIMessage, error) { failures.Add(1) },
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	_, ok := client.(*noopClient)
-	require.True(t, ok)
-
-	require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}), ErrSDKDisabled)
-	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Equal(t, false, isEnabled)
-	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "test-user"})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, allFlags)
-	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, remoteConfigPayload)
-	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
-
-	require.Zero(t, requests.Load())
-	require.Zero(t, successes.Load())
-	require.Zero(t, failures.Load())
-}
-
-func TestNewWithConfig_BlankAPIKeyWithPersonalAPIKeyReturnsNoopClient(t *testing.T) {
-	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		body, _ := io.ReadAll(r.Body)
-		writeCaptureOK(w, body)
-	}))
-	defer server.Close()
-
-	client, err := NewWithConfig(" \n\t ", Config{
-		Endpoint:       server.URL,
-		PersonalApiKey: "personal-api-key",
-		BatchSize:      1,
-		Interval:       time.Millisecond,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	_, ok := client.(*noopClient)
-	require.True(t, ok)
-
-	require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}), ErrSDKDisabled)
-	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Equal(t, false, isEnabled)
-	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, remoteConfigPayload)
-	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
-
-	require.Zero(t, requests.Load())
+				client, err := NewWithConfig(apiKey, config)
+				require.ErrorIs(t, err, ErrSDKDisabled)
+				require.Nil(t, client)
+				require.Zero(t, requests.Load())
+			})
+		}
+	}
 }
 
 func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
@@ -1145,9 +1053,10 @@ func (c *customMessage) apifyEvent() apiEvent {
 }
 
 func TestEnqueuingCustomTypeFails(t *testing.T) {
-	client := New("0123456789")
+	client, err := New("0123456789")
+	require.NoError(t, err)
 	defer client.Close()
-	err := client.Enqueue(&customMessage{})
+	err = client.Enqueue(&customMessage{})
 	require.Error(t, err)
 	require.EqualError(t, err, "messages with custom types cannot be enqueued: *posthog.customMessage",
 		"invalid/missing error when queuing unsupported message")
@@ -1300,7 +1209,8 @@ func TestCaptureMany(t *testing.T) {
 }
 
 func TestClientCloseTwice(t *testing.T) {
-	client := New("0123456789")
+	client, err := New("0123456789")
+	require.NoError(t, err)
 	require.NoError(t, client.Close())
 	require.EqualError(t, client.Close(), ErrClosed.Error())
 	require.EqualError(t, client.Enqueue(Capture{DistinctId: "1", Event: "A"}), ErrClosed.Error())
@@ -1325,7 +1235,8 @@ func TestClientWithPersonalApiKeyClosing(t *testing.T) {
 }
 
 func TestClientEnqueueError(t *testing.T) {
-	client := New("0123456789")
+	client, err := New("0123456789")
+	require.NoError(t, err)
 	defer client.Close()
 
 	if err := client.Enqueue(testErrorMessage{}); err != testError {

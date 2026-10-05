@@ -426,7 +426,7 @@ func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error
 // evaluation requires a stable distinct ID and returns ErrNoDistinctID if neither payload nor ctx has one.
 func EvaluateFlagsWithContext(ctx context.Context, client Client, payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
 	if client == nil {
-		return noopFeatureFlagEvaluations, fmt.Errorf("posthog: nil client")
+		return emptyFeatureFlagEvaluations, fmt.Errorf("posthog: nil client")
 	}
 	if contextClient, ok := client.(interface {
 		EvaluateFlagsWithContext(context.Context, EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)

@@ -6,7 +6,10 @@ Every `tools/call` becomes a `$mcp_tool_call` event, the same event the Python
 and TypeScript SDKs send.
 
 ```go
-client := posthog.New("phc_project_api_key")
+client, err := posthog.New("phc_project_api_key")
+if err != nil {
+    log.Fatal(err)
+}
 defer client.Close()
 
 server := mcp.NewServer(&mcp.Implementation{Name: "weather-server", Version: "1.0.0"}, nil)

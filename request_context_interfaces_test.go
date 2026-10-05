@@ -108,7 +108,7 @@ func TestRequestContextMiddleware_MixedOptionalInterfaces(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, int64(4), n)
 				}
-			}), WithCapturePanics(&noopClient{}))
+			}), WithCapturePanics(&fakeEnqueueClient{}))
 			handler.ServeHTTP(tc.writer, httptest.NewRequest(http.MethodGet, "/", nil))
 			require.Equal(t, want.flusher, base.flushed)
 			require.Equal(t, want.hijacker, base.hijacked)
