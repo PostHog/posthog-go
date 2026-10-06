@@ -84,7 +84,9 @@ func limitProperty(properties posthog.Properties, key string, keep bool, depth i
 
 func (p preparedToolCall) buildException() (posthog.Exception, error) {
 	handled := true
-	synthetic := true
+	// An isError result the tool reported without throwing is synthesized by the
+	// instrumentation; a thrown error is not.
+	synthetic := p.call.Error == nil
 	item := posthog.ExceptionItem{
 		Type:  p.exceptionType,
 		Value: p.errorMessage,
@@ -94,7 +96,9 @@ func (p preparedToolCall) buildException() (posthog.Exception, error) {
 		},
 	}
 
-	base := posthog.NewProperties().Set(propertyExceptionLevel, "error")
+	base := posthog.NewProperties().
+		Set(propertyExceptionLevel, "error").
+		Set(propertyExceptionSource, exceptionSource)
 	setStringProperty(base, propertySessionID, p.sessionID)
 	setStringProperty(base, propertyConversationID, p.conversationID)
 	setStringProperty(base, propertyResourceName, p.toolName)

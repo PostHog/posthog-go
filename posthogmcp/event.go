@@ -143,7 +143,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 			continue
 		}
 		switch key {
-		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID, propertyExceptionLevel:
+		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID, propertyExceptionLevel, propertyExceptionSource:
 			continue
 		}
 		custom[key] = value
