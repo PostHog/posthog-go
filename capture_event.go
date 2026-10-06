@@ -176,15 +176,17 @@ func baseProperties(isServer bool, disableGeoIP bool) Properties {
 }
 
 // prepareForSend builds the callback APIMessage, serializes the wire event,
-// and returns the event uuid for per-event result correlation.
+// and returns the event uuid for per-event result correlation. The uuid is
+// canonicalized because BeforeSend may set any form capture accepts, while
+// capture keys its results by the canonical form.
 func prepareForSend(msg Message) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
 	ev := buildEvent(msg.apifyEvent())
 	data, err := json.Marshal(ev)
 	if err != nil {
-		return nil, apiMsg, ev.Uuid, err
+		return nil, apiMsg, canonicalUUID(ev.Uuid), err
 	}
-	return json.RawMessage(data), apiMsg, ev.Uuid, nil
+	return json.RawMessage(data), apiMsg, canonicalUUID(ev.Uuid), nil
 }
 
 // apifyEvent builds the intermediate event for a Capture. It mirrors the

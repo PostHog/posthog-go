@@ -71,11 +71,13 @@ func makeTimestamp(t time.Time, def time.Time) time.Time {
 	return t.UTC()
 }
 
-// makeUUID returns the UUID passed as first argument if non-empty and valid,
-// otherwise generates and returns a new random UUID (v4).
+// makeUUID returns the UUID passed as first argument in canonical form if
+// non-empty and valid, otherwise generates and returns a new UUID.
 func makeUUID(u string) string {
-	if u != "" && uuid.Validate(u) == nil {
-		return u
+	if u != "" {
+		if parsed, err := uuid.Parse(u); err == nil {
+			return parsed.String()
+		}
 	}
 	// v7 is time-ordered, matching what capture generates server-side when a
 	// client omits the uuid, and what posthog-rs sends. Falls back to v4 if the
@@ -84,6 +86,16 @@ func makeUUID(u string) string {
 		return v7.String()
 	}
 	return uuid.New().String()
+}
+
+// canonicalUUID returns u in the lowercase hyphenated form the capture
+// endpoint keys per-event results by. A value that does not parse is returned
+// unchanged; capture rejects its whole batch anyway.
+func canonicalUUID(u string) string {
+	if parsed, err := uuid.Parse(u); err == nil {
+		return parsed.String()
+	}
+	return u
 }
 
 // APIMessage is a wire-format message produced by Message.APIfy and passed to callbacks.

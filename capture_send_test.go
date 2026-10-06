@@ -17,6 +17,7 @@ import (
 
 	"github.com/andybalholm/brotli"
 	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
@@ -405,6 +406,37 @@ func TestSendTerminalResultsNotRetried(t *testing.T) {
 			}
 			if s, f := cb.counts(); s != tc.wantSuccess || f != tc.wantFailure {
 				t.Errorf("callbacks: success=%d failure=%d, want %d/%d", s, f, tc.wantSuccess, tc.wantFailure)
+			}
+		})
+	}
+}
+
+func TestSendCorrelatesNonCanonicalUuid(t *testing.T) {
+	// BeforeSend can set any uuid form capture parses; capture keys results by
+	// the canonical form. The verdict must still reach the event.
+	for name, sent := range map[string]string{
+		"uppercase":  "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+		"no_hyphens": "aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
+		"braced":     "{aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa}",
+		"urn":        "urn:uuid:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cb := &recordingCallback{}
+			srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
+				m := map[string]eventResult{}
+				for _, u := range uuids {
+					m[uuid.MustParse(u).String()] = eventResult{Result: resultDrop}
+				}
+				return http.StatusOK, resultsBody(t, m), ""
+			}}
+			ts := httptest.NewServer(srv.handler(t))
+			defer ts.Close()
+
+			c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+			c.send(c.analytics, captureBatch(t, cap1(sent)))
+
+			if s, f := cb.counts(); s != 0 || f != 1 {
+				t.Errorf("callbacks: success=%d failure=%d, want 0/1", s, f)
 			}
 		})
 	}
