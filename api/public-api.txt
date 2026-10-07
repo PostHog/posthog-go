@@ -351,6 +351,8 @@ type Config struct {
 
 	DefaultEventProperties Properties
 
+	DefaultEventOptions Options
+
 	Callback Callback
 
 	BeforeSend BeforeSendFunc
@@ -869,6 +871,7 @@ type RequestContext struct {
 	DistinctId string
 	SessionId string
 	Properties Properties
+	Options Options
 }
 
 
@@ -1105,6 +1108,7 @@ type ToolCall struct {
 	ErrorType string
 
 	Properties posthog.Properties
+	Options posthog.Options
 	Timestamp time.Time
 }
 
