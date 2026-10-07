@@ -2,8 +2,9 @@
 
 `posthogmcpsdk` captures PostHog MCP analytics for servers built with
 [`github.com/modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk).
-Every `tools/call` becomes a `$mcp_tool_call` event, the same event the Python
-and TypeScript SDKs send.
+Every `tools/call` that reaches a final outcome becomes a `$mcp_tool_call`
+event, the same event the Python and TypeScript SDKs send. Calls that do not
+get their own events, described below.
 
 ```go
 client := posthog.New("phc_project_api_key")
@@ -24,26 +25,58 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   redacted. Turn either off with `WithCaptureParameters(false)` or
   `WithCaptureResponses(false)`. The error text of a failed call is captured
   either way.
-- The session as `$session_id`, always set. A transport session ID (streamable
-  HTTP) becomes `ses_` plus a hash every PostHog MCP SDK computes the same way,
-  so one session served from several languages groups together. Without one
-  (stdio, in-memory, stateless HTTP), the adapter generates `ses_<UUIDv7>` per
+- The session as `$session_id`, always set. A conversation handle, described
+  below, comes first. Next, a transport session ID (streamable HTTP) becomes
+  `ses_` plus a hash every PostHog MCP SDK computes the same way, so one
+  session served from several languages groups together. On a one-client
+  connection (stdio, in-memory), the adapter generates `ses_<UUIDv7>` per
   go-sdk session and starts a new one after 30 minutes without a tool call
-  in that session.
-- The client name and version, and the protocol version.
+  in that session. A stateless HTTP request with neither gets its own.
+- The client name and version, and the protocol version. On HTTP, also the
+  `User-Agent` and `X-Anthropic-Client` headers, which tell apart the
+  products of one vendor that share a client name.
 - The tool's description and `_meta.category`, read from `tools/list`.
 - The agent's intent, from the `context` argument described below.
+- The model that made the call, from the client's request `_meta`
+  (`io.modelcontextprotocol/aiInvocation` or `x-codex-turn-metadata`) when it
+  names one, else from the `llm_model` argument described below.
 
 Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
 `WithProperties` to add event properties.
 
-## Not yet
+## Calls that are not tool calls
 
-Conversation anchoring, the optional `conversation_id` argument that keeps a
-stateless client's calls in one session, is not implemented. The other SDKs
-have it. Until it lands, each request to a stateless HTTP server is its own
-go-sdk session and so gets its own `$session_id`, which fragments a
-conversation across sessions.
+Some `tools/call` requests are not counted as `$mcp_tool_call`, since counting
+them would put tools that do not exist, calls that have not finished, or
+reports to the virtual tool in the per-tool views. Each gets its own event, with the client, server, and session
+properties of a tool call, and no `$exception`.
+
+- **`$mcp_unknown_tool`** for a call naming a tool the server has not
+  registered, with the requested name as `$mcp_tool_name`, redacted as free
+  text. It carries `$mcp_conversation_id` when the agent sent a valid handle,
+  and never mints one. A call naming no tool, or only whitespace, sends
+  nothing. A tool is unregistered when go-sdk answers the call with its
+  unknown tool error, so a tool added or removed since the last listing is
+  classified correctly. Invalid arguments for a registered tool are a failed
+  call.
+- **`$mcp_input_required`** for each `input_required` round a client of the
+  2026-07-28 revision receives (go-sdk v1.8 and later), with `$mcp_tool_name`,
+  the round's `$mcp_duration_ms`, and `$mcp_input_request_methods`: the method
+  of each input request, ordered by request id, duplicates kept, at most 100,
+  and `[]` for a round with no input requests. Never the requests or answers.
+  A round whose requests cannot be read sends nothing and reports the error.
+  The retry that completes the call sends the `$mcp_tool_call`. When the
+  client is on an earlier revision, go-sdk fulfils the requests itself and the
+  middleware sees one call. If the handler asks again after go-sdk's single
+  re-entry, that call is a failed `$mcp_tool_call` with `$mcp_error_type` of
+  `input_required`. A round never carries a conversation handle, so
+  `$mcp_conversation_id` is set only for a handle the agent sent.
+
+- **`$mcp_missing_capability`** for a call to the opt-in virtual tool, described
+  under "Reporting a missing capability".
+
+`WithProperties` applies to `$mcp_tool_call` only. `WithIdentity` applies to
+all of these events.
 
 ## The context argument
 
@@ -60,6 +93,15 @@ Schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not changed.
 
 Turn it off with `WithContextParameter(false)`.
 
+## The llm_model argument
+
+MCP has no standard way for a client to say which model is calling, so the
+middleware also adds a required `llm_model` string, asking the agent for its
+exact model identifier or `"unknown"`. It is handled like `context`: removed
+before the handler and validation, kept by tools that declare their own, and
+left off `$mcp_parameters`. A model named in the client's `_meta` wins over it.
+Turn both sources off with `WithCaptureModel(false)`.
+
 The middleware learns each tool's schema from `tools/list` and forgets it
 when the server sends `notifications/tools/list_changed`, so a tool registered
 again with a different schema is handled by the new one. go-sdk sends that
@@ -67,6 +109,58 @@ notification about 10ms after the change, so calls in that window still use
 the old schema. It notifies only connected sessions, so a tool added or
 replaced while no session is connected, as on a stateless server, is
 recognized within ten seconds, when the middleware lists tools again.
+
+## Conversation anchoring
+
+A stateless HTTP request carries no session unless the client sends an
+`Mcp-Session-Id`, so without help every call of one agent conversation lands
+in its own `$session_id`. The session ID a stateless go-sdk server assigns a
+request that sends none is new on every request, so it does not count. The
+middleware adds an optional `conversation_id` string to every tool's input
+schema. When a call arrives with neither a transport session nor a valid
+handle, it appends a new UUIDv7 handle to the result as a final text block,
+`{"conversation_id":"<handle>"}`, and the agent passes it back on later calls.
+Tools whose output schema is a plain object (`"type": "object"`, without
+`$ref`, `allOf`, `anyOf`, or `oneOf`) also get an optional `_mcp_instructions`
+property. When a call has a handle, new or echoed, their result carries it
+there too, unless the tool set `_mcp_instructions` itself.
+
+A handle the agent sends is used only if it is a UUIDv7. It becomes
+`$mcp_conversation_id`, on the `$exception` of a failed call too, and
+`$session_id` is derived from it the way every PostHog MCP SDK derives it, so
+replicas and servers in other languages agree. A handle wins over a transport
+session. A new handle the result cannot carry, as on a protocol error, is not
+recorded. `$mcp_response` is the result the tool returned, without the
+handle the middleware adds to it.
+
+Like `context`, the argument is removed before the handler and validation
+and left off `$mcp_parameters`, tools that declare their own `conversation_id`
+keep it, and schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not
+changed. Turn it off with `WithConversationID(false)`.
+
+## Reporting a missing capability
+
+`WithMissingCapabilityTool("")` adds a virtual tool, `get_more_tools` (pass a
+name to change it), that agents call when the server lacks a capability they
+need. Its required `context` argument is the report, sent as `$mcp_intent` on a
+`$mcp_missing_capability` event, with the tool's name as `$mcp_resource_name`.
+It gets the `llm_model` and `conversation_id` arguments you enable, and
+follows session and conversation handling like any tool. The call goes down
+the middleware chain like any other, so authentication and rate limiting
+installed inside `Instrument` run first. When go-sdk answers it as an unknown
+tool, the middleware replies with a short acknowledgement and sends the event,
+so your handlers never see it and it is not a `$mcp_tool_call`. A server that
+registers a tool of that name keeps its own, and the virtual tool is not
+advertised. It is off by default. A blank name is the default name.
+
+A server that registers no tools of its own must still declare the tools
+capability, with `ServerOptions.HasTools` (or `Capabilities.Tools`), or
+compliant clients never list tools and never see the virtual one.
+
+Known limits of the listing. A name the server registered and later removed
+stays unadvertised until go-sdk sends `list_changed` or the process restarts.
+On a load-balanced stateless deployment, the last page may not know about a
+collision on an earlier page.
 
 ## Middleware order
 

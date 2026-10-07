@@ -37,6 +37,9 @@ type Exception struct {
 	// IsServer controls whether the event includes the $is_server property.
 	// Enqueue overwrites it from Config.GetIsServer.
 	IsServer bool
+	// Library, when non-empty, replaces SDKName as this event's $lib.
+	// See Capture.Library.
+	Library string
 
 	// ExceptionList is the list of exception items sent as $exception_list. It must be non-empty.
 	ExceptionList []ExceptionItem
@@ -236,6 +239,7 @@ func (msg ExceptionItem) Validate() error {
 
 // APIfy converts an Exception message into the PostHog batch API representation.
 func (msg Exception) APIfy() APIMessage {
+	library := libraryOrSDKName(msg.Library)
 	libVersion := getVersion()
 
 	var isServer *bool
@@ -247,12 +251,12 @@ func (msg Exception) APIfy() APIMessage {
 		Type:           msg.Type, // set to "exception" by Enqueue switch
 		Uuid:           msg.Uuid,
 		Event:          "$exception",
-		Library:        SDKName,
+		Library:        library,
 		LibraryVersion: libVersion,
 		Timestamp:      msg.Timestamp.UTC(),
 		Properties: ExceptionInApiProperties{
 			sysContext:           getSystemContext(),
-			Lib:                  SDKName,
+			Lib:                  library,
 			LibVersion:           libVersion,
 			IsServer:             isServer,
 			DistinctId:           msg.DistinctId,
