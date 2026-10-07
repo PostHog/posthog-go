@@ -1040,6 +1040,7 @@ type EventContext struct {
 	VendorClient    string
 
 	Properties posthog.Properties
+	Options posthog.Options
 	Timestamp time.Time
 }
 

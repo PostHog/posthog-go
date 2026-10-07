@@ -249,7 +249,7 @@ tool calls and the `$mcp_unknown_tool`, `$mcp_input_required` and
 
 `posthogmcp.ToolCall` has a new `Options` field, and tool calls also take
 `RequestContext.Options`. The call's options override the request context's.
-The other MCP events take `RequestContext.Options` only.
+The other MCP events take the same layers through `EventContext.Options`.
 A call without an identity always gets `process_person_profile: false`, whatever
 its options say. With an identity, a `process_person_profile` option overrides
 a `$process_person_profile: false` property.
