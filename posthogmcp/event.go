@@ -337,9 +337,15 @@ func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, 
 			properties[propertySet] = p.setProperties
 		}
 	}
-	if p.suppressPersonProfile {
-		properties[propertyProcessProfile] = false
+}
+
+// options returns the event's capture options. The opt-out goes in as an
+// option, not a property, so it wins over client and request-context defaults.
+func (p preparedToolCall) options() posthog.Options {
+	if !p.suppressPersonProfile {
+		return nil
 	}
+	return posthog.NewOptions().Set(optionProcessProfile, false)
 }
 
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {
