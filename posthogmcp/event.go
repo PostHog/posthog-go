@@ -25,7 +25,7 @@ type preparedToolCall struct {
 	errorType             string
 	exceptionType         string
 	errorMessage          string
-	suppressPersonProfile bool
+	propertyProfileOptOut bool
 	parameters            any
 	response              any
 	groups                posthog.Groups
@@ -76,7 +76,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	prepared := preparedToolCall{
 		call:                  call,
 		explicitID:            explicitID,
-		suppressPersonProfile: !explicitID || personProfileOptOut(call.Properties),
+		propertyProfileOptOut: personProfileOptOut(call.Properties),
 		toolName:              truncateUTF8(sanitizeResourceName(call.ToolName), maxResourceNameBytes),
 	}
 	prepared.conversationID = normalizeConversationID(call.ConversationID)
@@ -339,13 +339,26 @@ func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, 
 	}
 }
 
-// options returns the event's capture options. The opt-out goes in as an
-// option, not a property, so it wins over client and request-context defaults.
+// options returns the event's capture options: the caller's Options plus the
+// person profile opt-out. The opt-out goes in as an option, not a property, so
+// it wins over client and request-context defaults.
 func (p preparedToolCall) options() posthog.Options {
-	if !p.suppressPersonProfile {
+	options := make(posthog.Options, len(p.call.Options)+1)
+	for name, value := range p.call.Options {
+		options[name] = value
+	}
+	switch {
+	case !p.explicitID:
+		// The fallback distinct ID is a session or "anonymous", so a person
+		// profile would be wrong whatever the caller asked for.
+		options[optionProcessProfile] = false
+	case p.propertyProfileOptOut && options[optionProcessProfile] == nil:
+		options[optionProcessProfile] = false
+	}
+	if len(options) == 0 {
 		return nil
 	}
-	return posthog.NewOptions().Set(optionProcessProfile, false)
+	return options
 }
 
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {

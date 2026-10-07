@@ -53,6 +53,7 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // A posthog.RequestContext attached to ctx supplies the distinct and session
 // IDs the call leaves empty, and its properties sit under call.Properties. They
 // go through the same reserved-key and sanitization rules as the call's own.
+// Its options sit under call.Options in the same way.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	call, err := a.withContext(ctx, call)
 	if err != nil {
@@ -97,6 +98,16 @@ func withRequestContext(call ToolCall, requestContext posthog.RequestContext) To
 	if len(requestContext.Properties) > 0 {
 		properties := posthog.NewProperties().Merge(requestContext.Properties)
 		call.Properties = properties.Merge(call.Properties)
+	}
+	if len(requestContext.Options) > 0 {
+		options := make(posthog.Options, len(requestContext.Options)+len(call.Options))
+		for name, value := range requestContext.Options {
+			options[name] = value
+		}
+		for name, value := range call.Options {
+			options[name] = value
+		}
+		call.Options = options
 	}
 	return call
 }
