@@ -19,6 +19,8 @@ const (
 	propertyCookielessMode = "$cookieless_mode"
 	propertyIgnoreSentAt   = "$ignore_sent_at"
 	propertyProductTourId  = "$product_tour_id"
+
+	optionProcessPersonProfile = "process_person_profile"
 )
 
 // Per-event result codes (the only four the backend emits, see
@@ -39,7 +41,7 @@ var legacyOptionProperties = []struct {
 	{propertyCookielessMode, "cookieless_mode"},
 	{propertyIgnoreSentAt, "disable_skew_correction"},
 	{propertyProductTourId, "product_tour_id"},
-	{propertyProcessPersonProfile, "process_person_profile"},
+	{propertyProcessPersonProfile, optionProcessPersonProfile},
 }
 
 // eventBatch is the request envelope. It carries no

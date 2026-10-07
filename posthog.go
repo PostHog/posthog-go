@@ -739,13 +739,14 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.IsServer = c.GetIsServer()
-		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, "posthog.Capture")
+		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, m.Options, c.DefaultEventOptions, "posthog.Capture")
 		if captureContextErr != nil {
 			err = captureContextErr
 			return
 		}
 		m.DistinctId = captureContext.distinctID
 		m.Properties = captureContext.properties
+		m.Options = captureContext.options
 		if err = m.Validate(); err != nil {
 			return
 		}
@@ -797,18 +798,13 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			sort.Strings(activeFeatureFlags)
 			m.Properties["$active_feature_flags"] = activeFeatureFlags
 		}
-		if m.Properties == nil {
-			m.Properties = NewProperties()
-		}
-		profileOptOut := m.Properties[propertyProcessPersonProfile] == false
-		m.Properties.Merge(c.DefaultEventProperties)
+		m.Properties = m.Properties.mergeDefaults(c.DefaultEventProperties)
 		if m.IsServer {
 			m.Properties.Set(propertyIsServer, true)
 		}
-		// An explicit opt-out, including one set for a personless capture,
-		// must survive defaults that would otherwise enable person profiles.
-		if profileOptOut {
-			m.Properties[propertyProcessPersonProfile] = false
+		// Config.DisableGeoIP is a client setting, not a default an event can override.
+		if c.GetDisableGeoIP() {
+			m.Properties.Set(propertyGeoipDisable, true)
 		}
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
@@ -836,13 +832,16 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, "posthog.Exception")
+		// Exceptions do not take Config.DefaultEventProperties, so they do not take
+		// Config.DefaultEventOptions either.
+		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, m.Options, nil, "posthog.Exception")
 		if captureContextErr != nil {
 			err = captureContextErr
 			return
 		}
 		m.DistinctId = captureContext.distinctID
 		m.Properties = captureContext.properties
+		m.Options = captureContext.options
 		if err = m.Validate(); err != nil {
 			return
 		}
