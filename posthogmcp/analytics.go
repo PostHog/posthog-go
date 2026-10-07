@@ -54,18 +54,30 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // IDs the call leaves empty, and its properties sit under call.Properties. They
 // go through the same reserved-key and sanitization rules as the call's own.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
-	if a == nil || a.client == nil {
-		return errors.New("posthogmcp: nil enqueue client")
+	call, err := a.withContext(ctx, call)
+	if err != nil {
+		return err
 	}
-	if requestContext, ok := posthog.RequestContextFromContext(ctx); ok {
-		call = withRequestContext(call, requestContext)
-	}
-
 	messages, err := buildToolCallMessages(call, a.cfg.exceptionAutocapture)
 	if err != nil {
 		return err
 	}
+	return a.enqueue(messages)
+}
 
+// withContext rejects a nil recorder and applies the RequestContext attached
+// to ctx.
+func (a *Analytics) withContext(ctx context.Context, call ToolCall) (ToolCall, error) {
+	if a == nil || a.client == nil {
+		return call, errors.New("posthogmcp: nil enqueue client")
+	}
+	if requestContext, ok := posthog.RequestContextFromContext(ctx); ok {
+		call = withRequestContext(call, requestContext)
+	}
+	return call, nil
+}
+
+func (a *Analytics) enqueue(messages []namedMessage) error {
 	var enqueueErrors []error
 	for _, message := range messages {
 		if err := a.client.Enqueue(message.message); err != nil {

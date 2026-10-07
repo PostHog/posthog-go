@@ -1662,3 +1662,27 @@ func TestSemverCompareTo(t *testing.T) {
 func (s semverTuple) String() string {
 	return strconv.Itoa(s.major) + "." + strconv.Itoa(s.minor) + "." + strconv.Itoa(s.patch)
 }
+
+func TestMatchPropertySemverErrorsEscapeValues(t *testing.T) {
+	const quoted = `1.0'"x`
+	for _, test := range []struct {
+		operator, propertyValue, flagValue, want string
+	}{
+		{"semver_eq", quoted, "1.2.3", `property value "1.0'\"x" is not a valid semver`},
+		{"semver_eq", "1.2.3", quoted, `flag semver value "1.0'\"x" is not a valid semver`},
+		{"semver_tilde", quoted, "1.2.3", `property value "1.0'\"x" is not a valid semver`},
+		{"semver_tilde", "1.2.3", quoted, `flag semver value "1.0'\"x" is not valid for tilde operator`},
+		{"semver_caret", quoted, "1.2.3", `property value "1.0'\"x" is not a valid semver`},
+		{"semver_caret", "1.2.3", quoted, `flag semver value "1.0'\"x" is not valid for caret operator`},
+		{"semver_wildcard", quoted, "1.2.*", `property value "1.0'\"x" is not a valid semver`},
+		{"semver_wildcard", "1.2.3", quoted, `flag semver value "1.0'\"x" is not valid for wildcard operator`},
+	} {
+		t.Run(test.operator+" "+test.want, func(t *testing.T) {
+			property := FlagProperty{Key: "version", Value: test.flagValue, Operator: test.operator}
+			_, err := matchProperty(property, NewProperties().Set("version", test.propertyValue))
+			var inconclusive *InconclusiveMatchError
+			require.ErrorAs(t, err, &inconclusive)
+			require.Equal(t, test.want, inconclusive.Error())
+		})
+	}
+}
