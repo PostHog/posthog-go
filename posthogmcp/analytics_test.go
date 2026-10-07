@@ -116,10 +116,12 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 
 func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		distinctID string
-		flag       any
-		want       any
+		name           string
+		distinctID     string
+		flag           any
+		options        posthog.Options
+		contextOptions posthog.Options
+		want           any
 	}{
 		{
 			name:       "identified explicit opt-out",
@@ -138,20 +140,65 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 			flag: true,
 			want: false,
 		},
+		{
+			name:       "identified option opt-out",
+			distinctID: "user_1",
+			options:    posthog.Options{optionProcessProfile: false},
+			want:       false,
+		},
+		{
+			name:       "option wins over legacy opt-out",
+			distinctID: "user_1",
+			flag:       false,
+			options:    posthog.Options{optionProcessProfile: true},
+			want:       true,
+		},
+		{
+			name:    "anonymous option cannot opt in",
+			options: posthog.Options{optionProcessProfile: true},
+			want:    false,
+		},
+		{
+			name:           "request-context option applies",
+			distinctID:     "user_1",
+			contextOptions: posthog.Options{optionProcessProfile: false},
+			want:           false,
+		},
+		{
+			name:           "call option wins over request-context option",
+			distinctID:     "user_1",
+			options:        posthog.Options{optionProcessProfile: true},
+			contextOptions: posthog.Options{optionProcessProfile: false},
+			want:           true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			if test.contextOptions != nil {
+				ctx = posthog.WithRequestContext(ctx, posthog.RequestContext{Options: test.contextOptions})
+			}
+			options := posthog.Options{"product_tour_id": "tour_1"}
+			for name, value := range test.options {
+				options[name] = value
+			}
 			client := &fakeEnqueueClient{}
-			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+			require.NoError(t, New(client).CaptureToolCall(ctx, ToolCall{
 				ToolName:   "query",
 				DistinctID: test.distinctID,
 				IsError:    true,
 				Error:      errors.New("request failed"),
 				Properties: posthog.Properties{propertyProcessProfile: test.flag},
+				Options:    options,
 			}))
 			require.Len(t, client.messages, 2)
 
 			assertPersonProfileOption(t, client.messages[0], test.want)
 			assertPersonProfileOption(t, client.messages[1], test.want)
+			assert.Equal(t, "tour_1", client.messages[0].(posthog.Capture).Options["product_tour_id"])
+			assert.Equal(t, "tour_1", client.messages[1].(posthog.Exception).Options["product_tour_id"])
+			if test.options != nil {
+				assert.Equal(t, test.options[optionProcessProfile], options[optionProcessProfile], "caller's Options must not be modified")
+			}
 		})
 	}
 }

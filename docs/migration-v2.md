@@ -245,6 +245,12 @@ can turn processing back on; a legacy `$process_person_profile` property
 cannot. `posthogmcp` sets the same option on tool calls without an identity,
 and on calls whose properties set `$process_person_profile: false`.
 
+`posthogmcp.ToolCall` has a new `Options` field, and tool calls also take
+`RequestContext.Options`. The call's options override the request context's.
+A call without an identity always gets `process_person_profile: false`, whatever
+its options say. With an identity, a `process_person_profile` option overrides
+a `$process_person_profile: false` property.
+
 Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
 
 - PostHog now reads common forms of the value, so

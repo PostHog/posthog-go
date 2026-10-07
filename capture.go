@@ -203,6 +203,11 @@ var minimalFlagCalledEventAllowlist = []string{
 	// this allowlist runs, not from a raw "$groups" key in Properties.
 	"$groups",
 	propertyProcessPersonProfile,
+	// The other legacy option properties survive so buildEvent can still move
+	// them into options.
+	propertyCookielessMode,
+	propertyIgnoreSentAt,
+	propertyProductTourId,
 	propertyGeoipDisable,
 	propertyIsServer,
 	propertySessionID,
