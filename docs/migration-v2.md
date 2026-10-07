@@ -159,6 +159,12 @@ Caller-supplied properties now take precedence over SDK system context.
 Previously the SDK's `$os`, `$os_version`, `$os_distro` and `$go_version`
 overwrote values you had set; they are now applied only as defaults.
 
+`Config.DefaultEventProperties` are now defaults too. Request-context and event
+properties override them on key conflicts. In 1.x the default value
+overwrote the event's value, except for an event's
+`$process_person_profile: false`. `Config.DisableGeoIP` still sets
+`$geoip_disable` on every event, whatever the event sets.
+
 ### Compression
 
 `Content-Encoding` must be one of `gzip`, `deflate`, `br` or `zstd`. The
@@ -216,6 +222,28 @@ and moves it into its option:
 
 When both are set, the option wins. An option set to `nil` counts as not
 set, so the legacy property applies.
+
+Options can also be set for every event and for a request:
+
+- `Config.DefaultEventOptions` applies to every `Capture`, like
+  `Config.DefaultEventProperties`.
+- `RequestContext.Options` applies to the `Capture` and `Exception` events
+  sent with `EnqueueWithContext` or `EnqueueAIWithContext`, like
+  `RequestContext.Properties`. A child context inherits its parent's options.
+
+Each layer overrides the one before it: the SDK's personless default (below),
+`DefaultEventOptions`, `RequestContext.Options`, the event's `Options`, then
+`BeforeSend`. An option at any layer wins over the matching legacy property at
+any layer. For example, `DefaultEventOptions` with `cookieless_mode: true`
+wins over an event's `$cookieless_mode: false`. When you move a default to
+options, move the per-event overrides of that key to options too.
+
+When a capture with a request context has no distinct ID, the SDK generates
+one and sets the option `process_person_profile: false`, so it does not create
+a person for every generated ID. A default, request-context or event option
+can turn processing back on; a legacy `$process_person_profile` property
+cannot. `posthogmcp` sets the same option on tool calls without an identity,
+and on calls whose properties set `$process_person_profile: false`.
 
 Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
 

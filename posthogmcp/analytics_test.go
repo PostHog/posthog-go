@@ -52,7 +52,7 @@ func TestCaptureToolCallMinimal(t *testing.T) {
 	assert.Equal(t, "search_docs", capture.Properties[propertyToolName])
 	assert.Equal(t, float64(0), capture.Properties[propertyDurationMS])
 	assert.Equal(t, false, capture.Properties[propertyIsError])
-	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+	assertPersonProfileOption(t, capture, false)
 	assert.Equal(t, capture.DistinctId, capture.Properties[propertySessionID])
 	assert.NotContains(t, capture.Properties, propertySet)
 	assert.Nil(t, capture.Groups)
@@ -104,7 +104,7 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Groups)
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Properties[propertyGroups])
 	assert.Equal(t, posthog.Properties{"plan": "pro"}, capture.Properties[propertySet])
-	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+	assertPersonProfileOption(t, capture, false)
 	assert.Equal(t, "test", capture.Properties["environment"])
 
 	assert.Equal(t, map[string]any{"query": "select 1"}, parameters)
@@ -150,8 +150,8 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 			}))
 			require.Len(t, client.messages, 2)
 
-			assertSerializedProperty(t, client.messages[0], propertyProcessProfile, test.want)
-			assertSerializedProperty(t, client.messages[1], propertyProcessProfile, test.want)
+			assertPersonProfileOption(t, client.messages[0], test.want)
+			assertPersonProfileOption(t, client.messages[1], test.want)
 		})
 	}
 }
@@ -256,9 +256,9 @@ func TestCaptureToolCallSessionFallbackAndAnonymousSetSuppression(t *testing.T) 
 			assertDistinctID(t, test.distinctID, capture.DistinctId)
 			assert.NotContains(t, capture.Properties, propertySet)
 			if test.personless {
-				assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+				assertPersonProfileOption(t, capture, false)
 			} else {
-				assert.NotContains(t, capture.Properties, propertyProcessProfile)
+				assertPersonProfileOption(t, capture, nil)
 			}
 		})
 	}
@@ -493,6 +493,28 @@ func TestCaptureToolCallWireGolden(t *testing.T) {
 	expected, err := os.ReadFile("testdata/tool_call.golden.json")
 	require.NoError(t, err)
 	assert.JSONEq(t, string(expected), string(actual))
+}
+
+// assertPersonProfileOption checks the process_person_profile option, which
+// is absent when want is nil, and that the legacy property is never set.
+func assertPersonProfileOption(t *testing.T, message posthog.Message, want any) {
+	t.Helper()
+	var options posthog.Options
+	var properties posthog.Properties
+	switch m := message.(type) {
+	case posthog.Capture:
+		options, properties = m.Options, m.Properties
+	case posthog.Exception:
+		options, properties = m.Options, m.Properties
+	default:
+		t.Fatalf("unexpected message type %T", message)
+	}
+	assert.NotContains(t, properties, propertyProcessProfile)
+	if want == nil {
+		assert.NotContains(t, options, optionProcessProfile)
+		return
+	}
+	assert.Equal(t, want, options[optionProcessProfile])
 }
 
 func assertSerializedProperty(t *testing.T, message posthog.Message, key string, want any) {

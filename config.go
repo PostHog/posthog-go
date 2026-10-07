@@ -135,9 +135,14 @@ type Config struct {
 
 	// DefaultEventProperties are merged into every Capture event before sending.
 	// They are useful for common metadata like service name or app version. On key
-	// conflicts, values from DefaultEventProperties overwrite event properties,
-	// except that an explicit $process_person_profile=false remains false.
+	// conflicts, request-context and event properties override them.
 	DefaultEventProperties Properties
+
+	// DefaultEventOptions are merged into the options of every Capture event,
+	// such as process_person_profile or cookieless_mode. Request-context and
+	// event options override them. Like any option, a default option wins over
+	// the matching legacy property, such as $cookieless_mode, set on an event.
+	DefaultEventOptions Options
 
 	// Callback receives success or failure notifications for messages sent to the
 	// PostHog batch API.

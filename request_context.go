@@ -47,11 +47,14 @@ type RequestContext struct {
 	SessionId string
 	// Properties are request-scoped properties merged into capture and exception events.
 	Properties Properties
+	// Options are request-scoped capture options merged into capture and exception events.
+	// They override Config.DefaultEventOptions, and event options override them.
+	Options Options
 }
 
 // WithRequestContext returns a child context with PostHog request metadata attached. Existing PostHog
 // request context values are inherited: non-empty DistinctId and SessionId override the parent values,
-// and Properties are merged with child properties taking precedence.
+// and Properties and Options are merged with child values taking precedence.
 func WithRequestContext(ctx context.Context, requestContext RequestContext) context.Context {
 	return withRequestContext(ctx, requestContext, false)
 }
@@ -76,6 +79,7 @@ func withRequestContext(ctx context.Context, requestContext RequestContext, fres
 		DistinctId: sanitizeRequestContextValue(base.DistinctId),
 		SessionId:  sanitizeRequestContextValue(base.SessionId),
 		Properties: cloneRequestProperties(base.Properties),
+		Options:    layerOptions(base.Options, requestContext.Options),
 	}
 
 	if distinctID := sanitizeRequestContextValue(requestContext.DistinctId); distinctID != "" {
@@ -112,6 +116,7 @@ func RequestContextFromContext(ctx context.Context) (RequestContext, bool) {
 		DistinctId: sanitizeRequestContextValue(requestContext.DistinctId),
 		SessionId:  sanitizeRequestContextValue(requestContext.SessionId),
 		Properties: cloneRequestProperties(requestContext.Properties),
+		Options:    cloneMessageOptions(requestContext.Options),
 	}, true
 }
 
@@ -234,10 +239,14 @@ func ExtractRequestContext(r *http.Request, captureTracingHeaders bool) RequestC
 type captureContext struct {
 	distinctID                    string
 	properties                    Properties
+	options                       Options
 	generatedPersonlessDistinctID bool
 }
 
-func resolveCaptureContext(ctx context.Context, distinctID string, properties Properties, fieldType string) (captureContext, error) {
+// resolveCaptureContext applies the request context to one event. Options are
+// layered from lowest to highest precedence: the personless default, the
+// client's default options, request-context options, then the event's own.
+func resolveCaptureContext(ctx context.Context, distinctID string, properties Properties, options, defaultOptions Options, fieldType string) (captureContext, error) {
 	requestContext, hasRequestContext := RequestContextFromContext(ctx)
 	resolvedDistinctID := distinctID
 	isPersonless := false
@@ -256,21 +265,33 @@ func resolveCaptureContext(ctx context.Context, distinctID string, properties Pr
 		isPersonless = true
 	}
 
-	resolved := captureContext{
-		distinctID:                    resolvedDistinctID,
-		properties:                    mergeContextProperties(requestContext, properties),
-		generatedPersonlessDistinctID: isPersonless,
-	}
+	var personless Options
 	if isPersonless {
-		if resolved.properties == nil {
-			resolved.properties = NewProperties()
-		}
-		if _, exists := resolved.properties[propertyProcessPersonProfile]; !exists {
-			resolved.properties[propertyProcessPersonProfile] = false
-		}
+		// A generated distinct ID would otherwise create a new person for every event.
+		personless = Options{optionProcessPersonProfile: false}
 	}
 
-	return resolved, nil
+	return captureContext{
+		distinctID:                    resolvedDistinctID,
+		properties:                    mergeContextProperties(requestContext, properties),
+		options:                       layerOptions(personless, defaultOptions, requestContext.Options, options),
+		generatedPersonlessDistinctID: isPersonless,
+	}, nil
+}
+
+// layerOptions merges option maps into a new map, later layers overriding
+// earlier ones. It returns nil when no layer sets an option.
+func layerOptions(layers ...Options) Options {
+	var merged Options
+	for _, layer := range layers {
+		for key, value := range layer {
+			if merged == nil {
+				merged = NewOptions()
+			}
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func mergeContextProperties(requestContext RequestContext, explicit Properties) Properties {
