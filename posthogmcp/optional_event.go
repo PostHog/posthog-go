@@ -177,6 +177,7 @@ func (p preparedToolCall) buildOptionalEvent(event string, specific posthog.Prop
 			Event:      event,
 			Timestamp:  p.call.Timestamp,
 			Properties: properties,
+			Options:    p.options(),
 			Groups:     p.groups,
 		}
 		size, err := messageSize(capture)

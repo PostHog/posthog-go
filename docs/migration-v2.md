@@ -242,11 +242,14 @@ When a capture with a request context has no distinct ID, the SDK generates
 one and sets the option `process_person_profile: false`, so it does not create
 a person for every generated ID. A default, request-context or event option
 can turn processing back on; a legacy `$process_person_profile` property
-cannot. `posthogmcp` sets the same option on tool calls without an identity,
-and on calls whose properties set `$process_person_profile: false`.
+cannot. `posthogmcp` sets the same option on events without an identity, and
+on events whose properties set `$process_person_profile: false`. This covers
+tool calls and the `$mcp_unknown_tool`, `$mcp_input_required` and
+`$mcp_missing_capability` events.
 
 `posthogmcp.ToolCall` has a new `Options` field, and tool calls also take
 `RequestContext.Options`. The call's options override the request context's.
+The other MCP events take `RequestContext.Options` only.
 A call without an identity always gets `process_person_profile: false`, whatever
 its options say. With an identity, a `process_person_profile` option overrides
 a `$process_person_profile: false` property.
