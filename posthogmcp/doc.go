@@ -9,8 +9,4 @@
 // [Analytics.CaptureInputRequired], and [Analytics.CaptureMissingCapability]
 // send their own events. Parameter or response JSON
 // exceeding 1 MiB after media redaction is replaced with an omission marker.
-//
-// MCP events carry $lib posthog-go-mcp in the properties that BeforeSend sees.
-// The server takes $lib from the per-request PostHog-Sdk-Info header, so stored
-// MCP events report posthog-go.
 package posthogmcp

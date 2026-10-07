@@ -81,8 +81,6 @@ func TestCaptureOptionalEventsCarryIdentityAndSession(t *testing.T) {
 			capture := captureOptional(t, test.capture)
 
 			assert.Equal(t, test.event, capture.Event)
-			assert.Equal(t, "posthog-go-mcp", capture.Library)
-			assertSerializedProperty(t, capture, "$lib", "posthog-go-mcp")
 			assert.Equal(t, "user_1", capture.DistinctId)
 			assert.Equal(t, shared.Timestamp, capture.Timestamp)
 			assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Groups)

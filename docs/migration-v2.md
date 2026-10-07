@@ -145,8 +145,15 @@ limits arrive as a terminal `402`. Retryable statuses are `408`, `500`, `502`,
 ### Event properties
 
 `$lib` and `$lib_version` are no longer sent in properties. SDK identity
-travels in the `PostHog-Sdk-Info` header and the backend injects the
-properties from it. If you set them explicitly they are still sent.
+travels in the `PostHog-Sdk-Info` header, which is always
+`posthog-go/<version>`, and the backend sets both properties from it. If you
+set them explicitly they are still sent, but the backend overwrites them, so
+stored events always report `posthog-go`.
+
+`Capture.Library` and `Exception.Library` (added in 1.33) are removed. One
+request carries one header, so a per-event library name cannot reach the
+backend. `posthogmcp` events now report `posthog-go`, like every other event.
+Delete the field.
 
 Caller-supplied properties now take precedence over SDK system context.
 Previously the SDK's `$os`, `$os_version`, `$os_distro` and `$go_version`

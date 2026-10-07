@@ -67,7 +67,6 @@ func (p preparedToolCall) captureAt(base posthog.Properties, stage captureStage)
 		Timestamp:  p.call.Timestamp,
 		Properties: properties,
 		Groups:     p.groups,
-		Library:    library,
 	}
 }
 
@@ -118,7 +117,6 @@ func (p preparedToolCall) buildException() (posthog.Exception, error) {
 			DistinctId: p.distinctID,
 			Timestamp:  p.call.Timestamp,
 			Properties: properties,
-			Library:    library,
 			ExceptionList: []posthog.ExceptionItem{
 				item,
 			},
