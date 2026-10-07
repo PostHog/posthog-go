@@ -139,11 +139,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 	custom := make(posthog.Properties, len(call.Properties))
 	for key, value := range call.Properties {
-		if strings.HasPrefix(key, "$mcp_") {
-			continue
-		}
-		switch key {
-		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID, propertyExceptionLevel, propertyExceptionSource:
+		if isReservedCustomProperty(key) {
 			continue
 		}
 		custom[key] = value
@@ -177,6 +173,36 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 
 	return prepared, nil
+}
+
+func isReservedCustomProperty(key string) bool {
+	if strings.HasPrefix(key, "$mcp_") {
+		return true
+	}
+	switch key {
+	case propertyGroups,
+		propertySet,
+		propertyProcessProfile,
+		propertySessionID,
+		propertyExceptionLevel,
+		propertyExceptionSource,
+		"$debug_images",
+		"$exception_fingerprint",
+		"$exception_fingerprint_record",
+		"$exception_fingerprint_version",
+		"$exception_functions",
+		"$exception_handled",
+		"$exception_issue_id",
+		"$exception_list",
+		"$exception_release",
+		"$exception_sources",
+		"$exception_types",
+		"$exception_values",
+		"$cymbal_errors":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeModel(model string) string {

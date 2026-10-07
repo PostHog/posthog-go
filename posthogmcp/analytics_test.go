@@ -871,6 +871,51 @@ func TestCaptureToolCallExceptionSource(t *testing.T) {
 	}
 }
 
+func TestCaptureToolCallReservedExceptionProperties(t *testing.T) {
+	reserved := []string{
+		"$debug_images",
+		"$exception_fingerprint",
+		"$exception_fingerprint_record",
+		"$exception_fingerprint_version",
+		"$exception_functions",
+		"$exception_handled",
+		"$exception_issue_id",
+		"$exception_list",
+		"$exception_release",
+		"$exception_sources",
+		"$exception_types",
+		"$exception_values",
+		"$cymbal_errors",
+	}
+
+	properties := posthog.Properties{"custom_property": "kept"}
+	for _, key := range reserved {
+		properties[key] = "caller-controlled"
+	}
+
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+		ToolName:   "query",
+		Error:      errors.New("boom"),
+		Properties: properties,
+	}))
+	require.Len(t, client.messages, 2)
+
+	for _, message := range client.messages {
+		data, err := json.Marshal(message.APIfy())
+		require.NoError(t, err)
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(data, &payload))
+		properties, ok := payload["properties"].(map[string]any)
+		require.True(t, ok, "properties type = %T", payload["properties"])
+
+		for _, key := range reserved {
+			assert.NotEqual(t, "caller-controlled", properties[key], "%s should not use caller-controlled metadata", key)
+		}
+		assert.Equal(t, "kept", properties["custom_property"])
+	}
+}
+
 func TestCaptureToolCallExceptionLevel(t *testing.T) {
 	tests := []struct {
 		name       string
