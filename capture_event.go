@@ -215,8 +215,10 @@ func (msg Capture) apifyEvent() apiEvent {
 
 // apifyEvent builds the intermediate event for an Identify. The person
 // properties are folded into properties.$set (there is no top-level $set).
+// Default event properties go into the event properties, never into $set.
 func (msg Identify) apifyEvent() apiEvent {
 	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
+		mergeDefaults(msg.defaultProperties).
 		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Properties != nil {
@@ -235,11 +237,13 @@ func (msg Identify) apifyEvent() apiEvent {
 
 // apifyEvent builds the intermediate event for a GroupIdentify. The group
 // identifiers and $group_set stay in properties (the ingestion groups step reads
-// them from there).
+// them from there). Default event properties go into the event properties,
+// never into $group_set.
 func (msg GroupIdentify) apifyEvent() apiEvent {
 	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
+		mergeDefaults(msg.defaultProperties).
 		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Properties != nil {
@@ -262,6 +266,7 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 // into properties.
 func (msg Alias) apifyEvent() apiEvent {
 	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
+		mergeDefaults(msg.defaultProperties).
 		mergeDefaults(getSystemContext().ToProperties()).
 		Set("alias", msg.Alias)
 

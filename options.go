@@ -39,3 +39,30 @@ func NewOptions() Options {
 func (o Options) Set(name string, value interface{}) Options {
 	return setStringInterfaceMapValue(o, name, value)
 }
+
+// fillOptions returns a copy of options with each option from layers added
+// when options and the earlier layers leave it missing or nil. A nil option
+// counts as unset here, as it does for the legacy properties in mergeOptions.
+// options is returned unchanged when no layer has an option.
+func fillOptions(options Options, layers ...Options) Options {
+	size := len(options)
+	for _, layer := range layers {
+		size += len(layer)
+	}
+	if size == len(options) {
+		return options
+	}
+	filled := make(Options, size)
+	for key, value := range options {
+		filled[key] = value
+	}
+	for _, layer := range layers {
+		for key, value := range layer {
+			if current, set := filled[key]; set && (!isNilValue(current) || isNilValue(value)) {
+				continue
+			}
+			filled[key] = value
+		}
+	}
+	return filled
+}
