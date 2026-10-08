@@ -217,8 +217,8 @@ func TestBeforeSendSeesEnrichmentButNotContextOrDefaults(t *testing.T) {
 		wantSeenProperties []interface{}
 		wantContext        bool
 	}{
-		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertyGeoipDisable, propertyIsServer}, wantContext: true},
-		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{}, wantContext: true},
+		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertyGeoipDisable, propertyIsServer, propertySessionID}, wantContext: true},
+		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID}, wantContext: true},
 		{msg: Identify{DistinctId: "user-1"}},
 		{msg: Alias{DistinctId: "user-1", Alias: "a"}},
 		{msg: GroupIdentify{Type: "company", Key: "k"}},
@@ -254,6 +254,7 @@ func TestBeforeSendSeesEnrichmentButNotContextOrDefaults(t *testing.T) {
 			defer client.Close()
 
 			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				SessionId:  "session-1",
 				Properties: NewProperties().Set("service", "context").Set("context_only", "context"),
 				Options:    NewOptions().Set("product_tour_id", "context-tour"),
 			})
@@ -272,6 +273,7 @@ func TestBeforeSendSeesEnrichmentButNotContextOrDefaults(t *testing.T) {
 				wantOptions["process_person_profile"] = false
 				require.Equal(t, "hook", properties["service"])
 				require.Equal(t, "context", properties["context_only"])
+				require.Equal(t, "session-1", event["session_id"])
 			} else {
 				require.Equal(t, "default", properties["service"])
 			}
@@ -282,7 +284,7 @@ func TestBeforeSendSeesEnrichmentButNotContextOrDefaults(t *testing.T) {
 }
 
 func TestBeforeSendCanRemoveEnrichmentProperties(t *testing.T) {
-	for _, removed := range []string{propertyIsServer, propertyGeoipDisable} {
+	for _, removed := range []string{propertyIsServer, propertyGeoipDisable, propertySessionID} {
 		t.Run(removed, func(t *testing.T) {
 			body, server := mockServer()
 			defer server.Close()
@@ -300,13 +302,18 @@ func TestBeforeSendCanRemoveEnrichmentProperties(t *testing.T) {
 			require.NoError(t, err)
 			defer client.Close()
 
-			require.NoError(t, client.Enqueue(Capture{
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{SessionId: "session-1"})
+			require.NoError(t, EnqueueWithContext(ctx, client, Capture{
 				DistinctId: "user-123",
 				Event:      "test-event",
 			}))
 
-			properties := firstProperties(t, readBatch(t, body))
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
 			require.NotContains(t, properties, removed)
+			if removed == propertySessionID {
+				require.NotContains(t, event, "session_id")
+			}
 			for _, kept := range []string{propertyIsServer, propertyGeoipDisable} {
 				if kept != removed {
 					require.Equal(t, true, properties[kept])
