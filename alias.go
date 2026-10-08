@@ -24,6 +24,11 @@ type Alias struct {
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
+	// EventProperties are properties of the $create_alias event. Enqueue fills
+	// the keys they leave unset from Config.DefaultEventProperties before
+	// BeforeSend. The SDK's alias property wins over an "alias" key in them.
+	// The Config.Callback message does not include them.
+	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
 	Options Options
 	// DisableGeoIP controls whether this alias event disables GeoIP lookup.
@@ -32,9 +37,6 @@ type Alias struct {
 	// IsServer controls whether the event includes the $is_server property.
 	// Enqueue overwrites it from Config.GetIsServer.
 	IsServer bool
-	// defaultProperties are Config.DefaultEventProperties. Enqueue sets them
-	// after BeforeSend, and they fill only event properties left unset.
-	defaultProperties Properties
 }
 
 func (msg Alias) internal() {

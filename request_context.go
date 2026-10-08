@@ -48,13 +48,13 @@ type RequestContext struct {
 	// unless the event has its own. A $session_id in Properties wins over it.
 	SessionId string
 	// Properties are request-scoped properties for capture and exception events.
-	// They fill in after BeforeSend, only for keys the event and the hook left
-	// unset, so BeforeSend does not see them. They win over
+	// They fill in before BeforeSend, only for keys the event left unset, so
+	// BeforeSend sees them and can change or remove them. They win over
 	// Config.DefaultEventProperties.
 	Properties Properties
 	// Options are request-scoped capture options for capture and exception events.
-	// They fill in after BeforeSend, only for options the event and the hook left
-	// missing or nil, so BeforeSend does not see them. They win over
+	// They fill in before BeforeSend, only for options the event left missing or
+	// nil, so BeforeSend sees them and can change them. They win over
 	// Config.DefaultEventOptions.
 	Options Options
 }
@@ -244,9 +244,9 @@ func ExtractRequestContext(r *http.Request, captureTracingHeaders bool) RequestC
 }
 
 // captureContext holds what the request context gives one event. The identity,
-// including the session ID, is resolved before BeforeSend because the event and
-// the personless decision depend on it. The other properties and the options
-// wait for fillEvent, after the hook.
+// including the session ID, is resolved first because the event and the
+// personless decision depend on it. fillEvent adds the other properties and the
+// options after SDK enrichment and before BeforeSend.
 type captureContext struct {
 	distinctID                    string
 	sessionID                     interface{}
@@ -304,9 +304,8 @@ func (cc captureContext) withSessionID(properties Properties) Properties {
 	return NewProperties().Merge(properties).Set(propertySessionID, cc.sessionID)
 }
 
-// fillEvent fills only the keys that the event and BeforeSend left unset. The
-// request context fills first, then the client defaults, then the personless
-// option.
+// fillEvent fills only the keys that the event left unset. The request context
+// fills first, then the client defaults, then the personless option.
 func (cc captureContext) fillEvent(properties Properties, options Options, defaultProperties Properties, defaultOptions Options) (Properties, Options) {
 	var personless Options
 	if cc.generatedPersonlessDistinctID {
