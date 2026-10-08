@@ -32,6 +32,9 @@ type Identify struct {
 	// IsServer controls whether the event includes the $is_server property.
 	// Enqueue overwrites it from Config.GetIsServer.
 	IsServer bool
+	// defaultProperties are Config.DefaultEventProperties. Enqueue sets them
+	// after BeforeSend, and they fill only event properties left unset.
+	defaultProperties Properties
 }
 
 func (msg Identify) internal() {

@@ -680,6 +680,8 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Alias)
+		m.defaultProperties = c.DefaultEventProperties
+		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -702,6 +704,8 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Identify)
+		m.defaultProperties = c.DefaultEventProperties
+		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -723,6 +727,8 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(GroupIdentify)
+		m.defaultProperties = c.DefaultEventProperties
+		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -739,14 +745,14 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Uuid = makeUUID(m.Uuid)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.IsServer = c.GetIsServer()
-		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, m.Options, c.DefaultEventOptions, "posthog.Capture")
+		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, "posthog.Capture")
 		if captureContextErr != nil {
 			err = captureContextErr
 			return
 		}
 		m.DistinctId = captureContext.distinctID
-		m.Properties = captureContext.properties
-		m.Options = captureContext.options
+		// Enrichment below writes into Properties, so copy the caller's map.
+		m.Properties = make(Properties, len(m.Properties)).Merge(m.Properties)
 		if err = m.Validate(); err != nil {
 			return
 		}
@@ -798,7 +804,6 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			sort.Strings(activeFeatureFlags)
 			m.Properties["$active_feature_flags"] = activeFeatureFlags
 		}
-		m.Properties = m.Properties.mergeDefaults(c.DefaultEventProperties)
 		if m.IsServer {
 			m.Properties.Set(propertyIsServer, true)
 		}
@@ -818,6 +823,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		} else if m.Properties != nil {
 			m.IsServer = false
 		}
+		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -832,16 +838,12 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		// Exceptions do not take Config.DefaultEventProperties, so they do not take
-		// Config.DefaultEventOptions either.
-		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, m.Properties, m.Options, nil, "posthog.Exception")
+		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, "posthog.Exception")
 		if captureContextErr != nil {
 			err = captureContextErr
 			return
 		}
 		m.DistinctId = captureContext.distinctID
-		m.Properties = captureContext.properties
-		m.Options = captureContext.options
 		if err = m.Validate(); err != nil {
 			return
 		}
@@ -850,6 +852,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Exception)
+		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)

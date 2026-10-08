@@ -66,3 +66,24 @@ func (p Properties) mergeDefaults(defaults Properties) Properties {
 
 	return p
 }
+
+// fillProperties returns a copy of props with each key from layers added when
+// props and the earlier layers do not contain it. A key with a nil value counts
+// as set. props is returned unchanged when no layer has a key.
+func fillProperties(props Properties, layers ...Properties) Properties {
+	size := len(props)
+	for _, layer := range layers {
+		size += len(layer)
+	}
+	if size == len(props) {
+		return props
+	}
+	filled := make(Properties, size)
+	for k, v := range props {
+		filled[k] = v
+	}
+	for _, layer := range layers {
+		filled.mergeDefaults(layer)
+	}
+	return filled
+}
