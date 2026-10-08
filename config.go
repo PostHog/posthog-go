@@ -73,7 +73,9 @@ type Config struct {
 
 	// DisableGeoIP controls whether event and feature flag requests include
 	// $geoip_disable/geoip_disable. Nil defaults to true because this SDK usually
-	// runs server-side; set Ptr(false) to allow GeoIP lookup.
+	// runs server-side; set Ptr(false) to allow GeoIP lookup. On events it is a
+	// default: a $geoip_disable value in the event, the RequestContext or
+	// DefaultEventProperties wins.
 	DisableGeoIP *bool
 
 	// IsServer controls whether events include the $is_server property.
@@ -83,7 +85,9 @@ type Config struct {
 	//
 	// Set Ptr(false) when using posthog-go as a CLI or client so the event is
 	// not flagged as server-side and the device OS is attributed normally. When
-	// resolved to false, $is_server is omitted from every event entirely.
+	// resolved to false, the SDK does not add $is_server. Like DisableGeoIP, it
+	// is a default: a $is_server value in the event, the RequestContext or
+	// DefaultEventProperties wins.
 	//
 	//	// CLI/client usage
 	//	config := posthog.Config{IsServer: posthog.Ptr(false)}
@@ -165,10 +169,11 @@ type Config struct {
 	// BeforeSend is called after SDK enrichment and before messages are serialized.
 	// Return the message to send a modified version, or nil to drop it.
 	//
-	// The hook sees the event's own values, the SDK enrichment, such as
-	// $is_server, $geoip_disable and feature flag properties, and the values
-	// filled from RequestContext, DefaultEventProperties, DefaultEventOptions and
-	// the personless process_person_profile option. Its changes are final. To
+	// The hook sees the event's own values and the values filled from
+	// RequestContext, DefaultEventProperties, DefaultEventOptions, the
+	// personless process_person_profile option and the SDK: $is_server,
+	// $geoip_disable, system context and feature flag properties. The SDK fills
+	// only keys the caller left unset. Its changes are final. To
 	// change an option, set it in Options: a legacy property such as
 	// $process_person_profile does not replace an option that is already set.
 	BeforeSend BeforeSendFunc
@@ -569,12 +574,6 @@ func makeConfig(c Config) Config {
 
 	if c.MaxEnqueuedRequests == 0 {
 		c.MaxEnqueuedRequests = DefaultMaxEnqueuedRequests
-	}
-
-	// Every message carries $geoip_disable from DisableGeoIP before the defaults
-	// fill, so it is not added as a default. A default must still not turn it off.
-	if _, ok := c.DefaultEventProperties[propertyGeoipDisable]; ok && c.GetDisableGeoIP() {
-		c.DefaultEventProperties = NewProperties().Merge(c.DefaultEventProperties).Set(propertyGeoipDisable, true)
 	}
 
 	return c
