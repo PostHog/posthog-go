@@ -124,12 +124,12 @@ type Capture struct {
 	// hidden /flags request on every capture. Flags takes precedence when
 	// both are set.
 	Flags *FeatureFlagEvaluations
-	// IsServer controls whether the event includes the $is_server property.
-	// Enqueue overwrites it from Config.GetIsServer.
+	// IsServer reports whether the event sets $is_server. Enqueue sets it from
+	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
+	// To change $is_server, set the property.
 	IsServer bool
 	// minimalFlagCalledEvent marks a $feature_flag_called event for the minimal
-	// shape: serialization keeps only the allowlisted evaluation properties and
-	// skips system context. It is set only when the server enabled
+	// shape: serialization keeps only the allowlisted properties. It is set only when the server enabled
 	// minimal_flag_called_events and the flag has no linked experiment. This is
 	// the resolved per-event decision (shouldMinimizeFlagCalledEvent's output),
 	// distinct from the plural minimalFlagCalledEvents gate that decision reads.
@@ -191,10 +191,9 @@ type CaptureInApi struct {
 // enrichment for events from clients that disabled it. $session_id,
 // $window_id, and $device_id are linkage identifiers the contract preserves.
 // $is_server is kept so server-event classification still works. System
-// context ($os, $os_version, $os_distro, $go_version) isn't filtered through
-// this allowlist — APIfy merges it into minimal events the same way it does
-// for full events, since those are cheap, low-cardinality dimensions kept for
-// platform/runtime breakdowns on flag-call debugging.
+// context ($os, $os_version, $os_distro, $go_version) is kept because those
+// are cheap, low-cardinality dimensions for platform/runtime breakdowns on
+// flag-call debugging.
 var minimalFlagCalledEventAllowlist = []string{
 	"$feature_flag",
 	"$feature_flag_response",
@@ -221,6 +220,10 @@ var minimalFlagCalledEventAllowlist = []string{
 	propertySessionID,
 	propertyWindowID,
 	"$device_id",
+	"$os",
+	"$os_version",
+	"$os_distro",
+	"$go_version",
 }
 
 // minimalFlagCalledEventProperties builds a fresh property set containing only
@@ -260,8 +263,7 @@ func (msg Capture) APIfy() APIMessage {
 	myProperties := Properties{}.
 		Merge(msg.selectedProperties()).
 		Set("$lib", SDKName).
-		Set("$lib_version", libraryVersion).
-		Merge(getSystemContext().ToProperties())
+		Set("$lib_version", libraryVersion)
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)

@@ -5,9 +5,9 @@
       "distinct_id": "capture-user",
       "event": "property-precedence",
       "properties": {
-        "$geoip_disable": true,
+        "$geoip_disable": false,
         "$go_version": "event-go-version",
-        "$is_server": true,
+        "$is_server": false,
         "$lib": "event-lib",
         "$lib_version": "event-version",
         "$os": "event-os",
