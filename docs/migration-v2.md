@@ -160,21 +160,33 @@ Previously the SDK's `$os`, `$os_version`, `$os_distro` and `$go_version`
 overwrote values you had set; they are now applied only as defaults.
 
 `Config.DefaultEventProperties` are now defaults too. The SDK fills them in
-after `BeforeSend`, only for keys that the event, the hook and the request
-context left unset. A key set to `nil` counts as set, so it keeps the default
-out. `RequestContext.Properties` fill in the same way, also after
-`BeforeSend`, and win over the defaults. In 1.x the default value overwrote
-the event's value, except for an event's `$process_person_profile: false`.
+before `BeforeSend`, only for keys that the event and the request context left
+unset. A key set to `nil` counts as set, so it keeps the default out.
+`RequestContext.Properties` fill in the same way and win over the defaults. In
+1.x the default value overwrote the event's value, except for an event's
+`$process_person_profile: false`.
 
-`BeforeSend` no longer sees `DefaultEventProperties` or
-`RequestContext.Properties`, so it cannot read or remove them. To override a
-default for one event, set the key on the event or in `BeforeSend`. The
-request context's session ID is part of the event's identity, so it is still
-set as `$session_id` before `BeforeSend`, unless the event has its own.
+`$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. When the
+event and a default both set one of them to a map, the default adds only the
+keys the event left out. For example, a default
+`"$set": {"plan": "free", "source": "web"}` and an event
+`"$set": {"plan": "pro"}` send `{"plan": "pro", "source": "web"}`. In 1.x the
+default replaced the event's whole map. `Capture.Groups` now merges into a
+`$groups` map in `Properties` and wins key by key; in 1.x it replaced it.
+
+`BeforeSend` sees the filled `DefaultEventProperties` and
+`RequestContext.Properties`, and can change or remove them. Its changes are
+final. The request context's session ID is part of the event's identity, so it
+is set as `$session_id` first, unless the event has its own.
 
 `DefaultEventProperties` now apply to `Exception`, `Identify`, `Alias` and
-`GroupIdentify` events too, not only to `Capture`. They go into the event's
-own `properties`, never into `$set` or `$group_set`.
+`GroupIdentify` events too, not only to `Capture`. For `Identify`, `Alias` and
+`GroupIdentify` they fill the new `EventProperties` field: the properties of
+the event itself, separate from the `$set` or `$group_set` that `Properties`
+sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
+`GroupIdentify.EventProperties` merges under `Properties`, which win key by
+key. The `Config.Callback` message for an `Alias` does not include its
+`EventProperties`.
 
 `Config.DisableGeoIP` still sets `$geoip_disable` on every event, whatever the
 event sets.
@@ -246,13 +258,15 @@ Options can also be set for every event and for a request:
   sent with `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
-The event's `Options` and `BeforeSend` come first. `BeforeSend` sees only the
-event's own options. After the hook, the SDK fills each option that is still
-missing or `nil`, from these layers in order: `RequestContext.Options`, then
-`DefaultEventOptions`, then the SDK's personless default (below). So a `nil`
-event option still gets the default. To turn a default off for one event, set
-the option to `false` on the event or in `BeforeSend`. `BeforeSend` cannot
-read or remove the request-context or default options.
+The event's `Options` come first. Before `BeforeSend`, the SDK fills each
+option that is still missing or `nil`, from these layers in order:
+`RequestContext.Options`, then `DefaultEventOptions`, then the SDK's
+personless default (below). So a `nil` event option still gets the default.
+`BeforeSend` sees the filled options and can change or remove them. To turn a
+default off for one event, set the option to `false` on the event or in
+`BeforeSend`. To change an option in `BeforeSend`, set it in `Options`: a
+legacy property that the hook adds does not replace an option that is already
+set.
 
 An option at any layer wins over the matching legacy property at any layer.
 For example, `DefaultEventOptions` with `cookieless_mode: true` wins over an
@@ -277,12 +291,11 @@ its options say. With an identity, a `process_person_profile` option overrides
 a `$process_person_profile: false` property.
 
 With a `posthog.Client`, `posthogmcp` events take `RequestContext.Properties`
-and `RequestContext.Options` like any capture: after `BeforeSend`, only for
-keys the call and the hook left unset. `posthogmcp` still drops the reserved
-keys, such as `$mcp_*`, `$set` and `$session_id`, from the context properties
-and sanitizes their values first. In 1.x the context properties sat under the
-call's properties, so `BeforeSend` saw them and they won over the hook. A
-`posthog.EnqueueClient` without `EnqueueWithContext` keeps that order.
+and `RequestContext.Options` like any capture: before `BeforeSend`, only for
+keys the call left unset. `posthogmcp` still drops the reserved keys, such as
+`$mcp_*`, `$set` and `$session_id`, from the context properties and sanitizes
+their values first. A `posthog.EnqueueClient` without `EnqueueWithContext`
+puts them under the call's properties and options instead, as in 1.x.
 
 Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
 

@@ -667,7 +667,7 @@ func TestCaptureToolCallSanitizesRequestContextProperties(t *testing.T) {
 	assert.NotContains(t, capture.Properties, propertySet)
 }
 
-func TestCaptureToolCallFillsRequestContextAfterBeforeSend(t *testing.T) {
+func TestCaptureToolCallFillsSanitizedRequestContextBeforeBeforeSend(t *testing.T) {
 	payloads := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -737,10 +737,12 @@ func TestCaptureToolCallFillsRequestContextAfterBeforeSend(t *testing.T) {
 	require.Len(t, payload.Batch, 1)
 	event := payload.Batch[0]
 
-	for _, key := range []string{"service", "region", "$current_url", propertyProcessProfile} {
-		assert.NotContains(t, hookProperties, key, "BeforeSend must not see request-context properties")
-	}
-	assert.NotContains(t, hookOptions, "cookieless_mode", "BeforeSend must not see request-context options")
+	assert.Equal(t, "context", hookProperties["service"])
+	assert.Equal(t, "eu", hookProperties["region"])
+	assert.Equal(t, "https://app.test/cb?token=%5Bredacted%5D", hookProperties["$current_url"])
+	assert.Equal(t, "query", hookProperties[propertyToolName])
+	assert.NotContains(t, hookProperties, propertySet)
+	assert.Equal(t, true, hookOptions["cookieless_mode"])
 
 	assert.Equal(t, "hook", event.Properties["service"], "a key BeforeSend sets wins over the request context")
 	assert.Equal(t, "eu", event.Properties["region"])

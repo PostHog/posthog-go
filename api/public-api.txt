@@ -139,10 +139,10 @@ type Alias struct {
 	Alias string
 	DistinctId string
 	Timestamp time.Time
+	EventProperties Properties
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
-
 }
 
 func (msg Alias) APIfy() APIMessage
@@ -756,10 +756,10 @@ type GroupIdentify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	EventProperties Properties
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
-
 }
 
 func (msg GroupIdentify) APIfy() APIMessage
@@ -790,10 +790,10 @@ type Identify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	EventProperties Properties
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
-
 }
 
 func (msg Identify) APIfy() APIMessage

@@ -499,14 +499,17 @@ func cloneExceptionList(items []ExceptionItem) []ExceptionItem {
 func isolateBeforeSendMessage(msg Message) Message {
 	switch m := msg.(type) {
 	case Alias:
+		m.EventProperties = cloneMessageProperties(m.EventProperties)
 		m.Options = hookOptions(m.Options)
 		return m
 	case Identify:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.EventProperties = cloneMessageProperties(m.EventProperties)
 		m.Options = hookOptions(m.Options)
 		return m
 	case GroupIdentify:
 		m.Properties = cloneMessageProperties(m.Properties)
+		m.EventProperties = cloneMessageProperties(m.EventProperties)
 		m.Options = hookOptions(m.Options)
 		return m
 	case Capture:
@@ -675,13 +678,13 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
+		m.EventProperties = fillProperties(m.EventProperties, c.DefaultEventProperties)
+		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(Alias)
-		m.defaultProperties = c.DefaultEventProperties
-		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -699,13 +702,13 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
+		m.EventProperties = fillProperties(m.EventProperties, c.DefaultEventProperties)
+		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(Identify)
-		m.defaultProperties = c.DefaultEventProperties
-		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -722,13 +725,13 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
+		m.EventProperties = fillProperties(m.EventProperties, c.DefaultEventProperties)
+		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(GroupIdentify)
-		m.defaultProperties = c.DefaultEventProperties
-		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -811,6 +814,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		if c.GetDisableGeoIP() {
 			m.Properties.Set(propertyGeoipDisable, true)
 		}
+		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
@@ -823,7 +827,6 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		} else if m.Properties != nil {
 			m.IsServer = false
 		}
-		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -848,12 +851,12 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		if err = m.Validate(); err != nil {
 			return
 		}
+		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(Exception)
-		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)

@@ -200,7 +200,7 @@ func (msg Capture) apifyEvent() apiEvent {
 		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Groups != nil {
-		myProperties.Set("$groups", msg.Groups)
+		myProperties.Set("$groups", mergeOverNested(myProperties["$groups"], msg.Groups))
 	}
 
 	return apiEvent{
@@ -214,15 +214,15 @@ func (msg Capture) apifyEvent() apiEvent {
 }
 
 // apifyEvent builds the intermediate event for an Identify. The person
-// properties are folded into properties.$set (there is no top-level $set).
-// Default event properties go into the event properties, never into $set.
+// properties are folded into properties.$set (there is no top-level $set) and
+// win key by key over a $set in EventProperties.
 func (msg Identify) apifyEvent() apiEvent {
 	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
-		mergeDefaults(msg.defaultProperties).
+		mergeDefaults(msg.EventProperties).
 		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Properties != nil {
-		myProperties.Set("$set", msg.Properties)
+		myProperties.Set("$set", mergeOverNested(myProperties["$set"], msg.Properties))
 	}
 
 	return apiEvent{
@@ -237,17 +237,17 @@ func (msg Identify) apifyEvent() apiEvent {
 
 // apifyEvent builds the intermediate event for a GroupIdentify. The group
 // identifiers and $group_set stay in properties (the ingestion groups step reads
-// them from there). Default event properties go into the event properties,
-// never into $group_set.
+// them from there). Properties win key by key over a $group_set in
+// EventProperties.
 func (msg GroupIdentify) apifyEvent() apiEvent {
 	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
-		mergeDefaults(msg.defaultProperties).
+		mergeDefaults(msg.EventProperties).
 		mergeDefaults(getSystemContext().ToProperties())
 
 	if msg.Properties != nil {
-		myProperties.Set("$group_set", msg.Properties)
+		myProperties.Set("$group_set", mergeOverNested(myProperties["$group_set"], msg.Properties))
 	}
 
 	return apiEvent{
@@ -266,7 +266,7 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 // into properties.
 func (msg Alias) apifyEvent() apiEvent {
 	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
-		mergeDefaults(msg.defaultProperties).
+		mergeDefaults(msg.EventProperties).
 		mergeDefaults(getSystemContext().ToProperties()).
 		Set("alias", msg.Alias)
 

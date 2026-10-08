@@ -210,18 +210,19 @@ func sortedKeys(m map[string]interface{}) []string {
 // TestBeforeSendSeesEnrichmentButNotContextOrDefaults has the hook write the
 // keys it saw into options, which are sent unchanged, so the wire event shows
 // what the hook saw and that a key it sets wins over the filled-in values.
-func TestBeforeSendSeesEnrichmentButNotContextOrDefaults(t *testing.T) {
+func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 	exceptionList := []ExceptionItem{{Type: "t", Value: "v"}}
 	tests := []struct {
 		msg                Message
 		wantSeenProperties []interface{}
+		wantSeenService    string
 		wantContext        bool
 	}{
-		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertyGeoipDisable, propertyIsServer, propertySessionID}, wantContext: true},
-		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID}, wantContext: true},
-		{msg: Identify{DistinctId: "user-1"}},
-		{msg: Alias{DistinctId: "user-1", Alias: "a"}},
-		{msg: GroupIdentify{Type: "company", Key: "k"}},
+		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertyGeoipDisable, propertyIsServer, propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
+		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
+		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
+		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
+		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
@@ -236,15 +237,30 @@ func TestBeforeSendSeesEnrichmentButNotContextOrDefaults(t *testing.T) {
 				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
 				BeforeSend: func(msg Message) Message {
 					options := messageOptions(msg)
-					options.Set("seen_options", sortedKeys(options)).Set("cookieless_mode", false)
+					record := func(properties Properties) Properties {
+						options.Set("seen_options", sortedKeys(options)).
+							Set("seen_properties", sortedKeys(properties)).
+							Set("seen_service", properties["service"]).
+							Set("cookieless_mode", false)
+						properties = NewProperties().Merge(properties).Set("service", "hook")
+						delete(properties, "app")
+						return properties
+					}
 					switch m := msg.(type) {
 					case Capture:
-						options.Set("seen_properties", sortedKeys(m.Properties))
-						m.Properties.Set("service", "hook")
+						m.Properties = record(m.Properties)
 						return m
 					case Exception:
-						options.Set("seen_properties", sortedKeys(m.Properties))
-						m.Properties = NewProperties().Merge(m.Properties).Set("service", "hook")
+						m.Properties = record(m.Properties)
+						return m
+					case Identify:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					case Alias:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					case GroupIdentify:
+						m.EventProperties = record(m.EventProperties)
 						return m
 					}
 					return msg
@@ -263,22 +279,70 @@ func TestBeforeSendSeesEnrichmentButNotContextOrDefaults(t *testing.T) {
 			event := readSingleBatchEvent(t, body)
 			properties := requireProperties(t, event)
 			wantOptions := map[string]interface{}{
-				"seen_options":            []interface{}{},
+				"seen_options":            []interface{}{"cookieless_mode", "disable_skew_correction"},
+				"seen_properties":         tt.wantSeenProperties,
+				"seen_service":            tt.wantSeenService,
 				"cookieless_mode":         false,
 				"disable_skew_correction": true,
 			}
 			if tt.wantContext {
-				wantOptions["seen_properties"] = tt.wantSeenProperties
+				wantOptions["seen_options"] = []interface{}{"cookieless_mode", "disable_skew_correction", "process_person_profile", "product_tour_id"}
 				wantOptions["product_tour_id"] = "context-tour"
 				wantOptions["process_person_profile"] = false
-				require.Equal(t, "hook", properties["service"])
 				require.Equal(t, "context", properties["context_only"])
 				require.Equal(t, "session-1", event["session_id"])
-			} else {
-				require.Equal(t, "default", properties["service"])
 			}
 			require.Equal(t, wantOptions, requireOptions(t, event))
-			require.Equal(t, "default", properties["app"])
+			require.Equal(t, "hook", properties["service"])
+			require.NotContains(t, properties, "app")
+		})
+	}
+}
+
+func TestNestedDefaultsFillOneLevelDeep(t *testing.T) {
+	tests := []struct {
+		msg  Message
+		want map[string]interface{}
+	}{
+		{
+			msg: Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set("$set", map[string]interface{}{"plan": "pro"}), Groups: NewGroups().Set("company", "posthog")},
+			want: map[string]interface{}{
+				"$set":    map[string]interface{}{"plan": "pro", "source": "default"},
+				"$groups": map[string]interface{}{"company": "posthog", "team": "core"},
+			},
+		},
+		{
+			msg:  Identify{DistinctId: "user-1", Properties: NewProperties().Set("plan", "pro")},
+			want: map[string]interface{}{"$set": map[string]interface{}{"plan": "pro", "source": "default"}},
+		},
+		{
+			msg:  GroupIdentify{Type: "company", Key: "k", Properties: NewProperties().Set("tier", "paid")},
+			want: map[string]interface{}{"$group_set": map[string]interface{}{"tier": "paid", "source": "default"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				now:       mockTime,
+				DefaultEventProperties: NewProperties().
+					Set("$set", map[string]interface{}{"plan": "free", "source": "default"}).
+					Set("$groups", map[string]interface{}{"company": "acme", "team": "core"}).
+					Set("$group_set", map[string]interface{}{"tier": "free", "source": "default"}),
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(tt.msg))
+
+			properties := requireProperties(t, readSingleBatchEvent(t, body))
+			for key, want := range tt.want {
+				require.Equal(t, want, properties[key], key)
+			}
 		})
 	}
 }

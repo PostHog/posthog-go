@@ -24,6 +24,11 @@ type Identify struct {
 	Timestamp time.Time
 	// Properties are sent as the $set person properties for DistinctId.
 	Properties Properties
+	// EventProperties are properties of the $identify event itself, not of the
+	// person. Enqueue fills the keys they leave unset from
+	// Config.DefaultEventProperties before BeforeSend. A $set in them is merged
+	// under Properties, which win key by key.
+	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
 	Options Options
 	// DisableGeoIP controls whether this identify event disables GeoIP lookup.
@@ -32,9 +37,6 @@ type Identify struct {
 	// IsServer controls whether the event includes the $is_server property.
 	// Enqueue overwrites it from Config.GetIsServer.
 	IsServer bool
-	// defaultProperties are Config.DefaultEventProperties. Enqueue sets them
-	// after BeforeSend, and they fill only event properties left unset.
-	defaultProperties Properties
 }
 
 func (msg Identify) internal() {
@@ -87,7 +89,7 @@ func (msg Identify) APIfy() APIMessage {
 	}
 
 	myProperties.
-		mergeDefaults(msg.defaultProperties).
+		mergeDefaults(msg.EventProperties).
 		mergeDefaults(getSystemContext().ToProperties())
 
 	apified := IdentifyInApi{

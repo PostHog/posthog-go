@@ -239,7 +239,7 @@ func isReservedProperty(key string) bool {
 }
 
 // prepareContextProperties applies the call.Properties rules to the request
-// context properties that the client fills in after BeforeSend. It keeps
+// context properties that the client fills in before BeforeSend. It keeps
 // $process_person_profile, which the client turns into the
 // process_person_profile option when the event has none.
 func prepareContextProperties(properties posthog.Properties) (posthog.Properties, error) {
