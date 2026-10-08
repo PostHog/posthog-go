@@ -142,6 +142,7 @@ type Alias struct {
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
+
 }
 
 func (msg Alias) APIfy() APIMessage
@@ -758,6 +759,7 @@ type GroupIdentify struct {
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
+
 }
 
 func (msg GroupIdentify) APIfy() APIMessage
@@ -791,6 +793,7 @@ type Identify struct {
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
+
 }
 
 func (msg Identify) APIfy() APIMessage
