@@ -358,6 +358,7 @@ func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 		IsServer:               true,
 		minimalFlagCalledEvent: true,
 	}
+	msg.Properties = fillSDKProperties(msg.Properties, msg.IsServer, false)
 
 	ev := buildEvent(msg.apifyEvent())
 	wantOptions := map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": true, "product_tour_id": "tour_1"}

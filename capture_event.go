@@ -165,16 +165,26 @@ func liftStringProperty(props Properties, key string) string {
 	return s
 }
 
-// baseProperties returns the common properties shared by all event types.
-func baseProperties(isServer bool, disableGeoIP bool) Properties {
-	props := Properties{}
+// fillSDKProperties fills the values the SDK adds to every event: system
+// context, $is_server and $geoip_disable. They fill last, after the context and
+// default values, so any value the caller set wins. Enqueue calls it before
+// BeforeSend, so the hook sees these values and can change or remove them.
+func fillSDKProperties(props Properties, isServer, disableGeoIP bool) Properties {
+	enrichment := Properties{}
 	if isServer {
-		props.Set("$is_server", true)
+		enrichment[propertyIsServer] = true
 	}
 	if disableGeoIP {
-		props.Set(propertyGeoipDisable, true)
+		enrichment[propertyGeoipDisable] = true
 	}
-	return props
+	return fillProperties(props, getSystemContext().ToProperties(), enrichment)
+}
+
+// boolProperty reads a boolean SDK value back from properties after
+// BeforeSend, which may have changed or removed it.
+func boolProperty(props Properties, key string) bool {
+	value, _ := props[key].(bool)
+	return value
 }
 
 // prepareForSend builds the callback APIMessage, serializes the wire event,
@@ -195,9 +205,7 @@ func prepareForSend(msg Message) (json.RawMessage, APIMessage, string, error) {
 // properties APIfy assembles, minus $lib/$lib_version (the PostHog-Sdk-Info
 // header is the authoritative SDK identity).
 func (msg Capture) apifyEvent() apiEvent {
-	myProperties := baseProperties(msg.IsServer, false).
-		Merge(msg.selectedProperties()).
-		mergeDefaults(getSystemContext().ToProperties())
+	myProperties := Properties{}.Merge(msg.selectedProperties())
 
 	if msg.Groups != nil {
 		myProperties.Set("$groups", mergeOverNested(myProperties["$groups"], msg.Groups))
@@ -217,9 +225,7 @@ func (msg Capture) apifyEvent() apiEvent {
 // properties are folded into properties.$set (there is no top-level $set) and
 // win key by key over a $set in EventProperties.
 func (msg Identify) apifyEvent() apiEvent {
-	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
-		mergeDefaults(msg.EventProperties).
-		mergeDefaults(getSystemContext().ToProperties())
+	myProperties := Properties{}.Merge(msg.EventProperties)
 
 	if msg.Properties != nil {
 		myProperties.Set("$set", mergeOverNested(myProperties["$set"], msg.Properties))
@@ -240,11 +246,10 @@ func (msg Identify) apifyEvent() apiEvent {
 // them from there). Properties win key by key over a $group_set in
 // EventProperties.
 func (msg GroupIdentify) apifyEvent() apiEvent {
-	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
+	myProperties := Properties{}.
+		Merge(msg.EventProperties).
 		Set("$group_type", msg.Type).
-		Set("$group_key", msg.Key).
-		mergeDefaults(msg.EventProperties).
-		mergeDefaults(getSystemContext().ToProperties())
+		Set("$group_key", msg.Key)
 
 	if msg.Properties != nil {
 		myProperties.Set("$group_set", mergeOverNested(myProperties["$group_set"], msg.Properties))
@@ -265,9 +270,8 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 // "alias" property and the top-level distinct_id, so no distinct_id is duplicated
 // into properties.
 func (msg Alias) apifyEvent() apiEvent {
-	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
-		mergeDefaults(msg.EventProperties).
-		mergeDefaults(getSystemContext().ToProperties()).
+	myProperties := Properties{}.
+		Merge(msg.EventProperties).
 		Set("alias", msg.Alias)
 
 	return apiEvent{
@@ -284,9 +288,8 @@ func (msg Alias) apifyEvent() apiEvent {
 // exception fields win over custom properties on collision (matching the legacy
 // ExceptionInApiProperties marshal precedence).
 func (msg Exception) apifyEvent() apiEvent {
-	myProperties := baseProperties(msg.IsServer, msg.DisableGeoIP).
+	myProperties := Properties{}.
 		Merge(msg.Properties).
-		mergeDefaults(getSystemContext().ToProperties()).
 		Set("$exception_list", msg.ExceptionList)
 
 	if msg.ExceptionFingerprint != nil {

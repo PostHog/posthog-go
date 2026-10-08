@@ -76,6 +76,7 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 		definitions     string // "" => definitions endpoint fails to load
 		decideResponse  string
 		sendFlags       SendFeatureFlagsValue
+		properties      Properties
 		wantDecideCalls int32
 		wantProps       map[string]interface{}
 		wantAbsent      []string
@@ -94,6 +95,19 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 			},
 			// … but excluded from $active_feature_flags.
 			wantActiveFlags: []string{"beta-feature"},
+		},
+		{
+			name:            "a flag property the caller set wins",
+			definitions:     validDefs,
+			decideResponse:  unusedDecide,
+			sendFlags:       SendFeatureFlags(true),
+			properties:      NewProperties().Set("$feature/beta-feature", "caller").Set("$active_feature_flags", "caller"),
+			wantDecideCalls: 0,
+			wantProps: map[string]interface{}{
+				"$feature/beta-feature":     "caller",
+				"$feature/disabled-feature": false,
+				"$active_feature_flags":     "caller",
+			},
 		},
 		{
 			name:            "falls back to remote for an uncomputable flag",
@@ -162,6 +176,7 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 			if err := client.Enqueue(Capture{
 				Event:            "test_event",
 				DistinctId:       "distinct-id",
+				Properties:       tt.properties,
 				SendFeatureFlags: tt.sendFlags,
 			}); err != nil {
 				t.Fatal(err)

@@ -667,7 +667,7 @@ func TestCaptureToolCallSanitizesRequestContextProperties(t *testing.T) {
 	assert.NotContains(t, capture.Properties, propertySet)
 }
 
-func TestCaptureToolCallFillsSanitizedRequestContextBeforeBeforeSend(t *testing.T) {
+func TestCaptureToolCallSanitizedRequestContextReachesBeforeSend(t *testing.T) {
 	payloads := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)

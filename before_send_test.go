@@ -207,7 +207,7 @@ func sortedKeys(m map[string]interface{}) []string {
 	return keys
 }
 
-// TestBeforeSendSeesEnrichmentButNotContextOrDefaults has the hook write the
+// TestBeforeSendSeesContextAndDefaultsAndHasFinalSay has the hook write the
 // keys it saw into options, which are sent unchanged, so the wire event shows
 // what the hook saw and that a key it sets wins over the filled-in values.
 func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
@@ -218,11 +218,24 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 		wantSeenService    string
 		wantContext        bool
 	}{
-		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertyGeoipDisable, propertyIsServer, propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
+		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
 		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
 		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
 		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
 		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
+	}
+	withSDKValues := func(keys []interface{}) []interface{} {
+		all := NewProperties().Merge(getSystemContext().ToProperties()).
+			Set(propertyGeoipDisable, true).
+			Set(propertyIsServer, true)
+		for _, key := range keys {
+			all.Set(key.(string), true)
+		}
+		var sorted []interface{}
+		for _, key := range sortedKeys(all) {
+			sorted = append(sorted, key)
+		}
+		return sorted
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
@@ -233,7 +246,7 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 				Endpoint:               server.URL,
 				BatchSize:              1,
 				now:                    mockTime,
-				DefaultEventProperties: NewProperties().Set("service", "default").Set("app", "default"),
+				DefaultEventProperties: NewProperties().Set("service", "default").Set("app", "default").Set("$go_version", "default"),
 				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
 				BeforeSend: func(msg Message) Message {
 					options := messageOptions(msg)
@@ -244,6 +257,8 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 							Set("cookieless_mode", false)
 						properties = NewProperties().Merge(properties).Set("service", "hook")
 						delete(properties, "app")
+						delete(properties, "$os")
+						delete(properties, propertyIsServer)
 						return properties
 					}
 					switch m := msg.(type) {
@@ -280,7 +295,7 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 			properties := requireProperties(t, event)
 			wantOptions := map[string]interface{}{
 				"seen_options":            []interface{}{"cookieless_mode", "disable_skew_correction"},
-				"seen_properties":         tt.wantSeenProperties,
+				"seen_properties":         withSDKValues(tt.wantSeenProperties),
 				"seen_service":            tt.wantSeenService,
 				"cookieless_mode":         false,
 				"disable_skew_correction": true,
@@ -295,6 +310,10 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 			require.Equal(t, wantOptions, requireOptions(t, event))
 			require.Equal(t, "hook", properties["service"])
 			require.NotContains(t, properties, "app")
+			require.Equal(t, "default", properties["$go_version"])
+			require.Equal(t, true, properties[propertyGeoipDisable])
+			require.NotContains(t, properties, "$os")
+			require.NotContains(t, properties, propertyIsServer)
 		})
 	}
 }

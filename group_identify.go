@@ -31,11 +31,13 @@ type GroupIdentify struct {
 	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
 	Options Options
-	// DisableGeoIP controls whether this group-identify event disables GeoIP lookup.
-	// Enqueue overwrites it from Config.GetDisableGeoIP.
+	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
+	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
+	// after BeforeSend. To change $geoip_disable, set the property.
 	DisableGeoIP bool
-	// IsServer controls whether the event includes the $is_server property.
-	// Enqueue overwrites it from Config.GetIsServer.
+	// IsServer reports whether the event sets $is_server. Enqueue sets it from
+	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
+	// To change $is_server, set the property.
 	IsServer bool
 }
 
@@ -84,8 +86,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	}
 
 	myProperties.
-		mergeDefaults(msg.EventProperties).
-		mergeDefaults(getSystemContext().ToProperties())
+		mergeDefaults(msg.EventProperties)
 	if _, exists := myProperties["$group_set"]; !exists || msg.Properties != nil {
 		myProperties.Set("$group_set", mergeOverNested(myProperties["$group_set"], msg.Properties))
 	}

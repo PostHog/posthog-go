@@ -155,10 +155,6 @@ request carries one header, so a per-event library name cannot reach the
 backend. `posthogmcp` events now report `posthog-go`, like every other event.
 Delete the field.
 
-Caller-supplied properties now take precedence over SDK system context.
-Previously the SDK's `$os`, `$os_version`, `$os_distro` and `$go_version`
-overwrote values you had set; they are now applied only as defaults.
-
 `Config.DefaultEventProperties` are now defaults too. The SDK fills them in
 before `BeforeSend`, only for keys that the event and the request context left
 unset. A key set to `nil` counts as set, so it keeps the default out.
@@ -174,8 +170,9 @@ keys the event left out. For example, a default
 default replaced the event's whole map. `Capture.Groups` now merges into a
 `$groups` map in `Properties` and wins key by key; in 1.x it replaced it.
 
-`BeforeSend` sees the filled `DefaultEventProperties` and
-`RequestContext.Properties`, and can change or remove them. Its changes are
+`BeforeSend` sees the filled `DefaultEventProperties`,
+`RequestContext.Properties` and SDK values (below), and can change or remove
+them. Its changes are
 final. The request context's session ID is part of the event's identity, so it
 is set as `$session_id` first, unless the event has its own.
 
@@ -188,8 +185,23 @@ sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
 key. The `Config.Callback` message for an `Alias` does not include its
 `EventProperties`.
 
-`Config.DisableGeoIP` still sets `$geoip_disable` on every event, whatever the
-event sets.
+The values the SDK adds are defaults too. The SDK fills them last, only for
+keys that the event, the request context and `DefaultEventProperties` left
+unset, before `BeforeSend`:
+
+- `$is_server`, from `Config.IsServer`
+- `$geoip_disable`, from `Config.DisableGeoIP`
+- `$os`, `$os_version`, `$os_distro` and `$go_version`
+- `$feature/<key>` and `$active_feature_flags`, from `SendFeatureFlags`. They
+  fill only keys the event's own `Properties` left unset, like the `Flags`
+  snapshot.
+
+In 1.x the SDK overwrote the values you set for these. So a
+`DefaultEventProperties` value of `$geoip_disable: false` now turns GeoIP
+lookup back on for events, even when `Config.DisableGeoIP` is on. Feature flag
+requests still follow `Config.DisableGeoIP`. The `IsServer` and `DisableGeoIP`
+fields of a message report the values left after `BeforeSend`. To change
+them, set the properties.
 
 ### Compression
 
@@ -290,12 +302,12 @@ A call without an identity always gets `process_person_profile: false`, whatever
 its options say. With an identity, a `process_person_profile` option overrides
 a `$process_person_profile: false` property.
 
-With a `posthog.Client`, `posthogmcp` events take `RequestContext.Properties`
-and `RequestContext.Options` like any capture: before `BeforeSend`, only for
-keys the call left unset. `posthogmcp` still drops the reserved keys, such as
-`$mcp_*`, `$set` and `$session_id`, from the context properties and sanitizes
-their values first. A `posthog.EnqueueClient` without `EnqueueWithContext`
-puts them under the call's properties and options instead, as in 1.x.
+`posthogmcp` events take `RequestContext.Properties` and
+`RequestContext.Options` under the call's properties and options, with any
+client, as in 1.x. The call's values win, and the context's values win over
+`DefaultEventProperties` and `DefaultEventOptions`. `posthogmcp` still drops
+the reserved keys, such as `$mcp_*`, `$set` and `$session_id`, from the
+context properties and sanitizes their values first.
 
 Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
 

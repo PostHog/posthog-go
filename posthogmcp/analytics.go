@@ -51,11 +51,10 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // message has been attempted.
 //
 // A posthog.RequestContext attached to ctx supplies the distinct and session
-// IDs the call leaves empty. Its properties go through the same reserved-key
-// and sanitization rules as call.Properties. With a client that implements
-// EnqueueWithContext, such as the posthog.Client, the client fills the context
-// properties and options before BeforeSend, only for keys the call left unset.
-// With any other client they sit under call.Properties and call.Options.
+// IDs the call leaves empty. Its properties and options sit under
+// call.Properties and call.Options, and its properties go through the same
+// reserved-key and sanitization rules as call.Properties. They still win over
+// the client's Config.DefaultEventProperties and Config.DefaultEventOptions.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
@@ -68,14 +67,10 @@ func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	return a.enqueue(enqueueCtx, messages)
 }
 
-type contextEnqueuer interface {
-	EnqueueWithContext(context.Context, posthog.Message) error
-}
-
-// withContext rejects a nil recorder and applies the RequestContext attached
-// to ctx. It returns the context to enqueue with, which carries the sanitized
-// request-context properties and options for the client to fill in after
-// BeforeSend.
+// withContext rejects a nil recorder and puts the RequestContext attached to
+// ctx under the call. It returns the context to enqueue with, which carries an
+// empty request context so the client does not fill the unsanitized values
+// again.
 func (a *Analytics) withContext(ctx context.Context, call ToolCall) (ToolCall, context.Context, error) {
 	if a == nil || a.client == nil {
 		return call, nil, errors.New("posthogmcp: nil enqueue client")
@@ -87,20 +82,7 @@ func (a *Analytics) withContext(ctx context.Context, call ToolCall) (ToolCall, c
 	if !ok {
 		return call, ctx, nil
 	}
-	if _, ok := a.client.(contextEnqueuer); !ok {
-		return withRequestContext(call, requestContext), ctx, nil
-	}
-	call = withRequestIdentity(call, requestContext)
-	properties, err := prepareContextProperties(requestContext.Properties)
-	if err != nil {
-		return call, nil, err
-	}
-	// A fresh context keeps the distinct and session IDs, which the call
-	// already resolved, out of the client's fill.
-	return call, posthog.WithFreshRequestContext(ctx, posthog.RequestContext{
-		Properties: properties,
-		Options:    requestContext.Options,
-	}), nil
+	return withRequestContext(call, requestContext), posthog.WithFreshRequestContext(ctx, posthog.RequestContext{}), nil
 }
 
 func (a *Analytics) enqueue(ctx context.Context, messages []namedMessage) error {
@@ -123,8 +105,7 @@ func withRequestIdentity(call ToolCall, requestContext posthog.RequestContext) T
 	return call
 }
 
-// withRequestContext puts the request context under the call, for a client
-// without EnqueueWithContext.
+// withRequestContext puts the request context under the call.
 func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
 	call = withRequestIdentity(call, requestContext)
 	if len(requestContext.Properties) > 0 {

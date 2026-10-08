@@ -678,13 +678,15 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		m.EventProperties = fillProperties(m.EventProperties, c.DefaultEventProperties)
+		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
 		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(Alias)
+		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
+		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -702,13 +704,15 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		m.EventProperties = fillProperties(m.EventProperties, c.DefaultEventProperties)
+		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
 		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(Identify)
+		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
+		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -725,13 +729,15 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		m.EventProperties = fillProperties(m.EventProperties, c.DefaultEventProperties)
+		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
 		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(GroupIdentify)
+		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
+		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -794,10 +800,13 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 				m.Properties = NewProperties()
 			}
 
+			// Like the Flags snapshot path, a value the caller set wins.
 			activeFeatureFlags := make([]string, 0, len(featureVariants))
 			for feature, variant := range featureVariants {
 				propKey := fmt.Sprintf("$feature/%s", feature)
-				m.Properties[propKey] = variant
+				if _, set := m.Properties[propKey]; !set {
+					m.Properties[propKey] = variant
+				}
 				// $active_feature_flags lists only flags that resolved to a non-false value.
 				if variant != false {
 					activeFeatureFlags = append(activeFeatureFlags, feature)
@@ -805,28 +814,18 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			}
 			// Sort for deterministic output, matching the snapshot Flags.eventProperties() path.
 			sort.Strings(activeFeatureFlags)
-			m.Properties["$active_feature_flags"] = activeFeatureFlags
-		}
-		if m.IsServer {
-			m.Properties.Set(propertyIsServer, true)
-		}
-		// Config.DisableGeoIP is a client setting, not a default an event can override.
-		if c.GetDisableGeoIP() {
-			m.Properties.Set(propertyGeoipDisable, true)
+			if _, set := m.Properties["$active_feature_flags"]; !set {
+				m.Properties["$active_feature_flags"] = activeFeatureFlags
+			}
 		}
 		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
+		m.Properties = fillSDKProperties(m.Properties, m.IsServer, c.GetDisableGeoIP())
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(Capture)
-		// $is_server was materialized into Properties before BeforeSend;
-		// from this point, the hook's returned Properties are the source of truth.
-		if isServer, ok := m.Properties[propertyIsServer].(bool); ok {
-			m.IsServer = isServer
-		} else if m.Properties != nil {
-			m.IsServer = false
-		}
+		m.IsServer = boolProperty(m.Properties, propertyIsServer)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
@@ -852,11 +851,14 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return
 		}
 		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
+		m.Properties = fillSDKProperties(m.Properties, m.IsServer, m.DisableGeoIP)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
 		}
 		m = processed.(Exception)
+		m.IsServer = boolProperty(m.Properties, propertyIsServer)
+		m.DisableGeoIP = boolProperty(m.Properties, propertyGeoipDisable)
 		data, apiMsg, eventUuid, serErr := prepareForSend(m)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
