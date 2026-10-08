@@ -51,11 +51,14 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // message has been attempted.
 //
 // A posthog.RequestContext attached to ctx supplies the distinct and session
-// IDs the call leaves empty, and its properties sit under call.Properties. They
-// go through the same reserved-key and sanitization rules as the call's own.
-// Its options sit under call.Options in the same way.
+// IDs the call leaves empty. Its properties go through the same reserved-key
+// and sanitization rules as call.Properties. With a client that implements
+// EnqueueWithContext, such as the posthog.Client, the context properties and
+// options fill in after BeforeSend, only for keys the call and the hook left
+// unset. With any other client they sit under call.Properties and
+// call.Options before BeforeSend.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
-	call, err := a.withContext(ctx, call)
+	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
 		return err
 	}
@@ -63,38 +66,68 @@ func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	if err != nil {
 		return err
 	}
-	return a.enqueue(messages)
+	return a.enqueue(enqueueCtx, messages)
+}
+
+type contextEnqueuer interface {
+	EnqueueWithContext(context.Context, posthog.Message) error
 }
 
 // withContext rejects a nil recorder and applies the RequestContext attached
-// to ctx.
-func (a *Analytics) withContext(ctx context.Context, call ToolCall) (ToolCall, error) {
+// to ctx. It returns the context to enqueue with, which carries the sanitized
+// request-context properties and options for the client to fill in after
+// BeforeSend.
+func (a *Analytics) withContext(ctx context.Context, call ToolCall) (ToolCall, context.Context, error) {
 	if a == nil || a.client == nil {
-		return call, errors.New("posthogmcp: nil enqueue client")
+		return call, nil, errors.New("posthogmcp: nil enqueue client")
 	}
-	if requestContext, ok := posthog.RequestContextFromContext(ctx); ok {
-		call = withRequestContext(call, requestContext)
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return call, nil
+	requestContext, ok := posthog.RequestContextFromContext(ctx)
+	if !ok {
+		return call, ctx, nil
+	}
+	if _, ok := a.client.(contextEnqueuer); !ok {
+		return withRequestContext(call, requestContext), ctx, nil
+	}
+	call = withRequestIdentity(call, requestContext)
+	properties, err := prepareContextProperties(requestContext.Properties)
+	if err != nil {
+		return call, nil, err
+	}
+	// A fresh context keeps the distinct and session IDs, which the call
+	// already resolved, out of the client's fill.
+	return call, posthog.WithFreshRequestContext(ctx, posthog.RequestContext{
+		Properties: properties,
+		Options:    requestContext.Options,
+	}), nil
 }
 
-func (a *Analytics) enqueue(messages []namedMessage) error {
+func (a *Analytics) enqueue(ctx context.Context, messages []namedMessage) error {
 	var enqueueErrors []error
 	for _, message := range messages {
-		if err := a.client.Enqueue(message.message); err != nil {
+		if err := posthog.EnqueueWithContext(ctx, a.client, message.message); err != nil {
 			enqueueErrors = append(enqueueErrors, fmt.Errorf("posthogmcp: enqueue %s: %w", message.name, err))
 		}
 	}
 	return errors.Join(enqueueErrors...)
 }
 
-func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
+func withRequestIdentity(call ToolCall, requestContext posthog.RequestContext) ToolCall {
 	if call.DistinctID == "" {
 		call.DistinctID = requestContext.DistinctId
 	}
 	if call.SessionID == "" {
 		call.SessionID = requestContext.SessionId
 	}
+	return call
+}
+
+// withRequestContext puts the request context under the call, for a client
+// that cannot fill it in after BeforeSend.
+func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
+	call = withRequestIdentity(call, requestContext)
 	if len(requestContext.Properties) > 0 {
 		properties := posthog.NewProperties().Merge(requestContext.Properties)
 		call.Properties = properties.Merge(call.Properties)

@@ -139,11 +139,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 	custom := make(posthog.Properties, len(call.Properties))
 	for key, value := range call.Properties {
-		if strings.HasPrefix(key, "$mcp_") {
-			continue
-		}
-		switch key {
-		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID, propertyExceptionLevel:
+		if isReservedProperty(key) || key == propertyProcessProfile {
 			continue
 		}
 		custom[key] = value
@@ -228,6 +224,32 @@ func prepareProperties(field string, properties posthog.Properties) (posthog.Pro
 		return nil, errors.New("posthogmcp: normalized properties must be an object")
 	}
 	return posthog.Properties(value), nil
+}
+
+// isReservedProperty reports whether key is set only from ToolCall fields.
+func isReservedProperty(key string) bool {
+	if strings.HasPrefix(key, "$mcp_") {
+		return true
+	}
+	switch key {
+	case propertyGroups, propertySet, propertySessionID, propertyExceptionLevel:
+		return true
+	}
+	return false
+}
+
+// prepareContextProperties applies the call.Properties rules to the request
+// context properties that the client fills in after BeforeSend. It keeps
+// $process_person_profile, which the client turns into the
+// process_person_profile option when the event has none.
+func prepareContextProperties(properties posthog.Properties) (posthog.Properties, error) {
+	filtered := make(posthog.Properties, len(properties))
+	for key, value := range properties {
+		if !isReservedProperty(key) {
+			filtered[key] = value
+		}
+	}
+	return prepareProperties("RequestContext.Properties", filtered)
 }
 
 func prepareGroups(groups posthog.Groups) (posthog.Groups, error) {
