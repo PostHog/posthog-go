@@ -164,8 +164,9 @@ type Config struct {
 	//
 	// The hook sees the event's own values and the SDK enrichment, such as
 	// $is_server, $geoip_disable and feature flag properties. It does not see
-	// RequestContext properties and options, DefaultEventProperties,
-	// DefaultEventOptions, or the personless process_person_profile option.
+	// RequestContext properties and options other than the session ID,
+	// DefaultEventProperties, DefaultEventOptions, or the personless
+	// process_person_profile option.
 	// Those fill in after the hook, only for keys it left unset, so a key the
 	// hook sets wins over them.
 	BeforeSend BeforeSendFunc

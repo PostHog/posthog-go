@@ -752,7 +752,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		}
 		m.DistinctId = captureContext.distinctID
 		// Enrichment below writes into Properties, so copy the caller's map.
-		m.Properties = make(Properties, len(m.Properties)).Merge(m.Properties)
+		m.Properties = captureContext.withSessionID(make(Properties, len(m.Properties)).Merge(m.Properties))
 		if err = m.Validate(); err != nil {
 			return
 		}
@@ -844,6 +844,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return
 		}
 		m.DistinctId = captureContext.distinctID
+		m.Properties = captureContext.withSessionID(m.Properties)
 		if err = m.Validate(); err != nil {
 			return
 		}

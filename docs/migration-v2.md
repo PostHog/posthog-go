@@ -168,7 +168,9 @@ the event's value, except for an event's `$process_person_profile: false`.
 
 `BeforeSend` no longer sees `DefaultEventProperties` or
 `RequestContext.Properties`, so it cannot read or remove them. To override a
-default for one event, set the key on the event or in `BeforeSend`.
+default for one event, set the key on the event or in `BeforeSend`. The
+request context's session ID is part of the event's identity, so it is still
+set as `$session_id` before `BeforeSend`, unless the event has its own.
 
 `DefaultEventProperties` now apply to `Exception`, `Identify`, `Alias` and
 `GroupIdentify` events too, not only to `Capture`. They go into the event's

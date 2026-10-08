@@ -43,7 +43,9 @@ type requestContextKey struct{}
 type RequestContext struct {
 	// DistinctId is the request-scoped user distinct ID.
 	DistinctId string
-	// SessionId is the request-scoped PostHog session ID.
+	// SessionId is the request-scoped PostHog session ID. It is set as the
+	// $session_id property of capture and exception events before BeforeSend,
+	// unless the event has its own. A $session_id in Properties wins over it.
 	SessionId string
 	// Properties are request-scoped properties for capture and exception events.
 	// They fill in after BeforeSend, only for keys the event and the hook left
@@ -241,11 +243,13 @@ func ExtractRequestContext(r *http.Request, captureTracingHeaders bool) RequestC
 	}
 }
 
-// captureContext holds what the request context gives one event. The identity
-// is resolved before BeforeSend because the event and the personless decision
-// depend on it. The properties and options wait for fillEvent, after the hook.
+// captureContext holds what the request context gives one event. The identity,
+// including the session ID, is resolved before BeforeSend because the event and
+// the personless decision depend on it. The other properties and the options
+// wait for fillEvent, after the hook.
 type captureContext struct {
 	distinctID                    string
+	sessionID                     interface{}
 	properties                    Properties
 	options                       Options
 	generatedPersonlessDistinctID bool
@@ -272,12 +276,32 @@ func resolveCaptureContext(ctx context.Context, distinctID string, fieldType str
 		isPersonless = true
 	}
 
+	properties := contextProperties(requestContext)
+	sessionID, hasSessionID := properties[propertySessionID]
+	if hasSessionID {
+		properties = NewProperties().Merge(properties)
+		delete(properties, propertySessionID)
+	}
+
 	return captureContext{
 		distinctID:                    resolvedDistinctID,
-		properties:                    contextProperties(requestContext),
+		sessionID:                     sessionID,
+		properties:                    properties,
 		options:                       requestContext.Options,
 		generatedPersonlessDistinctID: isPersonless,
 	}, nil
+}
+
+// withSessionID returns properties with the request context's session ID when
+// the event has none. It copies properties instead of writing the caller's map.
+func (cc captureContext) withSessionID(properties Properties) Properties {
+	if cc.sessionID == nil {
+		return properties
+	}
+	if _, exists := properties[propertySessionID]; exists {
+		return properties
+	}
+	return NewProperties().Merge(properties).Set(propertySessionID, cc.sessionID)
 }
 
 // fillEvent fills only the keys that the event and BeforeSend left unset. The
