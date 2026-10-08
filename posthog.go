@@ -41,7 +41,10 @@ type EnqueueClient interface {
 	// This is the main method you'll be using, a typical flow would look like
 	// this:
 	//
-	//	client := posthog.New(apiKey)
+	//	client, err := posthog.New(apiKey)
+	//	if err != nil {
+	//	    return err
+	//	}
 	//	...
 	//	client.Enqueue(posthog.Capture{ ... })
 	//	...
@@ -249,12 +252,10 @@ type flagUser struct {
 
 // New creates a Client with the default Config and the provided PostHog project API key.
 //
-// The apiKey parameter is trimmed before use. If it is empty, New returns a
-// no-op client whose methods return default values and ErrSDKDisabled where applicable.
-func New(apiKey string) Client {
-	// Here we can ignore the error because the default config is always valid.
-	c, _ := NewWithConfig(apiKey, Config{})
-	return c
+// The apiKey parameter is trimmed before use. If initialization fails,
+// New returns a nil Client and an error.
+func New(apiKey string) (Client, error) {
+	return NewWithConfig(apiKey, Config{})
 }
 
 // NewWithConfig creates a Client with the provided PostHog project API key and Config.
@@ -262,18 +263,17 @@ func New(apiKey string) Client {
 // The apiKey, Config.Endpoint, Config.SecretKey, and Config.PersonalApiKey values are trimmed before use.
 // It returns a ConfigError when config contains invalid values such as negative
 // intervals or out-of-range retry settings; in that case the returned Client is nil.
-// If apiKey is empty after trimming, NewWithConfig returns a no-op client and nil error.
+// If client construction fails, NewWithConfig returns nil and an error.
 func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	if err = config.Validate(); err != nil {
 		return
 	}
 
-	config = makeConfig(config)
 	apiKey = strings.TrimSpace(apiKey)
 	if len(apiKey) == 0 {
-		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; %s", ErrSDKDisabled)
-		return newNoopClient(config), nil
+		return nil, ErrSDKDisabled
 	}
+	config = makeConfig(config)
 	reportedCache, err := lru.New[flagUser, struct{}](CACHE_DEFAULT_SIZE)
 	if err != nil && config.Logger != nil {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
@@ -1256,7 +1256,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 
 	if payload.DistinctId == "" {
 		c.Warnf("EvaluateFlags called without a DistinctId")
-		return noopFeatureFlagEvaluations, ErrNoDistinctID
+		return emptyFeatureFlagEvaluations, ErrNoDistinctID
 	}
 
 	if payload.Groups == nil {
@@ -1294,7 +1294,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, payload)
 	} else if payload.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyMissing("EvaluateFlags")
-		return noopFeatureFlagEvaluations, ErrNoSecretKey
+		return emptyFeatureFlagEvaluations, ErrNoSecretKey
 	}
 
 	var requestId string

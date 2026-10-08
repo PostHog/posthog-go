@@ -294,7 +294,7 @@ type Client interface {
 	CloseWithContext(context.Context) error
 }
 
-func New(apiKey string) Client
+func New(apiKey string) (Client, error)
 
 
 func NewWithConfig(apiKey string, config Config) (cli Client, err error)

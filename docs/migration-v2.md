@@ -25,6 +25,25 @@ Subpackages such as `posthogmcp` move with it, to `github.com/posthog/posthog-go
 The MCP Go SDK adapter is a separate module that moves in lockstep with the core, so import `github.com/posthog/posthog-go/posthogmcpsdk/v2`.
 The `otel` bridge versions independently and keeps its import path.
 
+## Constructors
+
+`New` now returns `(Client, error)`, like `NewWithConfig`. Handle the error
+before using or closing the client:
+
+```go
+// before
+client := posthog.New(apiKey)
+
+// after
+client, err := posthog.New(apiKey)
+if err != nil {
+    return err
+}
+defer client.Close()
+```
+
+If initialization fails, either constructor returns a nil client and an error.
+
 ## Config
 
 `Config.CaptureMode` is gone. If you opted into v1, delete the field — it is

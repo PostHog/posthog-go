@@ -167,14 +167,6 @@ func TestFlushConcurrentAndRetry(t *testing.T) {
 	require.Eventually(t, func() bool { return requests.Load() == 2 }, time.Second, time.Millisecond)
 }
 
-func TestFlushDisabled(t *testing.T) {
-	c := posthog.New("")
-	f, ok := c.(flushingClient)
-	require.True(t, ok)
-	require.True(t, errors.Is(f.Flush(), posthog.ErrSDKDisabled))
-	require.ErrorIs(t, f.FlushWithContext(context.Background()), posthog.ErrSDKDisabled)
-}
-
 func TestFlushCancelledContextAndConcurrentEnqueue(t *testing.T) {
 	var received atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

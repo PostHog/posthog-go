@@ -35,6 +35,11 @@ type FeatureFlagEvaluations struct {
 	accessed map[string]struct{}
 }
 
+var (
+	emptyFlagValues             = map[string]interface{}{}
+	emptyFeatureFlagEvaluations = &FeatureFlagEvaluations{flags: map[string]evaluatedFlagRecord{}}
+)
+
 // evaluatedFlagRecord is the per-flag entry stored in a snapshot. All fields
 // are optional except Key and Enabled, mirroring the v4 /flags response shape
 // with an additional LocallyEvaluated marker for poller-resolved flags.
