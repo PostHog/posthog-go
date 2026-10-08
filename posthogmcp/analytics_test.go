@@ -667,6 +667,91 @@ func TestCaptureToolCallSanitizesRequestContextProperties(t *testing.T) {
 	assert.NotContains(t, capture.Properties, propertySet)
 }
 
+func TestCaptureToolCallFillsRequestContextAfterBeforeSend(t *testing.T) {
+	payloads := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read capture request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		payloads <- body
+		var request struct {
+			Batch []struct {
+				UUID string `json:"uuid"`
+			} `json:"batch"`
+		}
+		results := map[string]any{}
+		if json.Unmarshal(body, &request) == nil {
+			for _, event := range request.Batch {
+				results[event.UUID] = map[string]string{"result": "ok"}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer server.Close()
+
+	var hookProperties posthog.Properties
+	var hookOptions posthog.Options
+	client, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		BeforeSend: func(msg posthog.Message) posthog.Message {
+			capture := msg.(posthog.Capture)
+			hookProperties = posthog.NewProperties().Merge(capture.Properties)
+			hookOptions = capture.Options
+			capture.Properties = posthog.NewProperties().Merge(capture.Properties).Set("service", "hook")
+			return capture
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{
+		Properties: posthog.Properties{
+			"service":              "context",
+			"region":               "eu",
+			"$current_url":         "https://app.test/cb?token=abc",
+			propertySet:            map[string]any{"email": "leak@example.com"},
+			propertyToolName:       "spoofed",
+			propertyProcessProfile: false,
+		},
+		Options: posthog.Options{"cookieless_mode": true},
+	})
+	require.NoError(t, New(client).CaptureToolCall(ctx, ToolCall{ToolName: "query", DistinctID: "user_1"}))
+
+	var body []byte
+	select {
+	case body = <-payloads:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the capture request")
+	}
+	var payload struct {
+		Batch []struct {
+			Properties map[string]any `json:"properties"`
+			Options    map[string]any `json:"options"`
+		} `json:"batch"`
+	}
+	require.NoError(t, json.Unmarshal(body, &payload))
+	require.Len(t, payload.Batch, 1)
+	event := payload.Batch[0]
+
+	for _, key := range []string{"service", "region", "$current_url", propertyProcessProfile} {
+		assert.NotContains(t, hookProperties, key, "BeforeSend must not see request-context properties")
+	}
+	assert.NotContains(t, hookOptions, "cookieless_mode", "BeforeSend must not see request-context options")
+
+	assert.Equal(t, "hook", event.Properties["service"], "a key BeforeSend sets wins over the request context")
+	assert.Equal(t, "eu", event.Properties["region"])
+	assert.Equal(t, "https://app.test/cb?token=%5Bredacted%5D", event.Properties["$current_url"])
+	assert.Equal(t, "query", event.Properties[propertyToolName])
+	assert.NotContains(t, event.Properties, propertySet)
+	assert.NotContains(t, event.Properties, propertyProcessProfile)
+	assert.Equal(t, true, event.Options["cookieless_mode"])
+	assert.Equal(t, false, event.Options["process_person_profile"])
+}
+
 func TestCaptureToolCallFallbackErrorMessageKeepsToolName(t *testing.T) {
 	client := &fakeEnqueueClient{}
 	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "Get_Organization_Memberships", IsError: true}))

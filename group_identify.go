@@ -72,8 +72,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 		Set("$lib_version", getVersion()).
 		Set("$group_type", msg.Type).
 		Set("$group_key", msg.Key).
-		Set("$group_set", msg.Properties).
-		Merge(getSystemContext().ToProperties())
+		Set("$group_set", msg.Properties)
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
@@ -82,6 +81,10 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	if msg.DisableGeoIP {
 		myProperties.Set(propertyGeoipDisable, true)
 	}
+
+	myProperties.
+		mergeDefaults(msg.defaultProperties).
+		mergeDefaults(getSystemContext().ToProperties())
 
 	distinctId := fmt.Sprintf("$%s_%s", msg.Type, msg.Key)
 
