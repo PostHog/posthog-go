@@ -24,6 +24,11 @@ type GroupIdentify struct {
 	Timestamp time.Time
 	// Properties are sent as the $group_set properties for the group.
 	Properties Properties
+	// EventProperties are properties of the $groupidentify event itself, not of
+	// the group. Enqueue fills the keys they leave unset from
+	// Config.DefaultEventProperties before BeforeSend. A $group_set in them is
+	// merged under Properties, which win key by key.
+	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
 	Options Options
 	// DisableGeoIP controls whether this group-identify event disables GeoIP lookup.
@@ -32,9 +37,6 @@ type GroupIdentify struct {
 	// IsServer controls whether the event includes the $is_server property.
 	// Enqueue overwrites it from Config.GetIsServer.
 	IsServer bool
-	// defaultProperties are Config.DefaultEventProperties. Enqueue sets them
-	// after BeforeSend, and they fill only event properties left unset.
-	defaultProperties Properties
 }
 
 func (msg GroupIdentify) internal() {
@@ -71,8 +73,7 @@ func (msg GroupIdentify) APIfy() APIMessage {
 		Set("$lib", SDKName).
 		Set("$lib_version", getVersion()).
 		Set("$group_type", msg.Type).
-		Set("$group_key", msg.Key).
-		Set("$group_set", msg.Properties)
+		Set("$group_key", msg.Key)
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
@@ -83,8 +84,11 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	}
 
 	myProperties.
-		mergeDefaults(msg.defaultProperties).
+		mergeDefaults(msg.EventProperties).
 		mergeDefaults(getSystemContext().ToProperties())
+	if _, exists := myProperties["$group_set"]; !exists || msg.Properties != nil {
+		myProperties.Set("$group_set", mergeOverNested(myProperties["$group_set"], msg.Properties))
+	}
 
 	distinctId := fmt.Sprintf("$%s_%s", msg.Type, msg.Key)
 

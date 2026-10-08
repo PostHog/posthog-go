@@ -53,10 +53,9 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // A posthog.RequestContext attached to ctx supplies the distinct and session
 // IDs the call leaves empty. Its properties go through the same reserved-key
 // and sanitization rules as call.Properties. With a client that implements
-// EnqueueWithContext, such as the posthog.Client, the context properties and
-// options fill in after BeforeSend, only for keys the call and the hook left
-// unset. With any other client they sit under call.Properties and
-// call.Options before BeforeSend.
+// EnqueueWithContext, such as the posthog.Client, the client fills the context
+// properties and options before BeforeSend, only for keys the call left unset.
+// With any other client they sit under call.Properties and call.Options.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
@@ -125,7 +124,7 @@ func withRequestIdentity(call ToolCall, requestContext posthog.RequestContext) T
 }
 
 // withRequestContext puts the request context under the call, for a client
-// that cannot fill it in after BeforeSend.
+// without EnqueueWithContext.
 func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
 	call = withRequestIdentity(call, requestContext)
 	if len(requestContext.Properties) > 0 {

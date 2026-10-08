@@ -138,37 +138,39 @@ type Config struct {
 	// common metadata like service name or app version. They never go into the
 	// $set or $group_set person and group properties.
 	//
-	// They fill in after BeforeSend, only for keys that the event, the hook and
-	// the request context left unset, so BeforeSend does not see them. A key
-	// with a nil value counts as set. To override a default for one event, set
-	// the key on the event or in BeforeSend.
+	// They fill in before BeforeSend, only for keys that the event and the
+	// request context left unset. A key with a nil value counts as set. $set,
+	// $set_once, $groups and $group_set fill one level deep when both values are
+	// maps. BeforeSend sees the filled values and can change or remove them. On
+	// Identify, Alias and GroupIdentify they fill EventProperties.
 	DefaultEventProperties Properties
 
 	// DefaultEventOptions are added to the options of every Capture, Exception,
 	// Identify, Alias and GroupIdentify event, such as process_person_profile or
 	// cookieless_mode.
 	//
-	// They fill in after BeforeSend, only for options that the event, the hook
-	// and the request context left missing or nil, so BeforeSend does not see
-	// them. Set an option to false on the event to turn a default off. They win
-	// over the personless default and, like any option, over the matching legacy
-	// property, such as $cookieless_mode, set on an event.
+	// They fill in before BeforeSend, only for options that the event and the
+	// request context left missing or nil. BeforeSend sees the filled options and
+	// can change them. Set an option to false on the event to turn a default off.
+	// They win over the personless default and, like any option, over the
+	// matching legacy property, such as $cookieless_mode, set on an event or in
+	// BeforeSend.
 	DefaultEventOptions Options
 
 	// Callback receives success or failure notifications for messages sent to the
-	// PostHog batch API.
+	// PostHog batch API. The message for an Alias does not include its
+	// EventProperties or the DefaultEventProperties filled into them.
 	Callback Callback
 
 	// BeforeSend is called after SDK enrichment and before messages are serialized.
 	// Return the message to send a modified version, or nil to drop it.
 	//
-	// The hook sees the event's own values and the SDK enrichment, such as
-	// $is_server, $geoip_disable and feature flag properties. It does not see
-	// RequestContext properties and options other than the session ID,
-	// DefaultEventProperties, DefaultEventOptions, or the personless
-	// process_person_profile option.
-	// Those fill in after the hook, only for keys it left unset, so a key the
-	// hook sets wins over them.
+	// The hook sees the event's own values, the SDK enrichment, such as
+	// $is_server, $geoip_disable and feature flag properties, and the values
+	// filled from RequestContext, DefaultEventProperties, DefaultEventOptions and
+	// the personless process_person_profile option. Its changes are final. To
+	// change an option, set it in Options: a legacy property such as
+	// $process_person_profile does not replace an option that is already set.
 	BeforeSend BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
@@ -569,9 +571,8 @@ func makeConfig(c Config) Config {
 		c.MaxEnqueuedRequests = DefaultMaxEnqueuedRequests
 	}
 
-	// Every message already carries $geoip_disable from DisableGeoIP before
-	// BeforeSend, so it is not added as a default: a default would put it back
-	// after the hook removed it. A default must still not turn it off.
+	// Every message carries $geoip_disable from DisableGeoIP before the defaults
+	// fill, so it is not added as a default. A default must still not turn it off.
 	if _, ok := c.DefaultEventProperties[propertyGeoipDisable]; ok && c.GetDisableGeoIP() {
 		c.DefaultEventProperties = NewProperties().Merge(c.DefaultEventProperties).Set(propertyGeoipDisable, true)
 	}
