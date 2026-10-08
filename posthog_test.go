@@ -1276,12 +1276,17 @@ func TestDefaultEventValuesReachEveryMessageType(t *testing.T) {
 			body, server := mockServer()
 			defer server.Close()
 
+			delivered := make(chan APIMessage, 1)
 			client, err := NewWithConfig("test-key", Config{
 				Endpoint:               server.URL,
 				BatchSize:              1,
 				now:                    mockTime,
 				DefaultEventProperties: NewProperties().Set("service", "api"),
 				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
+				Callback: testCallback{
+					success: func(m APIMessage) { delivered <- m },
+					failure: func(m APIMessage, _ error) { delivered <- m },
+				},
 			})
 			require.NoError(t, err)
 			defer client.Close()
@@ -1294,6 +1299,17 @@ func TestDefaultEventValuesReachEveryMessageType(t *testing.T) {
 			require.Equal(t, map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": false}, requireOptions(t, event))
 			if tt.personKey != "" {
 				require.Equal(t, tt.wantPersonData, properties[tt.personKey])
+			}
+
+			var callbackProperties Properties
+			switch m := awaitTestValue(t, delivered).(type) {
+			case IdentifyInApi:
+				callbackProperties = m.Properties
+			case GroupIdentifyInApi:
+				callbackProperties = m.Properties
+			}
+			if callbackProperties != nil {
+				require.Equal(t, "api", callbackProperties["service"], "the callback message carries the default properties sent on the wire")
 			}
 		})
 	}

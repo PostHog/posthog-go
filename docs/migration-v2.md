@@ -276,6 +276,14 @@ A call without an identity always gets `process_person_profile: false`, whatever
 its options say. With an identity, a `process_person_profile` option overrides
 a `$process_person_profile: false` property.
 
+With a `posthog.Client`, `posthogmcp` events take `RequestContext.Properties`
+and `RequestContext.Options` like any capture: after `BeforeSend`, only for
+keys the call and the hook left unset. `posthogmcp` still drops the reserved
+keys, such as `$mcp_*`, `$set` and `$session_id`, from the context properties
+and sanitizes their values first. In 1.x the context properties sat under the
+call's properties, so `BeforeSend` saw them and they won over the hook. A
+`posthog.EnqueueClient` without `EnqueueWithContext` keeps that order.
+
 Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
 
 - PostHog now reads common forms of the value, so

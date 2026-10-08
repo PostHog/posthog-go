@@ -150,7 +150,7 @@ func (a *Analytics) CaptureMissingCapability(ctx context.Context, event MissingC
 }
 
 func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build func(preparedToolCall) (posthog.Capture, error)) error {
-	call, err := a.withContext(ctx, call)
+	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
 		return err
 	}
@@ -162,7 +162,7 @@ func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build fu
 	if err != nil {
 		return err
 	}
-	return a.enqueue([]namedMessage{{name: capture.Event, message: capture}})
+	return a.enqueue(enqueueCtx, []namedMessage{{name: capture.Event, message: capture}})
 }
 
 // buildOptionalEvent builds an event of specific and the identity every MCP
