@@ -1251,6 +1251,54 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
 }
 
+func TestDefaultEventValuesReachEveryMessageType(t *testing.T) {
+	eventOptions := func() Options { return NewOptions().Set("disable_skew_correction", false) }
+	tests := []struct {
+		msg            Message
+		personKey      string
+		wantPersonData map[string]interface{}
+	}{
+		{msg: Exception{DistinctId: "user-1", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}, Options: eventOptions()}},
+		{
+			msg:            Identify{DistinctId: "user-1", Properties: NewProperties().Set("email", "user@example.com"), Options: eventOptions()},
+			personKey:      "$set",
+			wantPersonData: map[string]interface{}{"email": "user@example.com"},
+		},
+		{msg: Alias{DistinctId: "user-1", Alias: "alias-1", Options: eventOptions()}},
+		{
+			msg:            GroupIdentify{Type: "company", Key: "k", Properties: NewProperties().Set("name", "Example"), Options: eventOptions()},
+			personKey:      "$group_set",
+			wantPersonData: map[string]interface{}{"name": "Example"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set("service", "api"),
+				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(tt.msg))
+
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
+			require.Equal(t, "api", properties["service"])
+			require.Equal(t, map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": false}, requireOptions(t, event))
+			if tt.personKey != "" {
+				require.Equal(t, tt.wantPersonData, properties[tt.personKey])
+			}
+		})
+	}
+}
+
 func TestCaptureMany(t *testing.T) {
 	var ref = strings.TrimSpace(fixture("test-many-capture.json"))
 

@@ -159,11 +159,23 @@ Caller-supplied properties now take precedence over SDK system context.
 Previously the SDK's `$os`, `$os_version`, `$os_distro` and `$go_version`
 overwrote values you had set; they are now applied only as defaults.
 
-`Config.DefaultEventProperties` are now defaults too. Request-context and event
-properties override them on key conflicts. In 1.x the default value
-overwrote the event's value, except for an event's
-`$process_person_profile: false`. `Config.DisableGeoIP` still sets
-`$geoip_disable` on every event, whatever the event sets.
+`Config.DefaultEventProperties` are now defaults too. The SDK fills them in
+after `BeforeSend`, only for keys that the event, the hook and the request
+context left unset. A key set to `nil` counts as set, so it keeps the default
+out. `RequestContext.Properties` fill in the same way, also after
+`BeforeSend`, and win over the defaults. In 1.x the default value overwrote
+the event's value, except for an event's `$process_person_profile: false`.
+
+`BeforeSend` no longer sees `DefaultEventProperties` or
+`RequestContext.Properties`, so it cannot read or remove them. To override a
+default for one event, set the key on the event or in `BeforeSend`.
+
+`DefaultEventProperties` now apply to `Exception`, `Identify`, `Alias` and
+`GroupIdentify` events too, not only to `Capture`. They go into the event's
+own `properties`, never into `$set` or `$group_set`.
+
+`Config.DisableGeoIP` still sets `$geoip_disable` on every event, whatever the
+event sets.
 
 ### Compression
 
@@ -225,18 +237,26 @@ set, so the legacy property applies.
 
 Options can also be set for every event and for a request:
 
-- `Config.DefaultEventOptions` applies to every `Capture`, like
+- `Config.DefaultEventOptions` applies to every `Capture`, `Exception`,
+  `Identify`, `Alias` and `GroupIdentify` event, like
   `Config.DefaultEventProperties`.
 - `RequestContext.Options` applies to the `Capture` and `Exception` events
   sent with `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
-Each layer overrides the one before it: the SDK's personless default (below),
-`DefaultEventOptions`, `RequestContext.Options`, the event's `Options`, then
-`BeforeSend`. An option at any layer wins over the matching legacy property at
-any layer. For example, `DefaultEventOptions` with `cookieless_mode: true`
-wins over an event's `$cookieless_mode: false`. When you move a default to
-options, move the per-event overrides of that key to options too.
+The event's `Options` and `BeforeSend` come first. `BeforeSend` sees only the
+event's own options. After the hook, the SDK fills each option that is still
+missing or `nil`, from these layers in order: `RequestContext.Options`, then
+`DefaultEventOptions`, then the SDK's personless default (below). So a `nil`
+event option still gets the default. To turn a default off for one event, set
+the option to `false` on the event or in `BeforeSend`. `BeforeSend` cannot
+read or remove the request-context or default options.
+
+An option at any layer wins over the matching legacy property at any layer.
+For example, `DefaultEventOptions` with `cookieless_mode: true` wins over an
+event's `$cookieless_mode: false`, and the SDK still removes
+`$cookieless_mode` from the properties. When you move a default to options,
+move the per-event overrides of that key to options too.
 
 When a capture with a request context has no distinct ID, the SDK generates
 one and sets the option `process_person_profile: false`, so it does not create

@@ -666,6 +666,38 @@ func TestPersonProfileOptionLayers(t *testing.T) {
 			want:    false,
 		},
 		{
+			name:    "context option over the personless default",
+			ctx:     withOptions(NewOptions().Set("process_person_profile", true)),
+			capture: Capture{Event: "e"},
+			want:    true,
+		},
+		{
+			name:           "nil event option is filled by the default option",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx:            context.Background,
+			capture:        Capture{DistinctId: "user-1", Event: "e", Options: NewOptions().Set("process_person_profile", nil)},
+			want:           true,
+		},
+		{
+			name:    "nil event option is filled by the context option",
+			ctx:     withOptions(NewOptions().Set("process_person_profile", true)),
+			capture: Capture{DistinctId: "user-1", Event: "e", Options: NewOptions().Set("process_person_profile", nil)},
+			want:    true,
+		},
+		{
+			name:           "default option over the legacy event property",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx:            context.Background,
+			capture:        Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set(propertyProcessPersonProfile, false)},
+			want:           true,
+		},
+		{
+			name:    "context option over the legacy event property",
+			ctx:     withOptions(NewOptions().Set("process_person_profile", false)),
+			capture: Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set(propertyProcessPersonProfile, true)},
+			want:    false,
+		},
+		{
 			name: "child context inherits parent options",
 			ctx: func() context.Context {
 				parent := withOptions(NewOptions().Set("process_person_profile", true))()
@@ -700,6 +732,62 @@ func TestPersonProfileOptionLayers(t *testing.T) {
 			event := readSingleBatchEvent(t, body)
 			require.Equal(t, tt.want, requireOptions(t, event)["process_person_profile"])
 			require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
+		})
+	}
+}
+
+func TestEventPropertyLayers(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    Properties
+		context  Properties
+		defaults Properties
+		want     interface{}
+	}{
+		{
+			name:     "event property over context and default",
+			event:    NewProperties().Set("service", "event"),
+			context:  NewProperties().Set("service", "context"),
+			defaults: NewProperties().Set("service", "default"),
+			want:     "event",
+		},
+		{
+			name:     "context property over default",
+			context:  NewProperties().Set("service", "context"),
+			defaults: NewProperties().Set("service", "default"),
+			want:     "context",
+		},
+		{
+			name:     "default fills a missing property",
+			defaults: NewProperties().Set("service", "default"),
+			want:     "default",
+		},
+		{
+			name:     "nil event property blocks the default",
+			event:    NewProperties().Set("service", nil),
+			defaults: NewProperties().Set("service", "default"),
+			want:     nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: tt.defaults,
+			})
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{Properties: tt.context})
+			require.NoError(t, EnqueueWithContext(ctx, client, Capture{DistinctId: "user-1", Event: "e", Properties: tt.event}))
+
+			properties := requireProperties(t, readSingleBatchEvent(t, body))
+			require.Contains(t, properties, "service")
+			require.Equal(t, tt.want, properties["service"])
 		})
 	}
 }
