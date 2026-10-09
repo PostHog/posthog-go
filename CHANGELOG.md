@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.34.0
+
+### Minor Changes
+
+- 3f345cc: `posthogmcpsdk` accepts `WithIntentFallback`, a callback that supplies `$mcp_intent` for tool calls whose agent sent no `context`, with `$mcp_intent_source` of `inferred`. The agent's own `context` still wins.
+
 ## 1.33.0
 
 ### Minor Changes
