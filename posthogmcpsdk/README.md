@@ -93,6 +93,43 @@ Schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not changed.
 
 Turn it off with `WithContextParameter(false)`.
 
+## Inferring intent when the agent sends none
+
+A client that ignores the schema hint, such as a script or an in-house agent,
+sends no `context`, and its calls have no intent. `WithIntentFallback` supplies
+one for those calls:
+
+```go
+posthogmcpsdk.Instrument(server, analytics,
+	posthogmcpsdk.WithIntentFallback(func(_ context.Context, req *mcp.CallToolRequest) (string, error) {
+		var arguments struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(req.Params.Arguments, &arguments)
+		if req.Params.Name == "search_docs" && arguments.Query != "" {
+			return "Searching the docs for " + arguments.Query, nil
+		}
+		return "", nil
+	}),
+)
+```
+
+The result is captured as `$mcp_intent` with `$mcp_intent_source` of
+`"inferred"`, redacted like the agent's own text. A fallback that returns the
+same text for every call of a tool gives intent analysis nothing to cluster, so
+return an empty string when the call tells you nothing.
+
+The agent's `context` always wins, and the fallback is not called then. A blank `context`, or `{}`, is no context. An
+empty result, or an error or panic, leaves the call without an intent, and the
+error goes to `WithErrorHandler`. The callback receives the request as the
+client sent it, with any `context`, `llm_model`, or `conversation_id` the agent
+filled in still present, and the request's context, which a cancelled client
+cancels. Calls run concurrently, so it must be safe for concurrent use.
+
+The adapter infers nothing itself. The callback runs on the tool call's
+response path, so keep it fast and cache anything it computes with a model. It
+applies to `$mcp_tool_call` only.
+
 ## The llm_model argument
 
 MCP has no standard way for a client to say which model is calling, so the

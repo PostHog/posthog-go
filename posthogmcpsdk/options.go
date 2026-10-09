@@ -29,6 +29,13 @@ type PropertiesResolver func(
 	error,
 ) (posthog.Properties, error)
 
+// IntentFallback infers the intent of a tool call whose agent did not state
+// one. An empty result means no intent. It receives the request as the client
+// sent it, including any analytics arguments the agent filled in, and the
+// request's context. Calls run concurrently, so it must be safe for concurrent
+// use.
+type IntentFallback func(context.Context, *mcpsdk.CallToolRequest) (string, error)
+
 // ErrorHandler receives instrumentation failures. Its errors and panics never
 // alter the MCP response.
 type ErrorHandler func(context.Context, error)
@@ -41,6 +48,7 @@ type config struct {
 	identity              IdentityResolver
 	properties            PropertiesResolver
 	errorHandler          ErrorHandler
+	intentFallback        IntentFallback
 	captureParameters     bool
 	captureResponses      bool
 	contextParameter      bool
@@ -91,6 +99,17 @@ func WithCaptureResponses(enabled bool) Option {
 // It is enabled by default.
 func WithContextParameter(enabled bool) Option {
 	return func(cfg *config) { cfg.contextParameter = enabled }
+}
+
+// WithIntentFallback supplies the intent of a tool call whose agent sent no
+// context, captured with $mcp_intent_source "inferred". The agent's own context
+// always wins, and the fallback is not called then. The adapter infers nothing
+// itself, so everything the fallback does, including any model call, happens
+// on the tool call's response path. An error or panic is reported to the
+// ErrorHandler and the call has no intent. The result is redacted and bounded
+// like the agent's context.
+func WithIntentFallback(fallback IntentFallback) Option {
+	return func(cfg *config) { cfg.intentFallback = fallback }
 }
 
 // WithCaptureModel controls capture of the model that made each call. The
