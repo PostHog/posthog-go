@@ -520,6 +520,179 @@ func TestInstrumentPrivacyControlsAndUnrelatedMethods(t *testing.T) {
 	assert.NotContains(t, properties, "$mcp_response")
 }
 
+func TestInstrumentIntentFallback(t *testing.T) {
+	inferFromCall := func(_ context.Context, req *mcpsdk.CallToolRequest) (string, error) {
+		return "Looking up " + req.Params.Name + " " + string(req.Params.Arguments), nil
+	}
+	fixed := func(intent string, err error) IntentFallback {
+		return func(context.Context, *mcpsdk.CallToolRequest) (string, error) { return intent, err }
+	}
+	for _, test := range []struct {
+		name         string
+		opts         []Option
+		fallback     IntentFallback
+		arguments    map[string]any
+		wantCalls    int
+		wantIntent   any
+		wantSource   any
+		wantReported []string
+	}{
+		{
+			name:       "inferred when the agent sends no context, from the request as the client sent it",
+			fallback:   inferFromCall,
+			arguments:  map[string]any{"city": "Melbourne", "llm_model": "m-1"},
+			wantCalls:  1,
+			wantIntent: `Looking up weather {"city":"Melbourne","llm_model":"m-1"}`,
+			wantSource: "inferred",
+		},
+		{
+			name:       "inferred when the context is blank",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": "  "},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "inferred when the context is an empty object",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": "{}"},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "inferred when the context is not a string",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": 42},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "the agent's context wins and the fallback is not asked",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": "Planning a trip"},
+			wantIntent: "Planning a trip",
+			wantSource: "context_parameter",
+		},
+		{
+			name:       "inferred when the context parameter is off",
+			opts:       []Option{WithContextParameter(false)},
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne"},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "personal data is redacted like any intent",
+			fallback:   fixed("Emailing alice@example.com", nil),
+			arguments:  map[string]any{"city": "Melbourne"},
+			wantCalls:  1,
+			wantIntent: "Emailing [redacted]",
+			wantSource: "inferred",
+		},
+		{
+			name:      "a blank result is no intent",
+			fallback:  fixed("  ", nil),
+			arguments: map[string]any{"city": "Melbourne"},
+			wantCalls: 1,
+		},
+		{
+			name:      "an empty object result is no intent",
+			fallback:  fixed("{}", nil),
+			arguments: map[string]any{"city": "Melbourne"},
+			wantCalls: 1,
+		},
+		{
+			name:         "an error is reported and leaves no intent",
+			fallback:     fixed("ignored", errors.New("model unavailable")),
+			arguments:    map[string]any{"city": "Melbourne"},
+			wantCalls:    1,
+			wantReported: []string{"posthogmcpsdk: intent fallback: model unavailable"},
+		},
+		{
+			name: "a panic is reported and leaves no intent",
+			fallback: func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
+				panic("fallback panic")
+			},
+			arguments:    map[string]any{"city": "Melbourne"},
+			wantCalls:    1,
+			wantReported: []string{"posthogmcpsdk: intent fallback: intent fallback panic (string)"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var reported []string
+			var calls int
+			queue := &fakeQueue{}
+			server := newServer()
+			opts := append(test.opts,
+				WithIntentFallback(func(ctx context.Context, req *mcpsdk.CallToolRequest) (string, error) {
+					calls++
+					return test.fallback(ctx, req)
+				}),
+				WithErrorHandler(func(_ context.Context, err error) { reported = append(reported, err.Error()) }),
+			)
+			Instrument(server, posthogmcp.New(queue), opts...)
+			addWeatherTool(server, nil)
+
+			result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "weather",
+				Arguments: test.arguments,
+			})
+			require.NoError(t, err)
+			require.False(t, result.IsError, toolResultText(result))
+
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantCalls, calls)
+			assert.Equal(t, test.wantIntent, properties["$mcp_intent"])
+			assert.Equal(t, test.wantSource, properties["$mcp_intent_source"])
+			assert.Equal(t, test.wantReported, reported)
+		})
+	}
+}
+
+func TestInstrumentIntentFallbackIsForToolCallsOnly(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		tool      string
+		wantEvent string
+	}{
+		{name: "an unknown tool", tool: "no_such_tool", wantEvent: "$mcp_unknown_tool"},
+		{name: "the missing-capability tool", tool: "get_more_tools", wantEvent: "$mcp_missing_capability"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls int
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue),
+				WithMissingCapabilityTool(""),
+				WithIntentFallback(func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
+					calls++
+					return "inferred", nil
+				}),
+			)
+			addWeatherTool(server, nil)
+
+			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      test.tool,
+				Arguments: map[string]any{"context": "Reporting a gap"},
+			})
+			if test.tool == "no_such_tool" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Zero(t, calls)
+			assert.Empty(t, queue.toolCalls())
+			require.Len(t, queue.captures(test.wantEvent), 1)
+			assert.NotEqual(t, "inferred", queue.captures(test.wantEvent)[0].Properties["$mcp_intent_source"])
+		})
+	}
+}
+
 func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
 	failingIdentity := WithIdentity(func(context.Context, *mcpsdk.CallToolRequest) (Identity, error) {
 		return Identity{}, errors.New("identity unavailable")
