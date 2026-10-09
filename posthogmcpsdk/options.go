@@ -30,7 +30,10 @@ type PropertiesResolver func(
 ) (posthog.Properties, error)
 
 // IntentFallback infers the intent of a tool call whose agent did not state
-// one. An empty result means no intent.
+// one. An empty result means no intent. It receives the request as the client
+// sent it, including any analytics arguments the agent filled in, and the
+// request's context. Calls run concurrently, so it must be safe for concurrent
+// use.
 type IntentFallback func(context.Context, *mcpsdk.CallToolRequest) (string, error)
 
 // ErrorHandler receives instrumentation failures. Its errors and panics never

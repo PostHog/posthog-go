@@ -530,78 +530,103 @@ func TestInstrumentIntentFallback(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		opts         []Option
+		fallback     IntentFallback
 		arguments    map[string]any
+		wantCalls    int
 		wantIntent   any
 		wantSource   any
 		wantReported []string
 	}{
 		{
-			name:       "inferred when the agent sends no context",
-			opts:       []Option{WithIntentFallback(inferFromCall)},
-			arguments:  map[string]any{"city": "Melbourne"},
-			wantIntent: `Looking up weather {"city":"Melbourne"}`,
+			name:       "inferred when the agent sends no context, from the request as the client sent it",
+			fallback:   inferFromCall,
+			arguments:  map[string]any{"city": "Melbourne", "llm_model": "m-1"},
+			wantCalls:  1,
+			wantIntent: `Looking up weather {"city":"Melbourne","llm_model":"m-1"}`,
 			wantSource: "inferred",
 		},
 		{
 			name:       "inferred when the context is blank",
-			opts:       []Option{WithIntentFallback(fixed("Checking the forecast", nil))},
+			fallback:   fixed("Checking the forecast", nil),
 			arguments:  map[string]any{"city": "Melbourne", "context": "  "},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "inferred when the context is not a string",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": 42},
+			wantCalls:  1,
 			wantIntent: "Checking the forecast",
 			wantSource: "inferred",
 		},
 		{
 			name:       "the agent's context wins and the fallback is not asked",
-			opts:       []Option{WithIntentFallback(fixed("", errors.New("must not be called")))},
+			fallback:   fixed("Checking the forecast", nil),
 			arguments:  map[string]any{"city": "Melbourne", "context": "Planning a trip"},
 			wantIntent: "Planning a trip",
 			wantSource: "context_parameter",
 		},
 		{
 			name:       "inferred when the context parameter is off",
-			opts:       []Option{WithContextParameter(false), WithIntentFallback(fixed("Checking the forecast", nil))},
+			opts:       []Option{WithContextParameter(false)},
+			fallback:   fixed("Checking the forecast", nil),
 			arguments:  map[string]any{"city": "Melbourne"},
+			wantCalls:  1,
 			wantIntent: "Checking the forecast",
 			wantSource: "inferred",
 		},
 		{
 			name:       "personal data is redacted like any intent",
-			opts:       []Option{WithIntentFallback(fixed("Emailing alice@example.com", nil))},
+			fallback:   fixed("Emailing alice@example.com", nil),
 			arguments:  map[string]any{"city": "Melbourne"},
+			wantCalls:  1,
 			wantIntent: "Emailing [redacted]",
 			wantSource: "inferred",
 		},
 		{
 			name:      "a blank result is no intent",
-			opts:      []Option{WithIntentFallback(fixed("  ", nil))},
+			fallback:  fixed("  ", nil),
 			arguments: map[string]any{"city": "Melbourne"},
+			wantCalls: 1,
 		},
 		{
 			name:      "an empty object result is no intent",
-			opts:      []Option{WithIntentFallback(fixed("{}", nil))},
+			fallback:  fixed("{}", nil),
 			arguments: map[string]any{"city": "Melbourne"},
+			wantCalls: 1,
 		},
 		{
 			name:         "an error is reported and leaves no intent",
-			opts:         []Option{WithIntentFallback(fixed("ignored", errors.New("model unavailable")))},
+			fallback:     fixed("ignored", errors.New("model unavailable")),
 			arguments:    map[string]any{"city": "Melbourne"},
+			wantCalls:    1,
 			wantReported: []string{"posthogmcpsdk: intent fallback: model unavailable"},
 		},
 		{
 			name: "a panic is reported and leaves no intent",
-			opts: []Option{WithIntentFallback(func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
+			fallback: func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
 				panic("fallback panic")
-			})},
+			},
 			arguments:    map[string]any{"city": "Melbourne"},
+			wantCalls:    1,
 			wantReported: []string{"posthogmcpsdk: intent fallback: intent fallback panic (string)"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var reported []string
+			var calls int
 			queue := &fakeQueue{}
 			server := newServer()
-			Instrument(server, posthogmcp.New(queue), append(test.opts, WithErrorHandler(func(_ context.Context, err error) {
-				reported = append(reported, err.Error())
-			}))...)
+			opts := append(test.opts,
+				WithIntentFallback(func(ctx context.Context, req *mcpsdk.CallToolRequest) (string, error) {
+					calls++
+					return test.fallback(ctx, req)
+				}),
+				WithErrorHandler(func(_ context.Context, err error) { reported = append(reported, err.Error()) }),
+			)
+			Instrument(server, posthogmcp.New(queue), opts...)
 			addWeatherTool(server, nil)
 
 			result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
@@ -612,9 +637,50 @@ func TestInstrumentIntentFallback(t *testing.T) {
 			require.False(t, result.IsError, toolResultText(result))
 
 			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantCalls, calls)
 			assert.Equal(t, test.wantIntent, properties["$mcp_intent"])
 			assert.Equal(t, test.wantSource, properties["$mcp_intent_source"])
 			assert.Equal(t, test.wantReported, reported)
+		})
+	}
+}
+
+func TestInstrumentIntentFallbackIsForToolCallsOnly(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		tool      string
+		wantEvent string
+	}{
+		{name: "an unknown tool", tool: "no_such_tool", wantEvent: "$mcp_unknown_tool"},
+		{name: "the missing-capability tool", tool: "get_more_tools", wantEvent: "$mcp_missing_capability"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls int
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue),
+				WithMissingCapabilityTool(""),
+				WithIntentFallback(func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
+					calls++
+					return "inferred", nil
+				}),
+			)
+			addWeatherTool(server, nil)
+
+			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      test.tool,
+				Arguments: map[string]any{"context": "Reporting a gap"},
+			})
+			if test.tool == "no_such_tool" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Zero(t, calls)
+			assert.Empty(t, queue.toolCalls())
+			require.Len(t, queue.captures(test.wantEvent), 1)
+			assert.NotEqual(t, "inferred", queue.captures(test.wantEvent)[0].Properties["$mcp_intent_source"])
 		})
 	}
 }
