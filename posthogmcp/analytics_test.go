@@ -302,7 +302,7 @@ func TestCaptureToolCallFailureAndException(t *testing.T) {
 	assert.Equal(t, "request failed with [redacted]", item.Value)
 	require.NotNil(t, item.Mechanism)
 	assert.Equal(t, true, *item.Mechanism.Handled)
-	assert.Equal(t, false, *item.Mechanism.Synthetic, "a thrown error is not synthesized by the instrumentation")
+	assert.Equal(t, true, *item.Mechanism.Synthetic)
 	assert.Nil(t, item.Stacktrace)
 	assert.Equal(t, "mcp.tool_call", exception.Properties[propertyExceptionSource])
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, exception.Properties[propertyGroups])
