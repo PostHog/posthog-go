@@ -102,7 +102,8 @@ type Client interface {
 	// GetFeatureFlagResult evaluates one feature flag and returns its value and payload together.
 	// Use this instead of calling GetFeatureFlag and GetFeatureFlagPayload separately.
 	// It returns ErrFlagNotFound when the flag cannot be found or evaluated and
-	// ErrNoSecretKey when OnlyEvaluateLocally is true without SecretKey.
+	// ErrNoSecretKey when OnlyEvaluateLocally is true without SecretKey or a
+	// FlagDefinitionCacheProvider.
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
 	// GetFeatureFlagPayload returns the payload for the matching flag value, or an
@@ -117,7 +118,7 @@ type Client interface {
 
 	// GetAllFlags evaluates all flags for a user. Returned values are booleans for
 	// boolean flags and strings for multivariate variants. It returns ErrNoSecretKey
-	// when OnlyEvaluateLocally is true without SecretKey.
+	// when OnlyEvaluateLocally is true without SecretKey or a FlagDefinitionCacheProvider.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
@@ -134,11 +135,13 @@ type Client interface {
 	// were resolved locally, EvaluateFlags returns a non-nil snapshot containing
 	// the locally-evaluated flags alongside the error so the caller can still
 	// branch on what was resolved.
-	// If OnlyEvaluateLocally is true and no SecretKey is configured, returns ErrNoSecretKey.
+	// If OnlyEvaluateLocally is true and neither SecretKey nor a
+	// FlagDefinitionCacheProvider is configured, returns ErrNoSecretKey.
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
 	// ReloadFeatureFlags forces a reload of feature flags.
-	// If no SecretKey is configured, returns ErrNoSecretKey.
+	// If neither SecretKey nor a FlagDefinitionCacheProvider is configured,
+	// returns ErrNoSecretKey.
 	ReloadFeatureFlags() error
 
 	// CloseWithContext gracefully shuts down the client with the provided context.
@@ -310,7 +313,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	}
 
 	secretKey := c.Config.effectiveSecretKey()
-	if len(secretKey) > 0 {
+	if len(secretKey) > 0 || c.FlagDefinitionCacheProvider != nil {
 		c.featureFlagsPoller, err = newFeatureFlagsPoller(
 			c.key,
 			secretKey,
@@ -1139,7 +1142,7 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 	var err error
 
 	if c.featureFlagsPoller != nil {
-		// get feature flags from the poller, which uses the personal api key
+		// get feature flags from the local definition poller
 		flagsValue, err = c.featureFlagsPoller.GetAllFlags(flagConfig)
 	} else {
 		// if there's no poller, get the feature flags from the flags endpoint

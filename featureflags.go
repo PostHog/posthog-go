@@ -728,6 +728,10 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 	}
 
 	personalApiKey := poller.personalApiKey
+	if personalApiKey == "" {
+		poller.Logger.Warnf("PostHog secret key is not configured; fetching feature flag definitions requires a SecretKey.")
+		return
+	}
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
 
 	// Read current ETag from state (lock-free)

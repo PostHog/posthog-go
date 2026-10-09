@@ -70,12 +70,13 @@ type Config struct {
 	// If empty, it defaults to DefaultEndpoint.
 	Endpoint string
 
-	// SecretKey is the credential used for local feature flag evaluation, remote
-	// config payloads, and lower-latency flag APIs. It accepts either a Personal
-	// API Key (phx_...) or a Project Secret API Key (phs_...). If empty, feature
-	// flag methods fall back to the /flags endpoint unless the method requires
-	// local-only behavior. When both SecretKey and PersonalApiKey are set,
-	// SecretKey takes precedence.
+	// SecretKey is the credential used to fetch local feature flag definitions,
+	// remote config payloads, and lower-latency flag APIs. It accepts either a Personal
+	// API Key (phx_...) or a Project Secret API Key (phs_...). Local evaluation can
+	// also use definitions from FlagDefinitionCacheProvider without this key.
+	// Without either, feature flag methods fall back to the /flags endpoint unless
+	// the method requires local-only behavior. When both SecretKey and PersonalApiKey
+	// are set, SecretKey takes precedence.
 	// See https://posthog.com/docs/api/overview for how to create these keys.
 	SecretKey string
 
@@ -109,7 +110,8 @@ type Config struct {
 	Interval time.Duration
 
 	// DefaultFeatureFlagsPollingInterval is the interval for reloading local feature
-	// flag definitions when SecretKey is configured. If zero, it defaults to
+	// flag definitions when SecretKey or FlagDefinitionCacheProvider is configured.
+	// If zero, it defaults to
 	// DefaultFeatureFlagsPollingInterval.
 	DefaultFeatureFlagsPollingInterval time.Duration
 
@@ -127,7 +129,9 @@ type Config struct {
 	NextFeatureFlagsPollingTick func() time.Duration
 
 	// FlagDefinitionCacheProvider shares local evaluation flag definitions with other
-	// SDK instances through an external cache. Only used when SecretKey is configured.
+	// SDK instances through an external cache. Cached definitions can be loaded and
+	// evaluated locally without SecretKey; fetching definitions from PostHog still
+	// requires SecretKey.
 	// See https://posthog.com/docs/feature-flags/local-evaluation/distributed-environments
 	// for guidance.
 	//
