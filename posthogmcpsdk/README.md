@@ -93,6 +93,28 @@ Schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not changed.
 
 Turn it off with `WithContextParameter(false)`.
 
+## Inferring intent when the agent sends none
+
+A client that ignores the schema hint, such as a script or an in-house agent,
+sends no `context`, and its calls have no intent. `WithIntentFallback` supplies
+one for those calls:
+
+```go
+posthogmcpsdk.Instrument(server, analytics,
+	posthogmcpsdk.WithIntentFallback(func(_ context.Context, req *mcp.CallToolRequest) (string, error) {
+		return "Invoking " + req.Params.Name, nil
+	}),
+)
+```
+
+The result is captured as `$mcp_intent` with `$mcp_intent_source` of
+`"inferred"`, redacted like the agent's own text. The agent's `context` always
+wins, and the fallback is not called then. An empty result, or an error or
+panic, leaves the call without an intent, and the error goes to
+`WithErrorHandler`. The adapter infers nothing itself. The callback runs on the
+tool call's response path, so keep it fast and cache anything it computes with
+a model. It applies to `$mcp_tool_call` only.
+
 ## The llm_model argument
 
 MCP has no standard way for a client to say which model is calling, so the
