@@ -14,6 +14,10 @@ const (
 	contextArgument      = "context"
 	modelArgument        = "llm_model"
 	conversationArgument = "conversation_id"
+
+	// emptyJSONObject is what a client sends for an empty context, which is no
+	// intent, as in posthogmcp.
+	emptyJSONObject = "{}"
 )
 
 // toolArguments is a tools/call arguments object decoded one level deep, so

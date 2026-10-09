@@ -510,10 +510,7 @@ func (m *middleware) captureToolCall(
 		Timestamp:       event.Timestamp,
 	}
 
-	if intent := prepared.arguments.text(contextArgument); intent != "" && m.contextParameter {
-		call.Intent = intent
-		call.IntentSource = posthogmcp.IntentSourceContextParameter
-	}
+	call.Intent, call.IntentSource = m.callIntent(ctx, prepared)
 	if m.captureParameters {
 		call.Parameters = capturedParameters(toolRequest.Params, prepared.arguments, prepared.tool.injected)
 	}
@@ -543,6 +540,23 @@ func (m *middleware) captureToolCall(
 	}
 
 	return capture(ctx, func(ctx context.Context) error { return m.analytics.CaptureToolCall(ctx, call) })
+}
+
+// callIntent is the intent the agent stated in the context argument, else the
+// one the fallback infers.
+func (m *middleware) callIntent(ctx context.Context, prepared preparedCall) (string, posthogmcp.IntentSource) {
+	if intent := prepared.arguments.text(contextArgument); intent != "" && intent != emptyJSONObject && m.contextParameter {
+		return intent, posthogmcp.IntentSourceContextParameter
+	}
+	if m.intentFallback == nil {
+		return "", ""
+	}
+	intent, err := callIntentFallback(ctx, m.intentFallback, prepared.request)
+	if err != nil {
+		m.report(ctx, fmt.Errorf("posthogmcpsdk: intent fallback: %w", err))
+		return "", ""
+	}
+	return intent, posthogmcp.IntentSourceInferred
 }
 
 // errorTypeInputRequired is the $mcp_error_type of a call whose input_required
@@ -603,6 +617,15 @@ func callIdentityResolver(
 ) (identity Identity, err error) {
 	defer recoverInstrumentationPanic("identity resolver", &err)
 	return resolver(ctx, req)
+}
+
+func callIntentFallback(
+	ctx context.Context,
+	fallback IntentFallback,
+	req *mcpsdk.CallToolRequest,
+) (intent string, err error) {
+	defer recoverInstrumentationPanic("intent fallback", &err)
+	return fallback(ctx, req)
 }
 
 func callPropertiesResolver(
