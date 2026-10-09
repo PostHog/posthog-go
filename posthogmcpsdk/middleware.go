@@ -545,7 +545,7 @@ func (m *middleware) captureToolCall(
 // callIntent is the intent the agent stated in the context argument, else the
 // one the fallback infers.
 func (m *middleware) callIntent(ctx context.Context, prepared preparedCall) (string, posthogmcp.IntentSource) {
-	if intent := prepared.arguments.text(contextArgument); intent != "" && m.contextParameter {
+	if intent := prepared.arguments.text(contextArgument); intent != "" && intent != emptyJSONObject && m.contextParameter {
 		return intent, posthogmcp.IntentSourceContextParameter
 	}
 	if m.intentFallback == nil {

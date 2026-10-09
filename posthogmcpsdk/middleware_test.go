@@ -554,6 +554,14 @@ func TestInstrumentIntentFallback(t *testing.T) {
 			wantSource: "inferred",
 		},
 		{
+			name:       "inferred when the context is an empty object",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": "{}"},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
 			name:       "inferred when the context is not a string",
 			fallback:   fixed("Checking the forecast", nil),
 			arguments:  map[string]any{"city": "Melbourne", "context": 42},

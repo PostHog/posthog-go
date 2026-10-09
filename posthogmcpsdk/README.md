@@ -119,7 +119,7 @@ The result is captured as `$mcp_intent` with `$mcp_intent_source` of
 same text for every call of a tool gives intent analysis nothing to cluster, so
 return an empty string when the call tells you nothing.
 
-The agent's `context` always wins, and the fallback is not called then. An
+The agent's `context` always wins, and the fallback is not called then. A blank `context`, or `{}`, is no context. An
 empty result, or an error or panic, leaves the call without an intent, and the
 error goes to `WithErrorHandler`. The callback receives the request as the
 client sent it, with any `context`, `llm_model`, or `conversation_id` the agent
