@@ -163,7 +163,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	assert.Empty(t, queue.exceptions())
 }
 
-func TestInstrumentAdvertisesContextParameter(t *testing.T) {
+func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		opts           []Option
@@ -174,28 +174,44 @@ func TestInstrumentAdvertisesContextParameter(t *testing.T) {
 		{
 			name:           "added to a closed schema",
 			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []any{"city"}, "additionalProperties": false},
-			wantProperties: []string{"city", "context"},
-			wantRequired:   []string{"city", "context"},
+			wantProperties: []string{"city", "context", "llm_model", "conversation_id"},
+			wantRequired:   []string{"city", "context", "llm_model"},
 		},
 		{
 			name:           "added to an empty schema",
 			inputSchema:    map[string]any{"type": "object"},
-			wantProperties: []string{"context"},
-			wantRequired:   []string{"context"},
+			wantProperties: []string{"context", "llm_model", "conversation_id"},
+			wantRequired:   []string{"context", "llm_model"},
 		},
 		{
-			name:           "a tool's own context is kept",
-			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "object"}}},
-			wantProperties: []string{"context"},
+			name:           "a tool's own arguments are kept",
+			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"context": map[string]any{"type": "object"}, "llm_model": map[string]any{"type": "object"}, "conversation_id": map[string]any{"type": "object"}}},
+			wantProperties: []string{"context", "llm_model", "conversation_id"},
 		},
 		{
 			name:        "combinator schemas are left alone",
 			inputSchema: map[string]any{"type": "object", "anyOf": []any{map[string]any{"required": []any{"id"}}}},
 		},
 		{
-			name:        "disabled",
-			opts:        []Option{WithContextParameter(false)},
-			inputSchema: map[string]any{"type": "object"},
+			name:           "context disabled",
+			opts:           []Option{WithContextParameter(false)},
+			inputSchema:    map[string]any{"type": "object"},
+			wantProperties: []string{"llm_model", "conversation_id"},
+			wantRequired:   []string{"llm_model"},
+		},
+		{
+			name:           "model capture disabled",
+			opts:           []Option{WithCaptureModel(false)},
+			inputSchema:    map[string]any{"type": "object"},
+			wantProperties: []string{"context", "conversation_id"},
+			wantRequired:   []string{"context"},
+		},
+		{
+			name:           "conversation anchoring disabled",
+			opts:           []Option{WithConversationID(false)},
+			inputSchema:    map[string]any{"type": "object"},
+			wantProperties: []string{"context", "llm_model"},
+			wantRequired:   []string{"context", "llm_model"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -216,6 +232,102 @@ func TestInstrumentAdvertisesContextParameter(t *testing.T) {
 				assert.ElementsMatch(t, test.wantProperties, slices.Collect(maps.Keys(schema.Properties)))
 				assert.Equal(t, test.wantRequired, schema.Required)
 			}
+		})
+	}
+}
+
+// argumentsEchoTool registers a tool without input validation that returns
+// the arguments it received as text.
+func argumentsEchoTool(server *mcpsdk.Server, inputSchema any) {
+	server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: inputSchema}, func(_ context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: string(req.Params.Arguments)}}}, nil
+	})
+}
+
+func TestInstrumentCapturesModel(t *testing.T) {
+	ownModel := map[string]any{"type": "object", "properties": map[string]any{"llm_model": map[string]any{"type": "string"}}}
+	for _, test := range []struct {
+		name          string
+		opts          []Option
+		inputSchema   any
+		meta          mcpsdk.Meta
+		arguments     map[string]any
+		wantModel     any
+		wantSource    any
+		wantArguments string
+	}{
+		{
+			name:          "self-reported through the injected argument",
+			arguments:     map[string]any{"q": "flags", "llm_model": " claude-opus-4-8 "},
+			wantModel:     "claude-opus-4-8",
+			wantSource:    "self_reported",
+			wantArguments: `{"q":"flags"}`,
+		},
+		{
+			name:          "codex turn metadata wins over the argument",
+			meta:          mcpsdk.Meta{"x-codex-turn-metadata": map[string]any{"model": "gpt-5.2"}},
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantModel:     "gpt-5.2",
+			wantSource:    "client_metadata",
+			wantArguments: `{}`,
+		},
+		{
+			name:          "the proposed aiInvocation metadata",
+			meta:          mcpsdk.Meta{"io.modelcontextprotocol/aiInvocation": map[string]any{"model": "gemini-3-pro"}},
+			arguments:     map[string]any{},
+			wantModel:     "gemini-3-pro",
+			wantSource:    "client_metadata",
+			wantArguments: `{}`,
+		},
+		{
+			name:          "unknown metadata falls back to the argument",
+			meta:          mcpsdk.Meta{"x-codex-turn-metadata": map[string]any{"model": "Unknown"}},
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantModel:     "claude-opus-4-8",
+			wantSource:    "self_reported",
+			wantArguments: `{}`,
+		},
+		{
+			name:          "an unknown self-report is not a model",
+			arguments:     map[string]any{"llm_model": "unknown"},
+			wantArguments: `{}`,
+		},
+		{
+			name:          "a tool's own llm_model is its data",
+			inputSchema:   ownModel,
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantArguments: `{"llm_model":"claude-opus-4-8"}`,
+		},
+		{
+			name:          "disabled",
+			opts:          []Option{WithCaptureModel(false)},
+			meta:          mcpsdk.Meta{"x-codex-turn-metadata": map[string]any{"model": "gpt-5.2"}},
+			arguments:     map[string]any{"llm_model": "claude-opus-4-8"},
+			wantArguments: `{"llm_model":"claude-opus-4-8"}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue), test.opts...)
+			inputSchema := test.inputSchema
+			if inputSchema == nil {
+				inputSchema = map[string]any{"type": "object"}
+			}
+			argumentsEchoTool(server, inputSchema)
+
+			result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Meta:      test.meta,
+				Name:      "echo",
+				Arguments: test.arguments,
+			})
+			require.NoError(t, err)
+			assert.JSONEq(t, test.wantArguments, result.Content[0].(*mcpsdk.TextContent).Text)
+
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantModel, properties["$mcp_llm_model"])
+			assert.Equal(t, test.wantSource, properties["$mcp_llm_model_source"])
+			assert.JSONEq(t, test.wantArguments, jsonString(t, properties["$mcp_parameters"].(map[string]any)["request"].(map[string]any)["params"].(map[string]any)["arguments"]))
 		})
 	}
 }
@@ -352,9 +464,9 @@ func TestInstrumentCapturesParametersAndIntent(t *testing.T) {
 		wantSource     any
 	}{
 		{
-			name:           "context is captured as intent, not parameters, and a tool's own conversation_id stays a parameter",
-			arguments:      map[string]any{"city": "Melbourne", "context": "  Checking the weather for a trip  ", "conversation_id": "c-1"},
-			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"city":"Melbourne","conversation_id":"c-1"}}}}`,
+			name:           "context is captured as intent, not parameters, and the injected arguments are left out",
+			arguments:      map[string]any{"city": "Melbourne", "context": "  Checking the weather for a trip  ", "conversation_id": "c-1", "llm_model": "unknown"},
+			wantParameters: `{"request":{"method":"tools/call","params":{"name":"echo","arguments":{"city":"Melbourne"}}}}`,
 			wantIntent:     "Checking the weather for a trip",
 			wantSource:     "context_parameter",
 		},
@@ -406,6 +518,179 @@ func TestInstrumentPrivacyControlsAndUnrelatedMethods(t *testing.T) {
 	properties := queue.onlyToolCall(t)
 	assert.NotContains(t, properties, "$mcp_parameters")
 	assert.NotContains(t, properties, "$mcp_response")
+}
+
+func TestInstrumentIntentFallback(t *testing.T) {
+	inferFromCall := func(_ context.Context, req *mcpsdk.CallToolRequest) (string, error) {
+		return "Looking up " + req.Params.Name + " " + string(req.Params.Arguments), nil
+	}
+	fixed := func(intent string, err error) IntentFallback {
+		return func(context.Context, *mcpsdk.CallToolRequest) (string, error) { return intent, err }
+	}
+	for _, test := range []struct {
+		name         string
+		opts         []Option
+		fallback     IntentFallback
+		arguments    map[string]any
+		wantCalls    int
+		wantIntent   any
+		wantSource   any
+		wantReported []string
+	}{
+		{
+			name:       "inferred when the agent sends no context, from the request as the client sent it",
+			fallback:   inferFromCall,
+			arguments:  map[string]any{"city": "Melbourne", "llm_model": "m-1"},
+			wantCalls:  1,
+			wantIntent: `Looking up weather {"city":"Melbourne","llm_model":"m-1"}`,
+			wantSource: "inferred",
+		},
+		{
+			name:       "inferred when the context is blank",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": "  "},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "inferred when the context is an empty object",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": "{}"},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "inferred when the context is not a string",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": 42},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "the agent's context wins and the fallback is not asked",
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne", "context": "Planning a trip"},
+			wantIntent: "Planning a trip",
+			wantSource: "context_parameter",
+		},
+		{
+			name:       "inferred when the context parameter is off",
+			opts:       []Option{WithContextParameter(false)},
+			fallback:   fixed("Checking the forecast", nil),
+			arguments:  map[string]any{"city": "Melbourne"},
+			wantCalls:  1,
+			wantIntent: "Checking the forecast",
+			wantSource: "inferred",
+		},
+		{
+			name:       "personal data is redacted like any intent",
+			fallback:   fixed("Emailing alice@example.com", nil),
+			arguments:  map[string]any{"city": "Melbourne"},
+			wantCalls:  1,
+			wantIntent: "Emailing [redacted]",
+			wantSource: "inferred",
+		},
+		{
+			name:      "a blank result is no intent",
+			fallback:  fixed("  ", nil),
+			arguments: map[string]any{"city": "Melbourne"},
+			wantCalls: 1,
+		},
+		{
+			name:      "an empty object result is no intent",
+			fallback:  fixed("{}", nil),
+			arguments: map[string]any{"city": "Melbourne"},
+			wantCalls: 1,
+		},
+		{
+			name:         "an error is reported and leaves no intent",
+			fallback:     fixed("ignored", errors.New("model unavailable")),
+			arguments:    map[string]any{"city": "Melbourne"},
+			wantCalls:    1,
+			wantReported: []string{"posthogmcpsdk: intent fallback: model unavailable"},
+		},
+		{
+			name: "a panic is reported and leaves no intent",
+			fallback: func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
+				panic("fallback panic")
+			},
+			arguments:    map[string]any{"city": "Melbourne"},
+			wantCalls:    1,
+			wantReported: []string{"posthogmcpsdk: intent fallback: intent fallback panic (string)"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var reported []string
+			var calls int
+			queue := &fakeQueue{}
+			server := newServer()
+			opts := append(test.opts,
+				WithIntentFallback(func(ctx context.Context, req *mcpsdk.CallToolRequest) (string, error) {
+					calls++
+					return test.fallback(ctx, req)
+				}),
+				WithErrorHandler(func(_ context.Context, err error) { reported = append(reported, err.Error()) }),
+			)
+			Instrument(server, posthogmcp.New(queue), opts...)
+			addWeatherTool(server, nil)
+
+			result, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "weather",
+				Arguments: test.arguments,
+			})
+			require.NoError(t, err)
+			require.False(t, result.IsError, toolResultText(result))
+
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantCalls, calls)
+			assert.Equal(t, test.wantIntent, properties["$mcp_intent"])
+			assert.Equal(t, test.wantSource, properties["$mcp_intent_source"])
+			assert.Equal(t, test.wantReported, reported)
+		})
+	}
+}
+
+func TestInstrumentIntentFallbackIsForToolCallsOnly(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		tool      string
+		wantEvent string
+	}{
+		{name: "an unknown tool", tool: "no_such_tool", wantEvent: "$mcp_unknown_tool"},
+		{name: "the missing-capability tool", tool: "get_more_tools", wantEvent: "$mcp_missing_capability"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls int
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue),
+				WithMissingCapabilityTool(""),
+				WithIntentFallback(func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
+					calls++
+					return "inferred", nil
+				}),
+			)
+			addWeatherTool(server, nil)
+
+			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      test.tool,
+				Arguments: map[string]any{"context": "Reporting a gap"},
+			})
+			if test.tool == "no_such_tool" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Zero(t, calls)
+			assert.Empty(t, queue.toolCalls())
+			require.Len(t, queue.captures(test.wantEvent), 1)
+			assert.NotEqual(t, "inferred", queue.captures(test.wantEvent)[0].Properties["$mcp_intent_source"])
+		})
+	}
 }
 
 func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
@@ -581,16 +866,77 @@ func TestStreamableHTTPMapsSessionID(t *testing.T) {
 	assert.Equal(t, "ses_346bdc9a6b5cb06913bb476a65021eb5", queue.onlyToolCall(t)["$session_id"])
 }
 
-// A stateless HTTP server shares a session across requests only through an
-// Mcp-Session-Id the client echoes; without one, each request is its own
-// session. Which one a client holds depends on the negotiated revision.
+type headerTransport struct{ header http.Header }
+
+func (h headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	for name, values := range h.header {
+		req.Header[name] = values
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestStreamableHTTPCapturesClientHeaders(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		header        http.Header
+		wantUserAgent any
+		wantVendor    any
+	}{
+		{
+			name:          "both headers",
+			header:        http.Header{"User-Agent": {"claude-code/2.1.0 (claude-vscode)"}, "X-Anthropic-Client": {"claude-vscode"}},
+			wantUserAgent: "claude-code/2.1.0 (claude-vscode)",
+			wantVendor:    "claude-vscode",
+		},
+		{
+			name:          "no vendor header",
+			header:        http.Header{"User-Agent": {"cursor/1.0"}},
+			wantUserAgent: "cursor/1.0",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue))
+			addWeatherTool(server, nil)
+
+			handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, nil)
+			httpServer := httptest.NewServer(handler)
+			t.Cleanup(httpServer.Close)
+			client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
+			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{
+				Endpoint:   httpServer.URL,
+				HTTPClient: &http.Client{Transport: headerTransport{test.header}},
+			}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = session.Close() })
+
+			_, err = session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "weather",
+				Arguments: map[string]any{"city": "Melbourne"},
+			})
+			require.NoError(t, err)
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantUserAgent, properties["$mcp_client_user_agent"])
+			assert.Equal(t, test.wantVendor, properties["$mcp_vendor_client"])
+		})
+	}
+}
+
+// Without a conversation handle, a stateless HTTP server shares a session
+// across requests only through an Mcp-Session-Id the client echoes; without
+// one, each request is its own session. Which one a client holds depends on
+// the negotiated revision.
 func TestStatelessHTTPSessions(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		getSessionID func() string
+		client       http.RoundTripper
 	}{
-		{"server issues a session id", nil},
-		{"no session id", func() string { return "" }},
+		{name: "the client echoes the server's session id"},
+		{name: "the client drops the server's session id", client: sessionIDDroppingTransport{}},
+		{name: "no session id", getSessionID: func() string { return "" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			queue := &fakeQueue{}
@@ -598,7 +944,7 @@ func TestStatelessHTTPSessions(t *testing.T) {
 				&mcpsdk.Implementation{Name: "test-server", Version: "1.0.0"},
 				&mcpsdk.ServerOptions{GetSessionID: test.getSessionID},
 			)
-			Instrument(server, posthogmcp.New(queue))
+			Instrument(server, posthogmcp.New(queue), WithConversationID(false))
 			addWeatherTool(server, nil)
 
 			handler := mcpsdk.NewStreamableHTTPHandler(
@@ -608,7 +954,10 @@ func TestStatelessHTTPSessions(t *testing.T) {
 			httpServer := httptest.NewServer(handler)
 			t.Cleanup(httpServer.Close)
 			client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
-			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+			session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{
+				Endpoint:   httpServer.URL,
+				HTTPClient: &http.Client{Transport: test.client},
+			}, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = session.Close() })
 
@@ -628,7 +977,7 @@ func TestStatelessHTTPSessions(t *testing.T) {
 				assert.Equal(t, session.InitializeResult().ProtocolVersion, capture.Properties["$mcp_protocol_version"])
 			}
 			first, second := captures[0].Properties["$session_id"], captures[1].Properties["$session_id"]
-			if session.ID() != "" {
+			if session.ID() != "" && test.client == nil {
 				assert.Equal(t, deterministicSessionID(session.ID()), first)
 				assert.Equal(t, first, second)
 			} else {
@@ -680,6 +1029,7 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 		calls            []string
 		wantPages        int
 		wantDescriptions []any
+		wantUnknown      int
 	}{
 		{
 			name:             "a tool on the last page",
@@ -696,11 +1046,11 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 			wantDescriptions: []any{"Tool 1", "Tool 5"},
 		},
 		{
-			name:             "repeated unknown names",
-			toolCount:        5,
-			calls:            []string{"nope", "nope", "other"},
-			wantPages:        5,
-			wantDescriptions: []any{nil, nil, nil},
+			name:        "repeated unknown names",
+			toolCount:   5,
+			calls:       []string{"nope", "nope", "other"},
+			wantPages:   5,
+			wantUnknown: 3,
 		},
 		{
 			name:             "a tool beyond the page cap",
@@ -726,6 +1076,7 @@ func TestInstrumentLearnsToolsOncePerCatalog(t *testing.T) {
 				descriptions = append(descriptions, capture.Properties["$mcp_tool_description"])
 			}
 			assert.Equal(t, test.wantDescriptions, descriptions)
+			assert.Len(t, queue.captures("$mcp_unknown_tool"), test.wantUnknown)
 		})
 	}
 }
@@ -955,6 +1306,58 @@ func TestToolResultText(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			assert.Equal(t, test.want, toolResultText(&mcpsdk.CallToolResult{Content: test.content}))
+		})
+	}
+}
+
+type upstreamTimeout struct{}
+
+func (upstreamTimeout) Error() string { return "upstream timed out" }
+
+func TestInstrumentRecoversATypedHandlersError(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		handler       func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error)
+		wantErrorType string
+		wantMessage   string
+	}{
+		{
+			name: "typed handler returns its own error type",
+			handler: func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+				return nil, nil, upstreamTimeout{}
+			},
+			wantErrorType: "posthogmcpsdk.upstreamTimeout",
+			wantMessage:   "upstream timed out",
+		},
+		{
+			name: "typed handler returns a plain error",
+			handler: func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+				return nil, nil, errors.New("boom")
+			},
+			wantErrorType: "Error",
+			wantMessage:   "boom",
+		},
+		{
+			name: "handler returns an error result of its own",
+			handler: func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+				return &mcpsdk.CallToolResult{IsError: true, Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "403 Forbidden"}}}, nil, nil
+			},
+			wantErrorType: "Error",
+			wantMessage:   "403 Forbidden",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue))
+			mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "query"}, test.handler)
+
+			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "query"})
+			require.NoError(t, err)
+
+			call := queue.onlyToolCall(t)
+			assert.Equal(t, test.wantErrorType, call["$mcp_error_type"])
+			assert.Equal(t, test.wantMessage, call["$mcp_error_message"])
 		})
 	}
 }

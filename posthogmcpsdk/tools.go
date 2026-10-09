@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,14 +19,86 @@ const contextParameterDescription = "Explain in 15-25 words, in third person, wh
 	`"the customer", or "an account". Example: "Retrieving a customer's recent orders to ` +
 	`investigate a billing issue and help support determine the appropriate resolution."`
 
+const modelParameterDescription = "The exact model identifier you (the assistant) are running as, taken from your " +
+	`system prompt or environment (e.g. "claude-opus-4-8", "gpt-5.2"). Used for analytics only. If you do not ` +
+	`know your model identifier with certainty, pass "unknown" — never guess.`
+
+const conversationParameterDescription = "Pass the exact conversation_id from the server's previous response, unchanged. " +
+	"The server provides it on the first call — never invent one, and do not issue parallel tool calls until you " +
+	"have it. Keep passing the same conversation_id for the rest of the conversation, including after later user " +
+	"messages or on a different task; do not reset it when the user starts a new request."
+
+const defaultMissingCapabilityTool = "get_more_tools"
+
+const missingCapabilityDescription = "Check for additional tools whenever your task might benefit from specialized " +
+	"capabilities - even if existing tools could work as a fallback."
+
+const missingCapabilityContextDescription = "A description of your goal and what kind of tool would help accomplish it. " +
+	"Leave out personal and identifying information such as names, emails, and IDs; describe people by role, " +
+	`like "a customer".`
+
+const missingCapabilityResultText = "Unfortunately, we have shown you the full tool list. We have noted your feedback " +
+	"and will work to improve the tool list in the future."
+
+func missingCapabilityTool(name string) *mcpsdk.Tool {
+	openWorld := true
+	destructive := false
+	return &mcpsdk.Tool{
+		Name:        name,
+		Description: missingCapabilityDescription,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				contextArgument: map[string]any{"type": "string", "description": missingCapabilityContextDescription},
+			},
+			"required": []any{contextArgument},
+		},
+		Annotations: &mcpsdk.ToolAnnotations{
+			Title:           "Get More Tools",
+			ReadOnlyHint:    true,
+			OpenWorldHint:   &openWorld,
+			IdempotentHint:  true,
+			DestructiveHint: &destructive,
+		},
+	}
+}
+
+func missingCapabilityResult() *mcpsdk.CallToolResult {
+	return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: missingCapabilityResultText}}}
+}
+
+// analyticsArgument is an argument the middleware advertises on every tool
+// that does not declare it, and removes from calls before dispatch.
+type analyticsArgument struct {
+	name        string
+	description string
+	required    bool
+}
+
+var (
+	contextParameter = analyticsArgument{name: contextArgument, description: contextParameterDescription, required: true}
+	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription, required: true}
+	// conversationParameter is optional because the agent has no handle on its
+	// first call.
+	conversationParameter = analyticsArgument{name: conversationArgument, description: conversationParameterDescription}
+)
+
 // toolInfo is what instrumentation knows about a registered tool from its
 // tools/list entry.
 type toolInfo struct {
+	registered  bool
 	description string
 	category    string
-	// contextInjected means the advertised schema has a context argument the
-	// tool itself does not declare, so it is removed before dispatch.
-	contextInjected bool
+	// injected names the analytics arguments the advertised schema adds to the
+	// tool's own, which are removed before dispatch.
+	injected []string
+	// instructions means the advertised output schema declares
+	// _mcp_instructions, so results carry the conversation handle there too.
+	instructions bool
+}
+
+func (info toolInfo) injects(argument string) bool {
+	return slices.Contains(info.injected, argument)
 }
 
 // maxListingPages bounds the tools/list pages one learning walk requests.
@@ -42,8 +115,8 @@ const catalogTTL = 10 * time.Second
 // toolCatalog remembers every tool seen in a tools/list result. go-sdk has no
 // public tool registry, so listings are the only source of tool metadata.
 type toolCatalog struct {
-	injectContext bool
-	now           func() time.Time
+	inject []analyticsArgument
+	now    func() time.Time
 
 	mu      sync.Mutex
 	current *catalogGeneration
@@ -55,8 +128,8 @@ type catalogGeneration struct {
 	// walking is non-nil while a learning walk runs, and closed when it ends.
 	walking chan struct{}
 	// walkedAt is when the last finished walk ended. Until catalogTTL later, a
-	// name the catalog does not know is treated as not registered (past the
-	// page cap it may be): a later tools/list result can only add names, which
+	// name the catalog does not know is not listed again (past the page cap it
+	// may be registered): a later tools/list result can only add names, which
 	// are then known.
 	walkedAt time.Time
 }
@@ -66,8 +139,8 @@ type catalogEntry struct {
 	learnedAt time.Time
 }
 
-func newToolCatalog(injectContext bool, now func() time.Time) *toolCatalog {
-	return &toolCatalog{injectContext: injectContext, now: now, current: newCatalogGeneration()}
+func newToolCatalog(inject []analyticsArgument, now func() time.Time) *toolCatalog {
+	return &toolCatalog{inject: inject, now: now, current: newCatalogGeneration()}
 }
 
 func newCatalogGeneration() *catalogGeneration {
@@ -94,18 +167,8 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 	advertised := make([]*mcpsdk.Tool, len(tools))
 	infos := make([]toolInfo, len(tools))
 	for i, tool := range tools {
-		advertised[i] = tool
-		infos[i] = toolInfo{description: tool.Description}
-		infos[i].category, _ = tool.Meta["category"].(string)
-		if !c.injectContext {
-			continue
-		}
-		if schema, ok := withContextParameter(tool.InputSchema); ok {
-			copied := *tool
-			copied.InputSchema = schema
-			advertised[i] = &copied
-			infos[i].contextInjected = true
-		}
+		advertised[i], infos[i] = c.present(tool)
+		infos[i].registered = true
 	}
 
 	c.mu.Lock()
@@ -118,13 +181,35 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 	return advertised
 }
 
+func (c *toolCatalog) present(tool *mcpsdk.Tool) (*mcpsdk.Tool, toolInfo) {
+	info := toolInfo{description: tool.Description}
+	info.category, _ = tool.Meta["category"].(string)
+	schema, injected := withArguments(tool.InputSchema, c.inject)
+	if len(injected) == 0 {
+		return tool, info
+	}
+	copied := *tool
+	copied.InputSchema = schema
+	info.injected = injected
+	if slices.Contains(injected, conversationArgument) {
+		copied.OutputSchema, info.instructions = withInstructions(tool.OutputSchema)
+	}
+	return &copied, info
+}
+
+func (c *toolCatalog) registers(gen *catalogGeneration, name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return gen.tools[name].info.registered
+}
+
 // lookup returns what the catalog knows about the called tool. A call that
 // reaches this process before any tools/list did, as when a load balancer
 // sends a client's listing and its calls to different replicas, lists tools
 // through next, and so does a call for a tool learned catalogTTL ago, which
 // may have been replaced since. Concurrent callers share that walk, and once
-// one completes the generation remembers for catalogTTL which names are not
-// registered. The error reports why a walk did not complete, which never
+// one completes the generation remembers for catalogTTL that it did not know a
+// name. The error reports why a walk did not complete, which never
 // reaches the tools/call.
 func (c *toolCatalog) lookup(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (toolInfo, error) {
 	info, gen, err := c.lookupIn(ctx, next, req)
@@ -228,39 +313,93 @@ func listThrough(ctx context.Context, next mcpsdk.MethodHandler, list *mcpsdk.Li
 	return result, nil
 }
 
-// withContextParameter returns a copy of inputSchema that declares a required
-// context string. Schemas whose properties cannot be extended safely, or that
-// already declare context, are left alone. The advertised schema may require
-// context even under additionalProperties false: go-sdk validates calls
+// withArguments returns a copy of inputSchema that declares each of arguments
+// the schema does not, and the names it added. Schemas whose properties cannot
+// be extended safely are left alone. The advertised schema may require an
+// argument even under additionalProperties false: go-sdk validates calls
 // against the registered schema, and the argument is removed first.
-func withContextParameter(inputSchema any) (map[string]any, bool) {
-	encoded, err := json.Marshal(inputSchema)
-	if err != nil {
-		return nil, false
+func withArguments(inputSchema any, arguments []analyticsArgument) (map[string]any, []string) {
+	schema, properties, ok := extensibleSchema(inputSchema, false)
+	if !ok {
+		return nil, nil
 	}
-	var schema map[string]any
-	if json.Unmarshal(encoded, &schema) != nil || schema == nil {
-		return nil, false
+	required, _ := schema["required"].([]any)
+	var injected []string
+	for _, argument := range arguments {
+		if _, declared := properties[argument.name]; declared {
+			continue
+		}
+		properties[argument.name] = map[string]any{"type": "string", "description": argument.description}
+		if argument.required {
+			required = append(required, argument.name)
+		}
+		injected = append(injected, argument.name)
 	}
-	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
-		if _, ok := schema[key]; ok {
-			return nil, false
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema, injected
+}
+
+const instructionsProperty = "_mcp_instructions"
+
+// withInstructions returns outputSchema declaring an optional
+// _mcp_instructions object that holds the conversation handle, and whether it
+// added it. Otherwise it returns outputSchema unchanged.
+func withInstructions(outputSchema any) (any, bool) {
+	schema, properties, ok := extensibleSchema(outputSchema, true)
+	if !ok {
+		return outputSchema, false
+	}
+	if _, declared := properties[instructionsProperty]; declared {
+		return outputSchema, false
+	}
+	properties[instructionsProperty] = map[string]any{
+		"type":        "object",
+		"description": "Server-issued metadata for this conversation.",
+		"properties": map[string]any{
+			conversationArgument: map[string]any{"type": "string", "description": "The server-issued conversation identifier."},
+		},
+	}
+	return schema, true
+}
+
+// extensibleSchema decodes a copy of a JSON schema whose properties can be
+// extended safely, and its properties: one without $ref, allOf, anyOf, or
+// oneOf at its root, whose properties, if any, are an object. An output schema
+// must also declare type "object" and no constraint an extra property could
+// break (maxProperties, propertyNames), since clients validate delivered
+// results against it. An input schema may omit its type, as go-sdk accepts.
+func extensibleSchema(raw any, output bool) (schema, properties map[string]any, ok bool) {
+	encoded, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(encoded, &schema) != nil || schema == nil {
+		return nil, nil, false
+	}
+	switch schema["type"] {
+	case "object":
+	case nil:
+		if output {
+			return nil, nil, false
+		}
+	default:
+		return nil, nil, false
+	}
+	blockers := []string{"$ref", "allOf", "anyOf", "oneOf"}
+	if output {
+		blockers = append(blockers, "maxProperties", "propertyNames")
+	}
+	for _, key := range blockers {
+		if _, blocked := schema[key]; blocked {
+			return nil, nil, false
 		}
 	}
-	properties, ok := schema["properties"].(map[string]any)
+	properties, ok = schema["properties"].(map[string]any)
 	if !ok {
 		if schema["properties"] != nil {
-			return nil, false
+			return nil, nil, false
 		}
 		properties = map[string]any{}
+		schema["properties"] = properties
 	}
-	if _, declared := properties[contextArgument]; declared {
-		return nil, false
-	}
-
-	properties[contextArgument] = map[string]any{"type": "string", "description": contextParameterDescription}
-	schema["properties"] = properties
-	required, _ := schema["required"].([]any)
-	schema["required"] = append(required, contextArgument)
-	return schema, true
+	return schema, properties, true
 }
