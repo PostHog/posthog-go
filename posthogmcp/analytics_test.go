@@ -304,6 +304,7 @@ func TestCaptureToolCallFailureAndException(t *testing.T) {
 	assert.Equal(t, true, *item.Mechanism.Handled)
 	assert.Equal(t, true, *item.Mechanism.Synthetic)
 	assert.Nil(t, item.Stacktrace)
+	assert.Equal(t, "mcp.tool_call", exception.Properties[propertyExceptionSource])
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, exception.Properties[propertyGroups])
 }
 
@@ -840,6 +841,78 @@ func TestCaptureToolCallInvalidLLMModelSource(t *testing.T) {
 			assert.NotContains(t, capture.Properties, propertyLLMModel)
 			assert.NotContains(t, capture.Properties, propertyLLMModelSource)
 		})
+	}
+}
+
+func TestCaptureToolCallExceptionSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		message    int
+		properties posthog.Properties
+		wantSource any
+	}{
+		{name: "exception event names the tool call", message: 1, wantSource: "mcp.tool_call"},
+		{name: "tool call event has no source", message: 0, wantSource: nil},
+		{name: "custom source cannot override the exception's", message: 1, properties: posthog.Properties{"$exception_source": "custom"}, wantSource: "mcp.tool_call"},
+		{name: "custom source is not set on the tool call", message: 0, properties: posthog.Properties{"$exception_source": "custom"}, wantSource: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+				ToolName:   "query",
+				Error:      errors.New("boom"),
+				Properties: tt.properties,
+			}))
+			require.Len(t, client.messages, 2)
+
+			assertSerializedProperty(t, client.messages[tt.message], "$exception_source", tt.wantSource)
+		})
+	}
+}
+
+func TestCaptureToolCallReservedExceptionProperties(t *testing.T) {
+	reserved := []string{
+		"$debug_images",
+		"$exception_fingerprint",
+		"$exception_fingerprint_record",
+		"$exception_fingerprint_version",
+		"$exception_functions",
+		"$exception_handled",
+		"$exception_issue_id",
+		"$exception_list",
+		"$exception_release",
+		"$exception_sources",
+		"$exception_types",
+		"$exception_values",
+		"$cymbal_errors",
+	}
+
+	properties := posthog.Properties{"custom_property": "kept"}
+	for _, key := range reserved {
+		properties[key] = "caller-controlled"
+	}
+
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+		ToolName:   "query",
+		Error:      errors.New("boom"),
+		Properties: properties,
+	}))
+	require.Len(t, client.messages, 2)
+
+	for _, message := range client.messages {
+		data, err := json.Marshal(message.APIfy())
+		require.NoError(t, err)
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(data, &payload))
+		properties, ok := payload["properties"].(map[string]any)
+		require.True(t, ok, "properties type = %T", payload["properties"])
+
+		for _, key := range reserved {
+			assert.NotEqual(t, "caller-controlled", properties[key], "%s should not use caller-controlled metadata", key)
+		}
+		assert.Equal(t, "kept", properties["custom_property"])
 	}
 }
 
