@@ -5,7 +5,7 @@ import (
 )
 
 // Version of the client.
-const Version = "1.33.0"
+const Version = "1.34.0"
 
 // testVersionOverride pins the version this package's own tests assert against,
 // so fixtures and header expectations survive a release bump. It is set from a
