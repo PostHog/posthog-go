@@ -199,8 +199,10 @@ errors. `Retry-After` is honoured, clamped to the new `Config.MaxRetryBackoff`
 The SDK generates UUIDv7 values for event `Uuid`s, the `PostHog-Request-Id`
 header and the distinct ID of a personless capture. It falls back to v4 if v7
 generation fails. A `Uuid` you set is normalized to the lowercase hyphenated
-form, so the `Callback` message carries that form. An empty or invalid `Uuid`
-is replaced with a generated one before `BeforeSend`.
+form, so the `Callback` message carries that form. An empty `Uuid` gets a
+generated one. An invalid `Uuid` is replaced with a generated one, and the SDK
+logs one warning that does not include the value. The SDK applies this rule
+before `BeforeSend` and again to a `Uuid` that `BeforeSend` sets.
 
 Default retry waits now vary randomly by up to 25% either way, so clients
 that fail together do not all retry at the same moment. A server `Retry-After`
@@ -303,8 +305,7 @@ surface as `*CaptureEventError`:
 
 Each event needs its own uuid. Capture rejects a whole request that contains
 the same uuid twice, and the SDK reports it as a `*CaptureRequestError` (400,
-`duplicate_event_uuid`). A malformed `Uuid` set in `BeforeSend` also fails
-the whole request.
+`duplicate_event_uuid`).
 
 ## New: event options
 
