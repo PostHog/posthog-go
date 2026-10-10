@@ -64,8 +64,9 @@ func analyticsLaneConfig(c Config) laneConfig {
 }
 
 // aiLaneConfig is the AI lane. Its size limits are constants rather than
-// Config fields, matching posthog-rs, posthog-python and posthog-node: they
-// track the backend's limits rather than caller preference.
+// Config fields, matching posthog-rs and posthog-node: they track the backend's
+// limits rather than caller preference. posthog-python also lets a caller lower
+// its per-event cap.
 func aiLaneConfig(c Config) laneConfig {
 	return laneConfig{
 		name:          "capture-ai",

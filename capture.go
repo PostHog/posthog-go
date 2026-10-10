@@ -158,12 +158,12 @@ type CaptureInApi struct {
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
 	// Library is the legacy top-level SDK name retained for callbacks.
-	// Deprecated: PostHog reads SDK identity from Properties["$lib"], so this
-	// top-level field is no longer serialized.
+	// Deprecated: PostHog reads SDK identity from the PostHog-Sdk-Info header, so
+	// this top-level field is no longer serialized.
 	Library string `json:"-"`
 	// LibraryVersion is the legacy top-level SDK version retained for callbacks.
-	// Deprecated: PostHog reads SDK version from Properties["$lib_version"], so
-	// this top-level field is no longer serialized.
+	// Deprecated: PostHog reads the SDK version from the PostHog-Sdk-Info header,
+	// so this top-level field is no longer serialized.
 	LibraryVersion string `json:"-"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`

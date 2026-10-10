@@ -162,7 +162,7 @@ type Config struct {
 	DefaultEventOptions Options
 
 	// Callback receives success or failure notifications for messages sent to the
-	// PostHog batch API. The message for an Alias does not include its
+	// PostHog capture API. The message for an Alias does not include its
 	// EventProperties or the DefaultEventProperties filled into them.
 	Callback Callback
 
@@ -180,7 +180,7 @@ type Config struct {
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
 	// Messages are sent when BatchSize is reached or when Interval fires. If zero,
-	// it defaults to DefaultBatchSize. The API still enforces a 500KB request limit.
+	// it defaults to DefaultBatchSize. MaxBatchBytes bounds the request size.
 	BatchSize int
 
 	// MaxEventBytes is the maximum serialized size of a single event. A larger
@@ -261,7 +261,7 @@ type Config struct {
 	MaxEnqueuedRequests int
 
 	// Compression selects the compression mode for batch payloads. CompressionGzip
-	// compresses payloads and adds the appropriate headers/query params. If zero,
+	// compresses payloads and sets the matching Content-Encoding header. If zero,
 	// it defaults to CompressionNone.
 	Compression CompressionMode
 
