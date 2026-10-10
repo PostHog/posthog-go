@@ -688,7 +688,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(Alias)
 		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -715,7 +715,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(Identify)
 		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -741,7 +741,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(GroupIdentify)
 		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -830,7 +830,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		}
 		m = processed.(Capture)
 		m.IsServer = boolProperty(m.Properties, propertyIsServer)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -863,7 +863,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m = processed.(Exception)
 		m.IsServer = boolProperty(m.Properties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.Properties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
