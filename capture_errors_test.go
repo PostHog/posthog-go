@@ -124,6 +124,12 @@ func (l *capturingLogger) Warnf(f string, a ...interface{}) {
 }
 func (l *capturingLogger) Errorf(string, ...interface{}) {}
 
+func (l *capturingLogger) warnings() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.warnf...)
+}
+
 func (l *capturingLogger) debugContains(sub string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
