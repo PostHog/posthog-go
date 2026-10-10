@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,8 +39,8 @@ func newProviderOnlyTestClient(t *testing.T, provider FlagDefinitionCacheProvide
 func TestFlagDefinitionCacheWithoutSecretKeyPublicEvaluation(t *testing.T) {
 	for _, localOnly := range []bool{false, true} {
 		t.Run(fmt.Sprintf("localOnly=%t", localOnly), func(t *testing.T) {
-			provider := &fakeFlagDefinitionCache{cached: json.RawMessage(cachedFlagDefinitions)}
-			cli, requests := newProviderOnlyTestClient(t, provider, Config{})
+			provider := &fakeFlagDefinitionCache{shouldFetch: true, cached: json.RawMessage(cachedFlagDefinitions)}
+			cli, requests := newProviderOnlyTestClient(t, provider, Config{SecretKey: " \t", PersonalApiKey: "\n "})
 			result, err := cli.GetFeatureFlagResult(FeatureFlagPayload{
 				Key:                   "cached-flag",
 				DistinctId:            "user-1",
@@ -69,7 +70,7 @@ func TestFlagDefinitionCacheWithoutSecretKeyPublicEvaluation(t *testing.T) {
 			require.NoError(t, cli.Close())
 			require.Zero(t, requests.Load(), "neither definitions nor remote evaluation should be requested")
 			shouldFetch, get, shutdown, published := provider.calls()
-			require.Equal(t, 1, shouldFetch)
+			require.Zero(t, shouldFetch)
 			require.Equal(t, 1, get)
 			require.Equal(t, 1, shutdown)
 			require.Empty(t, published)
@@ -103,10 +104,11 @@ func TestFlagDefinitionCacheWithoutSecretKeyRefresh(t *testing.T) {
 			}, time.Second, time.Millisecond)
 			require.NoError(t, cli.Close())
 			require.Zero(t, requests.Load())
-			shouldFetch, get, shutdown, _ := provider.calls()
-			require.GreaterOrEqual(t, shouldFetch, 2)
+			shouldFetch, get, shutdown, published := provider.calls()
+			require.Zero(t, shouldFetch)
 			require.GreaterOrEqual(t, get, 2)
 			require.Equal(t, 1, shutdown)
+			require.Empty(t, published)
 		})
 	}
 }
@@ -118,24 +120,22 @@ func TestFlagDefinitionCacheWithoutSecretKeyFetchBoundary(t *testing.T) {
 		shouldFetchErr error
 		cached         json.RawMessage
 		getErr         error
-		wantGet        int
 	}{
 		{name: "fetch elected", shouldFetch: true, cached: json.RawMessage(cachedFlagDefinitions)},
 		{name: "decision failure", shouldFetchErr: errors.New("decision failed"), cached: json.RawMessage(cachedFlagDefinitions)},
-		{name: "cache miss", wantGet: 1},
-		{name: "cache failure", getErr: errors.New("cache failed"), wantGet: 1},
-		{name: "invalid cache", cached: json.RawMessage(`{}`), wantGet: 1},
+		{name: "cache miss"},
+		{name: "cache failure", getErr: errors.New("cache failed")},
+		{name: "invalid cache", cached: json.RawMessage(`{}`)},
+		{name: "malformed cache", cached: json.RawMessage(`{`)},
 	} {
 		for _, warm := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/warm=%t", test.name, warm), func(t *testing.T) {
-				logger := &captureLogger{}
 				provider := &fakeFlagDefinitionCache{}
 				if warm {
 					provider.cached = json.RawMessage(fmt.Sprintf(matchingVersionDefinitions, `,"property_matching_version":2`))
 				}
 				refreshed := make(chan struct{}, 2)
 				cli, requests := newProviderOnlyTestClient(t, provider, Config{
-					Logger: logger,
 					NextFeatureFlagsPollingTick: func() time.Duration {
 						refreshed <- struct{}{}
 						return time.Hour
@@ -168,22 +168,129 @@ func TestFlagDefinitionCacheWithoutSecretKeyFetchBoundary(t *testing.T) {
 				case <-time.After(time.Second):
 					t.Fatal("manual cache refresh did not finish")
 				}
-				if warm {
+				if test.shouldFetch || test.shouldFetchErr != nil {
+					value, err := cli.GetFeatureFlag(FeatureFlagPayload{Key: "cached-flag", DistinctId: "user-1", OnlyEvaluateLocally: true, SendFeatureFlagEvents: Ptr(false)})
+					require.NoError(t, err)
+					require.Equal(t, true, value, "cache is read regardless of the fetch decision")
+				} else if warm {
 					result, err := cli.GetFeatureFlagResult(payload)
 					require.NoError(t, err)
 					require.False(t, result.Enabled, "failed refresh preserves definitions and their v2 selector")
 				}
 				require.NoError(t, cli.Close())
 				shouldFetch, get, shutdown, published := provider.calls()
-				require.Equal(t, 2, shouldFetch)
-				require.Equal(t, getsBefore+test.wantGet, get)
+				require.Zero(t, shouldFetch)
+				require.Equal(t, getsBefore+1, get)
 				require.Equal(t, 1, shutdown)
 				require.Empty(t, published)
 				require.Zero(t, requests.Load(), "missing auth must stop before an HTTP request")
-				if !warm || test.shouldFetch || test.shouldFetchErr != nil {
-					require.Contains(t, strings.Join(logger.snapshot(), "\n"), "fetching feature flag definitions requires a SecretKey")
-				}
 			})
 		}
 	}
+}
+
+// leaseFlagDefinitionCache models a shared fetch lease that remains claimed until
+// the provider releases it, independently of whether a fetch actually occurred.
+type leaseFlagDefinitionCache struct {
+	fakeFlagDefinitionCache
+	leaseClaimed bool
+}
+
+func (c *leaseFlagDefinitionCache) ShouldFetchFlagDefinitions(context.Context) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.shouldFetchCalls++
+	if c.leaseClaimed {
+		return false, nil
+	}
+	c.leaseClaimed = true
+	return true, nil
+}
+
+func (c *leaseFlagDefinitionCache) OnFlagDefinitionsReceived(ctx context.Context, data json.RawMessage) error {
+	if err := c.fakeFlagDefinitionCache.OnFlagDefinitionsReceived(ctx, data); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cached = data
+	return nil
+}
+
+func TestFlagDefinitionCacheWithoutSecretKeyDoesNotClaimSharedLease(t *testing.T) {
+	provider := &leaseFlagDefinitionCache{
+		fakeFlagDefinitionCache: fakeFlagDefinitionCache{cached: json.RawMessage(cachedFlagDefinitions)},
+		leaseClaimed:            true,
+	}
+	updated := strings.Replace(cachedFlagDefinitions, `"active": true`, `"active": false`, 1)
+	server, requests := definitionsServer(t, serveDefinitions(updated))
+	publisher := newCachingTestPoller(t, server.URL, provider)
+	publisher.fetchNewFeatureFlags()
+	require.True(t, publisher.state.Load().flagsByKey["cached-flag"].Active)
+	require.Zero(t, requests())
+
+	// The lease is now available for the next refresh cycle. A cache reader must
+	// not claim it before the credentialed publisher has a chance to refresh.
+	provider.leaseClaimed = false
+	reader := newCachingTestPoller(t, server.URL, provider)
+	reader.personalApiKey = ""
+	reader.fetchNewFeatureFlags()
+	require.False(t, provider.leaseClaimed)
+	require.True(t, reader.state.Load().flagsByKey["cached-flag"].Active)
+	shouldFetch, get, _, published := provider.calls()
+	require.Equal(t, 1, shouldFetch, "only the initial keyed refresh consults the lease")
+	require.Equal(t, 2, get)
+	require.Empty(t, published)
+	require.Zero(t, requests())
+
+	publisher.fetchNewFeatureFlags()
+	require.False(t, publisher.state.Load().flagsByKey["cached-flag"].Active)
+	require.Equal(t, 1, requests())
+	reader.fetchNewFeatureFlags()
+	require.False(t, reader.state.Load().flagsByKey["cached-flag"].Active)
+	shouldFetch, get, _, published = provider.calls()
+	require.Equal(t, 2, shouldFetch, "only keyed refreshes consult the lease")
+	require.Equal(t, 3, get)
+	require.Len(t, published, 1)
+	require.JSONEq(t, updated, string(published[0]))
+}
+
+func TestFlagDefinitionCacheWithoutSecretKeySkipsPanickingDecision(t *testing.T) {
+	provider := &fakeFlagDefinitionCache{
+		cached: json.RawMessage(cachedFlagDefinitions),
+		onShouldFetch: func(context.Context) {
+			panic("cache-only readers must not acquire fetch leadership")
+		},
+	}
+	cli, requests := newProviderOnlyTestClient(t, provider, Config{})
+	value, err := cli.GetFeatureFlag(FeatureFlagPayload{
+		Key: "cached-flag", DistinctId: "user-1", OnlyEvaluateLocally: true, SendFeatureFlagEvents: Ptr(false),
+	})
+	require.NoError(t, err)
+	require.Equal(t, true, value)
+	require.NoError(t, cli.Close())
+	shouldFetch, get, shutdown, published := provider.calls()
+	require.Zero(t, shouldFetch)
+	require.Equal(t, 1, get)
+	require.Equal(t, 1, shutdown)
+	require.Empty(t, published)
+	require.Zero(t, requests.Load())
+}
+
+func TestFlagDefinitionCacheWithoutSecretKeyDirectFetchGuard(t *testing.T) {
+	provider := &fakeFlagDefinitionCache{cached: json.RawMessage(cachedFlagDefinitions)}
+	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
+	poller := newCachingTestPoller(t, server.URL, provider)
+	poller.personalApiKey = ""
+	poller.fetchNewFeatureFlags()
+	previous := poller.state.Load()
+	require.NotNil(t, previous)
+
+	poller.fetchFlagDefinitions(true)
+	require.Same(t, previous, poller.state.Load())
+	require.Zero(t, requests())
+	shouldFetch, get, _, published := provider.calls()
+	require.Zero(t, shouldFetch)
+	require.Equal(t, 1, get)
+	require.Empty(t, published)
 }

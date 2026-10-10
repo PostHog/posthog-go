@@ -572,6 +572,12 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 
+	// Cache-only readers must not claim fetch leadership they cannot use.
+	if poller.personalApiKey == "" {
+		poller.loadFlagDefinitionsFromCache()
+		return
+	}
+
 	shouldFetch, err := poller.cacheProvider.ShouldFetchFlagDefinitions(poller.ctx)
 	if poller.shuttingDown() {
 		return

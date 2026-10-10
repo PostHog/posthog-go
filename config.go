@@ -129,9 +129,10 @@ type Config struct {
 	NextFeatureFlagsPollingTick func() time.Duration
 
 	// FlagDefinitionCacheProvider shares local evaluation flag definitions with other
-	// SDK instances through an external cache. Cached definitions can be loaded and
-	// evaluated locally without SecretKey; fetching definitions from PostHog still
-	// requires SecretKey.
+	// SDK instances through an external cache. Without SecretKey, instances read
+	// cached definitions for local evaluation without consulting the provider's
+	// fetch decision or publishing. Fetching definitions from PostHog requires
+	// SecretKey.
 	// See https://posthog.com/docs/feature-flags/local-evaluation/distributed-environments
 	// for guidance.
 	//
