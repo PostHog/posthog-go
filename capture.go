@@ -80,8 +80,9 @@ var _ Message = (*Capture)(nil)
 
 // Capture represents a custom event to send to PostHog.
 // Enqueue validates Event and DistinctId (or obtains DistinctId from request context),
-// fills Type, Uuid, and Timestamp, merges Config.DefaultEventProperties, and queues
-// the event for a future batch upload.
+// fills Type, Uuid, and Timestamp, fills request-context and default properties and
+// options the event left unset, runs Config.BeforeSend, and queues the event for a
+// future batch upload.
 type Capture struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: PostHog ignores the top-level type field on capture events. Use Event for
@@ -99,12 +100,18 @@ type Capture struct {
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
-	// Properties are event properties. Enqueue merges request context properties
-	// and Config.DefaultEventProperties into this map before sending.
+	// Properties are event properties. They win over request-context properties
+	// and Config.DefaultEventProperties, which fill in before BeforeSend only for
+	// keys missing here. A key with a nil value blocks the fill. $set, $set_once,
+	// $groups and $group_set fill one level deep when both values are maps.
 	Properties Properties
-	// Groups associates the event with group analytics groups.
+	// Groups associates the event with group analytics groups. They win key by
+	// key over a $groups map in Properties.
 	Groups Groups
-	// Options are per-event capture options, sent unchanged. See Options.
+	// Options are per-event capture options, sent unchanged. See Options. They
+	// win over request-context options, Config.DefaultEventOptions and the
+	// personless default, which fill in before BeforeSend only for options
+	// missing or nil here.
 	Options Options
 	// SendFeatureFlags requests legacy feature flag enrichment on this event.
 	// Deprecated: Prefer Client.EvaluateFlags and pass the returned snapshot via Flags.
@@ -117,12 +124,12 @@ type Capture struct {
 	// hidden /flags request on every capture. Flags takes precedence when
 	// both are set.
 	Flags *FeatureFlagEvaluations
-	// IsServer controls whether the event includes the $is_server property.
-	// Enqueue overwrites it from Config.GetIsServer.
+	// IsServer reports whether the event sets $is_server. Enqueue sets it from
+	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
+	// To change $is_server, set the property.
 	IsServer bool
 	// minimalFlagCalledEvent marks a $feature_flag_called event for the minimal
-	// shape: serialization keeps only the allowlisted evaluation properties and
-	// skips system context. It is set only when the server enabled
+	// shape: serialization keeps only the allowlisted properties. It is set only when the server enabled
 	// minimal_flag_called_events and the flag has no linked experiment. This is
 	// the resolved per-event decision (shouldMinimizeFlagCalledEvent's output),
 	// distinct from the plural minimalFlagCalledEvents gate that decision reads.
@@ -177,16 +184,16 @@ type CaptureInApi struct {
 // minimalFlagCalledEventAllowlist lists the only event properties kept on a
 // minimal $feature_flag_called event, per the cross-SDK contract. Everything
 // else — Config.DefaultEventProperties and request-context properties
-// included — is stripped so the minimal shape stays predictable.
+// included — is stripped at serialization so
+// the minimal shape stays predictable.
 // $geoip_disable is kept because, like $process_person_profile, it is a
 // processing-control sentinel: stripping it would silently re-enable GeoIP
 // enrichment for events from clients that disabled it. $session_id,
 // $window_id, and $device_id are linkage identifiers the contract preserves.
 // $is_server is kept so server-event classification still works. System
-// context ($os, $os_version, $os_distro, $go_version) isn't filtered through
-// this allowlist — APIfy merges it into minimal events the same way it does
-// for full events, since those are cheap, low-cardinality dimensions kept for
-// platform/runtime breakdowns on flag-call debugging.
+// context ($os, $os_version, $os_distro, $go_version) is kept because those
+// are cheap, low-cardinality dimensions for platform/runtime breakdowns on
+// flag-call debugging.
 var minimalFlagCalledEventAllowlist = []string{
 	"$feature_flag",
 	"$feature_flag_response",
@@ -203,11 +210,20 @@ var minimalFlagCalledEventAllowlist = []string{
 	// this allowlist runs, not from a raw "$groups" key in Properties.
 	"$groups",
 	propertyProcessPersonProfile,
+	// The other legacy option properties survive so buildEvent can still move
+	// them into options.
+	propertyCookielessMode,
+	propertyIgnoreSentAt,
+	propertyProductTourId,
 	propertyGeoipDisable,
 	propertyIsServer,
 	propertySessionID,
 	propertyWindowID,
 	"$device_id",
+	"$os",
+	"$os_version",
+	"$os_distro",
+	"$go_version",
 }
 
 // minimalFlagCalledEventProperties builds a fresh property set containing only
@@ -247,15 +263,14 @@ func (msg Capture) APIfy() APIMessage {
 	myProperties := Properties{}.
 		Merge(msg.selectedProperties()).
 		Set("$lib", SDKName).
-		Set("$lib_version", libraryVersion).
-		Merge(getSystemContext().ToProperties())
+		Set("$lib_version", libraryVersion)
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
 	}
 
 	if msg.Groups != nil {
-		myProperties.Set("$groups", msg.Groups)
+		myProperties.Set("$groups", mergeOverNested(myProperties["$groups"], msg.Groups))
 	}
 
 	apified := CaptureInApi{

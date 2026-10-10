@@ -73,7 +73,9 @@ type Config struct {
 
 	// DisableGeoIP controls whether event and feature flag requests include
 	// $geoip_disable/geoip_disable. Nil defaults to true because this SDK usually
-	// runs server-side; set Ptr(false) to allow GeoIP lookup.
+	// runs server-side; set Ptr(false) to allow GeoIP lookup. On events it is a
+	// default: a $geoip_disable value in the event, the RequestContext or
+	// DefaultEventProperties wins.
 	DisableGeoIP *bool
 
 	// IsServer controls whether events include the $is_server property.
@@ -83,7 +85,9 @@ type Config struct {
 	//
 	// Set Ptr(false) when using posthog-go as a CLI or client so the event is
 	// not flagged as server-side and the device OS is attributed normally. When
-	// resolved to false, $is_server is omitted from every event entirely.
+	// resolved to false, the SDK does not add $is_server. Like DisableGeoIP, it
+	// is a default: a $is_server value in the event, the RequestContext or
+	// DefaultEventProperties wins.
 	//
 	//	// CLI/client usage
 	//	config := posthog.Config{IsServer: posthog.Ptr(false)}
@@ -133,18 +137,45 @@ type Config struct {
 	// operations. If nil, the client logs to os.Stderr with the standard logger.
 	Logger Logger
 
-	// DefaultEventProperties are merged into every Capture event before sending.
-	// They are useful for common metadata like service name or app version. On key
-	// conflicts, values from DefaultEventProperties overwrite event properties,
-	// except that an explicit $process_person_profile=false remains false.
+	// DefaultEventProperties are added to the event properties of every Capture,
+	// Exception, Identify, Alias and GroupIdentify event. They are useful for
+	// common metadata like service name or app version. They never go into the
+	// $set or $group_set person and group properties.
+	//
+	// They fill in before BeforeSend, only for keys that the event and the
+	// request context left unset. A key with a nil value counts as set. $set,
+	// $set_once, $groups and $group_set fill one level deep when both values are
+	// maps. BeforeSend sees the filled values and can change or remove them. On
+	// Identify, Alias and GroupIdentify they fill EventProperties.
 	DefaultEventProperties Properties
 
+	// DefaultEventOptions are added to the options of every Capture, Exception,
+	// Identify, Alias and GroupIdentify event, such as process_person_profile or
+	// cookieless_mode.
+	//
+	// They fill in before BeforeSend, only for options that the event and the
+	// request context left missing or nil. BeforeSend sees the filled options and
+	// can change them. Set an option to false on the event to turn a default off.
+	// They win over the personless default and, like any option, over the
+	// matching legacy property, such as $cookieless_mode, set on an event or in
+	// BeforeSend.
+	DefaultEventOptions Options
+
 	// Callback receives success or failure notifications for messages sent to the
-	// PostHog batch API.
+	// PostHog batch API. The message for an Alias does not include its
+	// EventProperties or the DefaultEventProperties filled into them.
 	Callback Callback
 
 	// BeforeSend is called after SDK enrichment and before messages are serialized.
 	// Return the message to send a modified version, or nil to drop it.
+	//
+	// The hook sees the event's own values and the values filled from
+	// RequestContext, DefaultEventProperties, DefaultEventOptions, the
+	// personless process_person_profile option and the SDK: $is_server,
+	// $geoip_disable, system context and feature flag properties. The SDK fills
+	// only keys the caller left unset. Its changes are final. To
+	// change an option, set it in Options: a legacy property such as
+	// $process_person_profile does not replace an option that is already set.
 	BeforeSend BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
@@ -543,13 +574,6 @@ func makeConfig(c Config) Config {
 
 	if c.MaxEnqueuedRequests == 0 {
 		c.MaxEnqueuedRequests = DefaultMaxEnqueuedRequests
-	}
-
-	if c.GetDisableGeoIP() {
-		if c.DefaultEventProperties == nil {
-			c.DefaultEventProperties = NewProperties()
-		}
-		c.DefaultEventProperties.Set(propertyGeoipDisable, true)
 	}
 
 	return c

@@ -351,12 +351,20 @@ func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 			Set("$feature_flag_has_experiment", false).
 			Set("locally_evaluated", true).
 			Set("$feature_flag_payload", `{"foo": 1}`).
-			Set("custom_prop", "junk"),
+			Set("custom_prop", "junk").
+			Set(propertyCookielessMode, true).
+			Set(propertyIgnoreSentAt, true).
+			Set(propertyProductTourId, "tour_1"),
 		IsServer:               true,
 		minimalFlagCalledEvent: true,
 	}
+	msg.Properties = fillSDKProperties(msg.Properties, msg.IsServer, false)
 
 	ev := buildEvent(msg.apifyEvent())
+	wantOptions := map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": true, "product_tour_id": "tour_1"}
+	if !reflect.DeepEqual(map[string]interface{}(ev.Options), wantOptions) {
+		t.Errorf("expected legacy option properties to become options %v, got %v", wantOptions, ev.Options)
+	}
 
 	got := make([]string, 0, len(ev.Properties))
 	for k := range ev.Properties {
@@ -410,7 +418,8 @@ func TestMinimalFlagCalledEventProperties_KeepsExactlyAllowlist(t *testing.T) {
 		"$feature_flag", "$feature_flag_response", "$feature_flag_has_experiment",
 		"$feature_flag_id", "$feature_flag_version", "$feature_flag_reason",
 		"$feature_flag_request_id", "$feature_flag_evaluated_at", "$feature_flag_error",
-		"locally_evaluated", "$groups", propertyProcessPersonProfile, propertyGeoipDisable,
+		"locally_evaluated", "$groups", propertyProcessPersonProfile,
+		propertyCookielessMode, propertyIgnoreSentAt, propertyProductTourId, propertyGeoipDisable,
 		propertyIsServer, propertySessionID, propertyWindowID, "$device_id",
 	}
 	props := NewProperties()

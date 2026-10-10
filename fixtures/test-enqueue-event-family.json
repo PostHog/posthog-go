@@ -160,8 +160,6 @@
         "$geoip_disable": false,
         "$go_version": "IGNORED",
         "$is_server": false,
-        "$lib": "custom-lib",
-        "$lib_version": "custom-version",
         "$os": "custom-os",
         "$os_distro": "IGNORED",
         "$os_version": "IGNORED",

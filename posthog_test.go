@@ -1251,6 +1251,70 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
 }
 
+func TestDefaultEventValuesReachEveryMessageType(t *testing.T) {
+	eventOptions := func() Options { return NewOptions().Set("disable_skew_correction", false) }
+	tests := []struct {
+		msg            Message
+		personKey      string
+		wantPersonData map[string]interface{}
+	}{
+		{msg: Exception{DistinctId: "user-1", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}, Options: eventOptions()}},
+		{
+			msg:            Identify{DistinctId: "user-1", Properties: NewProperties().Set("email", "user@example.com"), Options: eventOptions()},
+			personKey:      "$set",
+			wantPersonData: map[string]interface{}{"email": "user@example.com"},
+		},
+		{msg: Alias{DistinctId: "user-1", Alias: "alias-1", Options: eventOptions()}},
+		{
+			msg:            GroupIdentify{Type: "company", Key: "k", Properties: NewProperties().Set("name", "Example"), Options: eventOptions()},
+			personKey:      "$group_set",
+			wantPersonData: map[string]interface{}{"name": "Example"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			delivered := make(chan APIMessage, 1)
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set("service", "api"),
+				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
+				Callback: testCallback{
+					success: func(m APIMessage) { delivered <- m },
+					failure: func(m APIMessage, _ error) { delivered <- m },
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(tt.msg))
+
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
+			require.Equal(t, "api", properties["service"])
+			require.Equal(t, map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": false}, requireOptions(t, event))
+			if tt.personKey != "" {
+				require.Equal(t, tt.wantPersonData, properties[tt.personKey])
+			}
+
+			var callbackProperties Properties
+			switch m := awaitTestValue(t, delivered).(type) {
+			case IdentifyInApi:
+				callbackProperties = m.Properties
+			case GroupIdentifyInApi:
+				callbackProperties = m.Properties
+			}
+			if callbackProperties != nil {
+				require.Equal(t, "api", callbackProperties["service"], "the callback message carries the default properties sent on the wire")
+			}
+		})
+	}
+}
+
 func TestCaptureMany(t *testing.T) {
 	var ref = strings.TrimSpace(fixture("test-many-capture.json"))
 
@@ -3168,40 +3232,4 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 			t.Errorf("Expected payload '%s', got '%s'", expected, payload)
 		}
 	})
-}
-
-func TestDefaultEventPropertiesKeepPersonProfileOptOut(t *testing.T) {
-	tests := []struct {
-		name     string
-		event    any
-		defaults any
-		want     any
-	}{
-		{name: "explicit opt-out survives defaults", event: false, defaults: true, want: false},
-		{name: "defaults apply when the event is silent", event: nil, defaults: true, want: true},
-		{name: "defaults still override an explicit opt-in", event: true, defaults: false, want: false},
-		{name: "only a bool false counts as an opt-out", event: "false", defaults: true, want: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sent := make(chan Properties, 1)
-			client, err := NewWithConfig("test-api-key", Config{
-				Endpoint:               "http://127.0.0.1:0",
-				DefaultEventProperties: Properties{propertyProcessPersonProfile: tt.defaults},
-				BeforeSend: func(msg Message) Message {
-					sent <- msg.(Capture).Properties
-					return nil
-				},
-			})
-			require.NoError(t, err)
-			defer client.Close()
-
-			properties := NewProperties()
-			if tt.event != nil {
-				properties[propertyProcessPersonProfile] = tt.event
-			}
-			require.NoError(t, client.Enqueue(Capture{DistinctId: "user-123", Event: "test-event", Properties: properties}))
-			require.Equal(t, tt.want, (<-sent)[propertyProcessPersonProfile])
-		})
-	}
 }

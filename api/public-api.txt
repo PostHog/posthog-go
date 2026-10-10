@@ -139,6 +139,7 @@ type Alias struct {
 	Alias string
 	DistinctId string
 	Timestamp time.Time
+	EventProperties Properties
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
@@ -350,6 +351,8 @@ type Config struct {
 	Logger Logger
 
 	DefaultEventProperties Properties
+
+	DefaultEventOptions Options
 
 	Callback Callback
 
@@ -753,6 +756,7 @@ type GroupIdentify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	EventProperties Properties
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
@@ -786,6 +790,7 @@ type Identify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	EventProperties Properties
 	Options Options
 	DisableGeoIP bool
 	IsServer bool
@@ -869,6 +874,7 @@ type RequestContext struct {
 	DistinctId string
 	SessionId string
 	Properties Properties
+	Options Options
 }
 
 
@@ -1037,6 +1043,7 @@ type EventContext struct {
 	VendorClient    string
 
 	Properties posthog.Properties
+	Options posthog.Options
 	Timestamp time.Time
 }
 
@@ -1105,6 +1112,7 @@ type ToolCall struct {
 	ErrorType string
 
 	Properties posthog.Properties
+	Options posthog.Options
 	Timestamp time.Time
 }
 

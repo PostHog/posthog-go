@@ -24,13 +24,20 @@ type Identify struct {
 	Timestamp time.Time
 	// Properties are sent as the $set person properties for DistinctId.
 	Properties Properties
+	// EventProperties are properties of the $identify event itself, not of the
+	// person. Enqueue fills the keys they leave unset from
+	// Config.DefaultEventProperties before BeforeSend. A $set in them is merged
+	// under Properties, which win key by key.
+	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
 	Options Options
-	// DisableGeoIP controls whether this identify event disables GeoIP lookup.
-	// Enqueue overwrites it from Config.GetDisableGeoIP.
+	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
+	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
+	// after BeforeSend. To change $geoip_disable, set the property.
 	DisableGeoIP bool
-	// IsServer controls whether the event includes the $is_server property.
-	// Enqueue overwrites it from Config.GetIsServer.
+	// IsServer reports whether the event sets $is_server. Enqueue sets it from
+	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
+	// To change $is_server, set the property.
 	IsServer bool
 }
 
@@ -73,8 +80,7 @@ type IdentifyInApi struct {
 func (msg Identify) APIfy() APIMessage {
 	myProperties := Properties{}.
 		Set("$lib", SDKName).
-		Set("$lib_version", getVersion()).
-		Merge(getSystemContext().ToProperties())
+		Set("$lib_version", getVersion())
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
@@ -83,6 +89,9 @@ func (msg Identify) APIfy() APIMessage {
 	if msg.DisableGeoIP {
 		myProperties.Set(propertyGeoipDisable, true)
 	}
+
+	myProperties.
+		mergeDefaults(msg.EventProperties)
 
 	apified := IdentifyInApi{
 		Type:           msg.Type,

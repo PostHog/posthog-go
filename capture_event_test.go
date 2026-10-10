@@ -73,12 +73,15 @@ func TestEventNamesAndDistinctId(t *testing.T) {
 
 func TestDropsLibFromProperties(t *testing.T) {
 	// Decision B: SDK identity rides the PostHog-Sdk-Info header, never properties.
+	callerLib := func() Properties {
+		return NewProperties().Set("$lib", "custom-lib").Set("$lib_version", "9.9.9")
+	}
 	msgs := []Message{
-		Capture{Uuid: "u", Event: "e", DistinctId: "d"},
-		Identify{Uuid: "u", DistinctId: "d"},
-		GroupIdentify{Uuid: "u", Type: "company", Key: "acme"},
-		Alias{Uuid: "u", DistinctId: "d", Alias: "a"},
-		Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "E", Value: "v"}}},
+		Capture{Uuid: "u", Event: "e", DistinctId: "d", Properties: callerLib()},
+		Identify{Uuid: "u", DistinctId: "d", EventProperties: callerLib()},
+		GroupIdentify{Uuid: "u", Type: "company", Key: "acme", EventProperties: callerLib()},
+		Alias{Uuid: "u", DistinctId: "d", Alias: "a", EventProperties: callerLib()},
+		Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "E", Value: "v"}}, Properties: callerLib()},
 	}
 	for _, m := range msgs {
 		t.Run(fmt.Sprintf("%T", m), func(t *testing.T) {
@@ -109,13 +112,45 @@ func TestSystemContextAppliedAsDefaults(t *testing.T) {
 
 	for _, tc := range msgs {
 		t.Run(tc.name, func(t *testing.T) {
-			ev := marshalEvent(t, tc.msg)
-			props := wireProps(t, ev)
+			props := enqueueAndReadProperties(t, tc.msg)
 
 			for _, key := range []string{"$os", "$go_version"} {
 				if props[key] != sysCtx[key] {
 					t.Errorf("%s = %v, want system default %v", key, props[key], sysCtx[key])
 				}
+			}
+		})
+	}
+}
+
+func TestDefaultEventPropertiesWinOverSDKValues(t *testing.T) {
+	config := Config{DefaultEventProperties: Properties{
+		propertyIsServer:     false,
+		propertyGeoipDisable: false,
+		"$os":                "default-os",
+	}}
+	msgs := []struct {
+		name string
+		msg  Message
+	}{
+		{"capture", Capture{Uuid: "u", Event: "e", DistinctId: "d"}},
+		{"identify", Identify{Uuid: "u", DistinctId: "d"}},
+		{"groupidentify", GroupIdentify{Uuid: "u", Type: "company", Key: "acme"}},
+		{"alias", Alias{Uuid: "u", DistinctId: "d", Alias: "a"}},
+		{"exception", Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}}}},
+	}
+
+	for _, tc := range msgs {
+		t.Run(tc.name, func(t *testing.T) {
+			props := enqueueWithConfigAndReadProperties(t, config, tc.msg)
+
+			for _, key := range []string{propertyIsServer, propertyGeoipDisable} {
+				if props[key] == true {
+					t.Errorf("%s = true, want the default's false to win", key)
+				}
+			}
+			if props["$os"] != "default-os" {
+				t.Errorf("$os = %v, want default-os", props["$os"])
 			}
 		})
 	}
@@ -150,12 +185,15 @@ func TestSystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
 				ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
 			},
 		},
+		{
+			name: "identify",
+			msg:  Identify{Uuid: "u", DistinctId: "d", EventProperties: callerContext},
+		},
 	}
 
 	for _, tc := range msgs {
 		t.Run(tc.name, func(t *testing.T) {
-			ev := marshalEvent(t, tc.msg)
-			props := wireProps(t, ev)
+			props := enqueueAndReadProperties(t, tc.msg)
 			for key, want := range callerContext {
 				if props[key] != want {
 					t.Errorf("%s = %v, want caller value %v", key, props[key], want)
@@ -163,6 +201,29 @@ func TestSystemContextDoesNotOverwriteCallerProperties(t *testing.T) {
 			}
 		})
 	}
+}
+
+// enqueueAndReadProperties sends msg through a client, so the SDK values are
+// filled as in production, and returns the wire event's properties.
+func enqueueAndReadProperties(t *testing.T, msg Message) map[string]interface{} {
+	t.Helper()
+	return enqueueWithConfigAndReadProperties(t, Config{}, msg)
+}
+
+func enqueueWithConfigAndReadProperties(t *testing.T, config Config, msg Message) map[string]interface{} {
+	t.Helper()
+	body, server := mockServer()
+	defer server.Close()
+	config.Endpoint, config.BatchSize, config.now = server.URL, 1, mockTime
+	client, err := NewWithConfig("test-api-key", config)
+	if err != nil {
+		t.Fatalf("NewWithConfig: %v", err)
+	}
+	defer client.Close()
+	if err := client.Enqueue(msg); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	return requireProperties(t, readSingleBatchEvent(t, body))
 }
 
 // wireOptionsRaw returns the wire options of msg as raw JSON, so tests can
@@ -493,7 +554,7 @@ func TestResponseUnmarshal(t *testing.T) {
 	body := `{"results":{
 		"a":{"result":"ok"},
 		"b":{"result":"warning","details":"person_processing_disabled"},
-		"c":{"result":"drop","details":"billing_limit_exceeded"},
+		"c":{"result":"drop","details":"exceptions_over_quota"},
 		"d":{"result":"retry","details":"not_persisted"},
 		"e":{"result":"some_future_status"}
 	}}`

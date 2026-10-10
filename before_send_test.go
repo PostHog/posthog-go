@@ -1,10 +1,12 @@
 package posthog
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -196,75 +198,212 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 	}
 }
 
-func TestBeforeSendCaptureReceivesDefaultProperties(t *testing.T) {
-	body := make(chan []byte, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		payload, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		body <- payload
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"results":{}}`))
-	}))
-	defer server.Close()
-
-	client, err := NewWithConfig("test-api-key", Config{
-		Endpoint:  server.URL,
-		BatchSize: 1,
-		now:       mockTime,
-		BeforeSend: func(msg Message) Message {
-			capture := msg.(Capture)
-			capture.Properties["hook_saw_is_server"] = capture.Properties[propertyIsServer]
-			capture.Properties["hook_saw_geoip_disable"] = capture.Properties[propertyGeoipDisable]
-			return capture
-		},
-	})
-	require.NoError(t, err)
-
-	require.NoError(t, client.Enqueue(Capture{
-		DistinctId: "user-123",
-		Event:      "test-event",
-	}))
-	require.NoError(t, client.Close())
-
-	properties := firstProperties(t, readBatch(t, body))
-	require.Equal(t, true, properties["hook_saw_is_server"])
-	require.Equal(t, true, properties["hook_saw_geoip_disable"])
-	require.Equal(t, true, properties[propertyIsServer])
-	require.Equal(t, true, properties[propertyGeoipDisable])
+func sortedKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
-func TestBeforeSendCaptureCanRemoveDefaultIsServerProperty(t *testing.T) {
-	body := make(chan []byte, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		payload, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		body <- payload
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"results":{}}`))
-	}))
-	defer server.Close()
+// TestBeforeSendSeesContextAndDefaultsAndHasFinalSay has the hook write the
+// keys it saw into options, which are sent unchanged, so the wire event shows
+// what the hook saw and that a key it sets wins over the filled-in values.
+func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
+	exceptionList := []ExceptionItem{{Type: "t", Value: "v"}}
+	tests := []struct {
+		msg                Message
+		wantSeenProperties []interface{}
+		wantSeenService    string
+		wantContext        bool
+	}{
+		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
+		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
+		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
+		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
+		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
+	}
+	withSDKValues := func(keys []interface{}) []interface{} {
+		all := NewProperties().Merge(getSystemContext().ToProperties()).
+			Set(propertyGeoipDisable, true).
+			Set(propertyIsServer, true)
+		for _, key := range keys {
+			all.Set(key.(string), true)
+		}
+		var sorted []interface{}
+		for _, key := range sortedKeys(all) {
+			sorted = append(sorted, key)
+		}
+		return sorted
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
 
-	client, err := NewWithConfig("test-api-key", Config{
-		Endpoint:  server.URL,
-		BatchSize: 1,
-		now:       mockTime,
-		BeforeSend: func(msg Message) Message {
-			capture := msg.(Capture)
-			delete(capture.Properties, propertyIsServer)
-			return capture
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set("service", "default").Set("app", "default").Set("$go_version", "default"),
+				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
+				BeforeSend: func(msg Message) Message {
+					options := messageOptions(msg)
+					record := func(properties Properties) Properties {
+						options.Set("seen_options", sortedKeys(options)).
+							Set("seen_properties", sortedKeys(properties)).
+							Set("seen_service", properties["service"]).
+							Set("cookieless_mode", false)
+						properties = NewProperties().Merge(properties).Set("service", "hook")
+						delete(properties, "app")
+						delete(properties, "$os")
+						delete(properties, propertyIsServer)
+						return properties
+					}
+					switch m := msg.(type) {
+					case Capture:
+						m.Properties = record(m.Properties)
+						return m
+					case Exception:
+						m.Properties = record(m.Properties)
+						return m
+					case Identify:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					case Alias:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					case GroupIdentify:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					}
+					return msg
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				SessionId:  "session-1",
+				Properties: NewProperties().Set("service", "context").Set("context_only", "context"),
+				Options:    NewOptions().Set("product_tour_id", "context-tour"),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, tt.msg))
+
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
+			wantOptions := map[string]interface{}{
+				"seen_options":            []interface{}{"cookieless_mode", "disable_skew_correction"},
+				"seen_properties":         withSDKValues(tt.wantSeenProperties),
+				"seen_service":            tt.wantSeenService,
+				"cookieless_mode":         false,
+				"disable_skew_correction": true,
+			}
+			if tt.wantContext {
+				wantOptions["seen_options"] = []interface{}{"cookieless_mode", "disable_skew_correction", "process_person_profile", "product_tour_id"}
+				wantOptions["product_tour_id"] = "context-tour"
+				wantOptions["process_person_profile"] = false
+				require.Equal(t, "context", properties["context_only"])
+				require.Equal(t, "session-1", event["session_id"])
+			}
+			require.Equal(t, wantOptions, requireOptions(t, event))
+			require.Equal(t, "hook", properties["service"])
+			require.NotContains(t, properties, "app")
+			require.Equal(t, "default", properties["$go_version"])
+			require.Equal(t, true, properties[propertyGeoipDisable])
+			require.NotContains(t, properties, "$os")
+			require.NotContains(t, properties, propertyIsServer)
+		})
+	}
+}
+
+func TestNestedDefaultsFillOneLevelDeep(t *testing.T) {
+	tests := []struct {
+		msg  Message
+		want map[string]interface{}
+	}{
+		{
+			msg: Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set("$set", map[string]interface{}{"plan": "pro"}), Groups: NewGroups().Set("company", "posthog")},
+			want: map[string]interface{}{
+				"$set":    map[string]interface{}{"plan": "pro", "source": "default"},
+				"$groups": map[string]interface{}{"company": "posthog", "team": "core"},
+			},
 		},
-	})
-	require.NoError(t, err)
+		{
+			msg:  Identify{DistinctId: "user-1", Properties: NewProperties().Set("plan", "pro")},
+			want: map[string]interface{}{"$set": map[string]interface{}{"plan": "pro", "source": "default"}},
+		},
+		{
+			msg:  GroupIdentify{Type: "company", Key: "k", Properties: NewProperties().Set("tier", "paid")},
+			want: map[string]interface{}{"$group_set": map[string]interface{}{"tier": "paid", "source": "default"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
 
-	require.NoError(t, client.Enqueue(Capture{
-		DistinctId: "user-123",
-		Event:      "test-event",
-	}))
-	require.NoError(t, client.Close())
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				now:       mockTime,
+				DefaultEventProperties: NewProperties().
+					Set("$set", map[string]interface{}{"plan": "free", "source": "default"}).
+					Set("$groups", map[string]interface{}{"company": "acme", "team": "core"}).
+					Set("$group_set", map[string]interface{}{"tier": "free", "source": "default"}),
+			})
+			require.NoError(t, err)
+			defer client.Close()
 
-	properties := firstProperties(t, readBatch(t, body))
-	require.NotContains(t, properties, propertyIsServer)
-	require.Equal(t, true, properties[propertyGeoipDisable])
+			require.NoError(t, client.Enqueue(tt.msg))
+
+			properties := requireProperties(t, readSingleBatchEvent(t, body))
+			for key, want := range tt.want {
+				require.Equal(t, want, properties[key], key)
+			}
+		})
+	}
+}
+
+func TestBeforeSendCanRemoveEnrichmentProperties(t *testing.T) {
+	for _, removed := range []string{propertyIsServer, propertyGeoipDisable, propertySessionID} {
+		t.Run(removed, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				now:       mockTime,
+				BeforeSend: func(msg Message) Message {
+					capture := msg.(Capture)
+					delete(capture.Properties, removed)
+					return capture
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{SessionId: "session-1"})
+			require.NoError(t, EnqueueWithContext(ctx, client, Capture{
+				DistinctId: "user-123",
+				Event:      "test-event",
+			}))
+
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
+			require.NotContains(t, properties, removed)
+			if removed == propertySessionID {
+				require.NotContains(t, event, "session_id")
+			}
+			for _, kept := range []string{propertyIsServer, propertyGeoipDisable} {
+				if kept != removed {
+					require.Equal(t, true, properties[kept])
+				}
+			}
+		})
+	}
 }
 
 func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
