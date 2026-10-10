@@ -7,13 +7,14 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
 )
 
 // marshalEvent builds the wire event for a message and decodes it back into a
 // generic map so tests can assert the on-the-wire shape.
 func marshalEvent(t *testing.T, msg Message) map[string]interface{} {
 	t.Helper()
-	data, _, uuid, err := prepareForSend(msg)
+	data, _, uuid, err := prepareForSend(msg, nil)
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}
@@ -230,7 +231,7 @@ func enqueueWithConfigAndReadProperties(t *testing.T, config Config, msg Message
 // prove a value is sent exactly as the caller set it.
 func wireOptionsRaw(t *testing.T, msg Message) map[string]json.RawMessage {
 	t.Helper()
-	data, _, _, err := prepareForSend(msg)
+	data, _, _, err := prepareForSend(msg, nil)
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}
@@ -445,6 +446,76 @@ func TestSessionAndWindowLifted(t *testing.T) {
 	}
 }
 
+type namedSessionID string
+
+func TestSessionAndWindowLiftOnlyJSONStrings(t *testing.T) {
+	sessionUUID := uuid.MustParse("01890f6e-0000-7000-8000-000000000001")
+	cases := []struct {
+		name       string
+		value      interface{}
+		want       interface{} // nil means the field is omitted
+		warnedType string
+	}{
+		{"string", "sess-1", "sess-1", ""},
+		{"empty string", "", "", ""},
+		{"nil", nil, nil, ""},
+		{"typed nil pointer", (*string)(nil), nil, ""},
+		{"uuid", sessionUUID, sessionUUID.String(), ""},
+		{"named string type", namedSessionID("named"), "named", ""},
+		{"number", 42, nil, "number"},
+		{"bool", true, nil, "bool"},
+		{"array", []string{"secret-a"}, nil, "array"},
+		{"object", map[string]string{"k": "secret-o"}, nil, "object"},
+		{"unserializable", make(chan int), nil, "chan int"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log := &capturingLogger{}
+			data, _, _, err := prepareForSend(Capture{
+				Uuid: "u", Event: "e", DistinctId: "d",
+				Properties: Properties{propertySessionID: tc.value, propertyWindowID: tc.value},
+			}, log)
+			if err != nil {
+				t.Fatalf("prepareForSend: %v", err)
+			}
+			var ev map[string]interface{}
+			if err := json.Unmarshal(data, &ev); err != nil {
+				t.Fatalf("unmarshal wire event: %v", err)
+			}
+			for _, field := range []string{"session_id", "window_id"} {
+				got, present := ev[field]
+				if tc.want == nil && present {
+					t.Errorf("%s = %v, want omitted", field, got)
+				}
+				if tc.want != nil && got != tc.want {
+					t.Errorf("%s = %v, want %v", field, got, tc.want)
+				}
+			}
+			props := wireProps(t, ev)
+			if _, ok := props[propertySessionID]; ok {
+				t.Error("$session_id must be removed from properties")
+			}
+			if _, ok := props[propertyWindowID]; ok {
+				t.Error("$window_id must be removed from properties")
+			}
+
+			if tc.warnedType == "" {
+				if len(log.warnf) != 0 {
+					t.Errorf("unexpected warnings: %q", log.warnf)
+				}
+				return
+			}
+			want := []string{
+				fmt.Sprintf("dropping %s: a %s value is not a string", propertySessionID, tc.warnedType),
+				fmt.Sprintf("dropping %s: a %s value is not a string", propertyWindowID, tc.warnedType),
+			}
+			if strings.Join(log.warnf, "\n") != strings.Join(want, "\n") {
+				t.Errorf("warnings = %q, want %q", log.warnf, want)
+			}
+		})
+	}
+}
+
 func TestIdentifySetInProperties(t *testing.T) {
 	ev := marshalEvent(t, Identify{Uuid: "u", DistinctId: "d", Properties: Properties{"email": "a@b.co"}})
 	props := wireProps(t, ev)
@@ -509,7 +580,7 @@ func TestAliasIdentityPlacement(t *testing.T) {
 }
 
 func TestOptionsRendersEmptyObjectNotNull(t *testing.T) {
-	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"})
+	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}
@@ -519,7 +590,7 @@ func TestOptionsRendersEmptyObjectNotNull(t *testing.T) {
 }
 
 func TestEnvelopeShape(t *testing.T) {
-	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"})
+	data, _, _, err := prepareForSend(Capture{Uuid: "u", Event: "e", DistinctId: "d"}, nil)
 	if err != nil {
 		t.Fatalf("prepareForSend: %v", err)
 	}

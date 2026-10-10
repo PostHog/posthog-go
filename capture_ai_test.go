@@ -569,11 +569,11 @@ func TestAILaneSendsEventAtTheEndpointCeiling(t *testing.T) {
 	// Measure the non-blob overhead, then size the blob so the whole event lands
 	// just past the endpoint's ceiling -- the window the headroom covers.
 	probe, _, _, err := prepareForSend(
-		Capture{DistinctId: "d", Event: "$ai_generation", Properties: NewProperties().Set("blob", "")})
+		Capture{DistinctId: "d", Event: "$ai_generation", Properties: NewProperties().Set("blob", "")}, nil)
 	require.NoError(t, err)
 	props := NewProperties().Set("blob", strings.Repeat("x", aiMaxEventBytes-len(probe)+256))
 
-	data, _, _, err := prepareForSend(Capture{DistinctId: "d", Event: "$ai_generation", Properties: props})
+	data, _, _, err := prepareForSend(Capture{DistinctId: "d", Event: "$ai_generation", Properties: props}, nil)
 	require.NoError(t, err)
 	require.Greater(t, len(data), aiMaxEventBytes,
 		"precondition: the whole event must exceed the endpoint ceiling")
