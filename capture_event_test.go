@@ -551,7 +551,7 @@ func TestResponseUnmarshal(t *testing.T) {
 	body := `{"results":{
 		"a":{"result":"ok"},
 		"b":{"result":"warning","details":"person_processing_disabled"},
-		"c":{"result":"drop","details":"billing_limit_exceeded"},
+		"c":{"result":"drop","details":"exceptions_over_quota"},
 		"d":{"result":"retry","details":"not_persisted"},
 		"e":{"result":"some_future_status"}
 	}}`
