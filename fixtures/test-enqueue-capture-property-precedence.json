@@ -8,8 +8,6 @@
         "$geoip_disable": false,
         "$go_version": "event-go-version",
         "$is_server": false,
-        "$lib": "event-lib",
-        "$lib_version": "event-version",
         "$os": "event-os",
         "$os_distro": "IGNORED",
         "$os_version": "event-os-version",

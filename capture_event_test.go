@@ -73,12 +73,15 @@ func TestEventNamesAndDistinctId(t *testing.T) {
 
 func TestDropsLibFromProperties(t *testing.T) {
 	// Decision B: SDK identity rides the PostHog-Sdk-Info header, never properties.
+	callerLib := func() Properties {
+		return NewProperties().Set("$lib", "custom-lib").Set("$lib_version", "9.9.9")
+	}
 	msgs := []Message{
-		Capture{Uuid: "u", Event: "e", DistinctId: "d"},
-		Identify{Uuid: "u", DistinctId: "d"},
-		GroupIdentify{Uuid: "u", Type: "company", Key: "acme"},
-		Alias{Uuid: "u", DistinctId: "d", Alias: "a"},
-		Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "E", Value: "v"}}},
+		Capture{Uuid: "u", Event: "e", DistinctId: "d", Properties: callerLib()},
+		Identify{Uuid: "u", DistinctId: "d", EventProperties: callerLib()},
+		GroupIdentify{Uuid: "u", Type: "company", Key: "acme", EventProperties: callerLib()},
+		Alias{Uuid: "u", DistinctId: "d", Alias: "a", EventProperties: callerLib()},
+		Exception{Uuid: "u", DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "E", Value: "v"}}, Properties: callerLib()},
 	}
 	for _, m := range msgs {
 		t.Run(fmt.Sprintf("%T", m), func(t *testing.T) {
