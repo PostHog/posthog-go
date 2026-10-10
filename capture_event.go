@@ -23,6 +23,11 @@ const (
 	optionProcessPersonProfile = "process_person_profile"
 )
 
+// sdkInfoProperties are set by capture from the PostHog-Sdk-Info header and
+// appended after the event's own keys, so a copy left in properties is a
+// duplicate JSON key.
+var sdkInfoProperties = []string{"$lib", "$lib_version"}
+
 // Per-event result codes (the only four the backend emits, see
 // rust/capture/src/v1/analytics/types.rs EventResult).
 const (
@@ -104,6 +109,9 @@ func buildEvent(e apiEvent) eventPayload {
 		props = Properties{}
 	}
 	options := mergeOptions(e.options, props)
+	for _, key := range sdkInfoProperties {
+		delete(props, key)
+	}
 	sessionId := liftStringProperty(props, propertySessionID)
 	windowId := liftStringProperty(props, propertyWindowID)
 	return eventPayload{

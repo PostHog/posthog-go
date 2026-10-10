@@ -147,8 +147,8 @@ limits arrive as a terminal `402`. Retryable statuses are `408`, `500`, `502`,
 `$lib` and `$lib_version` are no longer sent in properties. SDK identity
 travels in the `PostHog-Sdk-Info` header, which is always
 `posthog-go/<version>`, and the backend sets both properties from it. If you
-set them explicitly they are still sent, but the backend overwrites them, so
-stored events always report `posthog-go`.
+set them explicitly, the SDK removes them before it sends the event, so stored
+events always report `posthog-go`. `BeforeSend` still sees the value you set.
 
 `Capture.Library` and `Exception.Library` (added in 1.33) are removed. One
 request carries one header, so a per-event library name cannot reach the
