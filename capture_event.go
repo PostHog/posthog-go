@@ -64,8 +64,8 @@ type eventPayload struct {
 	Uuid       string                 `json:"uuid"`
 	DistinctId string                 `json:"distinct_id"`
 	Timestamp  time.Time              `json:"timestamp"`
-	SessionId  string                 `json:"session_id,omitempty"`
-	WindowId   string                 `json:"window_id,omitempty"`
+	SessionId  *string                `json:"session_id,omitempty"`
+	WindowId   *string                `json:"window_id,omitempty"`
 	Options    map[string]interface{} `json:"options"`
 	Properties Properties             `json:"properties"`
 }
@@ -103,7 +103,7 @@ type apiEvent struct {
 // $window_id into top-level fields, and returns the wire payload. It mutates
 // e.properties by deleting the moved keys; callers must ensure the properties
 // map is not shared. e.options is copied, never mutated.
-func buildEvent(e apiEvent) eventPayload {
+func buildEvent(e apiEvent, logger Logger) eventPayload {
 	props := e.properties
 	if props == nil {
 		props = Properties{}
@@ -112,8 +112,8 @@ func buildEvent(e apiEvent) eventPayload {
 	for _, key := range sdkInfoProperties {
 		delete(props, key)
 	}
-	sessionId := liftStringProperty(props, propertySessionID)
-	windowId := liftStringProperty(props, propertyWindowID)
+	sessionId := liftStringProperty(props, propertySessionID, logger)
+	windowId := liftStringProperty(props, propertyWindowID, logger)
 	return eventPayload{
 		Event:      e.event,
 		Uuid:       e.uuid,
@@ -161,16 +161,63 @@ func isNilValue(v interface{}) bool {
 	return false
 }
 
-// liftStringProperty removes key from props and returns its value when it is a
-// string, or "" otherwise.
-func liftStringProperty(props Properties, key string) string {
+// liftStringProperty removes key from props and returns its value when the
+// value's JSON form is a string, such as a uuid.UUID or a named string type.
+// Capture rejects the whole request when the field is not a string, so any
+// other value is dropped with a warning that names its type, never the value.
+// A nil value counts as unset and drops silently.
+func liftStringProperty(props Properties, key string, logger Logger) *string {
 	v, ok := props[key]
 	if !ok {
-		return ""
+		return nil
 	}
 	delete(props, key)
-	s, _ := v.(string)
-	return s
+	if s, ok := v.(string); ok {
+		return &s
+	}
+	if v == nil {
+		return nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		warnDroppedProperty(logger, key, fmt.Sprintf("%T", v))
+		return nil
+	}
+	// Unmarshaling "null" into a string succeeds and yields "", so check the
+	// JSON type first.
+	if data[0] == '"' {
+		var s string
+		if json.Unmarshal(data, &s) == nil {
+			return &s
+		}
+	}
+	valueType := jsonTypeName(data)
+	if valueType != "null" {
+		warnDroppedProperty(logger, key, valueType)
+	}
+	return nil
+}
+
+// jsonTypeName names the JSON type of an encoded value.
+func jsonTypeName(data []byte) string {
+	switch data[0] {
+	case 'n':
+		return "null"
+	case 't', 'f':
+		return "bool"
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	default:
+		return "number"
+	}
+}
+
+func warnDroppedProperty(logger Logger, key, valueType string) {
+	if logger != nil {
+		logger.Warnf("dropping %s: a %s value is not a string", key, valueType)
+	}
 }
 
 // fillSDKProperties fills the values the SDK adds to every event: system
@@ -199,9 +246,9 @@ func boolProperty(props Properties, key string) bool {
 // and returns the event uuid for per-event result correlation. The uuid is
 // canonicalized because BeforeSend may set any form capture accepts, while
 // capture keys its results by the canonical form.
-func prepareForSend(msg Message) (json.RawMessage, APIMessage, string, error) {
+func prepareForSend(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
-	ev := buildEvent(msg.apifyEvent())
+	ev := buildEvent(msg.apifyEvent(), logger)
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return nil, apiMsg, canonicalUUID(ev.Uuid), err

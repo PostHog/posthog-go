@@ -142,6 +142,16 @@ func (c myCallback) Failure(msg posthog.APIMessage, err error) {
 limits arrive as a terminal `402`. Retryable statuses are `408`, `500`, `502`,
 `503` and `504`. `Retry-After` is honoured, clamped to 30s.
 
+### Session and window IDs
+
+The SDK sends `$session_id` and `$window_id` as top-level fields of the event,
+because capture reads them there and requires strings. A value whose JSON form
+is a string is sent as that string: a `string`, including `""`, a named string
+type, or a `uuid.UUID`. Any other value is dropped, and the SDK logs a warning
+for each drop that names the key and the value's type, never the value. A `nil`
+value counts as unset and drops without a warning. In 1.x the SDK sent any
+value as a property.
+
 ### Event properties
 
 `$lib` and `$lib_version` are no longer sent in properties. SDK identity

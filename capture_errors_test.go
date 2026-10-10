@@ -104,10 +104,11 @@ func TestTransportErrorUnwraps(t *testing.T) {
 	}
 }
 
-// capturingLogger records Debugf format strings for assertions.
+// capturingLogger records Debugf and Warnf messages for assertions.
 type capturingLogger struct {
 	mu     sync.Mutex
 	debugf []string
+	warnf  []string
 }
 
 func (l *capturingLogger) Debugf(f string, a ...interface{}) {
@@ -115,8 +116,12 @@ func (l *capturingLogger) Debugf(f string, a ...interface{}) {
 	l.debugf = append(l.debugf, fmt.Sprintf(f, a...))
 	l.mu.Unlock()
 }
-func (l *capturingLogger) Logf(string, ...interface{})   {}
-func (l *capturingLogger) Warnf(string, ...interface{})  {}
+func (l *capturingLogger) Logf(string, ...interface{}) {}
+func (l *capturingLogger) Warnf(f string, a ...interface{}) {
+	l.mu.Lock()
+	l.warnf = append(l.warnf, fmt.Sprintf(f, a...))
+	l.mu.Unlock()
+}
 func (l *capturingLogger) Errorf(string, ...interface{}) {}
 
 func (l *capturingLogger) debugContains(sub string) bool {
