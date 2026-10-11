@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var conversationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -35,4 +37,10 @@ func fnv1a(seed, prime uint32, x string) uint32 {
 		lane = (lane ^ uint32(char)) * prime
 	}
 	return lane
+}
+
+// mintSessionID is a new "ses_" + UUIDv7, the session of a call that carries
+// neither a transport session nor a conversation handle.
+func mintSessionID() string {
+	return "ses_" + uuid.Must(uuid.NewV7()).String()
 }
