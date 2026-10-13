@@ -228,7 +228,7 @@ func captureBatch(t *testing.T, msgs ...Message) preparedBatch {
 	t.Helper()
 	var pb preparedBatch
 	for _, m := range msgs {
-		data, apiMsg, uuid, err := prepareForSend(m)
+		data, apiMsg, uuid, err := prepareForSend(m, nil)
 		if err != nil {
 			t.Fatalf("prepareForSend: %v", err)
 		}
@@ -261,7 +261,7 @@ func TestSendHeadersAndAllOk(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	now := time.Date(2025, time.April, 6, 7, 8, 9, 0, time.FixedZone("UTC+5", 5*60*60))
+	now := time.Date(2025, time.April, 6, 7, 8, 9, 123456789, time.FixedZone("UTC+5", 5*60*60))
 	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) {
 		cfg.now = func() time.Time { return now }
 	})
@@ -281,7 +281,7 @@ func TestSendHeadersAndAllOk(t *testing.T) {
 	if r.requestId == "" {
 		t.Error("PostHog-Request-Id missing")
 	}
-	const wantTimestamp = "2025-04-06T02:08:09Z"
+	const wantTimestamp = "2025-04-06T02:08:09.123456789Z"
 	if r.timestamp != wantTimestamp {
 		t.Errorf("PostHog-Request-Timestamp = %q, want %q", r.timestamp, wantTimestamp)
 	}

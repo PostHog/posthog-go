@@ -360,7 +360,7 @@ func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 	}
 	msg.Properties = fillSDKProperties(msg.Properties, msg.IsServer, false)
 
-	ev := buildEvent(msg.apifyEvent())
+	ev := buildEvent(msg.apifyEvent(), nil)
 	wantOptions := map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": true, "product_tour_id": "tour_1"}
 	if !reflect.DeepEqual(map[string]interface{}(ev.Options), wantOptions) {
 		t.Errorf("expected legacy option properties to become options %v, got %v", wantOptions, ev.Options)
@@ -397,10 +397,10 @@ func TestMinimalFlagCalledEvent_LiftsSessionId(t *testing.T) {
 		minimalFlagCalledEvent: true,
 	}
 
-	ev := buildEvent(msg.apifyEvent())
+	ev := buildEvent(msg.apifyEvent(), nil)
 
-	if ev.SessionId != "sess-1" {
-		t.Errorf("expected $session_id to be lifted to the top-level session_id field, got %q", ev.SessionId)
+	if ev.SessionId == nil || *ev.SessionId != "sess-1" {
+		t.Errorf("expected $session_id to be lifted to the top-level session_id field, got %v", ev.SessionId)
 	}
 	if _, ok := ev.Properties[propertySessionID]; ok {
 		t.Error("expected $session_id to be removed from properties after the v1 lift")

@@ -34,8 +34,6 @@ const (
 
 	DefaultMaxEnqueuedRequests = 1000
 
-	DefaultMaxEventBytes = 500000
-
 	DefaultMaxBatchBytes = 500000
 
 	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
