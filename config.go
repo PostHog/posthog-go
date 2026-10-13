@@ -71,6 +71,11 @@ type Config struct {
 	// Deprecated: use SecretKey instead.
 	PersonalApiKey string
 
+	// Disabled makes NewWithConfig return a client that sends nothing: its
+	// methods return default values and ErrSDKDisabled. Use it in tests and
+	// local development.
+	Disabled bool
+
 	// DisableGeoIP controls whether event and feature flag requests include
 	// $geoip_disable/geoip_disable. Nil defaults to true because this SDK usually
 	// runs server-side; set Ptr(false) to allow GeoIP lookup. On events it is a
