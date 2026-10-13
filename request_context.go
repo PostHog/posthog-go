@@ -35,24 +35,27 @@ const (
 
 type requestContextKey struct{}
 
-// RequestContext carries request-scoped PostHog metadata that is applied to capture and exception events
-// enqueued with EnqueueWithContext.
+// RequestContext carries request-scoped PostHog metadata that is applied to events enqueued with
+// EnqueueWithContext.
 //
-// DistinctId and SessionId usually come from PostHog tracing headers. Properties usually contain safe
+// DistinctId and SessionId usually come from PostHog tracing headers (see WithCaptureTracingHeaders). Properties usually contain safe
 // request metadata such as $current_url, $request_method, $request_path, $user_agent, and $ip.
 type RequestContext struct {
-	// DistinctId is the request-scoped user distinct ID.
+	// DistinctId is the request-scoped user distinct ID. It fills a missing
+	// DistinctId on Capture and Exception events. It never changes the ids of an
+	// Identify or an Alias.
 	DistinctId string
 	// SessionId is the request-scoped PostHog session ID. It is set as the
-	// $session_id property of capture and exception events before BeforeSend,
-	// unless the event has its own. A $session_id in Properties wins over it.
+	// $session_id property of every event except GroupIdentify before
+	// BeforeSend, unless the event has its own. A $session_id in Properties
+	// wins over it.
 	SessionId string
-	// Properties are request-scoped properties for capture and exception events.
+	// Properties are request-scoped properties for every event type.
 	// They fill in before BeforeSend, only for keys the event left unset, so
 	// BeforeSend sees them and can change or remove them. They win over
 	// Config.DefaultEventProperties.
 	Properties Properties
-	// Options are request-scoped capture options for capture and exception events.
+	// Options are request-scoped capture options for every event type.
 	// They fill in before BeforeSend, only for options the event left missing or
 	// nil, so BeforeSend sees them and can change them. They win over
 	// Config.DefaultEventOptions.
@@ -130,8 +133,9 @@ func RequestContextFromContext(ctx context.Context) (RequestContext, bool) {
 // RequestContextOptions configures NewRequestContextMiddleware.
 type RequestContextOptions struct {
 	// CaptureTracingHeaders controls whether X-PostHog-Distinct-Id and X-PostHog-Session-Id
-	// are read into request-scoped analytics context. It defaults to true in NewRequestContextMiddleware.
-	// When disabled, the middleware still attaches request metadata to the request context.
+	// are read into request-scoped analytics context. It defaults to false in NewRequestContextMiddleware
+	// because any client can set these headers; enable it only to link backend events to frontend
+	// sessions. When disabled, the middleware still attaches request metadata to the request context.
 	CaptureTracingHeaders bool
 
 	// CapturePanics controls whether NewRequestContextMiddleware captures downstream panics as
@@ -162,13 +166,14 @@ func WithCapturePanics(client EnqueueClient) RequestContextOption {
 }
 
 func defaultRequestContextOptions() RequestContextOptions {
-	return RequestContextOptions{CaptureTracingHeaders: true}
+	return RequestContextOptions{}
 }
 
 // NewRequestContextMiddleware wraps an http.Handler with PostHog request-context extraction.
 //
-// The middleware always attaches safe request metadata to r.Context(). By default it also reads
-// X-PostHog-Distinct-Id and X-PostHog-Session-Id into request-scoped analytics context. Use
+// The middleware always attaches safe request metadata to r.Context(). With
+// WithCaptureTracingHeaders(true) it also reads X-PostHog-Distinct-Id and
+// X-PostHog-Session-Id into request-scoped analytics context. Use
 // EnqueueWithContext(r.Context(), ...) for captures inside the request so this metadata is applied.
 func NewRequestContextMiddleware(next http.Handler, opts ...RequestContextOption) http.Handler {
 	options := defaultRequestContextOptions()
@@ -290,6 +295,23 @@ func resolveCaptureContext(ctx context.Context, distinctID string, fieldType str
 		options:                       requestContext.Options,
 		generatedPersonlessDistinctID: isPersonless,
 	}, nil
+}
+
+// requestContextLayers returns the request context's properties and options for
+// a message that keeps its own identity: Identify, Alias and GroupIdentify. The
+// session ID is left out when withSession is false, because a session's person
+// follows the distinct ID of the session's events and a group's distinct ID is
+// not that person.
+func requestContextLayers(ctx context.Context, withSession bool) (Properties, Options) {
+	requestContext, ok := RequestContextFromContext(ctx)
+	if !ok {
+		return nil, nil
+	}
+	properties := contextProperties(requestContext)
+	if !withSession {
+		delete(properties, propertySessionID)
+	}
+	return properties, requestContext.Options
 }
 
 // withSessionID returns properties with the request context's session ID when

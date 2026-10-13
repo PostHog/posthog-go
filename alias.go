@@ -25,8 +25,8 @@ type Alias struct {
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
 	Timestamp time.Time
 	// EventProperties are properties of the $create_alias event. Enqueue fills
-	// the keys they leave unset from Config.DefaultEventProperties before
-	// BeforeSend. The SDK's alias property wins over an "alias" key in them.
+	// the keys they leave unset from the request context, then from
+	// Config.DefaultEventProperties, before BeforeSend. The SDK's alias property wins over an "alias" key in them.
 	// The Config.Callback message does not include them.
 	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.

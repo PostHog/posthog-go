@@ -678,8 +678,9 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
-		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
+		ctxProperties, ctxOptions := requestContextLayers(ctx, true)
+		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, ctxProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
+		m.Options = fillOptions(m.Options, ctxOptions, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
@@ -704,8 +705,9 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
-		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
+		ctxProperties, ctxOptions := requestContextLayers(ctx, true)
+		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, ctxProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
+		m.Options = fillOptions(m.Options, ctxOptions, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
@@ -729,8 +731,9 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
-		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
-		m.Options = fillOptions(m.Options, c.DefaultEventOptions)
+		ctxProperties, ctxOptions := requestContextLayers(ctx, false)
+		m.EventProperties = fillSDKProperties(fillProperties(m.EventProperties, ctxProperties, c.DefaultEventProperties), m.IsServer, m.DisableGeoIP)
+		m.Options = fillOptions(m.Options, ctxOptions, c.DefaultEventOptions)
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil

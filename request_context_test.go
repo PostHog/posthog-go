@@ -209,39 +209,46 @@ func TestEnqueueWithContext_ExceptionMissingIdentityWithRequestContextCreatesPer
 	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
 }
 
-func TestRequestContextMiddleware_DisableTracingHeadersPreservesMetadata(t *testing.T) {
-	body, server := mockServer()
-	defer server.Close()
+func TestRequestContextMiddleware_IgnoresTracingHeadersUnlessEnabled(t *testing.T) {
+	for name, opts := range map[string][]RequestContextOption{
+		"default":  nil,
+		"disabled": {WithCaptureTracingHeaders(false)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
 
-	client, _ := NewWithConfig("test-key", Config{Endpoint: server.URL, BatchSize: 1, now: mockTime})
-	defer client.Close()
+			client, _ := NewWithConfig("test-key", Config{Endpoint: server.URL, BatchSize: 1, now: mockTime})
+			defer client.Close()
 
-	handler := NewRequestContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		requestContext, ok := RequestContextFromContext(r.Context())
-		require.True(t, ok)
-		require.Empty(t, requestContext.DistinctId)
-		require.Empty(t, requestContext.SessionId)
-		require.NoError(t, EnqueueWithContext(r.Context(), client, Capture{Event: "metadata-event"}))
-	}), WithCaptureTracingHeaders(false))
+			handler := NewRequestContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				requestContext, ok := RequestContextFromContext(r.Context())
+				require.True(t, ok)
+				require.Empty(t, requestContext.DistinctId)
+				require.Empty(t, requestContext.SessionId)
+				require.NoError(t, EnqueueWithContext(r.Context(), client, Capture{Event: "metadata-event"}))
+			}), opts...)
 
-	req := httptest.NewRequest(http.MethodGet, "https://example.com/api/test?token=secret", nil)
-	req.RemoteAddr = "10.0.0.2:1234"
-	req.Header.Set(HeaderPostHogDistinctID, "header-user")
-	req.Header.Set(HeaderPostHogSessionID, "header-session")
-	req.Header.Set("User-Agent", "TestAgent/1.0")
-	handler.ServeHTTP(httptest.NewRecorder(), req)
+			req := httptest.NewRequest(http.MethodGet, "https://example.com/api/test?token=secret", nil)
+			req.RemoteAddr = "10.0.0.2:1234"
+			req.Header.Set(HeaderPostHogDistinctID, "header-user")
+			req.Header.Set(HeaderPostHogSessionID, "header-session")
+			req.Header.Set("User-Agent", "TestAgent/1.0")
+			handler.ServeHTTP(httptest.NewRecorder(), req)
 
-	event := readSingleBatchEvent(t, body)
-	distinctID, ok := event["distinct_id"].(string)
-	require.True(t, ok)
-	require.NotEqual(t, "header-user", distinctID)
-	require.NoError(t, uuid.Validate(distinctID))
-	properties := requireProperties(t, event)
-	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
-	require.NotContains(t, event, "session_id")
-	require.Equal(t, "/api/test", properties[propertyRequestPath])
-	require.Equal(t, "TestAgent/1.0", properties[propertyUserAgent])
-	require.Equal(t, "10.0.0.2", properties[propertyIP])
+			event := readSingleBatchEvent(t, body)
+			distinctID, ok := event["distinct_id"].(string)
+			require.True(t, ok)
+			require.NotEqual(t, "header-user", distinctID)
+			require.NoError(t, uuid.Validate(distinctID))
+			properties := requireProperties(t, event)
+			require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
+			require.NotContains(t, event, "session_id")
+			require.Equal(t, "/api/test", properties[propertyRequestPath])
+			require.Equal(t, "TestAgent/1.0", properties[propertyUserAgent])
+			require.Equal(t, "10.0.0.2", properties[propertyIP])
+		})
+	}
 }
 
 func TestRequestContextMiddleware_SanitizesHeaders(t *testing.T) {
@@ -253,7 +260,7 @@ func TestRequestContextMiddleware_SanitizesHeaders(t *testing.T) {
 
 	handler := NewRequestContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		require.NoError(t, EnqueueWithContext(r.Context(), client, Capture{Event: "sanitized-event"}))
-	}))
+	}), WithCaptureTracingHeaders(true))
 
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/api/test", nil)
 	req.Header.Set(HeaderPostHogDistinctID, " \u0000\u0001\u0002 ")
@@ -278,7 +285,7 @@ func TestRequestContextMiddleware_ConcurrentRequestsDoNotLeak(t *testing.T) {
 		mu.Lock()
 		results[r.URL.Path] = requestContext
 		mu.Unlock()
-	}))
+	}), WithCaptureTracingHeaders(true))
 
 	first := httptest.NewRequest(http.MethodGet, "https://example.com/first", nil)
 	first.Header.Set(HeaderPostHogDistinctID, "user-a")
@@ -365,7 +372,7 @@ func TestRequestContextMiddleware_CapturesPanicsWithRequestContextAndRethrows(t 
 	handler := NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		panic(errors.New("boom"))
-	}), WithCapturePanics(client))
+	}), WithCapturePanics(client), WithCaptureTracingHeaders(true))
 
 	req := httptest.NewRequest(http.MethodPost, "https://example.com/api/test", nil)
 	req.RemoteAddr = "10.0.0.2:1234"
@@ -788,6 +795,72 @@ func TestEventPropertyLayers(t *testing.T) {
 			properties := requireProperties(t, readSingleBatchEvent(t, body))
 			require.Contains(t, properties, "service")
 			require.Equal(t, tt.want, properties["service"])
+		})
+	}
+}
+
+func TestEnqueueWithContext_IdentityMessagesTakeContextPropertiesAndOptions(t *testing.T) {
+	tests := []struct {
+		name           string
+		msg            Message
+		wantDistinctID string
+		wantSessionID  interface{}
+	}{
+		{
+			name:           "identify",
+			msg:            Identify{DistinctId: "user-1", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
+			wantDistinctID: "user-1",
+			wantSessionID:  "ctx-session",
+		},
+		{
+			name:           "alias",
+			msg:            Alias{DistinctId: "user-1", Alias: "user-2", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
+			wantDistinctID: "user-1",
+			wantSessionID:  "ctx-session",
+		},
+		{
+			name:           "group identify gets no session",
+			msg:            GroupIdentify{Type: "company", Key: "acme", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
+			wantDistinctID: "$company_acme",
+			wantSessionID:  nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set("shared", "default").Set("default_only", "default"),
+				DefaultEventOptions:    NewOptions().Set("process_person_profile", true).Set("product_tour_id", "tour"),
+			})
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				DistinctId: "ctx-user",
+				SessionId:  "ctx-session",
+				Properties: NewProperties().Set("shared", "context").Set("context_only", "context"),
+				Options:    NewOptions().Set("process_person_profile", false).Set("cookieless_mode", true),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, tt.msg))
+
+			event := readSingleBatchEvent(t, body)
+			require.Equal(t, tt.wantDistinctID, event["distinct_id"])
+			require.Equal(t, tt.wantSessionID, event["session_id"])
+			properties := requireProperties(t, event)
+			require.Equal(t, "event", properties["own"])
+			require.Equal(t, "context", properties["shared"])
+			require.Equal(t, "context", properties["context_only"])
+			require.Equal(t, "default", properties["default_only"])
+			require.NotContains(t, properties, propertySessionID)
+			require.Equal(t, map[string]interface{}{
+				"cookieless_mode":        false,
+				"process_person_profile": false,
+				"product_tour_id":        "tour",
+			}, requireOptions(t, event))
 		})
 	}
 }

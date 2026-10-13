@@ -25,8 +25,8 @@ type Identify struct {
 	// Properties are sent as the $set person properties for DistinctId.
 	Properties Properties
 	// EventProperties are properties of the $identify event itself, not of the
-	// person. Enqueue fills the keys they leave unset from
-	// Config.DefaultEventProperties before BeforeSend. A $set in them is merged
+	// person. Enqueue fills the keys they leave unset from the request context,
+	// then from Config.DefaultEventProperties, before BeforeSend. A $set in them is merged
 	// under Properties, which win key by key.
 	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
