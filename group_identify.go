@@ -17,7 +17,9 @@ type GroupIdentify struct {
 	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
 	Uuid string
 
-	// DistinctId is accepted for compatibility but the wire payload uses a generated group distinct ID.
+	// DistinctId is the distinct ID the $groupidentify event is sent under. If
+	// empty, Enqueue uses the request context's distinct ID, then
+	// "$<Type>_<Key>".
 	DistinctId string
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
@@ -64,7 +66,7 @@ type GroupIdentifyInApi struct {
 
 	// Event is always $groupidentify for GroupIdentify messages.
 	Event string `json:"event"`
-	// DistinctId is the generated group distinct ID sent to PostHog.
+	// DistinctId is the distinct ID the event is sent under.
 	DistinctId string `json:"distinct_id"`
 	// Properties contains SDK metadata, group identifiers, and $group_set properties.
 	Properties Properties `json:"properties"`
@@ -92,7 +94,10 @@ func (msg GroupIdentify) APIfy() APIMessage {
 		myProperties.Set("$group_set", mergeOverNested(myProperties["$group_set"], msg.Properties))
 	}
 
-	distinctId := fmt.Sprintf("$%s_%s", msg.Type, msg.Key)
+	distinctId := msg.DistinctId
+	if distinctId == "" {
+		distinctId = groupDistinctID(msg.Type, msg.Key)
+	}
 
 	apified := GroupIdentifyInApi{
 		Uuid:           msg.Uuid,
@@ -105,4 +110,10 @@ func (msg GroupIdentify) APIfy() APIMessage {
 	}
 
 	return apified
+}
+
+// groupDistinctID is the distinct ID of a $groupidentify event when neither the
+// caller nor the request context gives one.
+func groupDistinctID(groupType string, groupKey string) string {
+	return fmt.Sprintf("$%s_%s", groupType, groupKey)
 }

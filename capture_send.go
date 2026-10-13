@@ -62,7 +62,7 @@ func isRetryableStatus(code int) bool {
 // PostHog-Attempt increments.
 func (c *client) send(l *lane, pb preparedBatch) {
 	requestId := newRequestID()
-	createdAt := c.now().UTC().Format(time.RFC3339)
+	createdAt := c.now().UTC().Format(time.RFC3339Nano)
 
 	pendingData := pb.data
 	pendingMsgs := pb.msgs
@@ -329,7 +329,9 @@ func (c *client) upload(l *lane, ctx context.Context, b []byte, requestId string
 	req.Header.Set("PostHog-Sdk-Info", sdkInfo)
 	req.Header.Set("PostHog-Attempt", strconv.Itoa(attempt))
 	req.Header.Set("PostHog-Request-Id", requestId)
-	req.Header.Set("PostHog-Request-Timestamp", c.now().UTC().Format(time.RFC3339))
+	// Sub-second precision: capture corrects clock skew against this header,
+	// so whole seconds would shift every event in the request.
+	req.Header.Set("PostHog-Request-Timestamp", c.now().UTC().Format(time.RFC3339Nano))
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	if encoding != "" {
 		req.Header.Set("Content-Encoding", encoding)

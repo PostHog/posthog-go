@@ -180,20 +180,23 @@ type Config struct {
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
 	// Messages are sent when BatchSize is reached or when Interval fires. If zero,
-	// it defaults to DefaultBatchSize. The API still enforces a 500KB request limit.
+	// it defaults to DefaultBatchSize. MaxBatchBytes also bounds each batch.
 	BatchSize int
 
-	// MaxEventBytes is the maximum serialized size of a single event. A larger
-	// event is rejected through Callback.Failure with ErrMessageTooBig rather
-	// than being sent. If zero, it defaults to DefaultMaxEventBytes.
+	// MaxEventBytes optionally caps the serialized size of a single event. A
+	// larger event is rejected through Callback.Failure with ErrMessageTooBig
+	// rather than being sent. Zero means no cap: PostHog drops an oversized
+	// event on its own and reports it per event, without failing the rest of
+	// the request.
 	MaxEventBytes int
 
 	// MaxBatchBytes bounds the combined serialized size of the events in one
 	// capture request, independently of BatchSize, which bounds event count. A
 	// batch is flushed early when the next event would exceed it. The request
 	// envelope adds a small fixed overhead on top, so it is a target rather than
-	// a hard wire limit. Must be at least MaxEventBytes, so a single event
-	// always fits in one request. If zero, it defaults to DefaultMaxBatchBytes.
+	// a hard wire limit. An event larger than MaxBatchBytes is sent alone.
+	// When MaxEventBytes is set, MaxBatchBytes must be at least MaxEventBytes.
+	// If zero, it defaults to DefaultMaxBatchBytes.
 	MaxBatchBytes int
 
 	// CaptureAICompression selects the compression mode for EnqueueAI request
@@ -326,10 +329,6 @@ const (
 	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
 	// can be queued for sending.
 	DefaultMaxEnqueuedRequests = 1000
-
-	// DefaultMaxEventBytes is the default maximum serialized size of a single
-	// event, used when Config.MaxEventBytes is zero.
-	DefaultMaxEventBytes = 500000
 
 	// DefaultMaxBatchBytes is the default maximum serialized size of one capture
 	// request, used when Config.MaxBatchBytes is zero.
@@ -466,18 +465,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// A single event must fit in one request, so the per-event ceiling cannot
+	// A capped event must fit in one request, so the per-event ceiling cannot
 	// exceed the request ceiling -- otherwise an event between the two is
 	// accepted and then sent alone in a request that breaks MaxBatchBytes.
 	// Compares effective values because makeConfig applies defaults after this.
 	maxEventBytes, maxBatchBytes := c.MaxEventBytes, c.MaxBatchBytes
-	if maxEventBytes <= 0 {
-		maxEventBytes = DefaultMaxEventBytes
-	}
 	if maxBatchBytes <= 0 {
 		maxBatchBytes = DefaultMaxBatchBytes
 	}
-	if maxBatchBytes < maxEventBytes {
+	if maxEventBytes > 0 && maxBatchBytes < maxEventBytes {
 		return ConfigError{
 			Reason: "MaxBatchBytes must be at least MaxEventBytes so a single event fits in one request",
 			Field:  "MaxBatchBytes",
@@ -535,10 +531,6 @@ func makeConfig(c Config) Config {
 
 	if c.CaptureAIMaxQueueSize <= 0 {
 		c.CaptureAIMaxQueueSize = DefaultCaptureAIMaxQueueSize
-	}
-
-	if c.MaxEventBytes <= 0 {
-		c.MaxEventBytes = DefaultMaxEventBytes
 	}
 
 	if c.MaxBatchBytes <= 0 {

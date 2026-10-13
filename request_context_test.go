@@ -898,9 +898,15 @@ func TestEnqueueWithContext_IdentityMessagesTakeContextPropertiesAndOptions(t *t
 			wantSessionID:  "ctx-session",
 		},
 		{
-			name:           "group identify gets no session",
+			name:           "group identify takes the context id but no session",
 			msg:            GroupIdentify{Type: "company", Key: "acme", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
-			wantDistinctID: "$company_acme",
+			wantDistinctID: "ctx-user",
+			wantSessionID:  nil,
+		},
+		{
+			name:           "group identify caller id wins over the context id",
+			msg:            GroupIdentify{Type: "company", Key: "acme", DistinctId: "owner-1", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
+			wantDistinctID: "owner-1",
 			wantSessionID:  nil,
 		},
 	}
@@ -940,6 +946,42 @@ func TestEnqueueWithContext_IdentityMessagesTakeContextPropertiesAndOptions(t *t
 				"process_person_profile": false,
 				"product_tour_id":        "tour",
 			}, requireOptions(t, event))
+		})
+	}
+}
+
+func TestEnqueue_BlankDistinctIdIsMissing(t *testing.T) {
+	blank := " \t "
+	t.Run("group identify falls back to the group id", func(t *testing.T) {
+		body, server := mockServer()
+		defer server.Close()
+		client, _ := NewWithConfig("test-key", Config{Endpoint: server.URL, BatchSize: 1, now: mockTime})
+		defer client.Close()
+
+		require.NoError(t, client.Enqueue(GroupIdentify{Type: "company", Key: "acme", DistinctId: blank}))
+		require.Equal(t, "$company_acme", readSingleBatchEvent(t, body)["distinct_id"])
+	})
+	t.Run("capture with a context takes the context id", func(t *testing.T) {
+		body, server := mockServer()
+		defer server.Close()
+		client, _ := NewWithConfig("test-key", Config{Endpoint: server.URL, BatchSize: 1, now: mockTime})
+		defer client.Close()
+
+		ctx := WithFreshRequestContext(context.Background(), RequestContext{DistinctId: "ctx-user"})
+		require.NoError(t, EnqueueWithContext(ctx, client, Capture{Event: "e", DistinctId: blank}))
+		require.Equal(t, "ctx-user", readSingleBatchEvent(t, body)["distinct_id"])
+	})
+	for name, msg := range map[string]Message{
+		"capture without a context": Capture{Event: "e", DistinctId: blank},
+		"identify":                  Identify{DistinctId: blank},
+		"alias target":              Alias{DistinctId: "user-1", Alias: blank},
+	} {
+		t.Run(name+" is rejected", func(t *testing.T) {
+			client, _ := NewWithConfig("test-key", Config{Transport: NoOpTransport()})
+			defer client.Close()
+
+			var fieldErr FieldError
+			require.ErrorAs(t, client.Enqueue(msg), &fieldErr)
 		})
 	}
 }

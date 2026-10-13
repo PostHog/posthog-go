@@ -310,10 +310,15 @@ func (msg GroupIdentify) apifyEvent() apiEvent {
 		myProperties.Set("$group_set", mergeOverNested(myProperties["$group_set"], msg.Properties))
 	}
 
+	distinctID := msg.DistinctId
+	if distinctID == "" {
+		distinctID = groupDistinctID(msg.Type, msg.Key)
+	}
+
 	return apiEvent{
 		event:      "$groupidentify",
 		uuid:       msg.Uuid,
-		distinctId: fmt.Sprintf("$%s_%s", msg.Type, msg.Key),
+		distinctId: distinctID,
 		timestamp:  msg.Timestamp,
 		properties: myProperties,
 		options:    msg.Options,
