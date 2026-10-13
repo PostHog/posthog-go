@@ -25,7 +25,7 @@ type preparedToolCall struct {
 	errorType             string
 	exceptionType         string
 	errorMessage          string
-	suppressPersonProfile bool
+	propertyProfileOptOut bool
 	parameters            any
 	response              any
 	groups                posthog.Groups
@@ -76,7 +76,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	prepared := preparedToolCall{
 		call:                  call,
 		explicitID:            explicitID,
-		suppressPersonProfile: !explicitID || personProfileOptOut(call.Properties),
+		propertyProfileOptOut: personProfileOptOut(call.Properties),
 		toolName:              truncateUTF8(sanitizeResourceName(call.ToolName), maxResourceNameBytes),
 	}
 	prepared.conversationID = normalizeConversationID(call.ConversationID)
@@ -139,11 +139,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 	custom := make(posthog.Properties, len(call.Properties))
 	for key, value := range call.Properties {
-		if strings.HasPrefix(key, "$mcp_") {
-			continue
-		}
-		switch key {
-		case propertyGroups, propertySet, propertyProcessProfile, propertySessionID, propertyExceptionLevel:
+		if isReservedProperty(key) || key == propertyProcessProfile {
 			continue
 		}
 		custom[key] = value
@@ -228,6 +224,18 @@ func prepareProperties(field string, properties posthog.Properties) (posthog.Pro
 		return nil, errors.New("posthogmcp: normalized properties must be an object")
 	}
 	return posthog.Properties(value), nil
+}
+
+// isReservedProperty reports whether key is set only from ToolCall fields.
+func isReservedProperty(key string) bool {
+	if strings.HasPrefix(key, "$mcp_") {
+		return true
+	}
+	switch key {
+	case propertyGroups, propertySet, propertySessionID, propertyExceptionLevel:
+		return true
+	}
+	return false
 }
 
 func prepareGroups(groups posthog.Groups) (posthog.Groups, error) {
@@ -337,9 +345,28 @@ func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, 
 			properties[propertySet] = p.setProperties
 		}
 	}
-	if p.suppressPersonProfile {
-		properties[propertyProcessProfile] = false
+}
+
+// options returns the event's capture options: the caller's Options plus the
+// person profile opt-out. The opt-out goes in as an option, not a property, so
+// it wins over client and request-context defaults.
+func (p preparedToolCall) options() posthog.Options {
+	options := make(posthog.Options, len(p.call.Options)+1)
+	for name, value := range p.call.Options {
+		options[name] = value
 	}
+	switch {
+	case !p.explicitID:
+		// The fallback distinct ID is a session or "anonymous", so a person
+		// profile would be wrong whatever the caller asked for.
+		options[optionProcessProfile] = false
+	case p.propertyProfileOptOut && options[optionProcessProfile] == nil:
+		options[optionProcessProfile] = false
+	}
+	if len(options) == 0 {
+		return nil
+	}
+	return options
 }
 
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {

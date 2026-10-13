@@ -36,6 +36,9 @@ type EventContext struct {
 	// Properties adds custom event metadata. $mcp_* and identity control keys
 	// are reserved.
 	Properties posthog.Properties
+	// Options sets capture options on the event, over the RequestContext's.
+	// Without a DistinctID, process_person_profile is always false.
+	Options posthog.Options
 	// Timestamp is the time of the event. When zero, the PostHog client stamps
 	// the time it enqueues the event.
 	Timestamp time.Time
@@ -57,6 +60,7 @@ func (c EventContext) toolCall(toolName string) ToolCall {
 		ClientUserAgent: c.ClientUserAgent,
 		VendorClient:    c.VendorClient,
 		Properties:      c.Properties,
+		Options:         c.Options,
 		Timestamp:       c.Timestamp,
 	}
 }
@@ -146,7 +150,7 @@ func (a *Analytics) CaptureMissingCapability(ctx context.Context, event MissingC
 }
 
 func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build func(preparedToolCall) (posthog.Capture, error)) error {
-	call, err := a.withContext(ctx, call)
+	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
 		return err
 	}
@@ -158,7 +162,7 @@ func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build fu
 	if err != nil {
 		return err
 	}
-	return a.enqueue([]namedMessage{{name: capture.Event, message: capture}})
+	return a.enqueue(enqueueCtx, []namedMessage{{name: capture.Event, message: capture}})
 }
 
 // buildOptionalEvent builds an event of specific and the identity every MCP
@@ -177,6 +181,7 @@ func (p preparedToolCall) buildOptionalEvent(event string, specific posthog.Prop
 			Event:      event,
 			Timestamp:  p.call.Timestamp,
 			Properties: properties,
+			Options:    p.options(),
 			Groups:     p.groups,
 		}
 		size, err := messageSize(capture)

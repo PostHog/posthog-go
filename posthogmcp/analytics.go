@@ -51,10 +51,12 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 // message has been attempted.
 //
 // A posthog.RequestContext attached to ctx supplies the distinct and session
-// IDs the call leaves empty, and its properties sit under call.Properties. They
-// go through the same reserved-key and sanitization rules as the call's own.
+// IDs the call leaves empty. Its properties and options sit under
+// call.Properties and call.Options, and its properties go through the same
+// reserved-key and sanitization rules as call.Properties. They still win over
+// the client's Config.DefaultEventProperties and Config.DefaultEventOptions.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
-	call, err := a.withContext(ctx, call)
+	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
 		return err
 	}
@@ -62,41 +64,63 @@ func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	if err != nil {
 		return err
 	}
-	return a.enqueue(messages)
+	return a.enqueue(enqueueCtx, messages)
 }
 
-// withContext rejects a nil recorder and applies the RequestContext attached
-// to ctx.
-func (a *Analytics) withContext(ctx context.Context, call ToolCall) (ToolCall, error) {
+// withContext rejects a nil recorder and puts the RequestContext attached to
+// ctx under the call. It returns the context to enqueue with, which carries an
+// empty request context so the client does not fill the unsanitized values
+// again.
+func (a *Analytics) withContext(ctx context.Context, call ToolCall) (ToolCall, context.Context, error) {
 	if a == nil || a.client == nil {
-		return call, errors.New("posthogmcp: nil enqueue client")
+		return call, nil, errors.New("posthogmcp: nil enqueue client")
 	}
-	if requestContext, ok := posthog.RequestContextFromContext(ctx); ok {
-		call = withRequestContext(call, requestContext)
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return call, nil
+	requestContext, ok := posthog.RequestContextFromContext(ctx)
+	if !ok {
+		return call, ctx, nil
+	}
+	return withRequestContext(call, requestContext), posthog.WithFreshRequestContext(ctx, posthog.RequestContext{}), nil
 }
 
-func (a *Analytics) enqueue(messages []namedMessage) error {
+func (a *Analytics) enqueue(ctx context.Context, messages []namedMessage) error {
 	var enqueueErrors []error
 	for _, message := range messages {
-		if err := a.client.Enqueue(message.message); err != nil {
+		if err := posthog.EnqueueWithContext(ctx, a.client, message.message); err != nil {
 			enqueueErrors = append(enqueueErrors, fmt.Errorf("posthogmcp: enqueue %s: %w", message.name, err))
 		}
 	}
 	return errors.Join(enqueueErrors...)
 }
 
-func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
+func withRequestIdentity(call ToolCall, requestContext posthog.RequestContext) ToolCall {
 	if call.DistinctID == "" {
 		call.DistinctID = requestContext.DistinctId
 	}
 	if call.SessionID == "" {
 		call.SessionID = requestContext.SessionId
 	}
+	return call
+}
+
+// withRequestContext puts the request context under the call.
+func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
+	call = withRequestIdentity(call, requestContext)
 	if len(requestContext.Properties) > 0 {
 		properties := posthog.NewProperties().Merge(requestContext.Properties)
 		call.Properties = properties.Merge(call.Properties)
+	}
+	if len(requestContext.Options) > 0 {
+		options := make(posthog.Options, len(requestContext.Options)+len(call.Options))
+		for name, value := range requestContext.Options {
+			options[name] = value
+		}
+		for name, value := range call.Options {
+			options[name] = value
+		}
+		call.Options = options
 	}
 	return call
 }

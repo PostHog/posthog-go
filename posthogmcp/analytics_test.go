@@ -52,7 +52,7 @@ func TestCaptureToolCallMinimal(t *testing.T) {
 	assert.Equal(t, "search_docs", capture.Properties[propertyToolName])
 	assert.Equal(t, float64(0), capture.Properties[propertyDurationMS])
 	assert.Equal(t, false, capture.Properties[propertyIsError])
-	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+	assertPersonProfileOption(t, capture, false)
 	assert.Equal(t, capture.DistinctId, capture.Properties[propertySessionID])
 	assert.NotContains(t, capture.Properties, propertySet)
 	assert.Nil(t, capture.Groups)
@@ -104,7 +104,7 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Groups)
 	assert.Equal(t, posthog.Groups{"organization": "org_1"}, capture.Properties[propertyGroups])
 	assert.Equal(t, posthog.Properties{"plan": "pro"}, capture.Properties[propertySet])
-	assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+	assertPersonProfileOption(t, capture, false)
 	assert.Equal(t, "test", capture.Properties["environment"])
 
 	assert.Equal(t, map[string]any{"query": "select 1"}, parameters)
@@ -116,10 +116,12 @@ func TestCaptureToolCallCompleteMappingAndPrecedence(t *testing.T) {
 
 func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		distinctID string
-		flag       any
-		want       any
+		name           string
+		distinctID     string
+		flag           any
+		options        posthog.Options
+		contextOptions posthog.Options
+		want           any
 	}{
 		{
 			name:       "identified explicit opt-out",
@@ -138,20 +140,65 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 			flag: true,
 			want: false,
 		},
+		{
+			name:       "identified option opt-out",
+			distinctID: "user_1",
+			options:    posthog.Options{optionProcessProfile: false},
+			want:       false,
+		},
+		{
+			name:       "option wins over legacy opt-out",
+			distinctID: "user_1",
+			flag:       false,
+			options:    posthog.Options{optionProcessProfile: true},
+			want:       true,
+		},
+		{
+			name:    "anonymous option cannot opt in",
+			options: posthog.Options{optionProcessProfile: true},
+			want:    false,
+		},
+		{
+			name:           "request-context option applies",
+			distinctID:     "user_1",
+			contextOptions: posthog.Options{optionProcessProfile: false},
+			want:           false,
+		},
+		{
+			name:           "call option wins over request-context option",
+			distinctID:     "user_1",
+			options:        posthog.Options{optionProcessProfile: true},
+			contextOptions: posthog.Options{optionProcessProfile: false},
+			want:           true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			if test.contextOptions != nil {
+				ctx = posthog.WithRequestContext(ctx, posthog.RequestContext{Options: test.contextOptions})
+			}
+			options := posthog.Options{"product_tour_id": "tour_1"}
+			for name, value := range test.options {
+				options[name] = value
+			}
 			client := &fakeEnqueueClient{}
-			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+			require.NoError(t, New(client).CaptureToolCall(ctx, ToolCall{
 				ToolName:   "query",
 				DistinctID: test.distinctID,
 				IsError:    true,
 				Error:      errors.New("request failed"),
 				Properties: posthog.Properties{propertyProcessProfile: test.flag},
+				Options:    options,
 			}))
 			require.Len(t, client.messages, 2)
 
-			assertSerializedProperty(t, client.messages[0], propertyProcessProfile, test.want)
-			assertSerializedProperty(t, client.messages[1], propertyProcessProfile, test.want)
+			assertPersonProfileOption(t, client.messages[0], test.want)
+			assertPersonProfileOption(t, client.messages[1], test.want)
+			assert.Equal(t, "tour_1", client.messages[0].(posthog.Capture).Options["product_tour_id"])
+			assert.Equal(t, "tour_1", client.messages[1].(posthog.Exception).Options["product_tour_id"])
+			if test.options != nil {
+				assert.Equal(t, test.options[optionProcessProfile], options[optionProcessProfile], "caller's Options must not be modified")
+			}
 		})
 	}
 }
@@ -256,9 +303,9 @@ func TestCaptureToolCallSessionFallbackAndAnonymousSetSuppression(t *testing.T) 
 			assertDistinctID(t, test.distinctID, capture.DistinctId)
 			assert.NotContains(t, capture.Properties, propertySet)
 			if test.personless {
-				assert.Equal(t, false, capture.Properties[propertyProcessProfile])
+				assertPersonProfileOption(t, capture, false)
 			} else {
-				assert.NotContains(t, capture.Properties, propertyProcessProfile)
+				assertPersonProfileOption(t, capture, nil)
 			}
 		})
 	}
@@ -495,6 +542,28 @@ func TestCaptureToolCallWireGolden(t *testing.T) {
 	assert.JSONEq(t, string(expected), string(actual))
 }
 
+// assertPersonProfileOption checks the process_person_profile option, which
+// is absent when want is nil, and that the legacy property is never set.
+func assertPersonProfileOption(t *testing.T, message posthog.Message, want any) {
+	t.Helper()
+	var options posthog.Options
+	var properties posthog.Properties
+	switch m := message.(type) {
+	case posthog.Capture:
+		options, properties = m.Options, m.Properties
+	case posthog.Exception:
+		options, properties = m.Options, m.Properties
+	default:
+		t.Fatalf("unexpected message type %T", message)
+	}
+	assert.NotContains(t, properties, propertyProcessProfile)
+	if want == nil {
+		assert.NotContains(t, options, optionProcessProfile)
+		return
+	}
+	assert.Equal(t, want, options[optionProcessProfile])
+}
+
 func assertSerializedProperty(t *testing.T, message posthog.Message, key string, want any) {
 	t.Helper()
 	data, err := json.Marshal(message.APIfy())
@@ -596,6 +665,93 @@ func TestCaptureToolCallSanitizesRequestContextProperties(t *testing.T) {
 	assert.Equal(t, "call", capture.Properties["service"], "call properties win over the request context")
 	assert.NotContains(t, capture.Properties, propertyIntent)
 	assert.NotContains(t, capture.Properties, propertySet)
+}
+
+func TestCaptureToolCallSanitizedRequestContextReachesBeforeSend(t *testing.T) {
+	payloads := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read capture request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		payloads <- body
+		var request struct {
+			Batch []struct {
+				UUID string `json:"uuid"`
+			} `json:"batch"`
+		}
+		results := map[string]any{}
+		if json.Unmarshal(body, &request) == nil {
+			for _, event := range request.Batch {
+				results[event.UUID] = map[string]string{"result": "ok"}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer server.Close()
+
+	var hookProperties posthog.Properties
+	var hookOptions posthog.Options
+	client, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		BeforeSend: func(msg posthog.Message) posthog.Message {
+			capture := msg.(posthog.Capture)
+			hookProperties = posthog.NewProperties().Merge(capture.Properties)
+			hookOptions = capture.Options
+			capture.Properties = posthog.NewProperties().Merge(capture.Properties).Set("service", "hook")
+			return capture
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{
+		Properties: posthog.Properties{
+			"service":              "context",
+			"region":               "eu",
+			"$current_url":         "https://app.test/cb?token=abc",
+			propertySet:            map[string]any{"email": "leak@example.com"},
+			propertyToolName:       "spoofed",
+			propertyProcessProfile: false,
+		},
+		Options: posthog.Options{"cookieless_mode": true},
+	})
+	require.NoError(t, New(client).CaptureToolCall(ctx, ToolCall{ToolName: "query", DistinctID: "user_1"}))
+
+	var body []byte
+	select {
+	case body = <-payloads:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the capture request")
+	}
+	var payload struct {
+		Batch []struct {
+			Properties map[string]any `json:"properties"`
+			Options    map[string]any `json:"options"`
+		} `json:"batch"`
+	}
+	require.NoError(t, json.Unmarshal(body, &payload))
+	require.Len(t, payload.Batch, 1)
+	event := payload.Batch[0]
+
+	assert.Equal(t, "context", hookProperties["service"])
+	assert.Equal(t, "eu", hookProperties["region"])
+	assert.Equal(t, "https://app.test/cb?token=%5Bredacted%5D", hookProperties["$current_url"])
+	assert.Equal(t, "query", hookProperties[propertyToolName])
+	assert.NotContains(t, hookProperties, propertySet)
+	assert.Equal(t, true, hookOptions["cookieless_mode"])
+
+	assert.Equal(t, "hook", event.Properties["service"], "a key BeforeSend sets wins over the request context")
+	assert.Equal(t, "eu", event.Properties["region"])
+	assert.Equal(t, "https://app.test/cb?token=%5Bredacted%5D", event.Properties["$current_url"])
+	assert.Equal(t, "query", event.Properties[propertyToolName])
+	assert.NotContains(t, event.Properties, propertySet)
+	assert.NotContains(t, event.Properties, propertyProcessProfile)
+	assert.Equal(t, true, event.Options["cookieless_mode"])
+	assert.Equal(t, false, event.Options["process_person_profile"])
 }
 
 func TestCaptureToolCallFallbackErrorMessageKeepsToolName(t *testing.T) {
