@@ -12,12 +12,14 @@ type Backoff struct {
 	factor uint8
 	jitter float64
 	cap    time.Duration
+	random func() float64
 }
 
 // NewBackoff creates a Backoff with the provided base duration, exponential
-// factor, jitter ratio, and maximum cap duration.
+// factor, jitter ratio, and maximum cap duration. A jitter ratio j scales each
+// delay by a uniform random factor in [1-j, 1+j] before the cap applies.
 func NewBackoff(base time.Duration, factor uint8, jitter float64, cap time.Duration) *Backoff {
-	return &Backoff{base, factor, jitter, cap}
+	return &Backoff{base: base, factor: factor, jitter: jitter, cap: cap, random: rand.Float64}
 }
 
 const (
@@ -28,16 +30,19 @@ const (
 
 	defaultBackoffBase   = 100 * time.Millisecond
 	defaultBackoffFactor = 2
+	// defaultBackoffJitter spreads retries from many clients that failed
+	// together, so they don't all return to the server at the same moment.
+	defaultBackoffJitter = 0.25
 )
 
 // DefaultBackoff creates a Backoff with the SDK's default retry policy:
 //
 //	base: 100 milliseconds
 //	factor: 2
-//	jitter: 0
+//	jitter: 0.25 (each delay is scaled by a random factor in [0.75, 1.25])
 //	cap: 30 seconds
 func DefaultBackoff() *Backoff {
-	return NewBackoff(defaultBackoffBase, defaultBackoffFactor, 0, DefaultMaxRetryBackoff)
+	return NewBackoff(defaultBackoffBase, defaultBackoffFactor, defaultBackoffJitter, DefaultMaxRetryBackoff)
 }
 
 // Duration returns the backoff interval for the given attempt.
@@ -45,13 +50,7 @@ func (b *Backoff) Duration(attempt int) time.Duration {
 	duration := float64(b.base) * math.Pow(float64(b.factor), float64(attempt))
 
 	if b.jitter != 0 {
-		random := rand.Float64()
-		deviation := math.Floor(random * b.jitter * duration)
-		if (int(math.Floor(random*10)) & 1) == 0 {
-			duration = duration - deviation
-		} else {
-			duration = duration + deviation
-		}
+		duration *= 1 + b.jitter*(2*b.random()-1)
 	}
 
 	duration = math.Min(float64(duration), float64(b.cap))
