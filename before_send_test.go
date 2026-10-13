@@ -215,14 +215,14 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 	tests := []struct {
 		msg                Message
 		wantSeenProperties []interface{}
-		wantSeenService    string
-		wantContext        bool
+		wantSession        bool
+		wantPersonless     bool
 	}{
-		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
-		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSeenService: "context", wantContext: true},
-		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
-		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
-		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "service"}, wantSeenService: "default"},
+		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonless: true},
+		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonless: true},
+		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true},
+		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true},
+		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "context_only", "service"}},
 	}
 	withSDKValues := func(keys []interface{}) []interface{} {
 		all := NewProperties().Merge(getSystemContext().ToProperties()).
@@ -294,18 +294,22 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 			event := readSingleBatchEvent(t, body)
 			properties := requireProperties(t, event)
 			wantOptions := map[string]interface{}{
-				"seen_options":            []interface{}{"cookieless_mode", "disable_skew_correction"},
+				"seen_options":            []interface{}{"cookieless_mode", "disable_skew_correction", "product_tour_id"},
 				"seen_properties":         withSDKValues(tt.wantSeenProperties),
-				"seen_service":            tt.wantSeenService,
+				"seen_service":            "context",
 				"cookieless_mode":         false,
 				"disable_skew_correction": true,
+				"product_tour_id":         "context-tour",
 			}
-			if tt.wantContext {
+			if tt.wantPersonless {
 				wantOptions["seen_options"] = []interface{}{"cookieless_mode", "disable_skew_correction", "process_person_profile", "product_tour_id"}
-				wantOptions["product_tour_id"] = "context-tour"
 				wantOptions["process_person_profile"] = false
-				require.Equal(t, "context", properties["context_only"])
+			}
+			require.Equal(t, "context", properties["context_only"])
+			if tt.wantSession {
 				require.Equal(t, "session-1", event["session_id"])
+			} else {
+				require.NotContains(t, event, "session_id")
 			}
 			require.Equal(t, wantOptions, requireOptions(t, event))
 			require.Equal(t, "hook", properties["service"])

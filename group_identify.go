@@ -25,8 +25,9 @@ type GroupIdentify struct {
 	// Properties are sent as the $group_set properties for the group.
 	Properties Properties
 	// EventProperties are properties of the $groupidentify event itself, not of
-	// the group. Enqueue fills the keys they leave unset from
-	// Config.DefaultEventProperties before BeforeSend. A $group_set in them is
+	// the group. Enqueue fills the keys they leave unset from the request
+	// context (except its session ID), then from Config.DefaultEventProperties,
+	// before BeforeSend. A $group_set in them is
 	// merged under Properties, which win key by key.
 	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
