@@ -56,6 +56,7 @@ func TestEventNamesAndDistinctId(t *testing.T) {
 		{"capture", Capture{Uuid: "u", Event: "clicked", DistinctId: "user-1"}, "clicked", "user-1"},
 		{"identify", Identify{Uuid: "u", DistinctId: "user-2"}, "$identify", "user-2"},
 		{"groupidentify", GroupIdentify{Uuid: "u", Type: "company", Key: "acme"}, "$groupidentify", "$company_acme"},
+		{"groupidentify with caller id", GroupIdentify{Uuid: "u", Type: "company", Key: "acme", DistinctId: "owner-1"}, "$groupidentify", "owner-1"},
 		{"alias", Alias{Uuid: "u", DistinctId: "user-3", Alias: "anon-9"}, "$create_alias", "user-3"},
 		{"exception", Exception{Uuid: "u", DistinctId: "user-4", ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}}}, "$exception", "user-4"},
 	}

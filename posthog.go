@@ -670,6 +670,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 
 	switch m := msg.(type) {
 	case Alias:
+		m.DistinctId, m.Alias = blankAsMissing(m.DistinctId), blankAsMissing(m.Alias)
 		if err = m.Validate(); err != nil {
 			return
 		}
@@ -698,6 +699,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		return
 
 	case Identify:
+		m.DistinctId = blankAsMissing(m.DistinctId)
 		if err = m.Validate(); err != nil {
 			return
 		}
@@ -729,6 +731,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		if err = m.Validate(); err != nil {
 			return
 		}
+		m.DistinctId = groupIdentifyDistinctID(ctx, m)
 		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
@@ -1737,7 +1740,7 @@ func (c *client) loop(l *lane) {
 	processMessage := func(prepared preparedMessage) bool {
 		msgSize := len(prepared.data)
 
-		if msgSize > l.cfg.maxEventBytes {
+		if l.cfg.maxEventBytes > 0 && msgSize > l.cfg.maxEventBytes {
 			c.Errorf("%s: message exceeds maximum size (%d > %d)", l.cfg.name, msgSize, l.cfg.maxEventBytes)
 			c.notifyLocalFailure(l, []APIMessage{prepared.msg}, ErrMessageTooBig)
 			return false
@@ -1766,7 +1769,7 @@ func (c *client) loop(l *lane) {
 			if !processMessage(prepared) {
 				continue
 			}
-			c.debugf("buffer (%d/%d, %d bytes) %v", len(batchData), c.BatchSize, batchSize, prepared.msg)
+			c.debugf("%s: buffer (%d/%d, %d bytes)", l.cfg.name, len(batchData), c.BatchSize, batchSize)
 
 		case reply := <-l.flushRequests:
 			// Bound the drain to the queue observed at this barrier. Continual

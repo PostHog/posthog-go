@@ -231,11 +231,10 @@ func TestAILaneSizeLimits(t *testing.T) {
 	analytics := analyticsLaneConfig(makeConfig(Config{}))
 	ai := aiLaneConfig(makeConfig(Config{}))
 
-	require.Equal(t, DefaultMaxEventBytes, analytics.maxEventBytes)
+	require.Zero(t, analytics.maxEventBytes, "analytics has no per-event cap by default")
+	require.Equal(t, DefaultMaxBatchBytes, analytics.maxBatchBytes)
 	require.Equal(t, aiMaxEventBytes+aiEnvelopeHeadroom, ai.maxEventBytes)
 	require.Equal(t, aiBatchBytesTarget, ai.maxBatchBytes)
-	require.Greater(t, ai.maxEventBytes, analytics.maxEventBytes,
-		"an AI event well over the analytics cap must still be accepted")
 
 	require.Equal(t, DefaultCaptureAIMaxQueueSize, ai.maxQueueSize)
 	require.Equal(t, DefaultMaxQueueSize, analytics.maxQueueSize)
@@ -244,8 +243,8 @@ func TestAILaneSizeLimits(t *testing.T) {
 }
 
 // TestAILaneAcceptsEventOverAnalyticsCap is the behavioral half of the limits:
-// a payload larger than the analytics per-event cap reaches the AI endpoint.
-// Production AI events routinely exceed that cap.
+// a payload larger than the analytics batch target reaches the AI endpoint.
+// Production AI events routinely exceed it.
 func TestAILaneAcceptsEventOverAnalyticsCap(t *testing.T) {
 	rec := newLaneRecorder()
 	srv := rec.server(t)
@@ -261,7 +260,7 @@ func TestAILaneAcceptsEventOverAnalyticsCap(t *testing.T) {
 		}}
 	})
 
-	big := NewProperties().Set("blob", strings.Repeat("x", DefaultMaxEventBytes+1000))
+	big := NewProperties().Set("blob", strings.Repeat("x", DefaultMaxBatchBytes+1000))
 	require.NoError(t, c.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation", Properties: big}))
 	require.NoError(t, c.Close())
 
