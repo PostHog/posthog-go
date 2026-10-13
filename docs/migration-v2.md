@@ -161,6 +161,10 @@ func (c myCallback) Failure(msg posthog.APIMessage, err error) {
 limits arrive as a terminal `402`. Retryable statuses are `408`, `500`, `502`,
 `503` and `504`. `Retry-After` is honoured, clamped to 30s.
 
+Default retry waits now vary randomly by up to 25% either way, so clients
+that fail together do not all retry at the same moment. A server `Retry-After`
+stays the minimum wait. A custom `Config.RetryAfter` is used as given.
+
 ### Event properties
 
 `$lib` and `$lib_version` are no longer sent in properties. SDK identity

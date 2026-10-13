@@ -197,7 +197,9 @@ type Config struct {
 	Verbose bool
 
 	// RetryAfter returns the delay before retrying a failed batch upload. The int
-	// argument is the retry attempt number. If nil, DefaultBackoff().Duration is used.
+	// argument is the retry attempt number. If nil, the SDK uses DefaultBackoff's
+	// policy (with ±25% jitter), capped at MaxRetryBackoff. A custom RetryAfter
+	// is used as given, with no jitter added.
 	RetryAfter func(int) time.Duration
 
 	// MaxRetries is the maximum number of retries after the first send attempt.
@@ -517,7 +519,7 @@ func makeConfig(c Config) Config {
 	}
 
 	if c.RetryAfter == nil {
-		c.RetryAfter = NewBackoff(defaultBackoffBase, defaultBackoffFactor, 0, c.MaxRetryBackoff).Duration
+		c.RetryAfter = NewBackoff(defaultBackoffBase, defaultBackoffFactor, defaultBackoffJitter, c.MaxRetryBackoff).Duration
 	}
 
 	if c.now == nil {
