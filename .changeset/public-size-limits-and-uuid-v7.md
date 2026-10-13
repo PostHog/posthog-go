@@ -4,10 +4,10 @@
 
 Capture size limits are now configurable, and generated UUIDs are version 7.
 
-- `Config.MaxEventBytes` and `Config.MaxBatchBytes` replace the private 500KB constants, defaulting to `DefaultMaxEventBytes` / `DefaultMaxBatchBytes` (both 500000, unchanged). `MaxBatchBytes` bounds request size; `BatchSize` still bounds event count. `MaxBatchBytes` must be at least `MaxEventBytes` and `NewWithConfig` rejects a config where it is not, so an event that passes the per-event check always fits in one request.
+- `Config.MaxBatchBytes` replaces the private 500KB request constant and defaults to `DefaultMaxBatchBytes` (500000, unchanged). `BatchSize` still bounds event count. An event larger than `MaxBatchBytes` is sent alone.
 
-  These were previously unreachable, so an event over 500KB was rejected with `ErrMessageTooBig` and there was no way to raise the limit. That is not hypothetical: AI events routinely exceed it in other SDKs, and posthog-go's own captured AI events show a distribution truncated exactly at the cap. Raise `MaxEventBytes` if you send large events; the capture endpoint itself accepts far more.
+- Analytics events have no per-event size cap by default. In 1.x an event over 500KB was refused with `ErrMessageTooBig`, although PostHog accepts larger events; PostHog now drops an oversized event on its own and reports it per event. The optional `Config.MaxEventBytes` refuses larger events locally, and `NewWithConfig` then rejects a `MaxBatchBytes` below it.
 
-- Event UUIDs and `PostHog-Request-Id` are now UUIDv7, which is time-ordered and matches what capture generates server-side. A caller-supplied `Uuid` is untouched.
+- Event UUIDs and `PostHog-Request-Id` are now UUIDv7, which is time-ordered and matches what capture generates server-side. A caller-supplied `Uuid` is kept, normalized to the lowercase hyphenated form.
 
 - Fixed the SDK reporting version `1.0.0` from any Go test binary, including an application's own. It probed `flag.Lookup("test.v")`, so events captured during a customer's tests were recorded against the wrong `$lib_version`.
