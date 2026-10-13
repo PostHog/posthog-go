@@ -73,13 +73,16 @@ unaffected.
 require an opt-in. A config that previously failed `Validate()` with
 `"zstd compression requires CaptureModeAnalyticsV1"` now succeeds.
 
-`Config.MaxEventBytes` and `Config.MaxBatchBytes` are new. Both default to
-500000 bytes, the limits 1.x applied internally. An event over
-`MaxEventBytes` is refused locally with `ErrMessageTooBig`, and
-`MaxBatchBytes` bounds the size of one request. `Validate`, and so
-`NewWithConfig`, rejects a config where `MaxBatchBytes` is less than
-`MaxEventBytes`. Neither applies to `EnqueueAI` (see
-[AI events](#new-ai-events)).
+`Config.MaxBatchBytes` is new. It defaults to 500000 bytes, the request limit
+1.x applied internally, and bounds the size of one request. An event larger
+than `MaxBatchBytes` is sent in a request of its own.
+
+There is no per-event size cap by default, unlike the 500000-byte cap in 1.x.
+PostHog now drops an oversized event on its own and reports it to `Callback`,
+without failing the other events in the request. Set the new
+`Config.MaxEventBytes` to refuse large events locally with `ErrMessageTooBig`;
+`Validate`, and so `NewWithConfig`, then rejects a `MaxBatchBytes` below it.
+Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
 
 `Config.MaxRetryBackoff` is new (see [Retries](#retries)).
 
@@ -119,6 +122,36 @@ allowlists, WAF rules, and self-hosted deployments. **The v1 route is only
 served where the deployment enables it**, so confirm your PostHog instance
 serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
 `eu.i.posthog.com`) does.
+
+### Request context
+
+`NewRequestContextMiddleware` no longer reads the `X-PostHog-Distinct-Id` and
+`X-PostHog-Session-Id` headers by default, because any client can set them.
+To keep linking backend events to frontend sessions, opt in:
+
+```go
+handler := posthog.NewRequestContextMiddleware(mux, posthog.WithCaptureTracingHeaders(true))
+```
+
+`RequestContext.Properties` and `RequestContext.Options` now apply to
+`Identify`, `Alias` and `GroupIdentify` events sent with `EnqueueWithContext`,
+not only to `Capture` and `Exception`. The context's session ID fills
+`Identify` and `Alias`, but never `GroupIdentify`. A session's person in
+PostHog follows the distinct IDs of the session's events, so an event sent
+under a different distinct ID with the context's session ID can change the
+person shown for that session. The context's distinct ID never changes an
+`Identify` or an `Alias`.
+
+An empty or whitespace-only `DistinctId` is now treated as missing, so a
+`Capture` or `Exception` sent with a request context gets the context's ID or a
+personless one. In 1.x it was sent, and PostHog dropped the event.
+
+### Group identify distinct ID
+
+`GroupIdentify.DistinctId` is now sent as the event's distinct ID. If it is
+empty, the SDK uses the request context's distinct ID, then `$<type>_<key>`.
+In 1.x the field was accepted and ignored, and every `$groupidentify` was sent
+as `$<type>_<key>`.
 
 ### Authentication
 
@@ -349,8 +382,8 @@ Options can also be set for every event and for a request:
 - `Config.DefaultEventOptions` applies to every `Capture`, `Exception`,
   `Identify`, `Alias` and `GroupIdentify` event, like
   `Config.DefaultEventProperties`.
-- `RequestContext.Options` applies to the `Capture` and `Exception` events
-  sent with `EnqueueWithContext` or `EnqueueAIWithContext`, like
+- `RequestContext.Options` applies to every event sent with
+  `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
