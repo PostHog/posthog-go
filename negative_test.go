@@ -296,8 +296,9 @@ func TestConfig_Validation(t *testing.T) {
 				return nil, ErrSDKDisabled
 			}),
 		})
-		require.ErrorIs(t, err, ErrSDKDisabled)
-		require.Nil(t, client)
+		require.NoError(t, err)
+		require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "user", Event: "event"}), ErrSDKDisabled)
+		require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 		require.Zero(t, calls.Load())
 	})
 }

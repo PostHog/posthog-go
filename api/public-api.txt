@@ -96,7 +96,7 @@ var (
 
 	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
-	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
+	ErrSDKDisabled = errors.New("posthog SDK is disabled")
 )
 var ErrFlagNotFound = errors.New("feature flag not found")
 
@@ -300,6 +300,7 @@ func New(apiKey string) (Client, error)
 func NewWithConfig(apiKey string, config Config) (cli Client, err error)
 
 
+
 type CommonResponseFields struct {
 	QuotaLimited []string `json:"quota_limited"`
 	RequestId string `json:"requestId"`
@@ -326,6 +327,8 @@ type Config struct {
 	SecretKey string
 
 	PersonalApiKey string
+
+	Disabled bool
 
 	DisableGeoIP *bool
 

@@ -42,7 +42,12 @@ if err != nil {
 defer client.Close()
 ```
 
-If initialization fails, either constructor returns a nil client and an error.
+Either constructor returns a nil client and an error only for invalid
+configuration. An empty project API key still gives a disabled client and a
+nil error, as in 1.x, and a personal (`phx_...`) key now does too. Both log an
+error. A disabled client
+sends nothing, and its methods return default values and `ErrSDKDisabled`.
+Set `Config.Disabled` to build one on purpose, for example in tests.
 
 ## Config
 
