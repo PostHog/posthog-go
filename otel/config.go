@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 
@@ -23,10 +24,11 @@ const (
 	// are rejected with a non-retryable HTTP 400 and the whole batch is lost, so
 	// batches must be capped at this limit.
 	maxSpansPerRequest = 100
-)
 
-// errEmptyAPIKey is returned when the project API key is missing.
-var errEmptyAPIKey = errors.New("posthogotel: apiKey must not be empty")
+	// personalAPIKeyPrefix marks a personal API key, which PostHog rejects as a
+	// project key. It matches the core SDK's rule.
+	personalAPIKeyPrefix = "phx_"
+)
 
 // errInvalidHost is returned when the configured host is not an absolute http
 // or https URL with a hostname.
@@ -50,6 +52,21 @@ func WithHost(host string) Option {
 			c.host = h
 		}
 	}
+}
+
+// unusableAPIKey logs why apiKey cannot send spans and reports whether it
+// cannot. The message never contains the key.
+func unusableAPIKey(apiKey string) bool {
+	apiKey = strings.TrimSpace(apiKey)
+	switch {
+	case apiKey == "":
+		log.Printf("[PostHog] posthogotel: apiKey is empty after trimming whitespace; spans will not be exported")
+		return true
+	case strings.HasPrefix(apiKey, personalAPIKeyPrefix):
+		log.Printf("[PostHog] posthogotel: apiKey is a personal API key (%s...), not a project API key; spans will not be exported", personalAPIKeyPrefix)
+		return true
+	}
+	return false
 }
 
 func newConfig(opts ...Option) (config, error) {
