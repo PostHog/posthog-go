@@ -49,6 +49,13 @@ error. A disabled client
 sends nothing, and its methods return default values and `ErrSDKDisabled`.
 Set `Config.Disabled` to build one on purpose, for example in tests.
 
+Integrations follow the same rule. `posthogmcpsdk.NewMiddleware` and
+`Instrument` no longer panic on a nil `*posthogmcp.Analytics`: they report one
+error and install middleware that changes nothing. The `otel` bridge's
+`NewExporter` and `NewSpanProcessor` no longer return an error for an empty or
+personal API key: they log one error and return an exporter or processor that
+exports nothing. They still return an error for an invalid `WithHost`.
+
 ## Config
 
 `Config.CaptureMode` is gone. If you opted into v1, delete the field — it is
