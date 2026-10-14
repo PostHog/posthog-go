@@ -11,11 +11,14 @@
 //   - SpanProcessor is the recommended integration. It filters spans, batches
 //     the AI spans, and exports them. Register it with
 //     TracerProvider.RegisterSpanProcessor (or the WithSpanProcessor option).
+//     It also adds the PostHog request context (see posthog.WithRequestContext)
+//     to the AI spans it exports, which Exporter can't.
 //
 //   - Exporter is for setups that supply their own span processor, or
 //     frameworks that accept only a span exporter. It filters spans and
 //     delegates the AI spans to an OTLP/HTTP exporter.
 //
 // This is a separate Go module so that the core posthog-go SDK does not depend
-// on OpenTelemetry.
+// on OpenTelemetry. This module depends on the core module for the request
+// context.
 package posthogotel
