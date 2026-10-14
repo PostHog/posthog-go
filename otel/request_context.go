@@ -20,8 +20,8 @@ const (
 	sessionIDAttribute  = "$session_id"
 )
 
-// ingestion prefers posthog.distinct_id, so adding the context's distinct ID
-// would override a user the span already names.
+// identityAttributes are the span attributes that name a user. Ingestion
+// prefers posthog.distinct_id, so adding one would override that user.
 var identityAttributes = []attribute.Key{
 	distinctIDAttribute,
 	"user.id",
@@ -152,11 +152,11 @@ func withRequestContext(span sdktrace.ReadOnlySpan, extra []attribute.KeyValue) 
 }
 
 // toAttribute converts a property value to an attribute. It skips nil values,
-// empty strings, nil slices and non-finite numbers. Slices other than []string,
-// []bool, []int, []int64, []float64 and []interface{} holding one primitive
-// kind, and all other types OpenTelemetry can't hold,
-// become JSON strings, except values that encode as a JSON string, which become
-// that string. Values that encode as an empty JSON string are skipped.
+// empty strings, nil slices and non-finite numbers. Slices other than
+// []string, []bool, []int, []int64, []float64 and []interface{} holding one
+// primitive kind, and all other types OpenTelemetry can't hold, become JSON
+// strings, except values that encode as a JSON string, which become that
+// string. Values that encode as an empty JSON string are skipped.
 func toAttribute(key string, value interface{}) (attribute.KeyValue, bool) {
 	switch v := value.(type) {
 	case nil:
@@ -193,9 +193,8 @@ func toAttribute(key string, value interface{}) (attribute.KeyValue, bool) {
 			return attribute.Int64(key, int64(v)), true
 		}
 	case float32:
-		// Parsing the shortest float32 form avoids widening noise such as 0.10000000149011612.
-		widened, err := strconv.ParseFloat(strconv.FormatFloat(float64(v), 'g', -1, 32), 64)
-		if err != nil || !isFinite(widened) {
+		widened, ok := finiteFloatValue(v)
+		if !ok {
 			return attribute.KeyValue{}, false
 		}
 		return attribute.Float64(key, widened), true
@@ -305,6 +304,7 @@ func finiteFloatValue(value interface{}) (float64, bool) {
 	var f float64
 	switch v := value.(type) {
 	case float32:
+		// Parsing the shortest float32 form avoids widening noise such as 0.10000000149011612.
 		parsed, err := strconv.ParseFloat(strconv.FormatFloat(float64(v), 'g', -1, 32), 64)
 		if err != nil {
 			return 0, false

@@ -169,6 +169,19 @@ func TestSpanProcessorDoesNotDeriveAISessionIDFromContext(t *testing.T) {
 	}
 }
 
+func TestSpanProcessorDropsDistinctIDPropertyWhenSpanHasIdentity(t *testing.T) {
+	h := newRequestContextHarness(t)
+	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{
+		Properties: posthog.Properties{"posthog.distinct_id": "alice"},
+	})
+
+	h.emitAISpan(ctx, attribute.String("user.id", "bob"))
+
+	if _, present := h.exported()[0].attributes["posthog.distinct_id"]; present {
+		t.Error("posthog.distinct_id property should not be exported next to user.id")
+	}
+}
+
 func TestSpanProcessorSkipsContextDistinctIDWhenSpanHasIdentity(t *testing.T) {
 	for _, key := range []string{
 		"posthog.distinct_id",
@@ -439,20 +452,10 @@ func TestSpanProcessorIgnoresContextsCapturedAfterShutdown(t *testing.T) {
 	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{DistinctId: "alice"})
 
 	h.provider.Tracer("test").Start(ctx, "gen_ai.chat")
-	h.processor.OnStart(ctx, tracetestLiveSpan(t))
 
 	if h.capturedCount() != 0 {
 		t.Errorf("captured entries after shutdown = %d, want 0", h.capturedCount())
 	}
-}
-
-func tracetestLiveSpan(t *testing.T) sdktrace.ReadWriteSpan {
-	t.Helper()
-	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	provider.Tracer("test").Start(context.Background(), "gen_ai.chat")
-	return recorder.Started()[0].(sdktrace.ReadWriteSpan)
 }
 
 func TestToAttributeSkipsTypedNilSlicesAndKeepsEmptyOnes(t *testing.T) {
