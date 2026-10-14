@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -928,18 +929,50 @@ func TestInstrumentRelearnsAToolReplacedWhileNoSessionIsConnected(t *testing.T) 
 	assert.Equal(t, "own context: Planning a trip", result.Content[0].(*mcpsdk.TextContent).Text)
 }
 
-func TestNilAnalyticsPanicsAtConstruction(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		install func()
-	}{
-		{name: "NewMiddleware", install: func() { NewMiddleware(nil) }},
-		{name: "Instrument", install: func() { Instrument(newServer(), nil) }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			assert.PanicsWithValue(t, "posthogmcpsdk: analytics must not be nil", test.install)
-		})
+func TestNilAnalyticsPassesThrough(t *testing.T) {
+	var logged strings.Builder
+	orig := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	server := newServer()
+	require.NotPanics(t, func() { Instrument(server, nil) })
+	assert.Equal(t, 1, strings.Count(logged.String(), "\n"), "want exactly one log line, got %q", logged.String())
+	assert.Contains(t, logged.String(), errNilAnalytics.Error())
+
+	addWeatherTool(server, nil)
+	client := connectInMemory(t, server)
+	listed, err := client.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.Len(t, listed.Tools, 1)
+	assert.NotContains(t, jsonString(t, listed.Tools[0].InputSchema), `"context"`, "a disabled middleware must not change tool schemas")
+	result, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
+	require.NoError(t, err)
+	require.False(t, result.IsError, toolResultText(result))
+	assert.JSONEq(t, `{"temperature":21}`, jsonString(t, result.StructuredContent))
+	assert.Equal(t, 1, strings.Count(logged.String(), "\n"), "requests must not log again, got %q", logged.String())
+}
+
+func TestNilAnalyticsReturnsHandlerResultsUntouched(t *testing.T) {
+	var reported []error
+	m := NewMiddleware(nil, WithErrorHandler(func(_ context.Context, err error) { reported = append(reported, err) }))
+	assert.Equal(t, []error{errNilAnalytics}, reported)
+
+	wantResult := &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "ok"}}}
+	wantErr := errors.New("downstream failed")
+	var calls int
+	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+		calls++
+		return wantResult, wantErr
 	}
+	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Name: "weather"}}
+	for _, handler := range []mcpsdk.MethodHandler{m.Receiving(next), m.Sending(next)} {
+		result, err := handler(t.Context(), methodCallTool, req)
+		assert.Same(t, wantResult, result)
+		assert.Same(t, wantErr, err)
+	}
+	assert.Equal(t, 2, calls)
+	assert.Len(t, reported, 1, "handling requests must not report again")
 }
 
 func TestToolResultText(t *testing.T) {

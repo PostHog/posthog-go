@@ -21,8 +21,8 @@ const (
 // Instrument adds PostHog tool-call analytics to server receiving middleware,
 // and the sending middleware described in [Middleware]. Install other
 // receiving middleware before or after Instrument according to whether its
-// work should be included in the measured duration. It panics if analytics is
-// nil.
+// work should be included in the measured duration. A nil analytics installs
+// middleware that changes nothing, as [NewMiddleware] describes.
 func Instrument(server *mcpsdk.Server, analytics *posthogmcp.Analytics, opts ...Option) {
 	m := NewMiddleware(analytics, opts...)
 	server.AddReceivingMiddleware(m.Receiving)
@@ -52,11 +52,14 @@ type Middleware struct {
 	Sending   mcpsdk.Middleware
 }
 
-// NewMiddleware returns the [Middleware] [Instrument] installs. It panics if
-// analytics is nil.
+// NewMiddleware returns the [Middleware] [Instrument] installs. A nil analytics
+// reports one error, through the WithErrorHandler handler when one is set and
+// the standard logger otherwise, and returns middleware that passes every
+// request and notification through unchanged, so analytics setup never stops
+// the server.
 func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 	if analytics == nil {
-		panic("posthogmcpsdk: analytics must not be nil")
+		return disabledMiddleware(opts)
 	}
 	cfg := defaultConfig(analytics)
 	for _, opt := range opts {
