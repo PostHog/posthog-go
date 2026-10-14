@@ -38,7 +38,7 @@ ctx = posthog.WithRequestContext(ctx, posthog.RequestContext{
 handleRequest(ctx)
 ```
 
-An attribute already on the span wins over a property, and a property wins over the context's distinct ID and session ID. The processor adds these attributes only to the AI spans it exports to PostHog. Other processors and exporters on the provider don't see them.
+An attribute already on the span wins over a property, and a property wins over the context's distinct ID and session ID. The context's session ID is added as `$session_id`, and the context's distinct ID is skipped when the span already has `posthog.distinct_id`, `user.id`, `ai.telemetry.metadata.posthog_distinct_id` or `ai.settings.context.posthog_distinct_id`. To set `$ai_session_id`, add it as a property or span attribute. The processor adds these attributes only to the AI spans it exports to PostHog. Other processors and exporters on the provider don't see them.
 
 `posthog.NewRequestContextMiddleware` sets the request context from the PostHog tracing headers. It also adds request metadata (`$current_url`, `$request_method`, `$request_path`, `$user_agent`, `$ip`), and these are added to the AI spans exported to PostHog. To keep that metadata out, set the request context yourself with `posthog.WithRequestContext` instead of using the middleware.
 

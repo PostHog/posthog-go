@@ -65,7 +65,7 @@ func (p *SpanProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 // Shutdown shuts down the underlying batch span processor and releases the
 // request contexts of spans that never ended.
 func (p *SpanProcessor) Shutdown(ctx context.Context) error {
-	p.requestContexts.clear()
+	p.requestContexts.close()
 	return p.inner.Shutdown(ctx)
 }
 

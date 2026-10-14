@@ -17,8 +17,17 @@ import (
 
 const (
 	distinctIDAttribute = "posthog.distinct_id"
-	sessionIDAttribute  = "$ai_session_id"
+	sessionIDAttribute  = "$session_id"
 )
+
+// ingestion prefers posthog.distinct_id, so adding the context's distinct ID
+// would override a user the span already names.
+var identityAttributes = []attribute.Key{
+	distinctIDAttribute,
+	"user.id",
+	"ai.telemetry.metadata.posthog_distinct_id",
+	"ai.settings.context.posthog_distinct_id",
+}
 
 // spanKey identifies a span between OnStart and OnEnd.
 type spanKey struct {
@@ -31,11 +40,15 @@ type spanKey struct {
 type requestContextStore struct {
 	mu      sync.Mutex
 	entries map[spanKey]posthog.RequestContext
+	closed  bool
 }
 
 func (s *requestContextStore) put(key spanKey, requestContext posthog.RequestContext) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	if s.entries == nil {
 		s.entries = make(map[spanKey]posthog.RequestContext)
 	}
@@ -50,9 +63,11 @@ func (s *requestContextStore) take(key spanKey) (posthog.RequestContext, bool) {
 	return requestContext, ok
 }
 
-func (s *requestContextStore) clear() {
+// close drops every entry and ignores later puts.
+func (s *requestContextStore) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	clear(s.entries)
 }
 
@@ -119,9 +134,16 @@ func withRequestContext(span sdktrace.ReadOnlySpan, extra []attribute.KeyValue) 
 	for _, kv := range own {
 		existing[kv.Key] = struct{}{}
 	}
+	hasIdentity := slices.ContainsFunc(identityAttributes, func(key attribute.Key) bool {
+		_, ok := existing[key]
+		return ok
+	})
 	merged := make([]attribute.KeyValue, len(own), len(own)+len(extra))
 	copy(merged, own)
 	for _, kv := range extra {
+		if hasIdentity && kv.Key == distinctIDAttribute {
+			continue
+		}
 		if _, ok := existing[kv.Key]; !ok {
 			merged = append(merged, kv)
 		}
@@ -130,8 +152,9 @@ func withRequestContext(span sdktrace.ReadOnlySpan, extra []attribute.KeyValue) 
 }
 
 // toAttribute converts a property value to an attribute. It skips nil values,
-// empty strings and non-finite numbers. Slices other than []string, []bool,
-// []int, []int64 and []float64, and all other types OpenTelemetry can't hold,
+// empty strings, nil slices and non-finite numbers. Slices other than []string,
+// []bool, []int, []int64, []float64 and []interface{} holding one primitive
+// kind, and all other types OpenTelemetry can't hold,
 // become JSON strings, except values that encode as a JSON string, which become
 // that string. Values that encode as an empty JSON string are skipped.
 func toAttribute(key string, value interface{}) (attribute.KeyValue, bool) {
@@ -182,15 +205,31 @@ func toAttribute(key string, value interface{}) (attribute.KeyValue, bool) {
 		}
 		return attribute.Float64(key, v), true
 	case []string:
+		if v == nil {
+			return attribute.KeyValue{}, false
+		}
 		return attribute.StringSlice(key, v), true
 	case []bool:
+		if v == nil {
+			return attribute.KeyValue{}, false
+		}
 		return attribute.BoolSlice(key, v), true
 	case []int:
+		if v == nil {
+			return attribute.KeyValue{}, false
+		}
 		return attribute.IntSlice(key, v), true
 	case []int64:
+		if v == nil {
+			return attribute.KeyValue{}, false
+		}
 		return attribute.Int64Slice(key, v), true
+	case []interface{}:
+		if kv, ok := homogeneousSliceAttribute(key, v); ok {
+			return kv, true
+		}
 	case []float64:
-		if slices.ContainsFunc(v, func(f float64) bool { return !isFinite(f) }) {
+		if v == nil || slices.ContainsFunc(v, func(f float64) bool { return !isFinite(f) }) {
 			return attribute.KeyValue{}, false
 		}
 		return attribute.Float64Slice(key, v), true
@@ -207,6 +246,76 @@ func toAttribute(key string, value interface{}) (attribute.KeyValue, bool) {
 		return attribute.String(key, plain), true
 	}
 	return attribute.String(key, string(encoded)), true
+}
+
+// homogeneousSliceAttribute converts a slice whose elements are all strings,
+// all bools, all integers or all finite floats into the matching typed slice.
+func homogeneousSliceAttribute(key string, values []interface{}) (attribute.KeyValue, bool) {
+	if len(values) == 0 {
+		return attribute.KeyValue{}, false
+	}
+	switch values[0].(type) {
+	case string:
+		return convertSlice(values, func(v interface{}) (string, bool) { s, ok := v.(string); return s, ok }, attribute.StringSlice, key)
+	case bool:
+		return convertSlice(values, func(v interface{}) (bool, bool) { b, ok := v.(bool); return b, ok }, attribute.BoolSlice, key)
+	case int, int8, int16, int32, int64, uint8, uint16, uint32:
+		return convertSlice(values, integerValue, attribute.Int64Slice, key)
+	case float32, float64:
+		return convertSlice(values, finiteFloatValue, attribute.Float64Slice, key)
+	}
+	return attribute.KeyValue{}, false
+}
+
+func convertSlice[T any](values []interface{}, convert func(interface{}) (T, bool), build func(string, []T) attribute.KeyValue, key string) (attribute.KeyValue, bool) {
+	converted := make([]T, len(values))
+	for i, value := range values {
+		item, ok := convert(value)
+		if !ok {
+			return attribute.KeyValue{}, false
+		}
+		converted[i] = item
+	}
+	return build(key, converted), true
+}
+
+func integerValue(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	}
+	return 0, false
+}
+
+func finiteFloatValue(value interface{}) (float64, bool) {
+	var f float64
+	switch v := value.(type) {
+	case float32:
+		parsed, err := strconv.ParseFloat(strconv.FormatFloat(float64(v), 'g', -1, 32), 64)
+		if err != nil {
+			return 0, false
+		}
+		f = parsed
+	case float64:
+		f = v
+	default:
+		return 0, false
+	}
+	return f, isFinite(f)
 }
 
 func isFinite(f float64) bool {

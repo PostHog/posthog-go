@@ -80,7 +80,7 @@ func TestSpanProcessorExportsRequestContextPerContext(t *testing.T) {
 	}
 	for i, want := range []struct{ user, session, plan string }{{"alice", "s_alice", "pro"}, {"bob", "s_bob", "free"}} {
 		attrs := exported[i].attributes
-		for key, wantValue := range map[string]string{"posthog.distinct_id": want.user, "$ai_session_id": want.session, "plan": want.plan} {
+		for key, wantValue := range map[string]string{"posthog.distinct_id": want.user, "$session_id": want.session, "plan": want.plan} {
 			if got := attrs[key].GetStringValue(); got != wantValue {
 				t.Errorf("span %d %s = %q, want %q", i, key, got, wantValue)
 			}
@@ -111,11 +111,11 @@ func TestSpanProcessorKeepsSpanAttributesOverContext(t *testing.T) {
 		DistinctId: "alice", SessionId: "s_alice",
 	})
 
-	h.emitAISpan(ctx, attribute.String("$ai_session_id", "conv_42"))
+	h.emitAISpan(ctx, attribute.String("$session_id", "s_span"))
 
 	attrs := h.exported()[0].attributes
-	if got := attrs["$ai_session_id"].GetStringValue(); got != "conv_42" {
-		t.Errorf("$ai_session_id = %q, want conv_42", got)
+	if got := attrs["$session_id"].GetStringValue(); got != "s_span" {
+		t.Errorf("$session_id = %q, want s_span", got)
 	}
 	if got := attrs["posthog.distinct_id"].GetStringValue(); got != "alice" {
 		t.Errorf("posthog.distinct_id = %q, want alice", got)
@@ -125,19 +125,77 @@ func TestSpanProcessorKeepsSpanAttributesOverContext(t *testing.T) {
 func TestSpanProcessorLetsPropertiesOverrideContextIDs(t *testing.T) {
 	h := newRequestContextHarness(t)
 	noSession := posthog.WithRequestContext(context.Background(), posthog.RequestContext{
-		Properties: posthog.Properties{"$ai_session_id": "conv_42"},
+		Properties: posthog.Properties{"$session_id": "s_prop"},
 	})
 	withSession := posthog.WithRequestContext(context.Background(), posthog.RequestContext{
-		SessionId: "s_alice", Properties: posthog.Properties{"$ai_session_id": "conv_42"},
+		SessionId: "s_alice", Properties: posthog.Properties{"$session_id": "s_prop"},
 	})
 
 	h.emitAISpan(noSession)
 	h.emitAISpan(withSession)
 
 	for i, span := range h.exported() {
-		if got := span.attributes["$ai_session_id"].GetStringValue(); got != "conv_42" {
-			t.Errorf("span %d $ai_session_id = %q, want conv_42", i, got)
+		if got := span.attributes["$session_id"].GetStringValue(); got != "s_prop" {
+			t.Errorf("span %d $session_id = %q, want s_prop", i, got)
 		}
+	}
+}
+
+func TestSpanProcessorPassesExplicitAISessionIDPropertyThrough(t *testing.T) {
+	h := newRequestContextHarness(t)
+	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{
+		SessionId: "s_alice", Properties: posthog.Properties{"$ai_session_id": "conv_42"},
+	})
+
+	h.emitAISpan(ctx)
+
+	attrs := h.exported()[0].attributes
+	if got := attrs["$ai_session_id"].GetStringValue(); got != "conv_42" {
+		t.Errorf("$ai_session_id = %q, want conv_42", got)
+	}
+	if got := attrs["$session_id"].GetStringValue(); got != "s_alice" {
+		t.Errorf("$session_id = %q, want s_alice", got)
+	}
+}
+
+func TestSpanProcessorDoesNotDeriveAISessionIDFromContext(t *testing.T) {
+	h := newRequestContextHarness(t)
+	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{SessionId: "s_alice"})
+
+	h.emitAISpan(ctx)
+
+	if _, present := h.exported()[0].attributes["$ai_session_id"]; present {
+		t.Error("$ai_session_id should not be derived from the context session")
+	}
+}
+
+func TestSpanProcessorSkipsContextDistinctIDWhenSpanHasIdentity(t *testing.T) {
+	for _, key := range []string{
+		"posthog.distinct_id",
+		"user.id",
+		"ai.telemetry.metadata.posthog_distinct_id",
+		"ai.settings.context.posthog_distinct_id",
+	} {
+		t.Run(key, func(t *testing.T) {
+			h := newRequestContextHarness(t)
+			ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{
+				DistinctId: "alice", SessionId: "s_alice",
+			})
+
+			h.emitAISpan(ctx, attribute.String(key, "bob"))
+
+			attrs := h.exported()[0].attributes
+			if key != "posthog.distinct_id" {
+				if _, present := attrs["posthog.distinct_id"]; present {
+					t.Errorf("posthog.distinct_id = %q, want none next to %s", attrs["posthog.distinct_id"].GetStringValue(), key)
+				}
+			} else if got := attrs[key].GetStringValue(); got != "bob" {
+				t.Errorf("%s = %q, want bob", key, got)
+			}
+			if got := attrs["$session_id"].GetStringValue(); got != "s_alice" {
+				t.Errorf("$session_id = %q, want s_alice", got)
+			}
+		})
 	}
 }
 
@@ -370,5 +428,103 @@ func TestSpanProcessorKeepsSpanAttributeWhenPropertyHasAnotherType(t *testing.T)
 
 	if got := h.exported()[0].attributes["seats"].GetIntValue(); got != 3 {
 		t.Errorf("seats = %v, want span's int 3", h.exported()[0].attributes["seats"])
+	}
+}
+
+func TestSpanProcessorIgnoresContextsCapturedAfterShutdown(t *testing.T) {
+	h := newRequestContextHarness(t)
+	if err := h.processor.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{DistinctId: "alice"})
+
+	h.provider.Tracer("test").Start(ctx, "gen_ai.chat")
+	h.processor.OnStart(ctx, tracetestLiveSpan(t))
+
+	if h.capturedCount() != 0 {
+		t.Errorf("captured entries after shutdown = %d, want 0", h.capturedCount())
+	}
+}
+
+func tracetestLiveSpan(t *testing.T) sdktrace.ReadWriteSpan {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	provider.Tracer("test").Start(context.Background(), "gen_ai.chat")
+	return recorder.Started()[0].(sdktrace.ReadWriteSpan)
+}
+
+func TestToAttributeSkipsTypedNilSlicesAndKeepsEmptyOnes(t *testing.T) {
+	skipped := map[string]interface{}{
+		"strings": []string(nil),
+		"bools":   []bool(nil),
+		"ints":    []int(nil),
+		"int64s":  []int64(nil),
+		"floats":  []float64(nil),
+		"any":     []interface{}(nil),
+	}
+	for name, value := range skipped {
+		if kv, ok := toAttribute(name, value); ok {
+			t.Errorf("%s: got %v, want skipped", name, kv)
+		}
+	}
+	kept := map[string]interface{}{
+		"strings": []string{},
+		"bools":   []bool{},
+		"ints":    []int{},
+		"int64s":  []int64{},
+		"floats":  []float64{},
+	}
+	for name, value := range kept {
+		if _, ok := toAttribute(name, value); !ok {
+			t.Errorf("%s: empty slice skipped, want kept", name)
+		}
+	}
+}
+
+func TestToAttributeConvertsHomogeneousInterfaceSlices(t *testing.T) {
+	tests := []struct {
+		name  string
+		value []interface{}
+		want  attribute.Value
+	}{
+		{"strings", []interface{}{"a", "b"}, attribute.StringSliceValue([]string{"a", "b"})},
+		{"bools", []interface{}{true, false}, attribute.BoolSliceValue([]bool{true, false})},
+		{"ints", []interface{}{1, int32(2), int64(3)}, attribute.Int64SliceValue([]int64{1, 2, 3})},
+		{"floats", []interface{}{1.5, float32(2.5)}, attribute.Float64SliceValue([]float64{1.5, 2.5})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kv, ok := toAttribute("k", tt.value)
+			if !ok || kv.Value != tt.want {
+				t.Errorf("got %v (ok=%v), want %v", kv.Value, ok, tt.want)
+			}
+		})
+	}
+}
+
+func TestToAttributeEncodesOtherInterfaceSlicesAsJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		value []interface{}
+		want  string
+	}{
+		{"mixed kinds", []interface{}{"a", 1}, `["a",1]`},
+		{"ints and floats", []interface{}{1, 2.5}, `[1,2.5]`},
+		{"nested", []interface{}{map[string]interface{}{"a": 1}}, `[{"a":1}]`},
+		{"with nil", []interface{}{"a", nil}, `["a",null]`},
+		{"empty", []interface{}{}, `[]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kv, ok := toAttribute("k", tt.value)
+			if !ok || kv.Value.Type() != attribute.STRING || kv.Value.AsString() != tt.want {
+				t.Errorf("got %v (ok=%v), want JSON %s", kv.Value, ok, tt.want)
+			}
+		})
+	}
+	if _, ok := toAttribute("k", []interface{}{1.5, math.NaN()}); ok {
+		t.Error("slice with a non-finite float should be skipped")
 	}
 }
