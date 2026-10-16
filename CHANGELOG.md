@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.35.1
+
+### Patch Changes
+
+- 88d8397: Allow local feature flag evaluation and definition refreshes from an external cache provider without a secret key, with cache-only readers skipping fetch coordination.
+
 ## 1.35.0
 
 ### Minor Changes
