@@ -148,3 +148,57 @@ func TestEnqueueWithContextDelegates(t *testing.T) {
 		t.Fatal("nil client must return an error")
 	}
 }
+
+func TestEnqueueWithContextRequestTraceOverridesForEnqueueClient(t *testing.T) {
+	span := trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{15: 3}, SpanID: trace.SpanID{7: 4}})
+	tests := []struct {
+		name              string
+		eventProperties   posthog.Properties
+		requestProperties posthog.Properties
+		wantProperties    posthog.Properties
+	}{
+		{name: "request trace", requestProperties: posthog.Properties{"$trace_id": "request-trace"}, wantProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "0000000000000004"}},
+		{name: "request span", requestProperties: posthog.Properties{"$span_id": "request-span"}, wantProperties: posthog.Properties{"$trace_id": "00000000000000000000000000000003", "$span_id": "request-span"}},
+		{name: "event trace wins", eventProperties: posthog.Properties{"$trace_id": "event-trace"}, requestProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "request-span"}, wantProperties: posthog.Properties{"$trace_id": "event-trace", "$span_id": "request-span"}},
+		{name: "event span wins", eventProperties: posthog.Properties{"$span_id": "event-span"}, requestProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "request-span"}, wantProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "event-span"}},
+		{name: "empty request values", requestProperties: posthog.Properties{"$trace_id": "", "$span_id": nil}, wantProperties: posthog.Properties{"$trace_id": "", "$span_id": nil}},
+		{name: "empty event values", eventProperties: posthog.Properties{"$trace_id": "", "$span_id": nil}, requestProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "request-span"}, wantProperties: posthog.Properties{"$trace_id": "", "$span_id": nil}},
+	}
+	for _, tt := range tests {
+		for _, pointer := range []bool{false, true} {
+			name := tt.name + "/value"
+			if pointer {
+				name = tt.name + "/pointer"
+			}
+			t.Run(name, func(t *testing.T) {
+				requestProperties := posthog.Properties{"request-only": "excluded"}
+				for key, value := range tt.requestProperties {
+					requestProperties[key] = value
+				}
+				ctx := posthog.WithRequestContext(context.Background(), posthog.RequestContext{Properties: requestProperties})
+				ctx = trace.ContextWithSpanContext(ctx, span)
+				exception := posthog.Exception{Properties: tt.eventProperties}
+				var msg posthog.Message = exception
+				if pointer {
+					msg = &exception
+				}
+				client := &enqueueRecorder{}
+				if err := EnqueueWithContext(ctx, client, msg); err != nil {
+					t.Fatal(err)
+				}
+				var got posthog.Properties
+				switch captured := client.message.(type) {
+				case posthog.Exception:
+					got = captured.Properties
+				case *posthog.Exception:
+					got = captured.Properties
+				default:
+					t.Fatalf("unexpected message: %T", client.message)
+				}
+				if !reflect.DeepEqual(got, tt.wantProperties) {
+					t.Fatalf("properties = %#v, want %#v", got, tt.wantProperties)
+				}
+			})
+		}
+	}
+}

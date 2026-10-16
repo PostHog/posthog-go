@@ -32,8 +32,8 @@ func exceptionTraceProperties(ctx context.Context, properties posthog.Properties
 	}
 	requestContext, _ := posthog.RequestContextFromContext(ctx)
 	for key := range derived {
-		if _, exists := requestContext.Properties[key]; exists {
-			delete(derived, key)
+		if value, exists := requestContext.Properties[key]; exists {
+			derived[key] = value
 		}
 	}
 	for key, value := range properties {
