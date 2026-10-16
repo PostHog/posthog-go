@@ -572,6 +572,12 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 		return
 	}
 
+	// Cache-only readers must not claim fetch leadership they cannot use.
+	if poller.personalApiKey == "" {
+		poller.loadFlagDefinitionsFromCache()
+		return
+	}
+
 	shouldFetch, err := poller.cacheProvider.ShouldFetchFlagDefinitions(poller.ctx)
 	if poller.shuttingDown() {
 		return
@@ -728,6 +734,10 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 	}
 
 	personalApiKey := poller.personalApiKey
+	if personalApiKey == "" {
+		poller.Logger.Warnf("PostHog secret key is not configured; fetching feature flag definitions requires a SecretKey.")
+		return
+	}
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
 
 	// Read current ETag from state (lock-free)
