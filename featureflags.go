@@ -41,6 +41,7 @@ var (
 	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
 	errAmbiguousExactNumber     = &InconclusiveMatchError{"Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float"}
 	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+	errHoldoutMissingDeviceID   = &InconclusiveMatchError{msg: "Can't evaluate a device-bucketed holdout without a device id"}
 	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
 )
 
@@ -1184,8 +1185,12 @@ func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
 	return true
 }
 
+func isDeviceBucketed(flag FeatureFlag) bool {
+	return flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice
+}
+
 func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) string {
-	if flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice && deviceId != nil {
+	if isDeviceBucketed(flag) && deviceId != nil {
 		return *deviceId
 	}
 	return distinctId
@@ -1221,14 +1226,17 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 ) (interface{}, error) {
 	state := poller.evaluationState(snapshots)
 	conditions := flag.Filters.Groups
-	bucketingId := getBucketingID(flag, distinctId, deviceId)
-
 	// Holdouts precede release conditions: a held-out identifier is excluded from
 	// the flag's targeting entirely rather than bucketed into one of its variants.
 	// Per-condition aggregation below never changes holdout membership.
-	if holdoutVariant, held := getHoldoutVariant(flag, bucketingId); held {
+	holdoutVariant, held, err := getHoldoutVariant(flag, distinctId, deviceId)
+	if err != nil {
+		return nil, err
+	}
+	if held {
 		return holdoutVariant, nil
 	}
+	bucketingId := getBucketingID(flag, distinctId, deviceId)
 
 	flagAggregation := flag.Filters.AggregationGroupTypeIndex
 	groupTypeMapping := state.groups
@@ -2436,30 +2444,35 @@ func holdoutHash(bucketingValue string) float64 {
 	return calculateHashWithSeparator("holdout", "-", bucketingValue, "")
 }
 
-// getHoldoutVariant returns the synthetic "holdout-<id>" variant for a bucketing
-// value, or false when the flag has no usable holdout or the value falls outside
-// it. A holdout missing either required field is skipped, leaving ordinary
-// evaluation unchanged.
-func getHoldoutVariant(flag FeatureFlag, bucketingValue string) (string, bool) {
+// getHoldoutVariant returns the synthetic "holdout-<id>" variant when the flag
+// has a usable holdout and the identity falls inside it. The server clamps
+// out-of-range percentages rather than rejecting them, and treats 100 as
+// everyone without hashing, so a full holdout cannot miss on a hash boundary.
+//
+// A partial holdout on a device-bucketed person flag needs the device id;
+// hashing the distinct id instead would put an unrelated identity in the
+// holdout, so the evaluation stays inconclusive. Group flags ignore the
+// bucketing identifier and hash the group key.
+func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (variant string, held bool, err error) {
 	holdout := flag.Filters.Holdout
 	if holdout == nil || holdout.ID == nil || holdout.ExclusionPercentage == nil {
-		return "", false
+		return "", false, nil
 	}
-
 	holdoutID, ok := holdoutIDToString(holdout.ID)
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
 
-	// The server clamps out-of-range percentages rather than rejecting them, and
-	// treats 100 as everyone without hashing, so a full holdout cannot miss on a
-	// hash boundary.
 	percentage := math.Min(math.Max(*holdout.ExclusionPercentage, 0), 100)
-	if percentage != 100 && holdoutHash(bucketingValue) > percentage/100 {
-		return "", false
+	if percentage != 100 {
+		if flag.Filters.AggregationGroupTypeIndex == nil && isDeviceBucketed(flag) && (deviceId == nil || *deviceId == "") {
+			return "", false, errHoldoutMissingDeviceID
+		}
+		if holdoutHash(getBucketingID(flag, distinctId, deviceId)) > percentage/100 {
+			return "", false, nil
+		}
 	}
-
-	return "holdout-" + holdoutID, true
+	return "holdout-" + holdoutID, true, nil
 }
 
 // holdoutIDToString renders a holdout id for the synthetic variant key. The API

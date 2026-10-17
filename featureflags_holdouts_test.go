@@ -159,6 +159,61 @@ func TestHoldoutUsesDeviceIdentityForDeviceBucketedFlags(t *testing.T) {
 	require.Equal(t, "holdout-727", value)
 }
 
+func deviceBucketedHoldoutFlag(holdout *Holdout) FeatureFlag {
+	flag := holdoutFlag(holdout)
+	flag.BucketingIdentifier = stringPtr(bucketingIdentifierDevice)
+	return flag
+}
+
+func TestHoldoutMissingDeviceIsInconclusive(t *testing.T) {
+	poller := &FeatureFlagsPoller{}
+	flag := deviceBucketedHoldoutFlag(&Holdout{ID: float64(727), ExclusionPercentage: floatPtr(20)})
+	flag.Filters.Groups[0].Properties = []FlagProperty{{
+		Key: "region", Type: "person", Operator: "exact", Value: "USA",
+	}}
+
+	// "user-1" is held out by its distinct id; that must not substitute for a missing device id.
+	for name, deviceId := range map[string]*string{"nil": nil, "empty": stringPtr("")} {
+		t.Run(name, func(t *testing.T) {
+			value, err := poller.computeFlagLocally(flag, "user-1", deviceId, nil, nil, nil, nil)
+			var inconclusive *InconclusiveMatchError
+			require.ErrorAs(t, err, &inconclusive)
+			require.Nil(t, value)
+		})
+	}
+}
+
+func TestHoldoutMissingDeviceStillEvaluatesWhenNoIdentityNeeded(t *testing.T) {
+	poller := &FeatureFlagsPoller{}
+	for name, tc := range map[string]struct {
+		holdout *Holdout
+		want    interface{}
+	}{
+		"full holdout holds everyone out without hashing": {&Holdout{ID: float64(727), ExclusionPercentage: floatPtr(100)}, "holdout-727"},
+		"incomplete holdout is skipped":                   {&Holdout{ID: float64(727)}, "control"},
+		"no holdout keeps ordinary distinct id fallback":  {nil, "control"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, evaluateLocally(t, poller, deviceBucketedHoldoutFlag(tc.holdout), "user-1"))
+		})
+	}
+
+	t.Run("group bucketing ignores the device id", func(t *testing.T) {
+		groupTypeIndex := uint8(0)
+		flag := deviceBucketedHoldoutFlag(&Holdout{ID: float64(727), ExclusionPercentage: floatPtr(20)})
+		flag.Filters.AggregationGroupTypeIndex = &groupTypeIndex
+		state := &flagsState{
+			flagsByKey: map[string]FeatureFlag{flag.Key: flag},
+			groups:     map[string]string{"0": "organization"},
+		}
+		value, err := poller.computeFlagLocally(
+			flag, "user-5", nil, Groups{"organization": "user-1"}, nil, nil, nil, state,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "holdout-727", value)
+	})
+}
+
 func TestHoldoutValueIsVisibleToDependentFlags(t *testing.T) {
 	poller := &FeatureFlagsPoller{}
 	checkout := holdoutFlag(&Holdout{ID: float64(727), ExclusionPercentage: floatPtr(100)})
@@ -223,7 +278,8 @@ func TestHoldoutIDRendering(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			flag := holdoutFlag(&Holdout{ID: id, ExclusionPercentage: floatPtr(100)})
-			variant, held := getHoldoutVariant(flag, "user-1")
+			variant, held, err := getHoldoutVariant(flag, "user-1", nil)
+			require.NoError(t, err)
 			require.True(t, held)
 			require.Equal(t, "holdout-727", variant)
 		})
