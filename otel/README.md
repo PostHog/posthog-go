@@ -68,3 +68,17 @@ variable, not as span attributes. This bridge forwards spans only, so prompt and
 response fields stay empty for ADK Go generations.
 
 See [`example/`](example) for a runnable program.
+
+## General application spans
+
+Register `NewContextSpanProcessor()` on your existing OpenTelemetry tracer provider to add `sessionId` and `posthogDistinctId` to application spans. Place it before processors that read attributes in `OnStart`. Keep your existing exporter and sampler.
+
+Use `posthogotel.NewRequestContextMiddleware(handler, options...)` for HTTP requests. This wrapper uses the core SDK's header extraction and options. Place it inside the OpenTelemetry HTTP middleware so the request span already exists. It also works outside the OpenTelemetry middleware, because the processor reads context when that middleware starts the span. Pass `r.Context()` when you start child spans.
+
+The bridge adds only missing IDs and preserves explicit span attributes. It does not create IDs or export spans. Register your normal application exporter to send general traces to PostHog. The AI `SpanProcessor` and `Exporter` above keep their separate AI-only behavior.
+
+The HTTP wrapper stops new spans from using the request IDs after the handler returns or panics. Spans already started keep their IDs when they end later. Detached work that needs its own IDs must use a fresh context, such as `context.Background()` with `posthog.WithFreshRequestContext`. A context derived from an ended request remains expired.
+
+For manual operations, `posthog.WithRequestContext` supplies IDs to the processor. The processor cannot determine when a manual operation ends. Use a new context for each operation and do not reuse its context for unrelated work.
+
+OpenTelemetry remains optional through this separate module. This bridge adds no OpenTelemetry dependency to the core SDK. Non-recording spans and spans without readable public attributes receive no changes. Span attribute limits can omit new IDs while preserving existing attributes.
