@@ -13,7 +13,7 @@ import (
 
 // ContextSpanProcessor adds PostHog IDs to spans from the application's provider.
 // Register it before processors that consume attributes in OnStart. It does not export spans.
-type ContextSpanProcessor struct{}
+type ContextSpanProcessor struct{ shutdown atomic.Bool }
 
 var _ sdktrace.SpanProcessor = (*ContextSpanProcessor)(nil)
 
@@ -21,12 +21,17 @@ var _ sdktrace.SpanProcessor = (*ContextSpanProcessor)(nil)
 // It does not require an API key or change the application's tracing configuration.
 func NewContextSpanProcessor() *ContextSpanProcessor { return &ContextSpanProcessor{} }
 
-func (*ContextSpanProcessor) OnStart(ctx context.Context, span sdktrace.ReadWriteSpan) {
-	enrichContextSpan(ctx, span)
+func (p *ContextSpanProcessor) OnStart(ctx context.Context, span sdktrace.ReadWriteSpan) {
+	if !p.shutdown.Load() {
+		enrichContextSpan(ctx, span)
+	}
 }
 
-func (*ContextSpanProcessor) OnEnd(sdktrace.ReadOnlySpan)      {}
-func (*ContextSpanProcessor) Shutdown(context.Context) error   { return nil }
+func (*ContextSpanProcessor) OnEnd(sdktrace.ReadOnlySpan) {}
+func (p *ContextSpanProcessor) Shutdown(context.Context) error {
+	p.shutdown.Store(true)
+	return nil
+}
 func (*ContextSpanProcessor) ForceFlush(context.Context) error { return nil }
 
 type contextSpanRequestKey struct{}

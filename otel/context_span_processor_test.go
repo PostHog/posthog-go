@@ -223,3 +223,31 @@ func TestContextHTTPMiddlewareKeepsUnreadableSpan(t *testing.T) {
 	span.End()
 	assertContextAttributes(t, recorder.Ended()[0], map[string]string{"sessionId": "application-session"})
 }
+
+func TestContextSpanProcessorShutdown(t *testing.T) {
+	for _, calls := range []int{1, 2} {
+		t.Run(fmt.Sprintf("shutdownCalls=%d", calls), func(t *testing.T) {
+			processor := NewContextSpanProcessor()
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor), sdktrace.WithSpanProcessor(recorder))
+			defer provider.Shutdown(context.Background())
+			ctx := posthog.WithFreshRequestContext(context.Background(), posthog.RequestContext{DistinctId: "user", SessionId: "session"})
+			tracer := provider.Tracer("test")
+			_, before := tracer.Start(ctx, "before")
+			for range calls {
+				if err := processor.Shutdown(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, after := tracer.Start(ctx, "after")
+			after.End()
+			before.End()
+			spans := recorder.Ended()
+			if len(spans) != 2 {
+				t.Fatalf("recorded spans=%d, want 2", len(spans))
+			}
+			assertContextAttributes(t, spans[0], map[string]string{})
+			assertContextAttributes(t, spans[1], map[string]string{"posthogDistinctId": "user", "sessionId": "session"})
+		})
+	}
+}
