@@ -1514,7 +1514,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1524,7 +1524,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		valueParsed, err := parseSemver(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not a valid semver", valueStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not a valid semver", valueStr)}
 		}
 
 		cmp := overrideParsed.compareTo(valueParsed)
@@ -1553,7 +1553,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1563,7 +1563,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		lower, upper, err := computeTildeBounds(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not valid for tilde operator", valueStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for tilde operator", valueStr)}
 		}
 
 		// Check: lower <= override < upper
@@ -1578,7 +1578,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1588,7 +1588,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		lower, upper, err := computeCaretBounds(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not valid for caret operator", valueStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for caret operator", valueStr)}
 		}
 
 		// Check: lower <= override < upper
@@ -1603,7 +1603,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value '%s' is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
 		}
 
 		valueStr, ok := value.(string)
@@ -1613,7 +1613,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		lower, upper, err := computeWildcardBounds(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value '%s' is not valid for wildcard operator", valueStr)}
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for wildcard operator", valueStr)}
 		}
 
 		// Check: lower <= override < upper

@@ -2,6 +2,7 @@ package posthogmcpsdk
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,6 +29,13 @@ type PropertiesResolver func(
 	error,
 ) (posthog.Properties, error)
 
+// IntentFallback infers the intent of a tool call whose agent did not state
+// one. An empty result means no intent. It receives the request as the client
+// sent it, including any analytics arguments the agent filled in, and the
+// request's context. Calls run concurrently, so it must be safe for concurrent
+// use.
+type IntentFallback func(context.Context, *mcpsdk.CallToolRequest) (string, error)
+
 // ErrorHandler receives instrumentation failures. Its errors and panics never
 // alter the MCP response.
 type ErrorHandler func(context.Context, error)
@@ -36,16 +44,20 @@ type ErrorHandler func(context.Context, error)
 type Option func(*config)
 
 type config struct {
-	analytics         *posthogmcp.Analytics
-	identity          IdentityResolver
-	properties        PropertiesResolver
-	errorHandler      ErrorHandler
-	captureParameters bool
-	captureResponses  bool
-	contextParameter  bool
-	serverName        string
-	serverVersion     string
-	now               func() time.Time
+	analytics             *posthogmcp.Analytics
+	identity              IdentityResolver
+	properties            PropertiesResolver
+	errorHandler          ErrorHandler
+	intentFallback        IntentFallback
+	captureParameters     bool
+	captureResponses      bool
+	contextParameter      bool
+	captureModel          bool
+	conversationID        bool
+	missingCapabilityTool string
+	serverName            string
+	serverVersion         string
+	now                   func() time.Time
 }
 
 func defaultConfig(analytics *posthogmcp.Analytics) *config {
@@ -54,6 +66,8 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 		captureParameters: true,
 		captureResponses:  true,
 		contextParameter:  true,
+		captureModel:      true,
+		conversationID:    true,
 		now:               time.Now,
 	}
 }
@@ -85,6 +99,77 @@ func WithCaptureResponses(enabled bool) Option {
 // It is enabled by default.
 func WithContextParameter(enabled bool) Option {
 	return func(cfg *config) { cfg.contextParameter = enabled }
+}
+
+// WithIntentFallback supplies the intent of a tool call whose agent sent no
+// context, captured with $mcp_intent_source "inferred". The agent's own context
+// always wins, and the fallback is not called then. The adapter infers nothing
+// itself, so everything the fallback does, including any model call, happens
+// on the tool call's response path. An error or panic is reported to the
+// ErrorHandler and the call has no intent. The result is redacted and bounded
+// like the agent's context.
+func WithIntentFallback(fallback IntentFallback) Option {
+	return func(cfg *config) { cfg.intentFallback = fallback }
+}
+
+// WithCaptureModel controls capture of the model that made each call. The
+// model comes from the client's own request metadata when it names one, else
+// from an llm_model argument the agent fills in, advertised as required and
+// removed before the tool's handler and input validation see the call, like
+// context. Tools that declare their own llm_model argument keep it, and its
+// value is not read as the model. It is enabled by default.
+func WithCaptureModel(enabled bool) Option {
+	return func(cfg *config) { cfg.captureModel = enabled }
+}
+
+// WithConversationID controls conversation anchoring, which keeps the calls
+// of one agent conversation in one $session_id where the transport carries no
+// session, as on stateless HTTP. Tools are advertised with an optional
+// conversation_id argument. A call that arrives with neither a transport
+// session nor a valid handle gets a new UUIDv7 handle, appended to its result
+// as a {"conversation_id": ...} text block, and the agent echoes it on later
+// calls. A valid handle sets $mcp_conversation_id and the $session_id derived
+// from it, also over a transport session. The handle is mirrored into
+// structuredContent under _mcp_instructions for tools whose output schema can
+// declare it. The argument is removed before the tool's handler and input
+// validation see the call, and tools that declare their own conversation_id
+// keep it. It is enabled by default.
+func WithConversationID(enabled bool) Option {
+	return func(cfg *config) { cfg.conversationID = enabled }
+}
+
+// WithMissingCapabilityTool advertises a virtual tool, named name (trimmed) or
+// "get_more_tools" when name is blank, that agents call to report a capability
+// the server lacks. The report is the tool's required context argument,
+// captured as $mcp_intent on a $mcp_missing_capability event, which is not a
+// $mcp_tool_call. The call passes through the middleware installed inside
+// Instrument, and the middleware answers it itself, so the server's
+// handlers never see it. The tool also gets the llm_model and conversation_id
+// arguments the configuration enables. It is not advertised, and its name is
+// the server's, when the server registers a tool of that name. It is off by
+// default.
+func WithMissingCapabilityTool(name string) Option {
+	return func(cfg *config) {
+		cfg.missingCapabilityTool = strings.TrimSpace(name)
+		if cfg.missingCapabilityTool == "" {
+			cfg.missingCapabilityTool = defaultMissingCapabilityTool
+		}
+	}
+}
+
+// injectedArguments are the analytics arguments the configuration advertises.
+func (cfg *config) injectedArguments() []analyticsArgument {
+	var arguments []analyticsArgument
+	if cfg.contextParameter {
+		arguments = append(arguments, contextParameter)
+	}
+	if cfg.captureModel {
+		arguments = append(arguments, modelParameter)
+	}
+	if cfg.conversationID {
+		arguments = append(arguments, conversationParameter)
+	}
+	return arguments
 }
 
 // WithProperties configures application-specific event properties.

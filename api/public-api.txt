@@ -996,10 +996,14 @@ package posthogmcp // import "github.com/posthog/posthog-go/v2/posthogmcp"
 Package posthogmcp builds and enqueues canonical PostHog analytics events for
 Model Context Protocol activity without depending on a particular MCP framework.
 
-Applications own the PostHog client lifecycle and pass completed tool calls to
-Analytics. Tool parameters, responses, intent, and error messages are sanitized
-and bounded before they are queued. Parameter or response JSON exceeding 1 MiB
-after media redaction is replaced with an omission marker.
+Applications own the PostHog client lifecycle and pass completed tool
+calls to Analytics. Tool parameters, responses, intent, and error messages
+are sanitized and bounded before they are queued. A call that names an
+unregistered tool, an input_required round the client receives, and a report
+of a missing capability, are not tool calls: Analytics.CaptureUnknownTool,
+Analytics.CaptureInputRequired, and Analytics.CaptureMissingCapability send
+their own events. Parameter or response JSON exceeding 1 MiB after media
+redaction is replaced with an omission marker.
 
 TYPES
 
@@ -1008,8 +1012,40 @@ type Analytics struct {
 
 func New(client posthog.EnqueueClient, opts ...Option) *Analytics
 
+func (a *Analytics) CaptureInputRequired(ctx context.Context, event InputRequired) error
+
+func (a *Analytics) CaptureMissingCapability(ctx context.Context, event MissingCapability) error
+
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error
 
+
+func (a *Analytics) CaptureUnknownTool(ctx context.Context, event UnknownTool) error
+
+type EventContext struct {
+	DistinctID string
+	SessionID string
+	Groups posthog.Groups
+	SetProperties posthog.Properties
+
+	ServerName      string
+	ServerVersion   string
+	ClientName      string
+	ClientVersion   string
+	ProtocolVersion string
+	ConversationID  string
+	ClientUserAgent string
+	VendorClient    string
+
+	Properties posthog.Properties
+	Timestamp time.Time
+}
+
+type InputRequired struct {
+	EventContext
+	ToolName string
+	Duration time.Duration
+	Methods []string
+}
 
 type IntentSource string
 
@@ -1017,6 +1053,14 @@ const (
 	IntentSourceContextParameter IntentSource = "context_parameter"
 	IntentSourceInferred IntentSource = "inferred"
 )
+type MissingCapability struct {
+	EventContext
+	ToolName string
+	Intent string
+	LLMModel string
+	LLMModelSource ModelSource
+}
+
 type ModelSource string
 
 const (
@@ -1062,6 +1106,11 @@ type ToolCall struct {
 
 	Properties posthog.Properties
 	Timestamp time.Time
+}
+
+type UnknownTool struct {
+	EventContext
+	ToolName string
 }
 
 
