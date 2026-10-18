@@ -1442,6 +1442,9 @@ func (c *client) featureFlagEvaluationsHostWithContext(ctx context.Context) feat
 	}
 }
 
+// IsEnabled reports whether the client can still send data. It returns false after Close.
+func (c *client) IsEnabled() bool { return !c.closed.Load() }
+
 // Close gracefully shuts down the client, flushing any pending messages.
 // If ShutdownTimeout is set to a positive duration, Close waits up to that
 // duration for in-flight requests to complete. Otherwise, it waits indefinitely.

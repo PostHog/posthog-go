@@ -71,9 +71,9 @@ See [`example/`](example) for a runnable program.
 
 ## General application spans
 
-Register `NewContextSpanProcessor()` on your existing OpenTelemetry tracer provider to add `sessionId` and `posthogDistinctId` to application spans. Place it before processors that read attributes in `OnStart`. Keep your existing exporter and sampler.
+Register `NewContextSpanProcessor(client)` on your existing OpenTelemetry tracer provider to add `sessionId` and `posthogDistinctId` to application spans. A nil, disabled (empty API key), or closed client adds no IDs; a custom `posthog.Client` wrapper counts as enabled unless it implements `IsEnabled() bool`. Place it before processors that read attributes in `OnStart`. Keep your existing exporter and sampler.
 
-Use `posthogotel.NewRequestContextMiddleware(handler, options...)` for HTTP requests. This wrapper uses the core SDK's header extraction and options. Place it inside the OpenTelemetry HTTP middleware so the request span already exists. It also works outside the OpenTelemetry middleware, because the processor reads context when that middleware starts the span. Pass `r.Context()` when you start child spans.
+Use `posthogotel.NewRequestContextMiddleware(client, handler, options...)` for HTTP requests. This wrapper uses the core SDK's header extraction and options. Place it inside the OpenTelemetry HTTP middleware so the request span already exists. It also works outside the OpenTelemetry middleware, because the processor reads context when that middleware starts the span. Pass `r.Context()` when you start child spans.
 
 The bridge adds only missing IDs and preserves explicit span attributes. It does not create IDs or export spans. Register your normal application exporter to send general traces to PostHog. The AI `SpanProcessor` and `Exporter` above keep their separate AI-only behavior.
 

@@ -34,7 +34,7 @@ func TestContextSpanProcessor(t *testing.T) {
 			recorder := tracetest.NewSpanRecorder()
 			limits := sdktrace.NewSpanLimits()
 			limits.AttributeCountLimit = tc.limit
-			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor()), sdktrace.WithSpanProcessor(recorder), sdktrace.WithRawSpanLimits(limits))
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor(newEnabledClient(t))), sdktrace.WithSpanProcessor(recorder), sdktrace.WithRawSpanLimits(limits))
 			defer provider.Shutdown(context.Background())
 			ctx := posthog.WithFreshRequestContext(context.Background(), tc.request)
 			_, span := provider.Tracer("test").Start(ctx, "operation", trace.WithAttributes(tc.own...))
@@ -48,7 +48,7 @@ func TestContextHTTPMiddleware(t *testing.T) {
 	for _, panics := range []bool{false, true} {
 		t.Run(fmt.Sprintf("panic=%t", panics), func(t *testing.T) {
 			recorder := tracetest.NewSpanRecorder()
-			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor()), sdktrace.WithSpanProcessor(recorder))
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor(newEnabledClient(t))), sdktrace.WithSpanProcessor(recorder))
 			defer provider.Shutdown(context.Background())
 			tracer := provider.Tracer("test")
 			ctx, incoming := tracer.Start(context.Background(), "incoming")
@@ -62,7 +62,7 @@ func TestContextHTTPMiddleware(t *testing.T) {
 				}
 				w.WriteHeader(http.StatusAccepted)
 			})
-			handler := NewRequestContextMiddleware(next)
+			handler := NewRequestContextMiddleware(newEnabledClient(t), next)
 			request := httptest.NewRequest(http.MethodGet, "https://example.com/", nil).WithContext(ctx)
 			request.Header.Set(posthog.HeaderPostHogDistinctID, "user")
 			request.Header.Set(posthog.HeaderPostHogSessionID, "session")
@@ -115,13 +115,13 @@ func TestContextHTTPMiddlewareOptions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := tracetest.NewSpanRecorder()
-			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor()), sdktrace.WithSpanProcessor(recorder))
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor(newEnabledClient(t))), sdktrace.WithSpanProcessor(recorder))
 			defer provider.Shutdown(context.Background())
 			ctx, incoming := provider.Tracer("test").Start(context.Background(), "incoming")
 			request := httptest.NewRequest(http.MethodGet, "https://example.com/", nil).WithContext(ctx)
 			request.Header.Set(posthog.HeaderPostHogDistinctID, tc.distinctID)
 			request.Header.Set(posthog.HeaderPostHogSessionID, tc.sessionID)
-			NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), posthog.WithCaptureTracingHeaders(!tc.disabled)).ServeHTTP(httptest.NewRecorder(), request)
+			NewRequestContextMiddleware(newEnabledClient(t), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), posthog.WithCaptureTracingHeaders(!tc.disabled)).ServeHTTP(httptest.NewRecorder(), request)
 			incoming.End()
 			assertContextAttributes(t, recorder.Ended()[0], tc.want)
 		})
@@ -130,12 +130,12 @@ func TestContextHTTPMiddlewareOptions(t *testing.T) {
 
 func TestContextHTTPMiddlewareConcurrentRequests(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor()), sdktrace.WithSpanProcessor(recorder))
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor(newEnabledClient(t))), sdktrace.WithSpanProcessor(recorder))
 	defer provider.Shutdown(context.Background())
 	tracer := provider.Tracer("test")
 	ready := make(chan struct{}, 2)
 	release := make(chan struct{})
-	handler := NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewRequestContextMiddleware(newEnabledClient(t), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ready <- struct{}{}
 		<-release
 		_, span := tracer.Start(r.Context(), r.Header.Get(posthog.HeaderPostHogDistinctID))
@@ -186,7 +186,7 @@ func TestContextHTTPMiddlewareWithoutRecording(t *testing.T) {
 		t.Run(fmt.Sprintf("sampledOut=%t", sampledOut), func(t *testing.T) {
 			ctx := context.Background()
 			if sampledOut {
-				provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()), sdktrace.WithSpanProcessor(NewContextSpanProcessor()))
+				provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()), sdktrace.WithSpanProcessor(NewContextSpanProcessor(newEnabledClient(t))))
 				defer provider.Shutdown(context.Background())
 				var span trace.Span
 				ctx, span = provider.Tracer("test").Start(ctx, "unsampled")
@@ -195,7 +195,7 @@ func TestContextHTTPMiddlewareWithoutRecording(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "https://example.com/", nil).WithContext(ctx)
 			request.Header.Set(posthog.HeaderPostHogSessionID, "session")
 			response := httptest.NewRecorder()
-			NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			NewRequestContextMiddleware(newEnabledClient(t), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				metadata, ok := posthog.RequestContextFromContext(r.Context())
 				if !ok || metadata.SessionId != "session" {
 					t.Errorf("event context=%+v", metadata)
@@ -219,7 +219,7 @@ func TestContextHTTPMiddlewareKeepsUnreadableSpan(t *testing.T) {
 	ctx = trace.ContextWithSpan(ctx, contextOpaqueSpan{span})
 	request := httptest.NewRequest(http.MethodGet, "https://example.com/", nil).WithContext(ctx)
 	request.Header.Set(posthog.HeaderPostHogSessionID, "header-session")
-	NewRequestContextMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), request)
+	NewRequestContextMiddleware(newEnabledClient(t), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), request)
 	span.End()
 	assertContextAttributes(t, recorder.Ended()[0], map[string]string{"sessionId": "application-session"})
 }
@@ -227,7 +227,7 @@ func TestContextHTTPMiddlewareKeepsUnreadableSpan(t *testing.T) {
 func TestContextSpanProcessorShutdown(t *testing.T) {
 	for _, calls := range []int{1, 2} {
 		t.Run(fmt.Sprintf("shutdownCalls=%d", calls), func(t *testing.T) {
-			processor := NewContextSpanProcessor()
+			processor := NewContextSpanProcessor(newEnabledClient(t))
 			recorder := tracetest.NewSpanRecorder()
 			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor), sdktrace.WithSpanProcessor(recorder))
 			defer provider.Shutdown(context.Background())
@@ -249,5 +249,80 @@ func TestContextSpanProcessorShutdown(t *testing.T) {
 			assertContextAttributes(t, spans[0], map[string]string{})
 			assertContextAttributes(t, spans[1], map[string]string{"posthogDistinctId": "user", "sessionId": "session"})
 		})
+	}
+}
+
+type contextClientWrapper struct{ posthog.Client }
+
+func newEnabledClient(t *testing.T) posthog.Client {
+	t.Helper()
+	client := posthog.New("test-key")
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+func TestContextSpansFollowClientState(t *testing.T) {
+	cases := []struct {
+		name   string
+		client func(*testing.T) posthog.Client
+		want   map[string]string
+	}{
+		{"missing client", func(*testing.T) posthog.Client { return nil }, map[string]string{}},
+		{"empty API key", func(*testing.T) posthog.Client { return posthog.New(" ") }, map[string]string{}},
+		{"closed client", func(t *testing.T) posthog.Client {
+			client := posthog.New("test-key")
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return client
+		}, map[string]string{}},
+		{"enabled client", newEnabledClient, map[string]string{"posthogDistinctId": "user", "sessionId": "session"}},
+		{"wrapper without IsEnabled", func(*testing.T) posthog.Client { return contextClientWrapper{posthog.New("")} }, map[string]string{"posthogDistinctId": "user", "sessionId": "session"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/processor", func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor(tc.client(t))), sdktrace.WithSpanProcessor(recorder))
+			defer provider.Shutdown(context.Background())
+			ctx := posthog.WithFreshRequestContext(context.Background(), posthog.RequestContext{DistinctId: "user", SessionId: "session"})
+			_, span := provider.Tracer("test").Start(ctx, "operation")
+			span.End()
+			assertContextAttributes(t, recorder.Ended()[0], tc.want)
+		})
+		t.Run(tc.name+"/middleware", func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			defer provider.Shutdown(context.Background())
+			ctx, incoming := provider.Tracer("test").Start(context.Background(), "incoming")
+			request := httptest.NewRequest(http.MethodGet, "https://example.com/", nil).WithContext(ctx)
+			request.Header.Set(posthog.HeaderPostHogDistinctID, "user")
+			request.Header.Set(posthog.HeaderPostHogSessionID, "session")
+			NewRequestContextMiddleware(tc.client(t), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), request)
+			incoming.End()
+			assertContextAttributes(t, recorder.Ended()[0], tc.want)
+		})
+	}
+}
+
+func TestContextSpanProcessorClientsAreIndependent(t *testing.T) {
+	closed, open := posthog.New("first-key"), newEnabledClient(t)
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := posthog.WithFreshRequestContext(context.Background(), posthog.RequestContext{DistinctId: "user", SessionId: "session"})
+	for _, tc := range []struct {
+		name   string
+		client posthog.Client
+		want   map[string]string
+	}{
+		{"closed", closed, map[string]string{}},
+		{"open", open, map[string]string{"posthogDistinctId": "user", "sessionId": "session"}},
+	} {
+		recorder := tracetest.NewSpanRecorder()
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(NewContextSpanProcessor(tc.client)), sdktrace.WithSpanProcessor(recorder))
+		_, span := provider.Tracer("test").Start(ctx, tc.name)
+		span.End()
+		_ = provider.Shutdown(context.Background())
+		assertContextAttributes(t, recorder.Ended()[0], tc.want)
 	}
 }
