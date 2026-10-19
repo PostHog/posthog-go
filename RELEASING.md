@@ -23,7 +23,7 @@ A push to `main` that includes `.changeset/*.md` changes automatically starts th
 1. Checks for pending changesets
 2. Notifies the client libraries team in Slack for approval
 3. Waits for approval from a maintainer via the GitHub `Release` environment
-4. The workflow applies Changesets, syncs `version.go`, creates a `vX.Y.Z` Git tag, and creates a GitHub Release.
+4. The workflow applies Changesets, syncs `version.go` and the nested modules' core requirements, then tags all three modules at the same release commit and creates a GitHub Release.
 5. Notifies Slack when the release completes or fails
 
 ### Manual Trigger
@@ -37,6 +37,8 @@ Changesets determines the next version from the committed changeset files:
 - **patch**: bug fixes, documentation updates, and internal changes
 - **minor**: backwards-compatible features
 - **major**: breaking changes
+
+The core SDK, `otel`, and `posthogmcpsdk` share a release version. During release preparation, the workflow updates `otel/go.mod` and `posthogmcpsdk/go.mod` to require that core version. This is a minimum requirement: consumers can still select a newer core version. These dependency updates are included in the automated version-bump commit.
 
 ## Troubleshooting
 

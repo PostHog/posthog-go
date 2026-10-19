@@ -102,6 +102,12 @@ jobs:
           cache: true
           install: false
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.x'
+          cache: false
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -114,6 +120,14 @@ jobs:
           sed -i "s/const Version = \"${CURRENT_VERSION}\"/const Version = \"${NEW_VERSION}\"/" version.go
           echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
+
+      - name: Synchronize nested module core minimums
+        env:
+          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+        run: |
+          for MODULE in otel posthogmcpsdk; do
+            (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go@v${NEW_VERSION}")
+          done
 
       - name: Check for version bump changes
         id: check-changes
