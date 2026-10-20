@@ -180,7 +180,7 @@ type Config struct {
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
 	// Messages are sent when BatchSize is reached or when Interval fires. If zero,
-	// it defaults to DefaultBatchSize. MaxBatchBytes bounds the request size.
+	// it defaults to DefaultBatchSize. MaxBatchBytes targets the combined event size.
 	BatchSize int
 
 	// MaxEventBytes optionally caps the serialized size of a single event. A

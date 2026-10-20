@@ -74,12 +74,14 @@ require an opt-in. A config that previously failed `Validate()` with
 `"zstd compression requires CaptureModeAnalyticsV1"` now succeeds.
 
 `Config.MaxBatchBytes` is new. It defaults to 500000 bytes, the request limit
-1.x applied internally, and bounds the size of one request. An event larger
-than `MaxBatchBytes` is sent in a request of its own.
+1.x applied internally. It targets the combined serialized size of the events
+in one request, excluding the request envelope. An event larger than
+`MaxBatchBytes` is sent in a request of its own.
 
 There is no per-event size cap by default, unlike the 500000-byte cap in 1.x.
-PostHog now drops an oversized event on its own and reports it to `Callback`,
-without failing the other events in the request. Set the new
+Within PostHog's request limits, PostHog now drops an oversized event on its
+own and reports it to `Callback`, without failing the other events in the
+request. Set the new
 `Config.MaxEventBytes` to refuse large events locally with `ErrMessageTooBig`;
 `Validate`, and so `NewWithConfig`, then rejects a `MaxBatchBytes` below it.
 Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
@@ -201,8 +203,10 @@ func (c myCallback) Failure(msg posthog.APIMessage, err error) {
 }
 ```
 
-Local failures, such as an event over `MaxEventBytes` or a full queue, reach
-`Failure` wrapped in a `*CaptureLocalError`. In 1.x they were the bare
+Local failures, such as an event over `MaxEventBytes` or a full
+batch-submission queue, reach `Failure` wrapped in a `*CaptureLocalError`. A
+full message queue is different: `Enqueue` returns `ErrQueueFull` and
+`Failure` is not called, so check the error `Enqueue` returns. In 1.x they were the bare
 sentinel errors, so `err == posthog.ErrMessageTooBig` no longer matches. Use
 `errors.Is(err, posthog.ErrMessageTooBig)`, which works in both. The new
 `Endpoint` field on all three error types names the lane: the analytics path
