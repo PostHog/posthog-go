@@ -347,6 +347,9 @@ surface as `*CaptureEventError`:
 - an event option value PostHog cannot read (`Details` is `invalid_options`,
   see [Event options](#new-event-options))
 
+The event name limit is new: 1.x sent events to legacy capture, which had no
+limit on event name length. Check your event names before you upgrade.
+
 Each event needs its own uuid. Capture rejects a whole request that contains
 the same uuid twice, and the SDK reports it as a `*CaptureRequestError` (400,
 `duplicate_event_uuid`).
