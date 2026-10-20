@@ -335,6 +335,13 @@ func TestNestedDefaultsFillOneLevelDeep(t *testing.T) {
 			},
 		},
 		{
+			msg: Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set("$set", map[string]string{"plan": "pro"}).Set("$groups", map[string]string{"region": "eu"}), Groups: NewGroups().Set("company", "posthog")},
+			want: map[string]interface{}{
+				"$set":    map[string]interface{}{"plan": "pro", "source": "default"},
+				"$groups": map[string]interface{}{"company": "posthog", "region": "eu", "team": "core"},
+			},
+		},
+		{
 			msg:  Identify{DistinctId: "user-1", Properties: NewProperties().Set("plan", "pro")},
 			want: map[string]interface{}{"$set": map[string]interface{}{"plan": "pro", "source": "default"}},
 		},

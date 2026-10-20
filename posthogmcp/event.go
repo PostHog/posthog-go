@@ -3,6 +3,7 @@ package posthogmcp
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -360,13 +361,26 @@ func (p preparedToolCall) options() posthog.Options {
 		// The fallback distinct ID is a session or "anonymous", so a person
 		// profile would be wrong whatever the caller asked for.
 		options[optionProcessProfile] = false
-	case p.propertyProfileOptOut && options[optionProcessProfile] == nil:
+	case p.propertyProfileOptOut && isNilOption(options[optionProcessProfile]):
 		options[optionProcessProfile] = false
 	}
 	if len(options) == 0 {
 		return nil
 	}
 	return options
+}
+
+// isNilOption reports whether an option value counts as unset: nil, or a nil
+// pointer, map, slice or interface, as in the core SDK.
+func isNilOption(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
 }
 
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {

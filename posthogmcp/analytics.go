@@ -114,10 +114,14 @@ func withRequestContext(call ToolCall, requestContext posthog.RequestContext) To
 	}
 	if len(requestContext.Options) > 0 {
 		options := make(posthog.Options, len(requestContext.Options)+len(call.Options))
-		for name, value := range requestContext.Options {
+		for name, value := range call.Options {
 			options[name] = value
 		}
-		for name, value := range call.Options {
+		// A request option fills a call option that is missing or nil, as in the core SDK.
+		for name, value := range requestContext.Options {
+			if current, set := options[name]; set && (!isNilOption(current) || isNilOption(value)) {
+				continue
+			}
 			options[name] = value
 		}
 		call.Options = options

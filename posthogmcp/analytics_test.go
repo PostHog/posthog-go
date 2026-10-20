@@ -171,6 +171,27 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 			contextOptions: posthog.Options{optionProcessProfile: false},
 			want:           true,
 		},
+		{
+			name:       "typed-nil option keeps legacy opt-out",
+			distinctID: "user_1",
+			flag:       false,
+			options:    posthog.Options{optionProcessProfile: (*bool)(nil)},
+			want:       false,
+		},
+		{
+			name:           "nil call option keeps request-context option",
+			distinctID:     "user_1",
+			options:        posthog.Options{optionProcessProfile: nil},
+			contextOptions: posthog.Options{optionProcessProfile: false},
+			want:           false,
+		},
+		{
+			name:           "typed-nil call option keeps request-context option",
+			distinctID:     "user_1",
+			options:        posthog.Options{optionProcessProfile: (*bool)(nil)},
+			contextOptions: posthog.Options{optionProcessProfile: false},
+			want:           false,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -540,6 +561,19 @@ func TestCaptureToolCallWireGolden(t *testing.T) {
 	expected, err := os.ReadFile("testdata/tool_call.golden.json")
 	require.NoError(t, err)
 	assert.JSONEq(t, string(expected), string(actual))
+}
+
+func TestOptionalEventNilOptionKeepsRequestContextOption(t *testing.T) {
+	ctx := posthog.WithFreshRequestContext(context.Background(), posthog.RequestContext{
+		Options: posthog.Options{"cookieless_mode": true},
+	})
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureUnknownTool(ctx, UnknownTool{
+		EventContext: EventContext{DistinctID: "user_1", Options: posthog.Options{"cookieless_mode": nil}},
+		ToolName:     "nope",
+	}))
+	require.Len(t, client.messages, 1)
+	assert.Equal(t, true, requireCapture(t, client.messages[0]).Options["cookieless_mode"])
 }
 
 // assertPersonProfileOption checks the process_person_profile option, which

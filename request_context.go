@@ -255,6 +255,7 @@ func ExtractRequestContext(r *http.Request, captureTracingHeaders bool) RequestC
 type captureContext struct {
 	distinctID                    string
 	sessionID                     interface{}
+	hasSessionID                  bool
 	properties                    Properties
 	options                       Options
 	generatedPersonlessDistinctID bool
@@ -291,6 +292,7 @@ func resolveCaptureContext(ctx context.Context, distinctID string, fieldType str
 	return captureContext{
 		distinctID:                    resolvedDistinctID,
 		sessionID:                     sessionID,
+		hasSessionID:                  hasSessionID,
 		properties:                    properties,
 		options:                       requestContext.Options,
 		generatedPersonlessDistinctID: isPersonless,
@@ -315,9 +317,10 @@ func requestContextLayers(ctx context.Context, withSession bool) (Properties, Op
 }
 
 // withSessionID returns properties with the request context's session ID when
-// the event has none. It copies properties instead of writing the caller's map.
+// the event has none. A nil session ID is kept, so it still blocks a default.
+// It copies properties instead of writing the caller's map.
 func (cc captureContext) withSessionID(properties Properties) Properties {
-	if cc.sessionID == nil {
+	if !cc.hasSessionID {
 		return properties
 	}
 	if _, exists := properties[propertySessionID]; exists {

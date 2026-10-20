@@ -1,5 +1,7 @@
 package posthog
 
+import "reflect"
+
 // Properties is used to represent properties in messages that support it.
 // It is a free-form object so the application can set any value it sees fit but
 // a few helper method are defined to make it easier to instantiate properties with
@@ -149,7 +151,16 @@ func stringKeyedMap(v interface{}) (map[string]interface{}, bool) {
 		}
 		return converted, true
 	}
-	return nil, false
+	// Other maps with string keys, such as map[string]string, merge the same way.
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Map || rv.Type().Key().Kind() != reflect.String || rv.IsNil() {
+		return nil, false
+	}
+	converted := make(map[string]interface{}, rv.Len())
+	for iter := rv.MapRange(); iter.Next(); {
+		converted[iter.Key().String()] = iter.Value().Interface()
+	}
+	return converted, true
 }
 
 // mergeOverNested returns top merged over base when both are maps, so top wins

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -795,6 +796,37 @@ func TestEventPropertyLayers(t *testing.T) {
 			properties := requireProperties(t, readSingleBatchEvent(t, body))
 			require.Contains(t, properties, "service")
 			require.Equal(t, tt.want, properties["service"])
+		})
+	}
+}
+
+func TestNilRequestSessionBlocksDefaultSession(t *testing.T) {
+	for _, msg := range []Message{
+		Capture{DistinctId: "user-1", Event: "e"},
+		Exception{DistinctId: "user-1", ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}}},
+	} {
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set(propertySessionID, "default-session"),
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				SessionId:  "request-session",
+				Properties: NewProperties().Set(propertySessionID, nil),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, msg))
+
+			event := readSingleBatchEvent(t, body)
+			require.NotContains(t, event, "session_id")
+			require.NotContains(t, requireProperties(t, event), propertySessionID)
 		})
 	}
 }
