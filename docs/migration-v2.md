@@ -375,15 +375,15 @@ event if a known key has a value it cannot read. That drop reaches
 `invalid_options`. A `BeforeSend` hook can read and change `Options` like
 `Properties`, and `Options` is never nil inside the hook.
 
-The legacy properties still work. The SDK removes each one from `properties`
-and moves it into its option:
+The legacy option properties, the `$`-prefixed properties legacy capture reads
+as settings, still work. The SDK removes each one from `properties` and moves
+it into its option:
 
-| Legacy property | Option |
+| Legacy option property | Option |
 | --- | --- |
 | `$process_person_profile` | `process_person_profile` |
 | `$cookieless_mode` | `cookieless_mode` |
 | `$ignore_sent_at` | `disable_skew_correction` |
-| `$product_tour_id` | `product_tour_id` |
 
 When both are set, the option wins. An option set to `nil` counts as not
 set, so the legacy property applies.
@@ -451,9 +451,8 @@ If you used `CaptureModeAnalyticsV1`, note that the SDK no longer converts
 these values or silently removes the ones it cannot read. PostHog validates
 them as described above.
 
-Minimal `$feature_flag_called` events now keep `$cookieless_mode`,
-`$ignore_sent_at` and `$product_tour_id`, so they get those options. 1.x
-removed them from these events.
+Minimal `$feature_flag_called` events now keep the legacy option properties,
+so they get those options. 1.x removed them from these events.
 
 ## New: AI events
 
