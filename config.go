@@ -185,9 +185,9 @@ type Config struct {
 
 	// MaxEventBytes optionally caps the serialized size of a single event. A
 	// larger event is rejected through Callback.Failure with ErrMessageTooBig
-	// rather than being sent. Zero means no cap: PostHog drops an oversized
-	// event on its own and reports it per event, without failing the rest of
-	// the request.
+	// rather than being sent. Zero disables the SDK's per-event cap. Backend
+	// request limits still apply; events processed within those limits can be
+	// rejected individually.
 	MaxEventBytes int
 
 	// MaxBatchBytes bounds the combined serialized size of the events in one
