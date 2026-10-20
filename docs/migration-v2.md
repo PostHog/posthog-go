@@ -148,12 +148,19 @@ An empty or whitespace-only `DistinctId` is now treated as missing, so a
 `Capture` or `Exception` sent with a request context gets the context's ID or a
 personless one. In 1.x it was sent, and PostHog dropped the event.
 
+PostHog drops an event whose distinct ID is over 200 UTF-8 bytes, with the
+per-event result `distinct_id_too_large`, which reaches `Callback.Failure` as a
+`CaptureEventError`. 1.x sent events to legacy capture, which shortened the ID
+to 200 characters and kept the event.
+
 ### Group identify distinct ID
 
 `GroupIdentify.DistinctId` is now sent as the event's distinct ID. If it is
 empty, the SDK uses the request context's distinct ID, then `$<type>_<key>`.
 In 1.x the field was accepted and ignored, and every `$groupidentify` was sent
 as `$<type>_<key>`.
+If `$<type>_<key>` is over 200 bytes, set `DistinctId`, or PostHog drops the
+event.
 
 ### Authentication
 
