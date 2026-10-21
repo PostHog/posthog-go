@@ -165,6 +165,9 @@ func requireDisabledClient(t *testing.T, client Client) {
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.NotNil(t, result)
 	require.False(t, result.Enabled)
+	result.Enabled = true
+	again, _ := client.GetFeatureFlagResult(FeatureFlagPayload{Key: "test-flag", DistinctId: "other-user"})
+	require.False(t, again.Enabled, "one caller's change reached another caller")
 
 	payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
@@ -177,6 +180,9 @@ func requireDisabledClient(t *testing.T, client Client) {
 	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, allFlags)
+	allFlags["fallback"] = true
+	allFlagsAgain, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "other-user"})
+	require.Empty(t, allFlagsAgain, "one caller's change reached another caller")
 
 	evaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)

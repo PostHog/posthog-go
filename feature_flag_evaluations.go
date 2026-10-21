@@ -35,10 +35,9 @@ type FeatureFlagEvaluations struct {
 	accessed map[string]struct{}
 }
 
-var (
-	emptyFlagValues             = map[string]interface{}{}
-	emptyFeatureFlagEvaluations = &FeatureFlagEvaluations{flags: map[string]evaluatedFlagRecord{}}
-)
+// emptyFeatureFlagEvaluations is safe to share: callers cannot change it, and
+// an empty distinct ID stops it from recording flag access.
+var emptyFeatureFlagEvaluations = &FeatureFlagEvaluations{flags: map[string]evaluatedFlagRecord{}}
 
 // evaluatedFlagRecord is the per-flag entry stored in a snapshot. All fields
 // are optional except Key and Enabled, mirroring the v4 /flags response shape

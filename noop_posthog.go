@@ -6,8 +6,6 @@ type noopClient struct {
 	Config
 }
 
-var noopFeatureFlagResult = &FeatureFlagResult{Enabled: false}
-
 func newNoopClient(config Config) Client {
 	return &noopClient{Config: config}
 }
@@ -37,7 +35,7 @@ func (c *noopClient) GetFeatureFlag(FeatureFlagPayload) (interface{}, error) {
 }
 
 func (c *noopClient) GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error) {
-	return noopFeatureFlagResult, ErrSDKDisabled
+	return &FeatureFlagResult{Enabled: false}, ErrSDKDisabled
 }
 
 func (c *noopClient) GetFeatureFlagPayload(FeatureFlagPayload) (string, error) {
@@ -49,7 +47,7 @@ func (c *noopClient) GetRemoteConfigPayload(string) (string, error) {
 }
 
 func (c *noopClient) GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
-	return emptyFlagValues, ErrSDKDisabled
+	return map[string]interface{}{}, ErrSDKDisabled
 }
 
 func (c *noopClient) EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {

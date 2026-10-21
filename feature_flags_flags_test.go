@@ -318,6 +318,29 @@ func TestFeatureFlagErrorOnCapturedEvents(t *testing.T) {
 		}
 	})
 
+	t.Run("quota limited GetAllFlags results are independent per call", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
+			w.Write([]byte(`{"flags": {}, "requestId": "req-123", "quota_limited": ["feature_flags"]}`))
+		}))
+		defer server.Close()
+
+		client, _ := NewWithConfig("test-api-key", Config{Endpoint: server.URL, BatchSize: 1})
+		defer client.Close()
+
+		first, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-123"})
+		if err != nil || len(first) != 0 {
+			t.Fatalf("Expected no flags and no error, got %v, %v", first, err)
+		}
+		first["fallback"] = true
+		second, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-456"})
+		if err != nil || len(second) != 0 {
+			t.Errorf("One caller's change reached another caller: got %v, %v", second, err)
+		}
+	})
+
 	t.Run("quota limited sets $feature_flag_error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if serveCaptureOK(w, r) {

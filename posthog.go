@@ -2012,7 +2012,7 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 	}
 
 	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return emptyFlagValues, nil
+		return map[string]interface{}{}, nil
 	}
 
 	return flagsResponse.FeatureFlags, nil
