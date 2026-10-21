@@ -16,7 +16,7 @@ require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 )
 
 require (
