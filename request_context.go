@@ -342,11 +342,15 @@ func (cc captureContext) fillEvent(properties Properties, options Options, defau
 }
 
 // layerOptions merges option maps into a new map, later layers overriding
-// earlier ones. It returns nil when no layer sets an option.
+// earlier ones. A nil value means unset, so it never replaces an earlier value.
+// It returns nil when no layer sets an option.
 func layerOptions(layers ...Options) Options {
 	var merged Options
 	for _, layer := range layers {
 		for key, value := range layer {
+			if current, set := merged[key]; set && !isNilValue(current) && isNilValue(value) {
+				continue
+			}
 			if merged == nil {
 				merged = NewOptions()
 			}

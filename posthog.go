@@ -768,6 +768,8 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		if err = m.Validate(); err != nil {
 			return
 		}
+		// Fill context and defaults before flag enrichment so they beat SDK-generated flag properties.
+		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		if m.Flags != nil {
 			if m.shouldSendFeatureFlags() {
 				c.Warnf("[FEATURE FLAGS] Both Flags and SendFeatureFlags were set on Capture; using Flags and ignoring SendFeatureFlags.")
@@ -821,7 +823,6 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 				m.Properties["$active_feature_flags"] = activeFeatureFlags
 			}
 		}
-		m.Properties, m.Options = captureContext.fillEvent(m.Properties, m.Options, c.DefaultEventProperties, c.DefaultEventOptions)
 		m.Properties = fillSDKProperties(m.Properties, m.IsServer, c.GetDisableGeoIP())
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {

@@ -706,6 +706,26 @@ func TestPersonProfileOptionLayers(t *testing.T) {
 			want:    false,
 		},
 		{
+			name:           "nil child option keeps the parent option",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx: func() context.Context {
+				parent := withOptions(NewOptions().Set("process_person_profile", false))()
+				return WithRequestContext(parent, RequestContext{Options: NewOptions().Set("process_person_profile", nil)})
+			},
+			capture: Capture{DistinctId: "user-1", Event: "e"},
+			want:    false,
+		},
+		{
+			name:           "typed-nil child option keeps the parent option",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx: func() context.Context {
+				parent := withOptions(NewOptions().Set("process_person_profile", false))()
+				return WithRequestContext(parent, RequestContext{Options: NewOptions().Set("process_person_profile", (*bool)(nil))})
+			},
+			capture: Capture{DistinctId: "user-1", Event: "e"},
+			want:    false,
+		},
+		{
 			name: "child context inherits parent options",
 			ctx: func() context.Context {
 				parent := withOptions(NewOptions().Set("process_person_profile", true))()
@@ -745,8 +765,11 @@ func TestPersonProfileOptionLayers(t *testing.T) {
 }
 
 func TestEventPropertyLayers(t *testing.T) {
+	betaFlag := &FeatureFlagEvaluations{flags: map[string]evaluatedFlagRecord{"beta": {Key: "beta", Enabled: true}}}
 	tests := []struct {
 		name     string
+		key      string
+		flags    *FeatureFlagEvaluations
 		event    Properties
 		context  Properties
 		defaults Properties
@@ -776,6 +799,26 @@ func TestEventPropertyLayers(t *testing.T) {
 			defaults: NewProperties().Set("service", "default"),
 			want:     nil,
 		},
+		{
+			name:    "context property over a generated flag property",
+			key:     "$feature/beta",
+			flags:   betaFlag,
+			context: NewProperties().Set("$feature/beta", "context"),
+			want:    "context",
+		},
+		{
+			name:     "default over a generated flag property",
+			key:      "$feature/beta",
+			flags:    betaFlag,
+			defaults: NewProperties().Set("$feature/beta", "default"),
+			want:     "default",
+		},
+		{
+			name:  "generated flag property fills a missing property",
+			key:   "$feature/beta",
+			flags: betaFlag,
+			want:  true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -790,12 +833,16 @@ func TestEventPropertyLayers(t *testing.T) {
 			})
 			defer client.Close()
 
+			key := tt.key
+			if key == "" {
+				key = "service"
+			}
 			ctx := WithFreshRequestContext(context.Background(), RequestContext{Properties: tt.context})
-			require.NoError(t, EnqueueWithContext(ctx, client, Capture{DistinctId: "user-1", Event: "e", Properties: tt.event}))
+			require.NoError(t, EnqueueWithContext(ctx, client, Capture{DistinctId: "user-1", Event: "e", Properties: tt.event, Flags: tt.flags}))
 
 			properties := requireProperties(t, readSingleBatchEvent(t, body))
-			require.Contains(t, properties, "service")
-			require.Equal(t, tt.want, properties["service"])
+			require.Contains(t, properties, key)
+			require.Equal(t, tt.want, properties[key])
 		})
 	}
 }
