@@ -1,6 +1,7 @@
 # Agent Instructions
 
 - Read and follow [CONTRIBUTING.md](./CONTRIBUTING.md) before contributing to the SDK.
+- Sign every commit; `main` rejects unsigned commits. Configure signing in the git config you commit with, as described in "Commit signing" in [CONTRIBUTING.md](./CONTRIBUTING.md).
 - For changes involving nested Go modules, follow the [module-specific checks](./CONTRIBUTING.md#nested-modules); root checks do not cover them.
 - Read and follow [RELEASING.md](./RELEASING.md) when adding changesets or working on publishing.
 - Public API changes: follow "Public API changes" in [CONTRIBUTING.md](./CONTRIBUTING.md). As an agent, also:
