@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -71,14 +72,11 @@ func (l testLogger) writeLog(fn func(string, ...interface{}), format string, arg
 	}
 }
 
-func TestNew_BlankAPIKeyReturnsError(t *testing.T) {
-	for _, apiKey := range []string{"", " ", " \n\t "} {
-		t.Run(fmt.Sprintf("%q", apiKey), func(t *testing.T) {
-			client, err := New(apiKey)
-			require.ErrorIs(t, err, ErrSDKDisabled)
-			require.Nil(t, client)
-		})
-	}
+func TestNew_BlankAPIKeyReturnsDisabledClient(t *testing.T) {
+	client, err := New(" \n\t ")
+	require.NoError(t, err)
+	require.IsType(t, &noopClient{}, client)
+	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 }
 
 func TestNew_TrimsAPIKey(t *testing.T) {
@@ -88,28 +86,114 @@ func TestNew_TrimsAPIKey(t *testing.T) {
 	require.NoError(t, c.Close())
 }
 
-func TestNewWithConfig_BlankAPIKeyReturnsErrorWithoutRequests(t *testing.T) {
-	for _, apiKey := range []string{"", " ", " \n\t "} {
+func TestNewWithConfig_DisabledClient(t *testing.T) {
+	cases := []struct {
+		name     string
+		apiKey   string
+		disabled bool
+		logged   string
+	}{
+		{name: "empty", apiKey: "", logged: "apiKey is empty after trimming whitespace"},
+		{name: "whitespace", apiKey: " \n\t ", logged: "apiKey is empty after trimming whitespace"},
+		{name: "personal_api_key", apiKey: " phx_abc123 ", logged: "apiKey is a personal API key"},
+		{name: "config_disabled", apiKey: "test-api-key", disabled: true},
+	}
+	for _, tc := range cases {
 		for _, secretConfig := range []Config{
 			{},
 			{SecretKey: "test-secret-key"},
 			{PersonalApiKey: "test-personal-key"},
 		} {
-			t.Run(fmt.Sprintf("%q/secret=%s/personal=%s", apiKey, secretConfig.SecretKey, secretConfig.PersonalApiKey), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/secret=%s/personal=%s", tc.name, secretConfig.SecretKey, secretConfig.PersonalApiKey), func(t *testing.T) {
 				var requests atomic.Int64
+				var failures atomic.Int64
+				var errorLogs []string
 				config := secretConfig
+				config.Disabled = tc.disabled
+				config.BatchSize = 1
+				config.Interval = time.Millisecond
 				config.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
 					requests.Add(1)
 					return nil, testError
 				})
+				config.Callback = testCallback{failure: func(APIMessage, error) { failures.Add(1) }}
+				config.Logger = testLogger{
+					logf: t.Logf,
+					errorf: func(format string, args ...interface{}) {
+						errorLogs = append(errorLogs, fmt.Sprintf(format, args...))
+					},
+				}
 
-				client, err := NewWithConfig(apiKey, config)
-				require.ErrorIs(t, err, ErrSDKDisabled)
-				require.Nil(t, client)
+				client, err := NewWithConfig(tc.apiKey, config)
+				require.NoError(t, err)
+				require.IsType(t, &noopClient{}, client)
+				if tc.logged == "" {
+					require.Empty(t, errorLogs)
+				} else {
+					require.Len(t, errorLogs, 1)
+					require.Contains(t, errorLogs[0], tc.logged)
+					require.Contains(t, errorLogs[0], ErrSDKDisabled.Error())
+					require.NotContains(t, errorLogs[0], "abc123")
+				}
+
+				requireDisabledClient(t, client)
 				require.Zero(t, requests.Load())
+				require.Zero(t, failures.Load())
 			})
 		}
 	}
+}
+
+// requireDisabledClient checks that every Client method returns its default
+// value and ErrSDKDisabled.
+func requireDisabledClient(t *testing.T, client Client) {
+	t.Helper()
+	ctx := context.Background()
+	event := Capture{DistinctId: "test-user", Event: "test-event"}
+	require.ErrorIs(t, client.Enqueue(event), ErrSDKDisabled)
+	require.ErrorIs(t, client.EnqueueAI(Capture{DistinctId: "test-user", Event: "$ai_generation"}), ErrSDKDisabled)
+
+	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.Equal(t, false, isEnabled)
+
+	flag, err := client.GetFeatureFlag(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.Equal(t, false, flag)
+
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.NotNil(t, result)
+	require.False(t, result.Enabled)
+	result.Enabled = true
+	again, _ := client.GetFeatureFlagResult(FeatureFlagPayload{Key: "test-flag", DistinctId: "other-user"})
+	require.False(t, again.Enabled, "one caller's change reached another caller")
+
+	payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.Empty(t, payload)
+
+	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.Empty(t, remoteConfigPayload)
+
+	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "test-user"})
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.Empty(t, allFlags)
+	allFlags["fallback"] = true
+	allFlagsAgain, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "other-user"})
+	require.Empty(t, allFlagsAgain, "one caller's change reached another caller")
+
+	evaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "test-user"})
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.NotNil(t, evaluations)
+	require.Empty(t, evaluations.Keys())
+
+	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrSDKDisabled)
+	require.ErrorIs(t, client.Flush(), ErrSDKDisabled)
+	require.ErrorIs(t, client.FlushWithContext(ctx), ErrSDKDisabled)
+	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
+	require.ErrorIs(t, client.CloseWithContext(ctx), ErrSDKDisabled)
 }
 
 func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {

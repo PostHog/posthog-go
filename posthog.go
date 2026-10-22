@@ -250,10 +250,14 @@ type flagUser struct {
 	groupsRepr string
 }
 
+// personalAPIKeyPrefix marks a personal API key, which capture always rejects
+// as a project API key.
+const personalAPIKeyPrefix = "phx_"
+
 // New creates a Client with the default Config and the provided PostHog project API key.
 //
-// The apiKey parameter is trimmed before use. If initialization fails,
-// New returns a nil Client and an error.
+// The apiKey parameter is trimmed before use. A missing or personal API key
+// gives a disabled client, as described on NewWithConfig.
 func New(apiKey string) (Client, error) {
 	return NewWithConfig(apiKey, Config{})
 }
@@ -263,17 +267,29 @@ func New(apiKey string) (Client, error) {
 // The apiKey, Config.Endpoint, Config.SecretKey, and Config.PersonalApiKey values are trimmed before use.
 // It returns a ConfigError when config contains invalid values such as negative
 // intervals or out-of-range retry settings; in that case the returned Client is nil.
-// If client construction fails, NewWithConfig returns nil and an error.
+//
+// A disabled client sends nothing; its methods return default values and
+// ErrSDKDisabled. NewWithConfig returns one with a nil error when
+// Config.Disabled is set, or when apiKey is empty or a personal API key
+// (phx_...). The last two log an error, so a missing key never stops the app.
 func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	if err = config.Validate(); err != nil {
 		return
 	}
 
+	config = makeConfig(config)
+	if config.Disabled {
+		return newNoopClient(config), nil
+	}
 	apiKey = strings.TrimSpace(apiKey)
 	if len(apiKey) == 0 {
-		return nil, ErrSDKDisabled
+		config.Logger.Errorf("posthog apiKey is empty after trimming whitespace; %s", ErrSDKDisabled)
+		return newNoopClient(config), nil
 	}
-	config = makeConfig(config)
+	if strings.HasPrefix(apiKey, personalAPIKeyPrefix) {
+		config.Logger.Errorf("posthog apiKey is a personal API key (%s...), not a project API key; %s", personalAPIKeyPrefix, ErrSDKDisabled)
+		return newNoopClient(config), nil
+	}
 	reportedCache, err := lru.New[flagUser, struct{}](CACHE_DEFAULT_SIZE)
 	if err != nil && config.Logger != nil {
 		config.Logger.Errorf("Error creating cache for reported flags: %v", err)
@@ -1996,7 +2012,7 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 	}
 
 	if c.isFeatureFlagsQuotaLimited(flagsResponse) {
-		return emptyFlagValues, nil
+		return map[string]interface{}{}, nil
 	}
 
 	return flagsResponse.FeatureFlags, nil

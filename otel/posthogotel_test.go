@@ -131,15 +131,100 @@ func TestWarnIfPostHogAIGateway(t *testing.T) {
 	}
 }
 
-func TestNewSpanProcessorRejectsEmptyAPIKey(t *testing.T) {
-	if _, err := NewSpanProcessor(context.Background(), "  "); err != errEmptyAPIKey {
-		t.Errorf("expected errEmptyAPIKey, got %v", err)
+// unusableAPIKeys are keys that must give a do-nothing exporter or processor.
+var unusableAPIKeys = []struct {
+	name, key, wantLog string
+}{
+	{"empty", "", "apiKey is empty"},
+	{"whitespace", " \t\n", "apiKey is empty"},
+	{"personal", "  phx_personalsecret123 ", "personal API key"},
+}
+
+// captureLog sends the standard logger to a buffer for the rest of the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+	return &buf
+}
+
+// assertOneKeyFreeLog checks that exactly one line was logged, that it names
+// the reason, and that it never contains the key.
+func assertOneKeyFreeLog(t *testing.T, logged, key, want string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(logged), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], want) {
+		t.Fatalf("want one log line containing %q, got %q", want, logged)
+	}
+	if secret := strings.TrimSpace(key); secret != "" && strings.Contains(logged, secret) {
+		t.Fatalf("log contains the API key: %q", logged)
 	}
 }
 
-func TestNewExporterRejectsEmptyAPIKey(t *testing.T) {
-	if _, err := NewExporter(context.Background(), ""); err != errEmptyAPIKey {
-		t.Errorf("expected errEmptyAPIKey, got %v", err)
+func TestNewExporterDisablesForUnusableAPIKey(t *testing.T) {
+	for _, tc := range unusableAPIKeys {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newOTLPServer(t)
+			logged := captureLog(t)
+
+			exporter, err := NewExporter(context.Background(), tc.key, WithHost(server.server.URL))
+			if err != nil || exporter == nil {
+				t.Fatalf("NewExporter = %v, %v; want a disabled exporter and a nil error", exporter, err)
+			}
+			assertOneKeyFreeLog(t, logged.String(), tc.key, tc.wantLog)
+
+			span := recordSpanWithAttr(t, "gen_ai.chat", "server.address", "gateway.us.posthog.com")
+			if err := exporter.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{span}); err != nil {
+				t.Fatalf("ExportSpans: %v", err)
+			}
+			if err := exporter.Shutdown(context.Background()); err != nil {
+				t.Fatalf("Shutdown: %v", err)
+			}
+			if calls, _, _, _ := server.snapshot(); calls != 0 {
+				t.Fatalf("a disabled exporter sent %d requests", calls)
+			}
+			assertOneKeyFreeLog(t, logged.String(), tc.key, tc.wantLog)
+		})
+	}
+}
+
+func TestNewSpanProcessorDisablesForUnusableAPIKey(t *testing.T) {
+	for _, tc := range unusableAPIKeys {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newOTLPServer(t)
+			logged := captureLog(t)
+
+			processor, err := NewSpanProcessor(context.Background(), tc.key, WithHost(server.server.URL))
+			if err != nil || processor == nil {
+				t.Fatalf("NewSpanProcessor = %v, %v; want a disabled processor and a nil error", processor, err)
+			}
+			assertOneKeyFreeLog(t, logged.String(), tc.key, tc.wantLog)
+
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+			emitSpans(provider)
+			processor.OnEnd(recordSpanWithAttr(t, "gen_ai.chat", "server.address", "gateway.us.posthog.com"))
+			if err := processor.ForceFlush(context.Background()); err != nil {
+				t.Fatalf("ForceFlush: %v", err)
+			}
+			if err := provider.Shutdown(context.Background()); err != nil {
+				t.Fatalf("Shutdown: %v", err)
+			}
+			if calls, _, _, _ := server.snapshot(); calls != 0 {
+				t.Fatalf("a disabled processor sent %d requests", calls)
+			}
+			assertOneKeyFreeLog(t, logged.String(), tc.key, tc.wantLog)
+		})
+	}
+}
+
+func TestConstructorsRejectInvalidHostEvenWithUnusableAPIKey(t *testing.T) {
+	if _, err := NewSpanProcessor(context.Background(), "", WithHost("us.i.posthog.com")); !errors.Is(err, errInvalidHost) {
+		t.Errorf("NewSpanProcessor: expected errInvalidHost, got %v", err)
+	}
+	if _, err := NewExporter(context.Background(), "phx_x", WithHost("us.i.posthog.com")); !errors.Is(err, errInvalidHost) {
+		t.Errorf("NewExporter: expected errInvalidHost, got %v", err)
 	}
 }
 

@@ -42,7 +42,19 @@ if err != nil {
 defer client.Close()
 ```
 
-If initialization fails, either constructor returns a nil client and an error.
+Either constructor returns a nil client and an error only for invalid
+configuration. An empty project API key still gives a disabled client and a
+nil error, as in 1.x, and a personal (`phx_...`) key now does too. Both log an
+error. A disabled client
+sends nothing, and its methods return default values and `ErrSDKDisabled`.
+Set `Config.Disabled` to build one on purpose, for example in tests.
+
+Integrations follow the same rule. `posthogmcpsdk.NewMiddleware` and
+`Instrument` no longer panic on a nil `*posthogmcp.Analytics`: they report one
+error and install middleware that changes nothing. The `otel` bridge's
+`NewExporter` and `NewSpanProcessor` no longer return an error for an empty or
+personal API key: they log one error and return an exporter or processor that
+exports nothing. They still return an error for an invalid `WithHost`.
 
 ## Config
 

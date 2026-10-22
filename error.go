@@ -94,7 +94,7 @@ var (
 	// reported only through this returned error, not through Callback.Failure.
 	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
-	// ErrSDKDisabled is returned by New and NewWithConfig when the project API
-	// key is empty after trimming whitespace. The returned Client is nil.
-	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
+	// ErrSDKDisabled is returned by every method of a disabled client: one built
+	// with Config.Disabled, or with an empty or personal (phx_) project API key.
+	ErrSDKDisabled = errors.New("posthog SDK is disabled")
 )
