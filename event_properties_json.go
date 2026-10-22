@@ -120,6 +120,12 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (i
 		}
 		fallthrough
 	case reflect.Array:
+		if v.Kind() == reflect.Array && !v.CanAddr() {
+			// Match go-json's addressable array elements, not the array's own pointer methods.
+			copy := reflect.New(v.Type()).Elem()
+			copy.Set(v)
+			v = copy
+		}
 		out := make([]interface{}, v.Len())
 		for i := range out {
 			child, err := normalizeEventProperty(v.Index(i), seen)
