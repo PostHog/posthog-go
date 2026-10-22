@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"encoding"
 	stdjson "encoding/json"
 	"math"
 	"reflect"
@@ -25,11 +26,15 @@ func isNonFiniteJSONError(err error) bool {
 	return math.IsNaN(value.Float()) || math.IsInf(value.Float(), 0)
 }
 
+func invalidEventJSON(data []byte) error {
+	var raw stdjson.RawMessage
+	return stdjson.Unmarshal(data, &raw)
+}
+
 func marshalEventJSON(value interface{}) ([]byte, error) {
 	data, err := json.Marshal(value)
-	// go-json can emit bare non-finite float32 tokens without reporting an error.
 	if err == nil && !stdjson.Valid(data) {
-		return stdjson.Marshal(value)
+		return nil, invalidEventJSON(data)
 	}
 	return data, err
 }
@@ -40,35 +45,42 @@ type jsonPropertyVisit struct {
 	length  int
 }
 
-func marshalEventProperties(properties Properties) (Properties, error) {
+func normalizeEventProperties(properties Properties) (Properties, error) {
+	if properties == nil {
+		return nil, nil
+	}
 	normalized := make(Properties, len(properties))
+	seen := make(map[jsonPropertyVisit]bool)
 	for key, value := range properties {
-		data, err := marshalEventProperty(reflect.ValueOf(value), make(map[jsonPropertyVisit]bool))
+		child, err := normalizeEventProperty(reflect.ValueOf(value), seen)
 		if err != nil {
 			return nil, err
 		}
-		normalized[key] = json.RawMessage(data)
+		normalized[key] = child
 	}
 	return normalized, nil
 }
 
-func marshalEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) ([]byte, error) {
-	var value interface{}
-	if v.IsValid() {
-		if v.CanAddr() {
-			// Preserve pointer-receiver marshalers on addressable container elements.
-			value = v.Addr().Interface()
-		} else {
-			value = v.Interface()
-		}
+func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (interface{}, error) {
+	if !v.IsValid() {
+		return nil, nil
 	}
-	data, err := marshalEventJSON(value)
-	if !isNonFiniteJSONError(err) {
-		return data, err
+	if (v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface) && v.IsNil() {
+		return nil, nil
 	}
-
+	value := v.Interface()
+	if v.CanAddr() {
+		value = v.Addr().Interface()
+	}
+	switch value.(type) {
+	case json.Marshaler, json.MarshalerContext, encoding.TextMarshaler:
+		return marshalOpaqueEventProperty(value, true)
+	}
 	switch v.Kind() {
 	case reflect.Map, reflect.Slice, reflect.Ptr:
+		if v.IsNil() {
+			return nil, nil
+		}
 		visit := jsonPropertyVisit{typ: v.Type(), pointer: v.Pointer()}
 		if v.Kind() != reflect.Ptr {
 			visit.length = v.Len()
@@ -80,32 +92,66 @@ func marshalEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) ([]b
 		defer delete(seen, visit)
 	}
 	switch v.Kind() {
+	case reflect.Float32, reflect.Float64:
+		if math.IsNaN(v.Float()) || math.IsInf(v.Float(), 0) {
+			return nil, nil
+		}
 	case reflect.Ptr, reflect.Interface:
-		return marshalEventProperty(v.Elem(), seen)
+		return normalizeEventProperty(v.Elem(), seen)
 	case reflect.Map:
-		out := reflect.MakeMapWithSize(reflect.MapOf(v.Type().Key(), reflect.TypeOf(json.RawMessage{})), v.Len())
+		out := reflect.MakeMapWithSize(reflect.MapOf(v.Type().Key(), reflect.TypeOf((*interface{})(nil)).Elem()), v.Len())
 		iter := v.MapRange()
 		for iter.Next() {
-			child, err := marshalEventProperty(iter.Value(), seen)
+			child, err := normalizeEventProperty(iter.Value(), seen)
 			if err != nil {
 				return nil, err
 			}
-			out.SetMapIndex(iter.Key(), reflect.ValueOf(json.RawMessage(child)))
+			slot := reflect.New(out.Type().Elem()).Elem()
+			if child != nil {
+				slot.Set(reflect.ValueOf(child))
+			}
+			out.SetMapIndex(iter.Key(), slot)
 		}
-		return json.Marshal(out.Interface())
-	case reflect.Slice, reflect.Array:
-		out := make([]json.RawMessage, v.Len())
+		return out.Interface(), nil
+	case reflect.Slice:
+		// Byte slices use the encoder's base64 representation, not JSON array slots.
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return marshalOpaqueEventProperty(value, false)
+		}
+		fallthrough
+	case reflect.Array:
+		out := make([]interface{}, v.Len())
 		for i := range out {
-			child, err := marshalEventProperty(v.Index(i), seen)
+			child, err := normalizeEventProperty(v.Index(i), seen)
 			if err != nil {
 				return nil, err
 			}
 			out[i] = child
 		}
-		return json.Marshal(out)
-	default:
-		// An arbitrary struct with a non-finite field is discarded as one property.
-		// Keeping its field/tag/custom-marshaler semantics belongs to the JSON encoder.
-		return []byte("null"), nil
+		return out, nil
+	case reflect.Struct:
+		return marshalOpaqueEventProperty(value, false)
 	}
+	return v.Interface(), nil
+}
+
+func marshalOpaqueEventProperty(value interface{}, custom bool) (interface{}, error) {
+	data, err := json.Marshal(value)
+	if !custom && isNonFiniteJSONError(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !stdjson.Valid(data) {
+		if !custom {
+			// go-json silently emits non-finite float32 tokens in ordinary structs.
+			// Use the standard encoder only for diagnostics, never its replacement bytes.
+			if _, diagnostic := stdjson.Marshal(value); isNonFiniteJSONError(diagnostic) {
+				return nil, nil
+			}
+		}
+		return nil, invalidEventJSON(data)
+	}
+	return json.RawMessage(data), nil
 }
