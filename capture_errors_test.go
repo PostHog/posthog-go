@@ -13,7 +13,7 @@ import (
 func TestDropYieldsCaptureEventError(t *testing.T) {
 	cb := &recordingCallback{}
 	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
-		details := "billing_limit_exceeded"
+		details := "llm_events_over_quota"
 		m := map[string]eventResult{uuids[0]: {Result: resultDrop, Details: &details}}
 		return http.StatusOK, resultsBody(t, m), ""
 	}}
@@ -30,7 +30,7 @@ func TestDropYieldsCaptureEventError(t *testing.T) {
 	if !errors.As(cb.failures[0].err, &ee) {
 		t.Fatalf("failure err = %T (%v), want *CaptureEventError", cb.failures[0].err, cb.failures[0].err)
 	}
-	if ee.EventUUID != uuidA || ee.Result != resultDrop || ee.Details != "billing_limit_exceeded" || ee.Exhausted {
+	if ee.EventUUID != uuidA || ee.Result != resultDrop || ee.Details != "llm_events_over_quota" || ee.Exhausted {
 		t.Errorf("CaptureEventError = %+v", ee)
 	}
 }

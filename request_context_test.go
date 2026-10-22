@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -102,24 +103,6 @@ func TestEnqueueWithContext_MissingIdentityWithRequestContextCreatesPersonlessCa
 	require.True(t, ok)
 	require.NoError(t, uuid.Validate(distinctID))
 	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
-}
-
-func TestEnqueueWithContext_PersonlessCapturePreservesExplicitProcessPersonProfile(t *testing.T) {
-	body, server := mockServer()
-	defer server.Close()
-
-	client, _ := NewWithConfig("test-key", Config{Endpoint: server.URL, BatchSize: 1, now: mockTime})
-	defer client.Close()
-
-	ctx := WithFreshRequestContext(context.Background(), RequestContext{})
-	err := EnqueueWithContext(ctx, client, Capture{
-		Event:      "personless-event",
-		Properties: NewProperties().Set(propertyProcessPersonProfile, true),
-	})
-	require.NoError(t, err)
-
-	event := readSingleBatchEvent(t, body)
-	require.Equal(t, true, requireOptions(t, event)["process_person_profile"])
 }
 
 func TestEnqueueWithContext_PersonlessCaptureSkipsSendFeatureFlags(t *testing.T) {
@@ -227,39 +210,46 @@ func TestEnqueueWithContext_ExceptionMissingIdentityWithRequestContextCreatesPer
 	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
 }
 
-func TestRequestContextMiddleware_DisableTracingHeadersPreservesMetadata(t *testing.T) {
-	body, server := mockServer()
-	defer server.Close()
+func TestRequestContextMiddleware_IgnoresTracingHeadersUnlessEnabled(t *testing.T) {
+	for name, opts := range map[string][]RequestContextOption{
+		"default":  nil,
+		"disabled": {WithCaptureTracingHeaders(false)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
 
-	client, _ := NewWithConfig("test-key", Config{Endpoint: server.URL, BatchSize: 1, now: mockTime})
-	defer client.Close()
+			client, _ := NewWithConfig("test-key", Config{Endpoint: server.URL, BatchSize: 1, now: mockTime})
+			defer client.Close()
 
-	handler := NewRequestContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		requestContext, ok := RequestContextFromContext(r.Context())
-		require.True(t, ok)
-		require.Empty(t, requestContext.DistinctId)
-		require.Empty(t, requestContext.SessionId)
-		require.NoError(t, EnqueueWithContext(r.Context(), client, Capture{Event: "metadata-event"}))
-	}), WithCaptureTracingHeaders(false))
+			handler := NewRequestContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				requestContext, ok := RequestContextFromContext(r.Context())
+				require.True(t, ok)
+				require.Empty(t, requestContext.DistinctId)
+				require.Empty(t, requestContext.SessionId)
+				require.NoError(t, EnqueueWithContext(r.Context(), client, Capture{Event: "metadata-event"}))
+			}), opts...)
 
-	req := httptest.NewRequest(http.MethodGet, "https://example.com/api/test?token=secret", nil)
-	req.RemoteAddr = "10.0.0.2:1234"
-	req.Header.Set(HeaderPostHogDistinctID, "header-user")
-	req.Header.Set(HeaderPostHogSessionID, "header-session")
-	req.Header.Set("User-Agent", "TestAgent/1.0")
-	handler.ServeHTTP(httptest.NewRecorder(), req)
+			req := httptest.NewRequest(http.MethodGet, "https://example.com/api/test?token=secret", nil)
+			req.RemoteAddr = "10.0.0.2:1234"
+			req.Header.Set(HeaderPostHogDistinctID, "header-user")
+			req.Header.Set(HeaderPostHogSessionID, "header-session")
+			req.Header.Set("User-Agent", "TestAgent/1.0")
+			handler.ServeHTTP(httptest.NewRecorder(), req)
 
-	event := readSingleBatchEvent(t, body)
-	distinctID, ok := event["distinct_id"].(string)
-	require.True(t, ok)
-	require.NotEqual(t, "header-user", distinctID)
-	require.NoError(t, uuid.Validate(distinctID))
-	properties := requireProperties(t, event)
-	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
-	require.NotContains(t, event, "session_id")
-	require.Equal(t, "/api/test", properties[propertyRequestPath])
-	require.Equal(t, "TestAgent/1.0", properties[propertyUserAgent])
-	require.Equal(t, "10.0.0.2", properties[propertyIP])
+			event := readSingleBatchEvent(t, body)
+			distinctID, ok := event["distinct_id"].(string)
+			require.True(t, ok)
+			require.NotEqual(t, "header-user", distinctID)
+			require.NoError(t, uuid.Validate(distinctID))
+			properties := requireProperties(t, event)
+			require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
+			require.NotContains(t, event, "session_id")
+			require.Equal(t, "/api/test", properties[propertyRequestPath])
+			require.Equal(t, "TestAgent/1.0", properties[propertyUserAgent])
+			require.Equal(t, "10.0.0.2", properties[propertyIP])
+		})
+	}
 }
 
 func TestRequestContextMiddleware_SanitizesHeaders(t *testing.T) {
@@ -271,7 +261,7 @@ func TestRequestContextMiddleware_SanitizesHeaders(t *testing.T) {
 
 	handler := NewRequestContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		require.NoError(t, EnqueueWithContext(r.Context(), client, Capture{Event: "sanitized-event"}))
-	}))
+	}), WithCaptureTracingHeaders(true))
 
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/api/test", nil)
 	req.Header.Set(HeaderPostHogDistinctID, " \u0000\u0001\u0002 ")
@@ -296,7 +286,7 @@ func TestRequestContextMiddleware_ConcurrentRequestsDoNotLeak(t *testing.T) {
 		mu.Lock()
 		results[r.URL.Path] = requestContext
 		mu.Unlock()
-	}))
+	}), WithCaptureTracingHeaders(true))
 
 	first := httptest.NewRequest(http.MethodGet, "https://example.com/first", nil)
 	first.Header.Set(HeaderPostHogDistinctID, "user-a")
@@ -383,7 +373,7 @@ func TestRequestContextMiddleware_CapturesPanicsWithRequestContextAndRethrows(t 
 	handler := NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		panic(errors.New("boom"))
-	}), WithCapturePanics(client))
+	}), WithCapturePanics(client), WithCaptureTracingHeaders(true))
 
 	req := httptest.NewRequest(http.MethodPost, "https://example.com/api/test", nil)
 	req.RemoteAddr = "10.0.0.2:1234"
@@ -627,28 +617,207 @@ func (w *allOptionalResponseWriter) ReadFrom(reader io.Reader) (int64, error) {
 	return io.Copy(w.minimalResponseWriter, reader)
 }
 
-func TestCallerOptionWinsOverSDKPersonProfileDefaults(t *testing.T) {
+func TestPersonProfileOptionLayers(t *testing.T) {
+	personless := func() context.Context {
+		return WithFreshRequestContext(context.Background(), RequestContext{})
+	}
+	withOptions := func(options Options) func() context.Context {
+		return func() context.Context {
+			return WithFreshRequestContext(context.Background(), RequestContext{Options: options})
+		}
+	}
 	tests := []struct {
-		name     string
-		defaults Properties
-		ctx      func() context.Context
-		capture  Capture
-		want     interface{}
+		name           string
+		defaults       Properties
+		defaultOptions Options
+		ctx            func() context.Context
+		capture        Capture
+		want           interface{}
 	}{
 		{
-			name:     "over DefaultEventProperties",
+			name:     "event option over DefaultEventProperties",
 			defaults: NewProperties().Set(propertyProcessPersonProfile, true),
 			ctx:      context.Background,
 			capture:  Capture{DistinctId: "user-1", Event: "e", Options: NewOptions().Set("process_person_profile", false)},
 			want:     false,
 		},
 		{
-			name: "over the personless default",
-			ctx: func() context.Context {
-				return WithFreshRequestContext(context.Background(), RequestContext{})
-			},
+			name:    "event option over the personless default",
+			ctx:     personless,
 			capture: Capture{Event: "e", Options: NewOptions().Set("process_person_profile", true)},
 			want:    true,
+		},
+		{
+			name:    "legacy event property does not override the personless option",
+			ctx:     personless,
+			capture: Capture{Event: "e", Properties: NewProperties().Set(propertyProcessPersonProfile, true)},
+			want:    false,
+		},
+		{
+			name:           "default option over the personless default",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx:            personless,
+			capture:        Capture{Event: "e"},
+			want:           true,
+		},
+		{
+			name:           "context option over default option",
+			defaultOptions: NewOptions().Set("process_person_profile", false),
+			ctx:            withOptions(NewOptions().Set("process_person_profile", true)),
+			capture:        Capture{DistinctId: "user-1", Event: "e"},
+			want:           true,
+		},
+		{
+			name:    "event option over context option",
+			ctx:     withOptions(NewOptions().Set("process_person_profile", true)),
+			capture: Capture{DistinctId: "user-1", Event: "e", Options: NewOptions().Set("process_person_profile", false)},
+			want:    false,
+		},
+		{
+			name:    "context option over the personless default",
+			ctx:     withOptions(NewOptions().Set("process_person_profile", true)),
+			capture: Capture{Event: "e"},
+			want:    true,
+		},
+		{
+			name:           "nil event option is filled by the default option",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx:            context.Background,
+			capture:        Capture{DistinctId: "user-1", Event: "e", Options: NewOptions().Set("process_person_profile", nil)},
+			want:           true,
+		},
+		{
+			name:    "nil event option is filled by the context option",
+			ctx:     withOptions(NewOptions().Set("process_person_profile", true)),
+			capture: Capture{DistinctId: "user-1", Event: "e", Options: NewOptions().Set("process_person_profile", nil)},
+			want:    true,
+		},
+		{
+			name:           "default option over the legacy event property",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx:            context.Background,
+			capture:        Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set(propertyProcessPersonProfile, false)},
+			want:           true,
+		},
+		{
+			name:    "context option over the legacy event property",
+			ctx:     withOptions(NewOptions().Set("process_person_profile", false)),
+			capture: Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set(propertyProcessPersonProfile, true)},
+			want:    false,
+		},
+		{
+			name:           "nil child option keeps the parent option",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx: func() context.Context {
+				parent := withOptions(NewOptions().Set("process_person_profile", false))()
+				return WithRequestContext(parent, RequestContext{Options: NewOptions().Set("process_person_profile", nil)})
+			},
+			capture: Capture{DistinctId: "user-1", Event: "e"},
+			want:    false,
+		},
+		{
+			name:           "typed-nil child option keeps the parent option",
+			defaultOptions: NewOptions().Set("process_person_profile", true),
+			ctx: func() context.Context {
+				parent := withOptions(NewOptions().Set("process_person_profile", false))()
+				return WithRequestContext(parent, RequestContext{Options: NewOptions().Set("process_person_profile", (*bool)(nil))})
+			},
+			capture: Capture{DistinctId: "user-1", Event: "e"},
+			want:    false,
+		},
+		{
+			name: "child context inherits parent options",
+			ctx: func() context.Context {
+				parent := withOptions(NewOptions().Set("process_person_profile", true))()
+				return WithRequestContext(parent, RequestContext{Options: NewOptions().Set("cookieless_mode", true)})
+			},
+			capture: Capture{DistinctId: "user-1", Event: "e"},
+			want:    true,
+		},
+		{
+			name:    "identified event gets no personless default",
+			ctx:     context.Background,
+			capture: Capture{DistinctId: "user-1", Event: "e"},
+			want:    nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: tt.defaults,
+				DefaultEventOptions:    tt.defaultOptions,
+			})
+			defer client.Close()
+
+			require.NoError(t, EnqueueWithContext(tt.ctx(), client, tt.capture))
+
+			event := readSingleBatchEvent(t, body)
+			require.Equal(t, tt.want, requireOptions(t, event)["process_person_profile"])
+			require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
+		})
+	}
+}
+
+func TestEventPropertyLayers(t *testing.T) {
+	betaFlag := &FeatureFlagEvaluations{flags: map[string]evaluatedFlagRecord{"beta": {Key: "beta", Enabled: true}}}
+	tests := []struct {
+		name     string
+		key      string
+		flags    *FeatureFlagEvaluations
+		event    Properties
+		context  Properties
+		defaults Properties
+		want     interface{}
+	}{
+		{
+			name:     "event property over context and default",
+			event:    NewProperties().Set("service", "event"),
+			context:  NewProperties().Set("service", "context"),
+			defaults: NewProperties().Set("service", "default"),
+			want:     "event",
+		},
+		{
+			name:     "context property over default",
+			context:  NewProperties().Set("service", "context"),
+			defaults: NewProperties().Set("service", "default"),
+			want:     "context",
+		},
+		{
+			name:     "default fills a missing property",
+			defaults: NewProperties().Set("service", "default"),
+			want:     "default",
+		},
+		{
+			name:     "nil event property blocks the default",
+			event:    NewProperties().Set("service", nil),
+			defaults: NewProperties().Set("service", "default"),
+			want:     nil,
+		},
+		{
+			name:    "context property over a generated flag property",
+			key:     "$feature/beta",
+			flags:   betaFlag,
+			context: NewProperties().Set("$feature/beta", "context"),
+			want:    "context",
+		},
+		{
+			name:     "default over a generated flag property",
+			key:      "$feature/beta",
+			flags:    betaFlag,
+			defaults: NewProperties().Set("$feature/beta", "default"),
+			want:     "default",
+		},
+		{
+			name:  "generated flag property fills a missing property",
+			key:   "$feature/beta",
+			flags: betaFlag,
+			want:  true,
 		},
 	}
 	for _, tt := range tests {
@@ -664,11 +833,113 @@ func TestCallerOptionWinsOverSDKPersonProfileDefaults(t *testing.T) {
 			})
 			defer client.Close()
 
-			require.NoError(t, EnqueueWithContext(tt.ctx(), client, tt.capture))
+			key := tt.key
+			if key == "" {
+				key = "service"
+			}
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{Properties: tt.context})
+			require.NoError(t, EnqueueWithContext(ctx, client, Capture{DistinctId: "user-1", Event: "e", Properties: tt.event, Flags: tt.flags}))
+
+			properties := requireProperties(t, readSingleBatchEvent(t, body))
+			require.Contains(t, properties, key)
+			require.Equal(t, tt.want, properties[key])
+		})
+	}
+}
+
+func TestNilRequestSessionBlocksDefaultSession(t *testing.T) {
+	for _, msg := range []Message{
+		Capture{DistinctId: "user-1", Event: "e"},
+		Exception{DistinctId: "user-1", ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}}},
+	} {
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set(propertySessionID, "default-session"),
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				SessionId:  "request-session",
+				Properties: NewProperties().Set(propertySessionID, nil),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, msg))
 
 			event := readSingleBatchEvent(t, body)
-			require.Equal(t, tt.want, requireOptions(t, event)["process_person_profile"])
-			require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
+			require.NotContains(t, event, "session_id")
+			require.NotContains(t, requireProperties(t, event), propertySessionID)
+		})
+	}
+}
+
+func TestEnqueueWithContext_IdentityMessagesTakeContextPropertiesAndOptions(t *testing.T) {
+	tests := []struct {
+		name           string
+		msg            Message
+		wantDistinctID string
+		wantSessionID  interface{}
+	}{
+		{
+			name:           "identify",
+			msg:            Identify{DistinctId: "user-1", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
+			wantDistinctID: "user-1",
+			wantSessionID:  "ctx-session",
+		},
+		{
+			name:           "alias",
+			msg:            Alias{DistinctId: "user-1", Alias: "user-2", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
+			wantDistinctID: "user-1",
+			wantSessionID:  "ctx-session",
+		},
+		{
+			name:           "group identify gets no session",
+			msg:            GroupIdentify{Type: "company", Key: "acme", EventProperties: NewProperties().Set("own", "event"), Options: NewOptions().Set("cookieless_mode", false)},
+			wantDistinctID: "$company_acme",
+			wantSessionID:  nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, _ := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set("shared", "default").Set("default_only", "default"),
+				DefaultEventOptions:    NewOptions().Set("process_person_profile", true).Set("product_tour_id", "tour"),
+			})
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				DistinctId: "ctx-user",
+				SessionId:  "ctx-session",
+				Properties: NewProperties().Set("shared", "context").Set("context_only", "context"),
+				Options:    NewOptions().Set("process_person_profile", false).Set("cookieless_mode", true),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, tt.msg))
+
+			event := readSingleBatchEvent(t, body)
+			require.Equal(t, tt.wantDistinctID, event["distinct_id"])
+			require.Equal(t, tt.wantSessionID, event["session_id"])
+			properties := requireProperties(t, event)
+			require.Equal(t, "event", properties["own"])
+			require.Equal(t, "context", properties["shared"])
+			require.Equal(t, "context", properties["context_only"])
+			require.Equal(t, "default", properties["default_only"])
+			require.NotContains(t, properties, propertySessionID)
+			require.Equal(t, map[string]interface{}{
+				"cookieless_mode":        false,
+				"process_person_profile": false,
+				"product_tour_id":        "tour",
+			}, requireOptions(t, event))
 		})
 	}
 }

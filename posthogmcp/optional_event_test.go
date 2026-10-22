@@ -106,6 +106,7 @@ func TestCaptureOptionalEventsCarryIdentityAndSession(t *testing.T) {
 			for _, absent := range []string{"$mcp_is_error", "$mcp_source", "$mcp_parameters", "$mcp_response"} {
 				assert.NotContains(t, capture.Properties, absent)
 			}
+			assertPersonProfileOption(t, capture, nil)
 		})
 	}
 }
@@ -175,7 +176,11 @@ func TestCaptureMissingCapabilityProperties(t *testing.T) {
 }
 
 func TestCaptureOptionalEventsFallBackToSessionAndRequestContext(t *testing.T) {
-	requestContext := posthog.RequestContext{DistinctId: "request_user", SessionId: "request_session"}
+	requestContext := posthog.RequestContext{
+		DistinctId: "request_user",
+		SessionId:  "request_session",
+		Options:    posthog.Options{"cookieless_mode": true},
+	}
 	ctx := posthog.WithRequestContext(context.Background(), requestContext)
 
 	capture := captureOptional(t, func(a *Analytics) error {
@@ -183,12 +188,34 @@ func TestCaptureOptionalEventsFallBackToSessionAndRequestContext(t *testing.T) {
 	})
 	assert.Equal(t, "request_user", capture.DistinctId)
 	assert.Equal(t, "request_session", capture.Properties["$session_id"])
+	assert.Equal(t, posthog.Options{"cookieless_mode": true}, capture.Options)
 
 	capture = captureOptional(t, func(a *Analytics) error {
-		return a.CaptureUnknownTool(context.Background(), UnknownTool{EventContext: EventContext{SessionID: "s1"}, ToolName: "nope"})
+		return a.CaptureUnknownTool(ctx, UnknownTool{
+			EventContext: EventContext{Options: posthog.Options{"cookieless_mode": false, "ignore_sent_at": true}},
+			ToolName:     "nope",
+		})
 	})
-	assert.Equal(t, "s1", capture.DistinctId)
-	assert.Equal(t, false, capture.Properties["$process_person_profile"])
+	assert.Equal(t, posthog.Options{"cookieless_mode": false, "ignore_sent_at": true}, capture.Options)
+
+	anonymous := EventContext{SessionID: "s1", Options: posthog.Options{"process_person_profile": true}}
+	for name, capture := range map[string]func(*Analytics) error{
+		"unknown tool": func(a *Analytics) error {
+			return a.CaptureUnknownTool(context.Background(), UnknownTool{EventContext: anonymous, ToolName: "nope"})
+		},
+		"input required": func(a *Analytics) error {
+			return a.CaptureInputRequired(context.Background(), InputRequired{EventContext: anonymous, ToolName: "deploy"})
+		},
+		"missing capability": func(a *Analytics) error {
+			return a.CaptureMissingCapability(context.Background(), MissingCapability{EventContext: anonymous, ToolName: "get_more_tools"})
+		},
+	} {
+		t.Run(name+" without an identity is personless", func(t *testing.T) {
+			captured := captureOptional(t, capture)
+			assert.Equal(t, "s1", captured.DistinctId)
+			assertPersonProfileOption(t, captured, false)
+		})
+	}
 }
 
 func TestCaptureUnknownToolNameIsSanitizedAsFreeText(t *testing.T) {
