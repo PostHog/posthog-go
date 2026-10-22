@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.35.3
+
+### Patch Changes
+
+- 870af8a: Fix local feature flag string and regex operators to stringify explicit null values as "null", matching the flags service. Flag results and variant selection can change for explicit-null properties; missing properties remain inconclusive and eligible for remote evaluation.
+
 ## 1.35.2
 
 ### Patch Changes
