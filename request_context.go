@@ -133,9 +133,10 @@ func RequestContextFromContext(ctx context.Context) (RequestContext, bool) {
 // RequestContextOptions configures NewRequestContextMiddleware.
 type RequestContextOptions struct {
 	// CaptureTracingHeaders controls whether X-PostHog-Distinct-Id and X-PostHog-Session-Id
-	// are read into request-scoped analytics context. It defaults to false in NewRequestContextMiddleware
-	// because any client can set these headers; enable it only to link backend events to frontend
-	// sessions. When disabled, the middleware still attaches request metadata to the request context.
+	// are read into request-scoped analytics context. It defaults to true in NewRequestContextMiddleware.
+	// Any client can set these headers, so they only fill a missing distinct ID or session ID and must
+	// never be used for authentication. When disabled, the middleware still attaches request metadata
+	// to the request context.
 	CaptureTracingHeaders bool
 
 	// CapturePanics controls whether NewRequestContextMiddleware captures downstream panics as
@@ -166,14 +167,14 @@ func WithCapturePanics(client EnqueueClient) RequestContextOption {
 }
 
 func defaultRequestContextOptions() RequestContextOptions {
-	return RequestContextOptions{}
+	return RequestContextOptions{CaptureTracingHeaders: true}
 }
 
 // NewRequestContextMiddleware wraps an http.Handler with PostHog request-context extraction.
 //
-// The middleware always attaches safe request metadata to r.Context(). With
-// WithCaptureTracingHeaders(true) it also reads X-PostHog-Distinct-Id and
-// X-PostHog-Session-Id into request-scoped analytics context. Use
+// The middleware always attaches safe request metadata to r.Context(). By default it also reads
+// X-PostHog-Distinct-Id and X-PostHog-Session-Id into request-scoped analytics context;
+// WithCaptureTracingHeaders(false) turns that off. Use
 // EnqueueWithContext(r.Context(), ...) for captures inside the request so this metadata is applied.
 func NewRequestContextMiddleware(next http.Handler, opts ...RequestContextOption) http.Handler {
 	options := defaultRequestContextOptions()

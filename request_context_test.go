@@ -210,10 +210,14 @@ func TestEnqueueWithContext_ExceptionMissingIdentityWithRequestContextCreatesPer
 	require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
 }
 
-func TestRequestContextMiddleware_IgnoresTracingHeadersUnlessEnabled(t *testing.T) {
-	for name, opts := range map[string][]RequestContextOption{
-		"default":  nil,
-		"disabled": {WithCaptureTracingHeaders(false)},
+func TestRequestContextMiddleware_TracingHeaders(t *testing.T) {
+	for name, tc := range map[string]struct {
+		opts        []RequestContextOption
+		readHeaders bool
+	}{
+		"default":  {readHeaders: true},
+		"enabled":  {opts: []RequestContextOption{WithCaptureTracingHeaders(true)}, readHeaders: true},
+		"disabled": {opts: []RequestContextOption{WithCaptureTracingHeaders(false)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body, server := mockServer()
@@ -225,10 +229,15 @@ func TestRequestContextMiddleware_IgnoresTracingHeadersUnlessEnabled(t *testing.
 			handler := NewRequestContextMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				requestContext, ok := RequestContextFromContext(r.Context())
 				require.True(t, ok)
-				require.Empty(t, requestContext.DistinctId)
-				require.Empty(t, requestContext.SessionId)
+				if tc.readHeaders {
+					require.Equal(t, "header-user", requestContext.DistinctId)
+					require.Equal(t, "header-session", requestContext.SessionId)
+				} else {
+					require.Empty(t, requestContext.DistinctId)
+					require.Empty(t, requestContext.SessionId)
+				}
 				require.NoError(t, EnqueueWithContext(r.Context(), client, Capture{Event: "metadata-event"}))
-			}), opts...)
+			}), tc.opts...)
 
 			req := httptest.NewRequest(http.MethodGet, "https://example.com/api/test?token=secret", nil)
 			req.RemoteAddr = "10.0.0.2:1234"
@@ -238,16 +247,20 @@ func TestRequestContextMiddleware_IgnoresTracingHeadersUnlessEnabled(t *testing.
 			handler.ServeHTTP(httptest.NewRecorder(), req)
 
 			event := readSingleBatchEvent(t, body)
-			distinctID, ok := event["distinct_id"].(string)
-			require.True(t, ok)
-			require.NotEqual(t, "header-user", distinctID)
-			require.NoError(t, uuid.Validate(distinctID))
 			properties := requireProperties(t, event)
-			require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
-			require.NotContains(t, event, "session_id")
 			require.Equal(t, "/api/test", properties[propertyRequestPath])
 			require.Equal(t, "TestAgent/1.0", properties[propertyUserAgent])
 			require.Equal(t, "10.0.0.2", properties[propertyIP])
+			if tc.readHeaders {
+				require.Equal(t, "header-user", event["distinct_id"])
+				require.Equal(t, "header-session", event["session_id"])
+				return
+			}
+			distinctID, ok := event["distinct_id"].(string)
+			require.True(t, ok)
+			require.NoError(t, uuid.Validate(distinctID))
+			require.Equal(t, false, requireOptions(t, event)["process_person_profile"])
+			require.NotContains(t, event, "session_id")
 		})
 	}
 }
