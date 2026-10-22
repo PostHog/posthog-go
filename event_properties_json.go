@@ -43,7 +43,7 @@ type jsonPropertyVisit struct {
 func marshalEventProperties(properties Properties) (Properties, error) {
 	normalized := make(Properties, len(properties))
 	for key, value := range properties {
-		data, err := marshalEventProperty(value, make(map[jsonPropertyVisit]bool))
+		data, err := marshalEventProperty(reflect.ValueOf(value), make(map[jsonPropertyVisit]bool))
 		if err != nil {
 			return nil, err
 		}
@@ -52,13 +52,21 @@ func marshalEventProperties(properties Properties) (Properties, error) {
 	return normalized, nil
 }
 
-func marshalEventProperty(value interface{}, seen map[jsonPropertyVisit]bool) ([]byte, error) {
+func marshalEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) ([]byte, error) {
+	var value interface{}
+	if v.IsValid() {
+		if v.CanAddr() {
+			// Preserve pointer-receiver marshalers on addressable container elements.
+			value = v.Addr().Interface()
+		} else {
+			value = v.Interface()
+		}
+	}
 	data, err := marshalEventJSON(value)
 	if !isNonFiniteJSONError(err) {
 		return data, err
 	}
 
-	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Map, reflect.Slice, reflect.Ptr:
 		visit := jsonPropertyVisit{typ: v.Type(), pointer: v.Pointer()}
@@ -72,13 +80,13 @@ func marshalEventProperty(value interface{}, seen map[jsonPropertyVisit]bool) ([
 		defer delete(seen, visit)
 	}
 	switch v.Kind() {
-	case reflect.Ptr:
-		return marshalEventProperty(v.Elem().Interface(), seen)
+	case reflect.Ptr, reflect.Interface:
+		return marshalEventProperty(v.Elem(), seen)
 	case reflect.Map:
 		out := reflect.MakeMapWithSize(reflect.MapOf(v.Type().Key(), reflect.TypeOf(json.RawMessage{})), v.Len())
 		iter := v.MapRange()
 		for iter.Next() {
-			child, err := marshalEventProperty(iter.Value().Interface(), seen)
+			child, err := marshalEventProperty(iter.Value(), seen)
 			if err != nil {
 				return nil, err
 			}
@@ -88,7 +96,7 @@ func marshalEventProperty(value interface{}, seen map[jsonPropertyVisit]bool) ([
 	case reflect.Slice, reflect.Array:
 		out := make([]json.RawMessage, v.Len())
 		for i := range out {
-			child, err := marshalEventProperty(v.Index(i).Interface(), seen)
+			child, err := marshalEventProperty(v.Index(i), seen)
 			if err != nil {
 				return nil, err
 			}

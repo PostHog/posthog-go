@@ -261,3 +261,36 @@ func TestPrepareCaptureCycles(t *testing.T) {
 		}
 	}
 }
+
+type redactedProperty struct{ Value string }
+
+func (*redactedProperty) MarshalJSON() ([]byte, error) { return []byte(`"redacted"`), nil }
+
+func TestPrepareCapturePreservesAddressableMarshalers(t *testing.T) {
+	type row struct {
+		Number     float64
+		Credential redactedProperty
+	}
+	for _, mode := range []CaptureMode{CaptureModeLegacy, CaptureModeAnalyticsV1} {
+		rows := []row{{42, redactedProperty{"caller value"}}, {math.NaN(), redactedProperty{"caller value"}}}
+		array := [2]row{rows[0], rows[1]}
+		for name, value := range map[string]interface{}{"slice": rows, "slice pointer": &rows, "array pointer": &array} {
+			t.Run(fmt.Sprintf("%d/%s", mode, name), func(t *testing.T) {
+				msg := Capture{Event: "addressable", DistinctId: "user", Properties: Properties{"rows": value}}
+				var data []byte
+				var err error
+				if mode == CaptureModeLegacy {
+					data, _, err = prepareForSend(msg)
+				} else {
+					data, _, _, err = prepareForSendV1(msg, nil)
+				}
+				require.NoError(t, err)
+				var wire struct {
+					Properties map[string]interface{} `json:"properties"`
+				}
+				require.NoError(t, json.Unmarshal(data, &wire))
+				require.Equal(t, []interface{}{map[string]interface{}{"Number": float64(42), "Credential": "redacted"}, nil}, wire.Properties["rows"])
+			})
+		}
+	}
+}
