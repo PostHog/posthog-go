@@ -86,6 +86,21 @@ func makeUUID(u string) string {
 	return uuid.New().String()
 }
 
+const invalidEventUUIDWarning = "event Uuid is not a valid UUID; sending the event with a generated UUID"
+
+// resolveEventUUID applies the event uuid rule. A valid uuid is normalized and
+// an empty one is generated silently. An invalid one is replaced, and the
+// warning omits the value because callers can put their own data in the field.
+func resolveEventUUID(u string, logger Logger) string {
+	if canonical, ok := parseUUID(u); ok {
+		return canonical
+	}
+	if u != "" && logger != nil {
+		logger.Warnf(invalidEventUUIDWarning)
+	}
+	return makeUUID("")
+}
+
 // canonicalUUID returns u in the lowercase hyphenated form the capture
 // endpoint keys per-event results by. A value that does not parse is returned
 // unchanged; capture rejects its whole batch anyway.

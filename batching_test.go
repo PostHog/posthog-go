@@ -126,51 +126,53 @@ func TestBatching_LargeEventsTriggerFlush(t *testing.T) {
 	require.ElementsMatch(t, []int{4, 4, 2}, batchSizes)
 }
 
-// TestBatching_OversizedEventRejected verifies that events >500KB are rejected
-func TestBatching_OversizedEventRejected(t *testing.T) {
+// TestBatching_EventOverBatchTargetShipsAlone verifies that analytics has no
+// per-event cap by default: an event larger than MaxBatchBytes is sent in a
+// request of its own, and the events around it are not held back.
+func TestBatching_EventOverBatchTargetShipsAlone(t *testing.T) {
 	t.Parallel()
 
-	var received atomic.Int64
+	var batchEvents [][]string
+	var mu sync.Mutex
 	var failureCount atomic.Int64
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var b eventBatch
-		json.Unmarshal(body, &b)
-		received.Add(int64(len(b.Batch)))
+		var b struct {
+			Batch []struct {
+				Event string `json:"event"`
+			} `json:"batch"`
+		}
+		require.NoError(t, json.Unmarshal(body, &b))
+		var names []string
+		for _, e := range b.Batch {
+			names = append(names, e.Event)
+		}
+		mu.Lock()
+		batchEvents = append(batchEvents, names)
+		mu.Unlock()
 		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
-	callback := &testCallbackCounter{
-		onFailure: func() { failureCount.Add(1) },
-	}
-
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		Callback: callback,
+		Interval: time.Hour,
+		Callback: &testCallbackCounter{onFailure: func() { failureCount.Add(1) }},
 	})
 	require.NoError(t, err)
 
-	// Create an event with MANY properties to exceed 500KB
-	// Each property is ~50 bytes, need ~10000 properties to hit 500KB
-	oversizedProps := make(Properties, 15000)
-	for i := 0; i < 15000; i++ {
-		oversizedProps[generateDistinctId(i)] = generateDistinctId(i + 100000)
-	}
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "user", Event: "before"}))
+	require.NoError(t, client.Enqueue(Capture{
+		DistinctId: "user", Event: "oversized",
+		Properties: Properties{"payload": strings.Repeat("x", DefaultMaxBatchBytes+200000)},
+	}))
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "user", Event: "after"}))
+	require.NoError(t, client.Close())
 
-	err = client.Enqueue(Capture{
-		DistinctId: "user_1",
-		Event:      "oversized_event",
-		Properties: oversizedProps,
-	})
-	require.NoError(t, err) // Enqueue itself doesn't fail
-
-	client.Close()
-
-	// The oversized event should be rejected via callback
-	require.Equal(t, int64(0), received.Load(), "Oversized event should not be delivered")
-	require.Equal(t, int64(1), failureCount.Load(), "Should have 1 failure callback for oversized event")
+	require.Zero(t, failureCount.Load())
+	// Batches upload concurrently, so only the split is fixed, not the arrival order.
+	require.ElementsMatch(t, [][]string{{"before"}, {"oversized"}, {"after"}}, batchEvents)
 }
 
 // TestBatching_MixedCardinalityBatching verifies correct batching with mixed event sizes

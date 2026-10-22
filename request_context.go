@@ -42,8 +42,8 @@ type requestContextKey struct{}
 // request metadata such as $current_url, $request_method, $request_path, $user_agent, and $ip.
 type RequestContext struct {
 	// DistinctId is the request-scoped user distinct ID. It fills a missing
-	// DistinctId on Capture and Exception events. It never changes the ids of an
-	// Identify or an Alias.
+	// DistinctId on Capture, Exception and GroupIdentify events. It never changes
+	// the ids of an Identify or an Alias.
 	DistinctId string
 	// SessionId is the request-scoped PostHog session ID. It is set as the
 	// $session_id property of every event except GroupIdentify before
@@ -261,14 +261,38 @@ type captureContext struct {
 	generatedPersonlessDistinctID bool
 }
 
+// blankAsMissing returns "" for an empty or whitespace-only id, which PostHog
+// would drop as missing, and the id unchanged otherwise.
+func blankAsMissing(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return ""
+	}
+	return id
+}
+
+// groupIdentifyDistinctID picks the $groupidentify distinct ID: the caller's,
+// then the request context's, then "$<type>_<key>". PostHog creates a person
+// for each new distinct ID, so it is never random.
+func groupIdentifyDistinctID(ctx context.Context, msg GroupIdentify) string {
+	if id := blankAsMissing(msg.DistinctId); id != "" {
+		return id
+	}
+	if requestContext, ok := RequestContextFromContext(ctx); ok {
+		if id := blankAsMissing(requestContext.DistinctId); id != "" {
+			return id
+		}
+	}
+	return groupDistinctID(msg.Type, msg.Key)
+}
+
 // resolveCaptureContext resolves the event's distinct ID from the event or the
 // request context, and generates a personless one when neither has it.
 func resolveCaptureContext(ctx context.Context, distinctID string, fieldType string) (captureContext, error) {
 	requestContext, hasRequestContext := RequestContextFromContext(ctx)
-	resolvedDistinctID := distinctID
+	resolvedDistinctID := blankAsMissing(distinctID)
 	isPersonless := false
 	if resolvedDistinctID == "" && hasRequestContext {
-		resolvedDistinctID = requestContext.DistinctId
+		resolvedDistinctID = blankAsMissing(requestContext.DistinctId)
 	}
 	if resolvedDistinctID == "" {
 		if !hasRequestContext {

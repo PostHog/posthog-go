@@ -670,11 +670,12 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 
 	switch m := msg.(type) {
 	case Alias:
+		m.DistinctId, m.Alias = blankAsMissing(m.DistinctId), blankAsMissing(m.Alias)
 		if err = m.Validate(); err != nil {
 			return
 		}
 		m.Type = "alias"
-		m.Uuid = makeUUID(m.Uuid)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
@@ -686,9 +687,10 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Alias)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -697,11 +699,12 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		return
 
 	case Identify:
+		m.DistinctId = blankAsMissing(m.DistinctId)
 		if err = m.Validate(); err != nil {
 			return
 		}
 		m.Type = "identify"
-		m.Uuid = makeUUID(m.Uuid)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
@@ -713,9 +716,10 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Identify)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -727,7 +731,8 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 		if err = m.Validate(); err != nil {
 			return
 		}
-		m.Uuid = makeUUID(m.Uuid)
+		m.DistinctId = groupIdentifyDistinctID(ctx, m)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
@@ -739,9 +744,10 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(GroupIdentify)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.IsServer = boolProperty(m.EventProperties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.EventProperties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -754,7 +760,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return
 		}
 		m.Type = "capture"
-		m.Uuid = makeUUID(m.Uuid)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.IsServer = c.GetIsServer()
 		captureContext, captureContextErr := resolveCaptureContext(ctx, m.DistinctId, "posthog.Capture")
@@ -829,8 +835,9 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Capture)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.IsServer = boolProperty(m.Properties, propertyIsServer)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -840,7 +847,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 
 	case Exception:
 		m.Type = "exception"
-		m.Uuid = makeUUID(m.Uuid)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.Timestamp = makeTimestamp(m.Timestamp, ts)
 		m.DisableGeoIP = c.GetDisableGeoIP()
 		m.IsServer = c.GetIsServer()
@@ -861,9 +868,10 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			return nil
 		}
 		m = processed.(Exception)
+		m.Uuid = resolveEventUUID(m.Uuid, c.Logger)
 		m.IsServer = boolProperty(m.Properties, propertyIsServer)
 		m.DisableGeoIP = boolProperty(m.Properties, propertyGeoipDisable)
-		data, apiMsg, eventUuid, serErr := prepareForSend(m)
+		data, apiMsg, eventUuid, serErr := prepareForSend(m, c.Logger)
 		if serErr != nil {
 			c.notifyLocalFailure(l, []APIMessage{apiMsg}, serErr)
 			return
@@ -1733,7 +1741,7 @@ func (c *client) loop(l *lane) {
 	processMessage := func(prepared preparedMessage) bool {
 		msgSize := len(prepared.data)
 
-		if msgSize > l.cfg.maxEventBytes {
+		if l.cfg.maxEventBytes > 0 && msgSize > l.cfg.maxEventBytes {
 			c.Errorf("%s: message exceeds maximum size (%d > %d)", l.cfg.name, msgSize, l.cfg.maxEventBytes)
 			c.notifyLocalFailure(l, []APIMessage{prepared.msg}, ErrMessageTooBig)
 			return false
@@ -1762,7 +1770,7 @@ func (c *client) loop(l *lane) {
 			if !processMessage(prepared) {
 				continue
 			}
-			c.debugf("buffer (%d/%d, %d bytes) %v", len(batchData), c.BatchSize, batchSize, prepared.msg)
+			c.debugf("%s: buffer (%d/%d, %d bytes)", l.cfg.name, len(batchData), c.BatchSize, batchSize)
 
 		case reply := <-l.flushRequests:
 			// Bound the drain to the queue observed at this barrier. Continual
