@@ -455,6 +455,69 @@ func TestMatchPropertyNumber(t *testing.T) {
 	}
 }
 
+func TestMatchPropertyStringOperatorsExplicitNull(t *testing.T) {
+	tests := []struct {
+		operator string
+		pattern  string
+		expected bool
+	}{
+		{"icontains", "NUL", true},
+		{"icontains", "x", false},
+		{"icontains", "<nil>", false},
+		{"icontains", "", true},
+		{"not_icontains", "NUL", false},
+		{"not_icontains", "x", true},
+		{"not_icontains", "<nil>", true},
+		{"not_icontains", "", false},
+		{"starts_with", "NU", true},
+		{"starts_with", "x", false},
+		{"starts_with", "<", false},
+		{"starts_with", "", true},
+		{"not_starts_with", "NU", false},
+		{"not_starts_with", "x", true},
+		{"not_starts_with", "<", true},
+		{"not_starts_with", "", false},
+		{"ends_with", "LL", true},
+		{"ends_with", "x", false},
+		{"ends_with", ">", false},
+		{"ends_with", "", true},
+		{"not_ends_with", "LL", false},
+		{"not_ends_with", "x", true},
+		{"not_ends_with", ">", true},
+		{"not_ends_with", "", false},
+		{"regex", "^null$", true},
+		{"regex", "ul", true},
+		{"regex", "x", false},
+		{"regex", "^<nil>$", false},
+		{"regex", "^NULL$", false},
+		{"regex", "", true},
+		{"regex", "[", false},
+		{"not_regex", "^null$", false},
+		{"not_regex", "ul", false},
+		{"not_regex", "x", true},
+		{"not_regex", "^<nil>$", true},
+		{"not_regex", "^NULL$", true},
+		{"not_regex", "", false},
+		{"not_regex", "[", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.operator+"/"+tt.pattern, func(t *testing.T) {
+			property := FlagProperty{Key: "key", Operator: tt.operator, Value: tt.pattern}
+			matched, err := matchProperty(property, Properties{"key": nil})
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, matched)
+
+			t.Run("missing", func(t *testing.T) {
+				matched, err := matchProperty(property, Properties{})
+				require.False(t, matched)
+				require.ErrorIs(t, err, errMissingPropertyValue)
+				var inconclusiveErr *InconclusiveMatchError
+				require.ErrorAs(t, err, &inconclusiveErr)
+			})
+		})
+	}
+}
+
 func TestMatchPropertyRegex(t *testing.T) {
 
 	shouldMatch := []interface{}{"value.com", "value2.com"}
