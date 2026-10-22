@@ -411,6 +411,111 @@ func TestSendTerminalResultsNotRetried(t *testing.T) {
 	}
 }
 
+func TestSendDuplicatesDropped(t *testing.T) {
+	invalidOptions := "invalid_options"
+	type wantFailure struct{ event, result, details string }
+	dup := func(event string) wantFailure { return wantFailure{event, resultDrop, detailsDuplicateEventUUID} }
+	copyOf := func(id, event string) Capture { return Capture{Uuid: id, Event: event, DistinctId: "d"} }
+	cases := []struct {
+		name         string
+		msgs         []Capture
+		results      map[string]eventResult
+		wantResent   []string
+		wantSuccess  []string
+		wantFailures []wantFailure
+	}{
+		{
+			name:         "kept_ok_two_dropped",
+			msgs:         []Capture{copyOf(uuidA, "first"), copyOf(uuidA, "copy1"), copyOf(uuidA, "copy2")},
+			results:      map[string]eventResult{uuidA: {Result: resultOk, DuplicatesDropped: 2}},
+			wantSuccess:  []string{"first"},
+			wantFailures: []wantFailure{dup("copy1"), dup("copy2")},
+		},
+		{
+			name:         "kept_drop_keeps_its_details",
+			msgs:         []Capture{copyOf(uuidA, "first"), copyOf(uuidA, "copy1")},
+			results:      map[string]eventResult{uuidA: {Result: resultDrop, Details: &invalidOptions, DuplicatesDropped: 1}},
+			wantFailures: []wantFailure{{"first", resultDrop, invalidOptions}, dup("copy1")},
+		},
+		{
+			name:         "kept_retry_resends_only_first",
+			msgs:         []Capture{copyOf(uuidA, "first"), copyOf(uuidA, "copy1")},
+			results:      map[string]eventResult{uuidA: {Result: resultRetry, DuplicatesDropped: 1}},
+			wantResent:   []string{uuidA},
+			wantSuccess:  []string{"first"},
+			wantFailures: []wantFailure{dup("copy1")},
+		},
+		{
+			name:         "interleaved_uuids",
+			msgs:         []Capture{copyOf(uuidA, "first"), copyOf(uuidB, "other"), copyOf(uuidA, "copy1")},
+			results:      map[string]eventResult{uuidA: {Result: resultOk, DuplicatesDropped: 1}, uuidB: {Result: resultOk}},
+			wantSuccess:  []string{"first", "other"},
+			wantFailures: []wantFailure{dup("copy1")},
+		},
+		{
+			name:         "copies_past_count_take_kept_result",
+			msgs:         []Capture{copyOf(uuidA, "first"), copyOf(uuidA, "copy1"), copyOf(uuidA, "copy2")},
+			results:      map[string]eventResult{uuidA: {Result: resultOk, DuplicatesDropped: 1}},
+			wantSuccess:  []string{"first", "copy2"},
+			wantFailures: []wantFailure{dup("copy1")},
+		},
+		{
+			name:        "repeat_without_count_shares_result",
+			msgs:        []Capture{copyOf(uuidA, "first"), copyOf(uuidA, "copy1")},
+			results:     map[string]eventResult{uuidA: {Result: resultOk}},
+			wantSuccess: []string{"first", "copy1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cb := &recordingCallback{}
+			srv := &captureTestServer{respond: func(attempt int, uuids []string) (int, string, string) {
+				if attempt == 1 {
+					return http.StatusOK, resultsBody(t, tc.results), ""
+				}
+				m := map[string]eventResult{}
+				for _, u := range uuids {
+					m[u] = eventResult{Result: resultOk}
+				}
+				return http.StatusOK, resultsBody(t, m), ""
+			}}
+			ts := httptest.NewServer(srv.handler(t))
+			defer ts.Close()
+
+			msgs := make([]Message, len(tc.msgs))
+			for i, m := range tc.msgs {
+				msgs[i] = m
+			}
+			c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+			c.send(c.analytics, captureBatch(t, msgs...))
+
+			reqs := srv.snapshot()
+			if tc.wantResent == nil {
+				require.Len(t, reqs, 1, "no retry expected")
+			} else {
+				require.Len(t, reqs, 2)
+				require.Equal(t, tc.wantResent, reqs[1].uuids)
+			}
+
+			var gotSuccess []string
+			for _, m := range cb.successes {
+				gotSuccess = append(gotSuccess, m.(CaptureInApi).Event)
+			}
+			require.Equal(t, tc.wantSuccess, gotSuccess)
+
+			var gotFailures []wantFailure
+			for _, f := range cb.failures {
+				var evErr *CaptureEventError
+				require.True(t, errors.As(f.err, &evErr), "failure is %T, want *CaptureEventError", f.err)
+				require.Equal(t, uuidA, evErr.EventUUID)
+				require.False(t, evErr.Exhausted)
+				gotFailures = append(gotFailures, wantFailure{f.msg.(CaptureInApi).Event, evErr.Result, evErr.Details})
+			}
+			require.Equal(t, tc.wantFailures, gotFailures)
+		})
+	}
+}
+
 func TestSendCorrelatesNonCanonicalUuid(t *testing.T) {
 	// BeforeSend can set any uuid form capture parses; capture keys results by
 	// the canonical form. The verdict must still reach the event.

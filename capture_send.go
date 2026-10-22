@@ -166,17 +166,33 @@ func (c *client) send(l *lane, pb preparedBatch) {
 // partitionResults splits a 2xx batch by per-event result: terminal events
 // fire their callback now, "retry" events are returned for the next attempt.
 // A uuid absent from the results map is silently dropped (no callback).
+// For a repeated uuid, the first copy in request order takes the result and
+// the next DuplicatesDropped copies fail as dropped duplicates.
 func (c *client) partitionResults(l *lane, res *attemptResult, data []json.RawMessage, msgs []APIMessage, uuids []string) ([]json.RawMessage, []APIMessage, []string) {
 	var nextData []json.RawMessage
 	var nextMsgs []APIMessage
 	var nextUuids []string
 	var dropped int
+	// copiesSeen stays nil unless capture reports dropped duplicates.
+	var copiesSeen map[string]int
 	for idx, id := range uuids {
 		r, ok := res.results[id]
 		if !ok {
 			// Matches posthog-rs: events absent from the results map are treated
 			// as accepted (no retry, no error callback).
 			continue
+		}
+		if r.DuplicatesDropped > 0 {
+			if copiesSeen == nil {
+				copiesSeen = make(map[string]int)
+			}
+			n := copiesSeen[id]
+			copiesSeen[id] = n + 1
+			if n > 0 && n <= r.DuplicatesDropped {
+				dropped++
+				c.notifyFailure([]APIMessage{msgs[idx]}, &CaptureEventError{EventUUID: id, Result: resultDrop, Details: detailsDuplicateEventUUID, Endpoint: l.cfg.path})
+				continue
+			}
 		}
 		switch r.Result {
 		case resultRetry:
@@ -418,8 +434,9 @@ func newCaptureRequestError(l *lane, res *attemptResult, underlying error) *Capt
 // tallies per-event directives (ok/warning/drop/retry/other), so operators can
 // debug partial-submission outcomes without diffing the raw response body.
 func (c *client) logResultSummary(requestId string, attempt int, results map[string]eventResult) {
-	var ok, warning, drop, retry, other int
+	var ok, warning, drop, retry, other, duplicates int
 	for _, r := range results {
+		duplicates += r.DuplicatesDropped
 		switch r.Result {
 		case resultOk:
 			ok++
@@ -434,7 +451,7 @@ func (c *client) logResultSummary(requestId string, attempt int, results map[str
 		}
 	}
 	c.debugf(
-		"capture response request_id=%s attempt=%d events=%d ok=%d warning=%d drop=%d retry=%d other=%d",
-		requestId, attempt, len(results), ok, warning, drop, retry, other,
+		"capture response request_id=%s attempt=%d events=%d ok=%d warning=%d drop=%d retry=%d other=%d duplicates_dropped=%d",
+		requestId, attempt, len(results), ok, warning, drop, retry, other, duplicates,
 	)
 }
