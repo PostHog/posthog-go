@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,21 +48,178 @@ var (
 // regexCache caches compiled regexps for flag property matching.
 // The set of patterns is bounded by the number of flag conditions (loaded once),
 // so this cache grows proportionally and avoids re-compiling on every evaluation.
-var regexCache sync.Map // map[string]*regexp.Regexp
+var regexCache sync.Map // map[string]*flagRegex
 
-// getOrCompileRegex returns a cached compiled regexp for the given pattern,
-// or compiles and caches it on first use.
-func getOrCompileRegex(pattern string) (*regexp.Regexp, error) {
+var errRegexRequiresServer = &InconclusiveMatchError{"Regex requires server evaluation"}
+
+type flagRegex struct {
+	*regexp.Regexp
+	asciiClasses bool
+}
+
+// getOrCompileRegex caches only patterns whose syntax has shared service semantics.
+func getOrCompileRegex(pattern string) (*flagRegex, error) {
 	if cached, ok := regexCache.Load(pattern); ok {
-		return cached.(*regexp.Regexp), nil
+		return cached.(*flagRegex), nil
 	}
-	r, err := regexp.Compile(pattern)
+	asciiClasses, err := classifyFlagRegex(pattern)
 	if err != nil {
 		return nil, err
 	}
-	// Store and return — concurrent stores of the same pattern are harmless
-	regexCache.Store(pattern, r)
-	return r, nil
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		// These errors describe invalid shared syntax, not an RE2 capability limit.
+		syntaxErr := err.(*syntax.Error)
+		if syntaxErr.Code == syntax.ErrMissingRepeatArgument && strings.HasPrefix(syntaxErr.Expr, "{") {
+			return nil, errRegexRequiresServer
+		}
+		switch syntaxErr.Code {
+		case syntax.ErrMissingBracket, syntax.ErrMissingParen, syntax.ErrUnexpectedParen,
+			syntax.ErrMissingRepeatArgument, syntax.ErrInvalidCharRange, syntax.ErrTrailingBackslash:
+			return nil, err
+		default:
+			return nil, errRegexRequiresServer
+		}
+	}
+	if hasRepeatedRegexAssertion(parsed) {
+		return nil, errRegexRequiresServer
+	}
+	r, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, errRegexRequiresServer
+	}
+	compiled := &flagRegex{Regexp: r, asciiClasses: asciiClasses}
+	// Concurrent stores of the same pattern are harmless.
+	regexCache.Store(pattern, compiled)
+	return compiled, nil
+}
+
+// RE2 shorthands are ASCII-only; Rust's are Unicode-aware (and include vertical tab).
+// Nested sets and set operations can compile in RE2 with a different interpretation.
+func classifyFlagRegex(pattern string) (asciiClasses bool, err error) {
+	inClass := false
+	classStart := 0
+	classHyphen := false
+	for i := 0; i < len(pattern); i++ {
+		previousClassHyphen := classHyphen
+		classHyphen = false
+		switch pattern[i] {
+		case '\\':
+			i++
+			if i == len(pattern) {
+				break
+			}
+			switch pattern[i] {
+			case 'd', 'D', 's', 'S', 'w', 'W':
+				if inClass && (previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']') {
+					return false, errRegexRequiresServer
+				}
+				asciiClasses = true
+			case '<', '>', 'b', 'B':
+				// Outside classes, even ASCII boundaries can exhaust the service's
+				// backtracking budget. Inside classes, RE2 lacks Rust's backspace.
+				return false, errRegexRequiresServer
+			case 'x':
+				if i+1 < len(pattern) && pattern[i+1] == '{' {
+					if end := strings.IndexByte(pattern[i+2:], '}'); end >= 0 {
+						i += end + 2
+					}
+				}
+			case 'p', 'P':
+				if i+1 < len(pattern) {
+					if pattern[i+1] == '{' {
+						if end := strings.IndexByte(pattern[i+2:], '}'); end >= 0 {
+							i += end + 2
+						}
+					} else {
+						i++
+					}
+				}
+				if inClass && (previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']') {
+					return false, errRegexRequiresServer
+				}
+			case 'A', 'z', 'a', 'f', 'n', 'r', 't', 'v':
+			default:
+				c := pattern[i]
+				if c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+					if c == 'q' { // Invalid in both engines.
+						return false, &syntax.Error{Code: syntax.ErrInvalidEscape, Expr: `\q`}
+					}
+					return false, errRegexRequiresServer
+				}
+			}
+		case '[':
+			if inClass {
+				if strings.HasPrefix(pattern[i:], "[:") {
+					if end := strings.Index(pattern[i+2:], ":]"); end >= 0 {
+						i += end + 3
+						if previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']' {
+							return false, errRegexRequiresServer
+						}
+						continue
+					}
+				}
+				return false, errRegexRequiresServer
+			}
+			inClass = true
+			classStart = i
+		case ']':
+			if inClass && (i == classStart+1 || i == classStart+2 && pattern[classStart+1] == '^') {
+				continue // A leading ] is a literal class member in both engines.
+			}
+			inClass = false
+		case '&', '-', '~':
+			if inClass && i+1 < len(pattern) && pattern[i+1] == pattern[i] {
+				return false, errRegexRequiresServer
+			}
+			classHyphen = inClass && pattern[i] == '-' && i > classStart+1 && !(i == classStart+2 && pattern[classStart+1] == '^')
+		case '{':
+			if !inClass {
+				if i+1 < len(pattern) && pattern[i+1] == ',' {
+					return false, errRegexRequiresServer
+				}
+				if end := strings.IndexByte(pattern[i+1:], '}'); end >= 0 {
+					for _, count := range strings.Split(pattern[i+1:i+1+end], ",") {
+						if len(count) > 1 && count[0] == '0' && count[1] >= '0' && count[1] <= '9' {
+							return false, errRegexRequiresServer
+						}
+					}
+				}
+			}
+		}
+	}
+	return asciiClasses, nil
+}
+
+func regexAssertionOnly(r *syntax.Regexp) bool {
+	switch r.Op {
+	case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText,
+		syntax.OpWordBoundary, syntax.OpNoWordBoundary:
+		return true
+	case syntax.OpCapture, syntax.OpConcat, syntax.OpAlternate:
+		for _, sub := range r.Sub {
+			if !regexAssertionOnly(sub) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func hasRepeatedRegexAssertion(r *syntax.Regexp) bool {
+	switch r.Op {
+	case syntax.OpStar, syntax.OpPlus, syntax.OpQuest, syntax.OpRepeat:
+		if regexAssertionOnly(r.Sub[0]) {
+			return true
+		}
+	}
+	for _, sub := range r.Sub {
+		if hasRepeatedRegexAssertion(sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // flagsState holds the feature flag data that is atomically swapped during updates.
@@ -1461,24 +1619,28 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 		return !strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
-	if operator == "regex" {
+	if operator == "regex" || operator == "not_regex" {
 		r, err := getOrCompileRegex(valueToString(value))
-		// invalid regex
 		if err != nil {
+			if isInconclusiveError(err) {
+				return false, err
+			}
+			// Invalid shared syntax fails both operators, without negation.
 			return false, nil
 		}
-
-		return r.MatchString(valueToString(override_value)), nil
-	}
-
-	if operator == "not_regex" {
-		r, err := getOrCompileRegex(valueToString(value))
-		// invalid regex
-		if err != nil {
-			return false, nil
+		input := valueToString(override_value)
+		if r.asciiClasses {
+			for _, c := range input {
+				if c > 127 || c == '\v' {
+					return false, errRegexRequiresServer
+				}
+			}
 		}
-
-		return !r.MatchString(valueToString(override_value)), nil
+		matched := r.MatchString(input)
+		if operator == "not_regex" {
+			matched = !matched
+		}
+		return matched, nil
 	}
 
 	if operator == "gt" {
