@@ -3,7 +3,7 @@ module github.com/posthog/posthog-go/otel
 go 1.25.0
 
 require (
-	github.com/posthog/posthog-go v1.34.0
+	github.com/posthog/posthog-go v1.35.2
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0

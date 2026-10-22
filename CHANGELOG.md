@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.35.2
+
+### Patch Changes
+
+- de638c7: `posthogmcp` now sets `$exception_source: "mcp.tool_call"` on the `$exception` it emits alongside a failed tool call, and strips caller-supplied reserved exception metadata from MCP events.
+
 ## 1.35.1
 
 ### Patch Changes
