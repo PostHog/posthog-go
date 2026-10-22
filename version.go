@@ -6,7 +6,7 @@ import (
 )
 
 // Version of the client.
-const Version = "1.35.2"
+const Version = "1.35.3"
 
 var (
 	cachedVersion     string
