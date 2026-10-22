@@ -140,7 +140,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 	custom := make(posthog.Properties, len(call.Properties))
 	for key, value := range call.Properties {
-		if isReservedProperty(key) || key == propertyProcessProfile {
+		if isReservedCustomProperty(key) {
 			continue
 		}
 		custom[key] = value
@@ -174,6 +174,36 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 	}
 
 	return prepared, nil
+}
+
+func isReservedCustomProperty(key string) bool {
+	if strings.HasPrefix(key, "$mcp_") {
+		return true
+	}
+	switch key {
+	case propertyGroups,
+		propertySet,
+		propertyProcessProfile,
+		propertySessionID,
+		propertyExceptionLevel,
+		propertyExceptionSource,
+		"$debug_images",
+		"$exception_fingerprint",
+		"$exception_fingerprint_record",
+		"$exception_fingerprint_version",
+		"$exception_functions",
+		"$exception_handled",
+		"$exception_issue_id",
+		"$exception_list",
+		"$exception_release",
+		"$exception_sources",
+		"$exception_types",
+		"$exception_values",
+		"$cymbal_errors":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeModel(model string) string {
@@ -225,18 +255,6 @@ func prepareProperties(field string, properties posthog.Properties) (posthog.Pro
 		return nil, errors.New("posthogmcp: normalized properties must be an object")
 	}
 	return posthog.Properties(value), nil
-}
-
-// isReservedProperty reports whether key is set only from ToolCall fields.
-func isReservedProperty(key string) bool {
-	if strings.HasPrefix(key, "$mcp_") {
-		return true
-	}
-	switch key {
-	case propertyGroups, propertySet, propertySessionID, propertyExceptionLevel:
-		return true
-	}
-	return false
 }
 
 func prepareGroups(groups posthog.Groups) (posthog.Groups, error) {
