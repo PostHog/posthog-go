@@ -1403,6 +1403,13 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 		return true, nil
 	}
 
+	if override_value == nil {
+		switch operator {
+		case "icontains", "not_icontains", "starts_with", "not_starts_with", "ends_with", "not_ends_with", "regex", "not_regex":
+			override_value = "null"
+		}
+	}
+
 	if operator == "icontains" {
 		return strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
@@ -1438,24 +1445,13 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	}
 
 	if operator == "not_regex" {
-		// The feature flags evaluation service stringifies an explicit JSON null
-		// as "null" before regex matching. Avoid Go's default "<nil>" representation.
-		overrideValueString := valueToString(override_value)
-		if override_value == nil {
-			overrideValueString = "null"
-		}
-		// Mirror the "regex" branch above: coerce both sides with valueToString
-		// so all property/flag value types are handled. The previous manual
-		// string/int type switch errored on other types, most notably float64,
-		// which is what JSON numbers deserialize to, so not_regex failed on a
-		// numeric property value even though regex handled it.
 		r, err := getOrCompileRegex(valueToString(value))
 		// invalid regex
 		if err != nil {
 			return false, nil
 		}
 
-		return !r.MatchString(overrideValueString), nil
+		return !r.MatchString(valueToString(override_value)), nil
 	}
 
 	if operator == "gt" {
