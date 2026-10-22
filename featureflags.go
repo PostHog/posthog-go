@@ -42,6 +42,7 @@ var (
 	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
 	errAmbiguousExactNumber     = &InconclusiveMatchError{"Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float"}
 	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+	errHoldoutMissingDeviceID   = &InconclusiveMatchError{msg: "Can't evaluate a device-bucketed holdout without a device id"}
 	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
 )
 
@@ -306,6 +307,8 @@ type Filter struct {
 	EarlyExit bool `json:"early_exit"`
 	// Multivariate contains variant definitions for multivariate flags.
 	Multivariate *Variants `json:"multivariate"`
+	// Holdout contains the experiment holdout configuration, when the flag has one.
+	Holdout *Holdout `json:"holdout"`
 	// Payloads maps flag values or variant keys to raw JSON payloads.
 	Payloads map[string]json.RawMessage `json:"payloads"`
 	// DecodedPayloads holds pre-decoded string versions of Payloads.
@@ -320,6 +323,16 @@ type Filter struct {
 type Variants struct {
 	// Variants is the ordered list of possible flag variants.
 	Variants []FlagVariant `json:"variants"`
+}
+
+// Holdout is the experiment holdout configuration attached to a feature flag.
+// Identifiers inside the holdout are excluded from the flag's release conditions
+// and resolve to the synthetic variant "holdout-<id>".
+type Holdout struct {
+	// ID identifies the holdout. It is rendered into the synthetic variant key.
+	ID interface{} `json:"id"`
+	// ExclusionPercentage is the share of identifiers held out, from 0 to 100.
+	ExclusionPercentage *float64 `json:"exclusion_percentage"`
 }
 
 // FlagVariant describes one multivariate feature flag variant.
@@ -1340,8 +1353,12 @@ func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
 	return true
 }
 
+func isDeviceBucketed(flag FeatureFlag) bool {
+	return flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice
+}
+
 func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) string {
-	if flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice && deviceId != nil {
+	if isDeviceBucketed(flag) && deviceId != nil {
 		return *deviceId
 	}
 	return distinctId
@@ -1377,7 +1394,18 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 ) (interface{}, error) {
 	state := poller.evaluationState(snapshots)
 	conditions := flag.Filters.Groups
+	// Holdouts precede release conditions: a held-out identifier is excluded from
+	// the flag's targeting entirely rather than bucketed into one of its variants.
+	// Per-condition aggregation below never changes holdout membership.
+	holdoutVariant, held, err := getHoldoutVariant(flag, distinctId, deviceId)
+	if err != nil {
+		return nil, err
+	}
+	if held {
+		return holdoutVariant, nil
+	}
 	bucketingId := getBucketingID(flag, distinctId, deviceId)
+
 	flagAggregation := flag.Filters.AggregationGroupTypeIndex
 	groupTypeMapping := state.groups
 	isInconclusive := false
@@ -2550,9 +2578,17 @@ func checkIfSimpleFlagEnabled(key, bucketingId string, rolloutPercentage float64
 // The input is: key + "." + distinctId + salt.
 // The "." separator is appended internally so callers don't need to concatenate.
 func calculateHash(key, distinctId, salt string) float64 {
+	return calculateHashWithSeparator(key, ".", distinctId, salt)
+}
+
+// calculateHashWithSeparator computes the bucketing hash for key + separator +
+// distinctId + salt. Holdouts join with "-" rather than the "." used by flag
+// rollouts, and the separator decides which population is selected, so it is
+// explicit rather than assumed.
+func calculateHashWithSeparator(key, separator, distinctId, salt string) float64 {
 	// Build the input in a stack-allocated buffer to avoid heap allocations.
 	// sha1.Sum takes a complete []byte and returns a [20]byte — no heap escapes.
-	totalLen := len(key) + 1 + len(distinctId) + len(salt) // +1 for "."
+	totalLen := len(key) + len(separator) + len(distinctId) + len(salt)
 	var buf [256]byte
 	var input []byte
 	if totalLen <= len(buf) {
@@ -2561,12 +2597,59 @@ func calculateHash(key, distinctId, salt string) float64 {
 		input = make([]byte, 0, totalLen)
 	}
 	input = append(input, key...)
-	input = append(input, '.')
+	input = append(input, separator...)
 	input = append(input, distinctId...)
 	input = append(input, salt...)
 
 	digest := sha1.Sum(input)
 	return float64(binary.BigEndian.Uint64(digest[:8])>>4) / LONG_SCALE
+}
+
+// holdoutHash computes holdout membership for a bucketing value. Neither the
+// flag key nor the holdout id takes part, so the same identity lands in the
+// same holdout population across every flag, matching the server.
+func holdoutHash(bucketingValue string) float64 {
+	return calculateHashWithSeparator("holdout", "-", bucketingValue, "")
+}
+
+// getHoldoutVariant returns the synthetic "holdout-<id>" variant when the flag
+// has a usable holdout and the identity falls inside it. The server clamps
+// out-of-range percentages rather than rejecting them, and treats 100 as
+// everyone without hashing, so a full holdout cannot miss on a hash boundary.
+//
+// A partial holdout on a device-bucketed person flag needs the device id;
+// hashing the distinct id instead would put an unrelated identity in the
+// holdout, so the evaluation stays inconclusive. Group flags ignore the
+// bucketing identifier and hash the group key.
+func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (variant string, held bool, err error) {
+	holdout := flag.Filters.Holdout
+	if holdout == nil || holdout.ID == nil || holdout.ExclusionPercentage == nil {
+		return "", false, nil
+	}
+	holdoutID, ok := holdoutIDToString(holdout.ID)
+	if !ok {
+		return "", false, nil
+	}
+
+	percentage := math.Min(math.Max(*holdout.ExclusionPercentage, 0), 100)
+	if percentage != 100 {
+		if flag.Filters.AggregationGroupTypeIndex == nil && isDeviceBucketed(flag) && (deviceId == nil || *deviceId == "") {
+			return "", false, errHoldoutMissingDeviceID
+		}
+		if holdoutHash(getBucketingID(flag, distinctId, deviceId)) > percentage/100 {
+			return "", false, nil
+		}
+	}
+	return "holdout-" + holdoutID, true, nil
+}
+
+// holdoutIDToString renders a holdout id for the synthetic variant key. The API
+// sends a number, but a string is accepted too; anything else is unusable.
+func holdoutIDToString(holdoutID interface{}) (string, bool) {
+	if id, ok := holdoutID.(string); ok {
+		return id, true
+	}
+	return groupKeyToString(holdoutID)
 }
 
 // GetFeatureFlags returns the locally loaded feature flag definitions.
