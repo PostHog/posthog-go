@@ -51,7 +51,8 @@ var (
 // so this cache grows proportionally and avoids re-compiling on every evaluation.
 var regexCache sync.Map // map[string]*flagRegex
 
-var errRegexRequiresServer = &InconclusiveMatchError{"Regex requires server evaluation"}
+// A later matching condition cannot decide the variant while an earlier regex is unresolved.
+var errRegexRequiresServer = &RequiresServerEvaluationError{"Regex requires server evaluation"}
 
 type flagRegex struct {
 	*regexp.Regexp
@@ -176,16 +177,28 @@ func classifyFlagRegex(pattern string) (asciiClasses bool, err error) {
 			classHyphen = inClass && pattern[i] == '-' && i > classStart+1 && !(i == classStart+2 && pattern[classStart+1] == '^')
 		case '{':
 			if !inClass {
-				if i+1 < len(pattern) && pattern[i+1] == ',' {
+				end := i + 1
+				for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
+					end++
+				}
+				if end-i > 2 && pattern[i+1] == '0' {
 					return false, errRegexRequiresServer
 				}
-				if end := strings.IndexByte(pattern[i+1:], '}'); end >= 0 {
-					for _, count := range strings.Split(pattern[i+1:i+1+end], ",") {
-						if len(count) > 1 && count[0] == '0' && count[1] >= '0' && count[1] <= '9' {
-							return false, errRegexRequiresServer
-						}
+				if end < len(pattern) && pattern[end] == ',' {
+					if end == i+1 {
+						return false, errRegexRequiresServer
+					}
+					start := end + 1
+					end = start
+					for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
+						end++
+					}
+					if end-start > 1 && pattern[start] == '0' {
+						return false, errRegexRequiresServer
 					}
 				}
+				// Consume only digits and the optional comma, never search/split the suffix.
+				i = end - 1
 			}
 		}
 	}
@@ -1461,7 +1474,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 				// Static cohort or other missing server-side data - must fallback to API
 				return nil, err
 			case *InconclusiveMatchError:
-				// Evaluation error (bad regex, invalid date, missing property, etc.)
+				// Evaluation error (invalid date, missing property, etc.)
 				// Track that we had an inconclusive match, but try other conditions
 				isInconclusive = true
 			default:
@@ -1650,7 +1663,7 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "regex" || operator == "not_regex" {
 		r, err := getOrCompileRegex(valueToString(value))
 		if err != nil {
-			if isInconclusiveError(err) {
+			if isServerEvalError(err) {
 				return false, err
 			}
 			// Invalid shared syntax fails both operators, without negation.
