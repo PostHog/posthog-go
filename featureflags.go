@@ -76,6 +76,17 @@ func getOrCompileRegex(pattern string) (*flagRegex, error) {
 			return nil, errRegexRequiresServer
 		}
 		switch syntaxErr.Code {
+		case syntax.ErrInvalidRepeatSize:
+			minimum, maximum, bounded := strings.Cut(syntaxErr.Expr[1:len(syntaxErr.Expr)-1], ",")
+			if bounded {
+				min, minErr := strconv.ParseUint(minimum, 10, 32)
+				max, maxErr := strconv.ParseUint(maximum, 10, 32)
+				if minErr == nil && maxErr == nil && min > max {
+					return nil, err
+				}
+			}
+			// RE2 also uses this error for its smaller repetition-size limit.
+			return nil, errRegexRequiresServer
 		case syntax.ErrMissingBracket, syntax.ErrMissingParen, syntax.ErrUnexpectedParen,
 			syntax.ErrMissingRepeatArgument, syntax.ErrInvalidCharRange, syntax.ErrTrailingBackslash:
 			return nil, err
@@ -123,16 +134,20 @@ func classifyFlagRegex(pattern string) (asciiClasses bool, err error) {
 				return false, errRegexRequiresServer
 			case 'x':
 				if i+1 < len(pattern) && pattern[i+1] == '{' {
-					if end := strings.IndexByte(pattern[i+2:], '}'); end >= 0 {
-						i += end + 2
+					end := strings.IndexByte(pattern[i+2:], '}')
+					if end < 0 {
+						return asciiClasses, nil // Let the compiler categorize the malformed escape once.
 					}
+					i += end + 2
 				}
 			case 'p', 'P':
 				if i+1 < len(pattern) {
 					if pattern[i+1] == '{' {
-						if end := strings.IndexByte(pattern[i+2:], '}'); end >= 0 {
-							i += end + 2
+						end := strings.IndexByte(pattern[i+2:], '}')
+						if end < 0 {
+							return asciiClasses, nil
 						}
+						i += end + 2
 					} else {
 						i++
 					}

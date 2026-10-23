@@ -33,6 +33,12 @@ func TestRegexCompatibilityRequiresServer(t *testing.T) {
 		{"empty group repetition", `(?:)*`, "x"},
 		{"empty capture repetition", `()+`, "x"},
 		{"oversized repetition", `a{1001}`, strings.Repeat("a", 1001)},
+		{"nested oversized repetition", `(?:a{100}){11}`, strings.Repeat("a", 1100)},
+		{"large valid bounds", `a{1001,1002}`, "a"},
+		{"overflowing bounds", `a{4294967296,2}`, "aa"},
+		{"leading-zero reversed bounds", `a{02,1}`, "aa"},
+		{"overflowing maximum", `a{2,4294967296}`, "aa"},
+		{"unsupported verbose comment with reversed text", `(?x)#a{2,1}`, "aa"},
 		{"stacked repetition", `a*{2}`, "aa"},
 		{"leading zero repetition", `a{0002}`, "aa"},
 		{"leading zero maximum repetition", `a{1,02}`, "aa"},
@@ -96,6 +102,11 @@ func TestRegexCompatibilityLocal(t *testing.T) {
 		{"leading literal bracket", `^[]a]+$`, "]a", true},
 		{"negated leading literal bracket", `^[^]a]+$`, "b", true},
 		{"hex scalar", `^\x{1F600}$`, "😀", true},
+		{"closed hex escape", `^\x{41}+$`, "AA", true},
+		{"closed complement property", `^\P{L}+$`, "123", true},
+		{"escaped incomplete escape", `^\\p\{$`, `\p{`, true},
+		{"escaped reversed bounds", `^a\{2,1\}$`, "a{2,1}", true},
+		{"class-local reversed bounds", `^[a{2,1}]+$`, "a{2,1}", true},
 		{"escaped marker", `^\\p\{L\}$`, `\p{L}`, true},
 		{"escaped flags", `^\(\?i\)$`, "(?i)", true},
 		{"escaped punctuation", `^a\@\:\_\=\ b$`, "a@:_= b", true},
@@ -216,6 +227,8 @@ func TestRegexCompatibilityOrderedVariants(t *testing.T) {
 				{"boundary", `^a\b$`, Properties{"k": "a"}, true, false},
 				{"unsupported compilation", `a(?=b)`, Properties{"k": "ab"}, true, false},
 				{"Unicode input", `^\d+$`, Properties{"k": "١"}, true, false},
+				{"RE2 size cap", `a{1001}`, Properties{"k": "a"}, true, false},
+				{"nested RE2 size cap", `(?:a{100}){11}`, Properties{"k": "a"}, true, false},
 				{"missing context", `^a$`, Properties{}, false, false},
 				{"safe match", `^a$`, Properties{"k": "a"}, false, true},
 				{"safe mismatch", `^a$`, Properties{"k": "b"}, false, false},
@@ -296,5 +309,90 @@ func BenchmarkClassifyFlagRegexRepetitionCandidates(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func TestRegexCompatibilityReversedBounds(t *testing.T) {
+	for _, pattern := range []string{`a{2,1}`, `(?:a{2,1})`, `a{1001,1000}`, `a{4294967295,2}`} {
+		for _, operator := range []string{"regex", "not_regex"} {
+			t.Run(pattern+"/"+operator, func(t *testing.T) {
+				prop := FlagProperty{Key: "k", Type: "person", Operator: operator, Value: pattern}
+				matched, err := matchProperty(prop, Properties{"k": "aa"})
+				if matched || err != nil {
+					t.Errorf("got %v, %v; invalid bounds must fail both operators", matched, err)
+				}
+				for _, ordered := range []bool{false, true} {
+					for _, onlyLocal := range []bool{false, true} {
+						d := &regexCompatibilityDecider{}
+						ready := make(chan bool)
+						close(ready)
+						p := &FeatureFlagsPoller{firstFeatureFlagRequestFinished: ready, decider: d, Logger: StdLogger(log.New(io.Discard, "", 0), false)}
+						flag := FeatureFlag{Key: "regex-flag", Active: true, Filters: Filter{Groups: []FeatureFlagCondition{{Properties: []FlagProperty{prop}}}}}
+						var want interface{} = false
+						if ordered {
+							first, second := "first", "second"
+							flag.Filters.Multivariate = &Variants{Variants: []FlagVariant{{Key: first}, {Key: second}}}
+							flag.Filters.Groups[0].Variant = &first
+							flag.Filters.Groups = append(flag.Filters.Groups, FeatureFlagCondition{Variant: &second})
+							want = second
+						}
+						p.state.Store(&flagsState{featureFlags: []FeatureFlag{flag}, flagsByKey: map[string]FeatureFlag{flag.Key: flag}})
+						got, local, err := p.GetFeatureFlag(FeatureFlagPayload{Key: flag.Key, DistinctId: "person", PersonProperties: Properties{"k": "aa"}, OnlyEvaluateLocally: onlyLocal})
+						if got != want || !local || err != nil || d.calls != 0 {
+							t.Errorf("ordered=%v local-only=%v: got %v local=%v err=%v calls=%d; want local %v", ordered, onlyLocal, got, local, err, d.calls, want)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRegexCompatibilityUnterminatedBracedEscapes(t *testing.T) {
+	for _, tc := range []struct {
+		pattern        string
+		requiresServer bool
+	}{
+		{`\x{`, true},
+		{`\p{`, false},
+		{`\P{`, false},
+		{`[\x{`, true},
+		{`[\p{`, false},
+		{`[\P{`, false},
+		{`(?x)#a{2,1}\x{`, true},
+		{`(?x)#a{2,1}\p{`, true},
+		{`(?x)#a{2,1}\P{`, true},
+	} {
+		for _, operator := range []string{"regex", "not_regex"} {
+			matched, err := matchProperty(FlagProperty{Key: "k", Operator: operator, Value: tc.pattern}, Properties{"k": "a"})
+			if matched || (tc.requiresServer && !isServerEvalError(err)) || (!tc.requiresServer && err != nil) {
+				t.Errorf("%s %q: got %v, %v; requires-server=%v", operator, tc.pattern, matched, err, tc.requiresServer)
+			}
+		}
+	}
+}
+
+func BenchmarkRegexCompatibilityUnterminatedBracedEscapes(b *testing.B) {
+	for _, escape := range []string{`\x{`, `\p{`, `\P{`, `(?x)#\x{`} {
+		for _, size := range []int{12 << 10, 48 << 10, 192 << 10} {
+			fragment, prefix := escape, ""
+			if strings.HasPrefix(escape, "(?x)#") {
+				fragment, prefix = `\x{`, "(?x)#"
+			}
+			pattern := prefix + strings.Repeat(fragment, size/len(fragment))
+			for _, match := range []bool{false, true} {
+				b.Run(escape+"/"+valueToString(size)+"/match="+valueToString(match), func(b *testing.B) {
+					b.ReportAllocs()
+					b.SetBytes(int64(len(pattern)))
+					for i := 0; i < b.N; i++ {
+						if match {
+							matchProperty(FlagProperty{Key: "k", Operator: "regex", Value: pattern}, Properties{"k": "a"})
+						} else {
+							classifyFlagRegex(pattern)
+						}
+					}
+				})
+			}
+		}
 	}
 }
