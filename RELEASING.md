@@ -12,18 +12,17 @@ When making a change that should be released, add a changeset:
 pnpm changeset
 ```
 
-This prompts you to select which package changed, the version bump (`patch`, `minor`, or `major`), and a short release summary. Commit the generated file in `.changeset/` with your pull request.
+This prompts you to select the version bump (`patch`, `minor`, or `major`) and write a short release summary. Commit the generated file in `.changeset/` with your pull request.
 
-There are two packages, because the repository ships two independently versioned Go modules:
+The repository ships three Go modules that share one release version:
 
-| Package | Go module | Tags |
-|---|---|---|
-| `posthog-go` | `github.com/posthog/posthog-go/v2` | `vX.Y.Z` |
-| `posthog-go-otel` | `github.com/posthog/posthog-go/otel` | `otel/vX.Y.Z` |
+| Go module | Tag |
+|---|---|
+| `github.com/posthog/posthog-go/v2` | `vX.Y.Z` |
+| `github.com/posthog/posthog-go/otel/v2` | `otel/vX.Y.Z` |
+| `github.com/posthog/posthog-go/posthogmcpsdk/v2` | `posthogmcpsdk/vX.Y.Z` |
 
-Select only the package your change affects. Each module is tagged only when its own version moves, and their majors are independent — the otel bridge does not import the core SDK, so a core major does not drag otel along with it. Go encodes the major in the import path, so a module at v2+ must have a matching `/vN` suffix in its `go.mod`; tagging `otel/v2.0.0` while `otel/go.mod` says `.../otel` would publish a version Go refuses to resolve.
-
-A third Go module, `github.com/posthog/posthog-go/posthogmcpsdk/v2`, has no package of its own. Its public API uses core types, so it moves in lockstep with `posthog-go`: whenever the core version moves, the workflow also tags `posthogmcpsdk/vX.Y.Z` at the same version. Its `/vN` suffix must match the core major. See [`posthogmcpsdk/README.md`](posthogmcpsdk/README.md) for the release order.
+`otel` and `posthogmcpsdk` import the core SDK, so they move in lockstep with `posthog-go`, major version included. Go encodes the major in the import path, so each module's `/vN` suffix must match the core major: a v2+ tag on a `go.mod` without that suffix publishes a version Go refuses to resolve. See [`posthogmcpsdk/README.md`](posthogmcpsdk/README.md) for how CI checks a nested module against the core release it requires.
 
 ### 2. Merge the Pull Request
 
@@ -34,7 +33,7 @@ A push to `main` that includes `.changeset/*.md` changes automatically starts th
 1. Checks for pending changesets
 2. Notifies the client libraries team in Slack for approval
 3. Waits for approval from a maintainer via the GitHub `Release` environment
-4. The workflow applies Changesets, syncs `version.go` when the core version moved, and tags each module whose version changed (`vX.Y.Z` for the core plus a GitHub Release, `otel/vX.Y.Z` for the bridge, `posthogmcpsdk/vX.Y.Z` with the core).
+4. The workflow applies Changesets, syncs `version.go` and the nested modules' core requirements, then publishes the core Git tag and GitHub Release before tagging the nested modules at that same release commit.
 5. Notifies Slack when the release completes or fails
 
 ### Manual Trigger
@@ -48,6 +47,8 @@ Changesets determines the next version from the committed changeset files:
 - **patch**: bug fixes, documentation updates, and internal changes
 - **minor**: backwards-compatible features
 - **major**: breaking changes
+
+During release preparation, the workflow updates `otel/go.mod` and `posthogmcpsdk/go.mod` to require the new core version. This is a minimum requirement: consumers can still select a newer core version. These dependency updates are included in the automated version-bump commit.
 
 ## Troubleshooting
 

@@ -1,4 +1,4 @@
-module github.com/posthog/posthog-go/otel
+module github.com/posthog/posthog-go/otel/v2
 
 go 1.25.0
 

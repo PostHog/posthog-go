@@ -8,7 +8,9 @@ name or any attribute key starts with `gen_ai.`, `llm.`, `ai.`, or
 PostHog `/i/v0/ai/otel` endpoint with the project API key as a bearer token.
 
 This is a separate Go module, so the core `posthog-go` SDK does not depend on
-OpenTelemetry.
+OpenTelemetry. The module is `github.com/posthog/posthog-go/otel/v2`. It imports
+the core SDK for the request context, so its version moves in lockstep with
+`posthog-go`, major version included.
 
 ## Usage
 
@@ -27,7 +29,7 @@ than PostHog US cloud. For a framework that accepts only a span exporter, use
 ## Per-request users and properties
 
 ```go
-import "github.com/posthog/posthog-go"
+import "github.com/posthog/posthog-go/v2"
 
 ctx = posthog.WithRequestContext(ctx, posthog.RequestContext{
     DistinctId: user.ID,

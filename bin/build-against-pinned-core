@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#/ Usage: bin/build-against-pinned-core <module-dir>
+#/ Description: Builds and vets a nested module against the core release its go.mod requires.
+#/ Consumers ignore the module's replace directive, so this proves the module
+#/ builds against the published core and not only the checkout. A required
+#/ version that is not tagged yet (an unreleased major) cannot resolve, so the
+#/ check skips with a warning until the release exists.
+source bin/helpers/_utils.sh
+set_source_and_root_dir
+set -euo pipefail
+
+[[ $# -eq 1 ]] || fatal "Usage: bin/build-against-pinned-core <module-dir>"
+module_dir="$1"
+core=github.com/posthog/posthog-go/v2
+
+cd "$module_dir"
+pinned=$(go list -m -f '{{.Version}}' "$core")
+status=0
+git ls-remote --exit-code --tags origin "refs/tags/${pinned}" > /dev/null || status=$?
+if [[ "$status" -eq 2 ]]; then
+    echo "::warning title=Pinned posthog-go build skipped::${module_dir}: ${core}@${pinned} is not tagged yet, so consumers cannot resolve it."
+    exit 0
+elif [[ "$status" -ne 0 ]]; then
+    exit "$status"
+fi
+
+workdir="$(mktemp -d)"
+cleanup() {
+    rm -rf "$workdir"
+}
+trap cleanup EXIT
+cp -r . "$workdir/pinned"
+cd "$workdir/pinned"
+go mod edit -dropreplace "$core"
+GOFLAGS=-mod=mod go build ./...
+GOFLAGS=-mod=mod go vet ./...
