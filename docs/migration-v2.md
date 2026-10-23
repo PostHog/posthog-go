@@ -320,12 +320,13 @@ The values the SDK adds are defaults too. The SDK fills them before
 - `$is_server`, from `Config.IsServer`
 - `$geoip_disable`, from `Config.DisableGeoIP`
 - `$os`, `$os_version`, `$os_distro` and `$go_version`
-- `$feature/<key>` and `$active_feature_flags`, from `SendFeatureFlags`
+- `$feature/<key>` and `$active_feature_flags`, from a `Flags` snapshot or
+  `SendFeatureFlags`
 
-The first three fill last, under the event, the request context and
-`DefaultEventProperties`. The feature flag properties fill right under the
-event's own `Properties`, like the `Flags` snapshot, so they win over the
-request context and `DefaultEventProperties`.
+All of them fill last, under the event, the request context and
+`DefaultEventProperties`. So a `$feature/<key>` set in the request context or
+`DefaultEventProperties` wins over the flag value, and one set in the event's
+own `Properties` wins over both.
 
 In 1.x the SDK overwrote the values you set for these. So a
 `DefaultEventProperties` value of `$geoip_disable: false` now turns GeoIP
