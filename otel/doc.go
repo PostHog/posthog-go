@@ -18,6 +18,12 @@
 //     frameworks that accept only a span exporter. It filters spans and
 //     delegates the AI spans to an OTLP/HTTP exporter.
 //
+// ContextSpanProcessor adds IDs to general application spans without exporting
+// them. NewRequestContextMiddleware also enriches the existing incoming span and
+// limits request IDs to the handler lifetime. These integrations use the
+// application's provider and exporter, and add no IDs when the PostHog client
+// is nil, disabled, or closed.
+//
 // This is a separate Go module so that the core posthog-go SDK does not depend
 // on OpenTelemetry. This module depends on the core module for the request
 // context.
