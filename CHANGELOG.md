@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.36.2
+
+### Patch Changes
+
+- e8c7d37: Fall back to remote feature flag evaluation for regex syntax and character-class semantics that cannot be evaluated consistently with the flags service, including through negated cohorts.
+
 ## 1.36.1
 
 ### Patch Changes
