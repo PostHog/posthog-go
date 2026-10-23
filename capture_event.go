@@ -37,6 +37,10 @@ const (
 	resultRetry   = "retry"
 )
 
+// detailsDuplicateEventUUID is the Details the SDK reports for a copy of a
+// repeated uuid that capture dropped.
+const detailsDuplicateEventUUID = "duplicate_event_uuid"
+
 // legacyOptionProperties pairs each legacy property with the option it fills.
 // Order mirrors posthog-rs.
 var legacyOptionProperties = []struct {
@@ -76,9 +80,11 @@ type captureResponse struct {
 }
 
 // eventResult is a single per-event outcome. Details is optional.
+// DuplicatesDropped, set only for a repeated uuid, counts the later copies capture dropped.
 type eventResult struct {
-	Result  string  `json:"result"`
-	Details *string `json:"details,omitempty"`
+	Result            string  `json:"result"`
+	Details           *string `json:"details,omitempty"`
+	DuplicatesDropped int     `json:"duplicates_dropped,omitempty"`
 }
 
 // captureErrorResponse is the best-effort body parsed from a non-2xx response.

@@ -354,9 +354,12 @@ surface as `*CaptureEventError`:
 The event name limit is new: 1.x sent events to legacy capture, which had no
 limit on event name length. Check your event names before you upgrade.
 
-Each event needs its own uuid. Capture rejects a whole request that contains
-the same uuid twice, and the SDK reports it as a `*CaptureRequestError` (400,
-`duplicate_event_uuid`).
+Each event needs its own uuid. When a request contains the same uuid more than
+once, capture keeps the first event and drops the later copies. The SDK reports
+each dropped copy to `Callback.Failure` as a `*CaptureEventError` with `Result`
+`drop` and `Details` `duplicate_event_uuid`, and never retries it. Older capture
+versions reject the whole request with a 400, which the SDK reports as a
+`*CaptureRequestError` (`duplicate_event_uuid`).
 
 ## New: event options
 
