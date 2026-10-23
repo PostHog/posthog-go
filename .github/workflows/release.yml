@@ -76,7 +76,7 @@ jobs:
           emoji_reaction: "white_check_mark"
       - name: Get GitHub App token
         id: releaser
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_APP_ID }}
           private-key: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_PRIVATE_KEY }}
@@ -94,7 +94,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup pnpm and Node.js
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         with:
           # pnpm/setup installs runtimes via pnpm runtime, which requires pnpm >=11.1.0.
           version: 11.7.0
@@ -102,21 +102,23 @@ jobs:
           cache: true
           install: false
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.x'
+          cache: false
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Apply changesets and update version
         id: apply-changesets
         run: |
-          # Separate Go modules with separate tag namespaces and independent
-          # majors: tag each only when its own version moves.
           PREV_ROOT=$(node -p "require('./package.json').version")
-          PREV_OTEL=$(node -p "require('./otel/package.json').version")
 
           pnpm changeset version
 
           ROOT_VERSION=$(node -p "require('./package.json').version")
-          OTEL_VERSION=$(node -p "require('./otel/package.json').version")
 
           if [ "$ROOT_VERSION" != "$PREV_ROOT" ]; then
             # Patch from what version.go actually holds, not from package.json,
@@ -132,29 +134,19 @@ jobs:
             echo "root-changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if [ "$OTEL_VERSION" != "$PREV_OTEL" ]; then
-            echo "otel-changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "otel-changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          # `if` rather than `[ … ] && …`, whose exit 1 on a false test would
-          # abort this step under the runner's `set -e`.
-          RELEASED=""
-          if [ "$ROOT_VERSION" != "$PREV_ROOT" ]; then
-            RELEASED="v${ROOT_VERSION}"
-          fi
-          if [ "$OTEL_VERSION" != "$PREV_OTEL" ]; then
-            if [ -n "$RELEASED" ]; then
-              RELEASED="${RELEASED}, "
-            fi
-            RELEASED="${RELEASED}otel/v${OTEL_VERSION}"
-          fi
-
           echo "new-version=$ROOT_VERSION" >> "$GITHUB_OUTPUT"
-          echo "otel-version=$OTEL_VERSION" >> "$GITHUB_OUTPUT"
-          echo "released=$RELEASED" >> "$GITHUB_OUTPUT"
-          echo "Root: $PREV_ROOT -> $ROOT_VERSION | otel: $PREV_OTEL -> $OTEL_VERSION"
+          echo "Root: $PREV_ROOT -> $ROOT_VERSION"
+
+      # otel and posthogmcpsdk import the core module and are tagged at its
+      # version, so each must require that exact core release.
+      - name: Synchronize nested module core minimums
+        if: steps.apply-changesets.outputs.root-changed == 'true'
+        env:
+          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+        run: |
+          for MODULE in otel posthogmcpsdk; do
+            (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go/v2@v${NEW_VERSION}")
+          done
 
       - name: Check for version bump changes
         id: check-changes
@@ -171,45 +163,11 @@ jobs:
         if: steps.check-changes.outputs.committed == 'true'
         uses: planetscale/ghcommit-action@a6b150b81dca5dd027baa898604418eec9e11465 # v0.2.22
         with:
-          commit_message: "chore: release ${{ steps.apply-changesets.outputs.released }} [version bump] [skip ci]"
+          commit_message: "chore: release v${{ steps.apply-changesets.outputs.new-version }} [version bump] [skip ci]"
           repo: ${{ github.repository }}
           branch: main
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
-
-      - name: Create nested module tags
-        if: steps.commit-version-bump.outputs.commit-hash != ''
-        env:
-          GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          ROOT_CHANGED: ${{ steps.apply-changesets.outputs.root-changed }}
-          ROOT_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
-          OTEL_CHANGED: ${{ steps.apply-changesets.outputs.otel-changed }}
-          OTEL_VERSION: ${{ steps.apply-changesets.outputs.otel-version }}
-          RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
-        run: |
-          # otel versions independently. posthogmcpsdk imports the core SDK,
-          # so it moves in lockstep with the core version.
-          TAGS=""
-          if [ "$OTEL_CHANGED" = "true" ]; then
-            TAGS="otel/v${OTEL_VERSION}"
-          fi
-          if [ "$ROOT_CHANGED" = "true" ]; then
-            TAGS="${TAGS} posthogmcpsdk/v${ROOT_VERSION}"
-          fi
-          for TAG in $TAGS; do
-            EXISTING_SHA=$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)
-            if [ -n "$EXISTING_SHA" ]; then
-              if [ "$EXISTING_SHA" != "$RELEASE_COMMIT" ]; then
-                echo "Tag ${TAG} already exists at ${EXISTING_SHA}, expected ${RELEASE_COMMIT}" >&2
-                exit 1
-              fi
-              echo "Tag ${TAG} already exists at the release commit"
-            else
-              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-                -f ref="refs/tags/${TAG}" \
-                -f sha="$RELEASE_COMMIT"
-            fi
-          done
 
       - name: Create GitHub release
         if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'
@@ -226,6 +184,29 @@ jobs:
             CHANGELOG_ENTRY="see CHANGELOG.md"
           fi
           gh release create "v${NEW_VERSION}" --target "$RELEASE_COMMIT" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
+
+      # Nested modules require the core version, so its tag goes first.
+      - name: Create nested module tags
+        if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          ROOT_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+          RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
+        run: |
+          for TAG in "otel/v${ROOT_VERSION}" "posthogmcpsdk/v${ROOT_VERSION}"; do
+            EXISTING_SHA=$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)
+            if [ -n "$EXISTING_SHA" ]; then
+              if [ "$EXISTING_SHA" != "$RELEASE_COMMIT" ]; then
+                echo "Tag ${TAG} already exists at ${EXISTING_SHA}, expected ${RELEASE_COMMIT}" >&2
+                exit 1
+              fi
+              echo "Tag ${TAG} already exists at the release commit"
+            else
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                -f ref="refs/tags/${TAG}" \
+                -f sha="$RELEASE_COMMIT"
+            fi
+          done
 
       - name: Dispatch posthog upgrade for posthog-go
         if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'

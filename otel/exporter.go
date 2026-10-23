@@ -9,6 +9,8 @@ import (
 // Exporter is a span exporter that keeps only AI spans and forwards them to
 // PostHog. Use it when you supply your own span processor, or with a framework
 // that accepts only a span exporter. For most setups prefer SpanProcessor.
+// Exporters only see finished spans, so they can't add PostHog request
+// context; use SpanProcessor for that.
 type Exporter struct {
 	// inner is nil when the API key cannot send spans; the Exporter then does
 	// nothing.
