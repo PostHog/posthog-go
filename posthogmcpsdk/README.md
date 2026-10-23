@@ -230,13 +230,10 @@ Consumers ignore that `replace`, so they build against the `posthog-go`
 version this module's `go.mod` requires, and that version must contain
 `posthogmcp`. CI also builds and vets the module with the `replace` dropped, so
 an adapter change that needs unreleased core API fails there. Until the
-required version is tagged, CI skips that check with a warning. Release in this
-order:
+required version is tagged, CI skips that check with a warning.
 
-1. Release the `posthog-go` version that contains the `posthogmcp` changes
-   this module needs.
-2. Bump this module's `require github.com/posthog/posthog-go/v2` to that
-   version and run `go mod tidy`.
-3. The release workflow tags this module as `posthogmcpsdk/vX.Y.Z` at the
-   same version as `posthog-go`. Go resolves a nested module's versions from
-   tags prefixed with its directory.
+The release workflow sets this module's core requirement to the new shared
+release version in the automated version-bump commit. It tags this module as
+`posthogmcpsdk/vX.Y.Z` at the same commit as `posthog-go` and `otel/vX.Y.Z`.
+Go resolves a nested module's versions from tags prefixed with its directory.
+See [RELEASING.md](../RELEASING.md) for the release process.
