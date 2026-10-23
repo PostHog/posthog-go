@@ -42,6 +42,39 @@ An attribute already on the span wins over a property, and a property wins over 
 
 `posthog.NewRequestContextMiddleware` sets the request context from the PostHog tracing headers. It also adds request metadata (`$current_url`, `$request_method`, `$request_path`, `$user_agent`, `$ip`), and these are added to the AI spans exported to PostHog. To keep that metadata out, set the request context yourself with `posthog.WithRequestContext` instead of using the middleware.
 
+## Exception trace IDs
+
+Use `posthogotel.EnqueueWithContext` to send a `posthog.Exception` with the active
+OpenTelemetry span's `$trace_id` and `$span_id`:
+
+```go
+import (
+    "github.com/posthog/posthog-go"
+    posthogotel "github.com/posthog/posthog-go/otel"
+)
+
+err := posthogotel.EnqueueWithContext(ctx, client, posthog.Exception{
+    DistinctId: "example-user",
+    ExceptionList: []posthog.ExceptionItem{{
+        Type: "ExampleError",
+        Value: "Example failure",
+    }},
+})
+```
+
+Pass the context from the application operation that failed. The helper reads any
+valid active span, including spans that are not sampled. It does not require the
+AI span processor or export the span. IDs use lowercase hex with leading zeros.
+
+Event properties override request-context properties, and both override derived
+trace IDs. Missing, invalid, or unreadable span context does not prevent exception
+capture. The helper copies properties, so reusing an exception does not keep IDs
+from a previous span. Other message types use the core enqueue behavior.
+
+This is an explicit integration. `client.Enqueue`, `posthog.EnqueueWithContext`,
+and automatic panic capture do not read OpenTelemetry spans. The core SDK does
+not depend on OpenTelemetry.
+
 ## Failed generations
 
 PostHog decides that a generation failed from the OpenTelemetry span status, so set the
