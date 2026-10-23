@@ -139,14 +139,6 @@ serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
 
 ### Request context
 
-`NewRequestContextMiddleware` no longer reads the `X-PostHog-Distinct-Id` and
-`X-PostHog-Session-Id` headers by default, because any client can set them.
-To keep linking backend events to frontend sessions, opt in:
-
-```go
-handler := posthog.NewRequestContextMiddleware(mux, posthog.WithCaptureTracingHeaders(true))
-```
-
 `RequestContext.Properties` and `RequestContext.Options` now apply to
 `Identify`, `Alias` and `GroupIdentify` events sent with `EnqueueWithContext`,
 not only to `Capture` and `Exception`. The context's session ID fills
