@@ -3,6 +3,8 @@
 v2 makes capture v1 the only capture path. The legacy `/batch/` pipeline is
 removed, along with the `Config.CaptureMode` switch that chose between them.
 
+<!-- TODO(capture-v1): when the public capture v1 SDK upgrade guide is published (PostHog/posthog.com#21386), link it here for details on options, limits and per-event results. -->
+
 ## Import path
 
 Go requires the major version in the module path:
