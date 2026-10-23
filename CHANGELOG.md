@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.37.0
+
+### Minor Changes
+
+- 729bcf7: Add an opt-in OpenTelemetry enqueue helper that adds active trace and span IDs to exception events.
+
 ## 1.36.2
 
 ### Patch Changes
