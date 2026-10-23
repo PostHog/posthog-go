@@ -257,7 +257,12 @@ func baseV1Props(isServer bool, disableGeoIP bool) Properties {
 func prepareForSendV1(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
 	ev := buildV1Event(msg.apifyEvent(), logger)
-	data, err := json.Marshal(ev)
+	properties, err := normalizeEventProperties(ev.Properties)
+	if err != nil {
+		return nil, apiMsg, ev.Uuid, err
+	}
+	ev.Properties = properties
+	data, err := marshalEventJSON(ev)
 	if err != nil {
 		return nil, apiMsg, ev.Uuid, err
 	}
