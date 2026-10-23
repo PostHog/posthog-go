@@ -328,12 +328,18 @@ All of them fill last, under the event, the request context and
 `DefaultEventProperties` wins over the flag value, and one set in the event's
 own `Properties` wins over both.
 
-In 1.x the SDK overwrote the values you set for these. So a
+In 1.x the SDK overwrote the values you set for `$is_server`,
+`$geoip_disable` and the system properties. So a
 `DefaultEventProperties` value of `$geoip_disable: false` now turns GeoIP
 lookup back on for events, even when `Config.DisableGeoIP` is on. Feature flag
 requests still follow `Config.DisableGeoIP`. The `IsServer` and `DisableGeoIP`
 fields of a message report the values left after `BeforeSend`. To change
 them, set the properties.
+
+For the feature flag properties, the only change is that a `$feature/<key>`
+set on the event or in the request context now wins over `SendFeatureFlags`.
+A `Flags` snapshot already let them win, and `DefaultEventProperties` already
+beat the flag values on both paths.
 
 ### Compression
 
