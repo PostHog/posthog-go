@@ -196,13 +196,10 @@ func classifyFlagRegex(pattern string) (asciiClasses bool, err error) {
 				for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
 					end++
 				}
-				if end-i > 2 && pattern[i+1] == '0' {
+				if end == i+1 || end-i > 2 && pattern[i+1] == '0' {
 					return false, errRegexRequiresServer
 				}
 				if end < len(pattern) && pattern[end] == ',' {
-					if end == i+1 {
-						return false, errRegexRequiresServer
-					}
 					start := end + 1
 					end = start
 					for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
@@ -211,6 +208,9 @@ func classifyFlagRegex(pattern string) (asciiClasses bool, err error) {
 					if end-start > 1 && pattern[start] == '0' {
 						return false, errRegexRequiresServer
 					}
+				}
+				if end == len(pattern) || pattern[end] != '}' {
+					return false, errRegexRequiresServer
 				}
 				// Consume only digits and the optional comma, never search/split the suffix.
 				i = end - 1
