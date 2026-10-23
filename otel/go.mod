@@ -3,7 +3,7 @@ module github.com/posthog/posthog-go/otel
 go 1.25.0
 
 require (
-	github.com/posthog/posthog-go v1.34.0
+	github.com/posthog/posthog-go v1.37.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
@@ -16,7 +16,7 @@ require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 )
 
 require (
@@ -34,7 +34,7 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
-	google.golang.org/grpc v1.83.1 // indirect
+	google.golang.org/grpc v1.83.2 // indirect
 )
 
 replace github.com/posthog/posthog-go => ../

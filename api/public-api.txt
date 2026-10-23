@@ -627,6 +627,7 @@ type Filter struct {
 	Groups []FeatureFlagCondition `json:"groups"`
 	EarlyExit bool `json:"early_exit"`
 	Multivariate *Variants `json:"multivariate"`
+	Holdout *Holdout `json:"holdout"`
 	Payloads map[string]json.RawMessage `json:"payloads"`
 	DecodedPayloads map[string]string `json:"-"`
 	VariantLookupTable []FlagVariantMeta `json:"-"`
@@ -745,6 +746,11 @@ type Groups map[string]interface{}
 func NewGroups() Groups
 
 func (p Groups) Set(name string, value interface{}) Groups
+
+type Holdout struct {
+	ID interface{} `json:"id"`
+	ExclusionPercentage *float64 `json:"exclusion_percentage"`
+}
 
 type Identify struct {
 	Type string

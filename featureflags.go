@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,27 +42,213 @@ var (
 	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
 	errAmbiguousExactNumber     = &InconclusiveMatchError{"Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float"}
 	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+	errHoldoutMissingDeviceID   = &InconclusiveMatchError{msg: "Can't evaluate a device-bucketed holdout without a device id"}
 	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
 )
 
 // regexCache caches compiled regexps for flag property matching.
 // The set of patterns is bounded by the number of flag conditions (loaded once),
 // so this cache grows proportionally and avoids re-compiling on every evaluation.
-var regexCache sync.Map // map[string]*regexp.Regexp
+var regexCache sync.Map // map[string]*flagRegex
 
-// getOrCompileRegex returns a cached compiled regexp for the given pattern,
-// or compiles and caches it on first use.
-func getOrCompileRegex(pattern string) (*regexp.Regexp, error) {
+// A later matching condition cannot decide the variant while an earlier regex is unresolved.
+var errRegexRequiresServer = &RequiresServerEvaluationError{"Regex requires server evaluation"}
+
+type flagRegex struct {
+	*regexp.Regexp
+	asciiClasses bool
+}
+
+// getOrCompileRegex caches only patterns whose syntax has shared service semantics.
+func getOrCompileRegex(pattern string) (*flagRegex, error) {
 	if cached, ok := regexCache.Load(pattern); ok {
-		return cached.(*regexp.Regexp), nil
+		return cached.(*flagRegex), nil
 	}
-	r, err := regexp.Compile(pattern)
+	asciiClasses, err := classifyFlagRegex(pattern)
 	if err != nil {
 		return nil, err
 	}
-	// Store and return — concurrent stores of the same pattern are harmless
-	regexCache.Store(pattern, r)
-	return r, nil
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		// These errors describe invalid shared syntax, not an RE2 capability limit.
+		syntaxErr := err.(*syntax.Error)
+		if syntaxErr.Code == syntax.ErrMissingRepeatArgument && strings.HasPrefix(syntaxErr.Expr, "{") {
+			return nil, errRegexRequiresServer
+		}
+		switch syntaxErr.Code {
+		case syntax.ErrInvalidRepeatSize:
+			minimum, maximum, bounded := strings.Cut(syntaxErr.Expr[1:len(syntaxErr.Expr)-1], ",")
+			if bounded {
+				min, minErr := strconv.ParseUint(minimum, 10, 32)
+				max, maxErr := strconv.ParseUint(maximum, 10, 32)
+				if minErr == nil && maxErr == nil && min > max {
+					return nil, err
+				}
+			}
+			// RE2 also uses this error for its smaller repetition-size limit.
+			return nil, errRegexRequiresServer
+		case syntax.ErrMissingBracket, syntax.ErrMissingParen, syntax.ErrUnexpectedParen,
+			syntax.ErrMissingRepeatArgument, syntax.ErrInvalidCharRange, syntax.ErrTrailingBackslash:
+			return nil, err
+		default:
+			return nil, errRegexRequiresServer
+		}
+	}
+	if hasRepeatedRegexAssertion(parsed) {
+		return nil, errRegexRequiresServer
+	}
+	r, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, errRegexRequiresServer
+	}
+	compiled := &flagRegex{Regexp: r, asciiClasses: asciiClasses}
+	// Concurrent stores of the same pattern are harmless.
+	regexCache.Store(pattern, compiled)
+	return compiled, nil
+}
+
+// RE2 shorthands are ASCII-only; Rust's are Unicode-aware (and include vertical tab).
+// Nested sets and set operations can compile in RE2 with a different interpretation.
+func classifyFlagRegex(pattern string) (asciiClasses bool, err error) {
+	inClass := false
+	classStart := 0
+	classHyphen := false
+	for i := 0; i < len(pattern); i++ {
+		previousClassHyphen := classHyphen
+		classHyphen = false
+		switch pattern[i] {
+		case '\\':
+			i++
+			if i == len(pattern) {
+				break
+			}
+			switch pattern[i] {
+			case 'd', 'D', 's', 'S', 'w', 'W':
+				if inClass && (previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']') {
+					return false, errRegexRequiresServer
+				}
+				asciiClasses = true
+			case '<', '>', 'b', 'B':
+				// Outside classes, even ASCII boundaries can exhaust the service's
+				// backtracking budget. Inside classes, RE2 lacks Rust's backspace.
+				return false, errRegexRequiresServer
+			case 'x':
+				if i+1 < len(pattern) && pattern[i+1] == '{' {
+					end := strings.IndexByte(pattern[i+2:], '}')
+					if end < 0 {
+						return asciiClasses, nil // Let the compiler categorize the malformed escape once.
+					}
+					i += end + 2
+				}
+			case 'p', 'P':
+				if i+1 < len(pattern) {
+					if pattern[i+1] == '{' {
+						end := strings.IndexByte(pattern[i+2:], '}')
+						if end < 0 {
+							return asciiClasses, nil
+						}
+						i += end + 2
+					} else {
+						i++
+					}
+				}
+				if inClass && (previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']') {
+					return false, errRegexRequiresServer
+				}
+			case 'A', 'z', 'a', 'f', 'n', 'r', 't', 'v':
+			default:
+				c := pattern[i]
+				if c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+					if c == 'q' { // Invalid in both engines.
+						return false, &syntax.Error{Code: syntax.ErrInvalidEscape, Expr: `\q`}
+					}
+					return false, errRegexRequiresServer
+				}
+			}
+		case '[':
+			if inClass {
+				if strings.HasPrefix(pattern[i:], "[:") {
+					if end := strings.Index(pattern[i+2:], ":]"); end >= 0 {
+						i += end + 3
+						if previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']' {
+							return false, errRegexRequiresServer
+						}
+						continue
+					}
+				}
+				return false, errRegexRequiresServer
+			}
+			inClass = true
+			classStart = i
+		case ']':
+			if inClass && (i == classStart+1 || i == classStart+2 && pattern[classStart+1] == '^') {
+				continue // A leading ] is a literal class member in both engines.
+			}
+			inClass = false
+		case '&', '-', '~':
+			if inClass && i+1 < len(pattern) && pattern[i+1] == pattern[i] {
+				return false, errRegexRequiresServer
+			}
+			classHyphen = inClass && pattern[i] == '-' && i > classStart+1 && !(i == classStart+2 && pattern[classStart+1] == '^')
+		case '{':
+			if !inClass {
+				end := i + 1
+				for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
+					end++
+				}
+				if end == i+1 || end-i > 2 && pattern[i+1] == '0' {
+					return false, errRegexRequiresServer
+				}
+				if end < len(pattern) && pattern[end] == ',' {
+					start := end + 1
+					end = start
+					for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
+						end++
+					}
+					if end-start > 1 && pattern[start] == '0' {
+						return false, errRegexRequiresServer
+					}
+				}
+				if end == len(pattern) || pattern[end] != '}' {
+					return false, errRegexRequiresServer
+				}
+				// Consume only digits and the optional comma, never search/split the suffix.
+				i = end - 1
+			}
+		}
+	}
+	return asciiClasses, nil
+}
+
+func regexAssertionOnly(r *syntax.Regexp) bool {
+	switch r.Op {
+	case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText,
+		syntax.OpWordBoundary, syntax.OpNoWordBoundary:
+		return true
+	case syntax.OpCapture, syntax.OpConcat, syntax.OpAlternate:
+		for _, sub := range r.Sub {
+			if !regexAssertionOnly(sub) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func hasRepeatedRegexAssertion(r *syntax.Regexp) bool {
+	switch r.Op {
+	case syntax.OpStar, syntax.OpPlus, syntax.OpQuest, syntax.OpRepeat:
+		if regexAssertionOnly(r.Sub[0]) {
+			return true
+		}
+	}
+	for _, sub := range r.Sub {
+		if hasRepeatedRegexAssertion(sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // flagsState holds the feature flag data that is atomically swapped during updates.
@@ -148,6 +335,8 @@ type Filter struct {
 	EarlyExit bool `json:"early_exit"`
 	// Multivariate contains variant definitions for multivariate flags.
 	Multivariate *Variants `json:"multivariate"`
+	// Holdout contains the experiment holdout configuration, when the flag has one.
+	Holdout *Holdout `json:"holdout"`
 	// Payloads maps flag values or variant keys to raw JSON payloads.
 	Payloads map[string]json.RawMessage `json:"payloads"`
 	// DecodedPayloads holds pre-decoded string versions of Payloads.
@@ -162,6 +351,16 @@ type Filter struct {
 type Variants struct {
 	// Variants is the ordered list of possible flag variants.
 	Variants []FlagVariant `json:"variants"`
+}
+
+// Holdout is the experiment holdout configuration attached to a feature flag.
+// Identifiers inside the holdout are excluded from the flag's release conditions
+// and resolve to the synthetic variant "holdout-<id>".
+type Holdout struct {
+	// ID identifies the holdout. It is rendered into the synthetic variant key.
+	ID interface{} `json:"id"`
+	// ExclusionPercentage is the share of identifiers held out, from 0 to 100.
+	ExclusionPercentage *float64 `json:"exclusion_percentage"`
 }
 
 // FlagVariant describes one multivariate feature flag variant.
@@ -1182,8 +1381,12 @@ func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
 	return true
 }
 
+func isDeviceBucketed(flag FeatureFlag) bool {
+	return flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice
+}
+
 func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) string {
-	if flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice && deviceId != nil {
+	if isDeviceBucketed(flag) && deviceId != nil {
 		return *deviceId
 	}
 	return distinctId
@@ -1219,7 +1422,18 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 ) (interface{}, error) {
 	state := poller.evaluationState(snapshots)
 	conditions := flag.Filters.Groups
+	// Holdouts precede release conditions: a held-out identifier is excluded from
+	// the flag's targeting entirely rather than bucketed into one of its variants.
+	// Per-condition aggregation below never changes holdout membership.
+	holdoutVariant, held, err := getHoldoutVariant(flag, distinctId, deviceId)
+	if err != nil {
+		return nil, err
+	}
+	if held {
+		return holdoutVariant, nil
+	}
 	bucketingId := getBucketingID(flag, distinctId, deviceId)
+
 	flagAggregation := flag.Filters.AggregationGroupTypeIndex
 	groupTypeMapping := state.groups
 	isInconclusive := false
@@ -1275,7 +1489,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 				// Static cohort or other missing server-side data - must fallback to API
 				return nil, err
 			case *InconclusiveMatchError:
-				// Evaluation error (bad regex, invalid date, missing property, etc.)
+				// Evaluation error (invalid date, missing property, etc.)
 				// Track that we had an inconclusive match, but try other conditions
 				isInconclusive = true
 			default:
@@ -1430,6 +1644,13 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 		return true, nil
 	}
 
+	if override_value == nil {
+		switch operator {
+		case "icontains", "not_icontains", "starts_with", "not_starts_with", "ends_with", "not_ends_with", "regex", "not_regex":
+			override_value = "null"
+		}
+	}
+
 	if operator == "icontains" {
 		return strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
@@ -1454,35 +1675,28 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 		return !strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
 	}
 
-	if operator == "regex" {
+	if operator == "regex" || operator == "not_regex" {
 		r, err := getOrCompileRegex(valueToString(value))
-		// invalid regex
 		if err != nil {
+			if isServerEvalError(err) {
+				return false, err
+			}
+			// Invalid shared syntax fails both operators, without negation.
 			return false, nil
 		}
-
-		return r.MatchString(valueToString(override_value)), nil
-	}
-
-	if operator == "not_regex" {
-		// The feature flags evaluation service stringifies an explicit JSON null
-		// as "null" before regex matching. Avoid Go's default "<nil>" representation.
-		overrideValueString := valueToString(override_value)
-		if override_value == nil {
-			overrideValueString = "null"
+		input := valueToString(override_value)
+		if r.asciiClasses {
+			for _, c := range input {
+				if c > 127 || c == '\v' {
+					return false, errRegexRequiresServer
+				}
+			}
 		}
-		// Mirror the "regex" branch above: coerce both sides with valueToString
-		// so all property/flag value types are handled. The previous manual
-		// string/int type switch errored on other types, most notably float64,
-		// which is what JSON numbers deserialize to, so not_regex failed on a
-		// numeric property value even though regex handled it.
-		r, err := getOrCompileRegex(valueToString(value))
-		// invalid regex
-		if err != nil {
-			return false, nil
+		matched := r.MatchString(input)
+		if operator == "not_regex" {
+			matched = !matched
 		}
-
-		return !r.MatchString(overrideValueString), nil
+		return matched, nil
 	}
 
 	if operator == "gt" {
@@ -2392,9 +2606,17 @@ func checkIfSimpleFlagEnabled(key, bucketingId string, rolloutPercentage float64
 // The input is: key + "." + distinctId + salt.
 // The "." separator is appended internally so callers don't need to concatenate.
 func calculateHash(key, distinctId, salt string) float64 {
+	return calculateHashWithSeparator(key, ".", distinctId, salt)
+}
+
+// calculateHashWithSeparator computes the bucketing hash for key + separator +
+// distinctId + salt. Holdouts join with "-" rather than the "." used by flag
+// rollouts, and the separator decides which population is selected, so it is
+// explicit rather than assumed.
+func calculateHashWithSeparator(key, separator, distinctId, salt string) float64 {
 	// Build the input in a stack-allocated buffer to avoid heap allocations.
 	// sha1.Sum takes a complete []byte and returns a [20]byte — no heap escapes.
-	totalLen := len(key) + 1 + len(distinctId) + len(salt) // +1 for "."
+	totalLen := len(key) + len(separator) + len(distinctId) + len(salt)
 	var buf [256]byte
 	var input []byte
 	if totalLen <= len(buf) {
@@ -2403,12 +2625,59 @@ func calculateHash(key, distinctId, salt string) float64 {
 		input = make([]byte, 0, totalLen)
 	}
 	input = append(input, key...)
-	input = append(input, '.')
+	input = append(input, separator...)
 	input = append(input, distinctId...)
 	input = append(input, salt...)
 
 	digest := sha1.Sum(input)
 	return float64(binary.BigEndian.Uint64(digest[:8])>>4) / LONG_SCALE
+}
+
+// holdoutHash computes holdout membership for a bucketing value. Neither the
+// flag key nor the holdout id takes part, so the same identity lands in the
+// same holdout population across every flag, matching the server.
+func holdoutHash(bucketingValue string) float64 {
+	return calculateHashWithSeparator("holdout", "-", bucketingValue, "")
+}
+
+// getHoldoutVariant returns the synthetic "holdout-<id>" variant when the flag
+// has a usable holdout and the identity falls inside it. The server clamps
+// out-of-range percentages rather than rejecting them, and treats 100 as
+// everyone without hashing, so a full holdout cannot miss on a hash boundary.
+//
+// A partial holdout on a device-bucketed person flag needs the device id;
+// hashing the distinct id instead would put an unrelated identity in the
+// holdout, so the evaluation stays inconclusive. Group flags ignore the
+// bucketing identifier and hash the group key.
+func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (variant string, held bool, err error) {
+	holdout := flag.Filters.Holdout
+	if holdout == nil || holdout.ID == nil || holdout.ExclusionPercentage == nil {
+		return "", false, nil
+	}
+	holdoutID, ok := holdoutIDToString(holdout.ID)
+	if !ok {
+		return "", false, nil
+	}
+
+	percentage := math.Min(math.Max(*holdout.ExclusionPercentage, 0), 100)
+	if percentage != 100 {
+		if flag.Filters.AggregationGroupTypeIndex == nil && isDeviceBucketed(flag) && (deviceId == nil || *deviceId == "") {
+			return "", false, errHoldoutMissingDeviceID
+		}
+		if holdoutHash(getBucketingID(flag, distinctId, deviceId)) > percentage/100 {
+			return "", false, nil
+		}
+	}
+	return "holdout-" + holdoutID, true, nil
+}
+
+// holdoutIDToString renders a holdout id for the synthetic variant key. The API
+// sends a number, but a string is accepted too; anything else is unusable.
+func holdoutIDToString(holdoutID interface{}) (string, bool) {
+	if id, ok := holdoutID.(string); ok {
+		return id, true
+	}
+	return groupKeyToString(holdoutID)
 }
 
 // GetFeatureFlags returns the locally loaded feature flag definitions.

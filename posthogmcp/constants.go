@@ -32,11 +32,13 @@ const (
 	propertyInputRequestMethods = "$mcp_input_request_methods"
 	propertySessionID           = "$session_id"
 	propertyExceptionLevel      = "$exception_level"
+	propertyExceptionSource     = "$exception_source"
 	propertyGroups              = "$groups"
 	propertySet                 = "$set"
 	propertyProcessProfile      = "$process_person_profile"
 
 	analyticsSource = "posthog_mcp_analytics"
+	exceptionSource = "mcp.tool_call"
 	library         = "posthog-go-mcp"
 )
 

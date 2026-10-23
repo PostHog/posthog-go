@@ -1,5 +1,41 @@
 ## Unreleased
 
+## 1.37.0
+
+### Minor Changes
+
+- 729bcf7: Add an opt-in OpenTelemetry enqueue helper that adds active trace and span IDs to exception events.
+
+## 1.36.2
+
+### Patch Changes
+
+- e8c7d37: Fall back to remote feature flag evaluation for regex syntax and character-class semantics that cannot be evaluated consistently with the flags service, including through negated cohorts.
+
+## 1.36.1
+
+### Patch Changes
+
+- 6b734dd: Preserve captured events with non-finite numeric properties by serializing NaN and infinities as null in both capture protocols. Arbitrary structs containing these numbers are replaced with null as a whole property.
+
+## 1.36.0
+
+### Minor Changes
+
+- d170fc5: Local flag evaluation honors experiment holdouts. A flag whose definition carries `filters.holdout` now resolves a held-out identifier to `holdout-<id>` before its release conditions, matching the server instead of silently bucketing the identifier into a regular variant.
+
+## 1.35.3
+
+### Patch Changes
+
+- 870af8a: Fix local feature flag string and regex operators to stringify explicit null values as "null", matching the flags service. Flag results and variant selection can change for explicit-null properties; missing properties remain inconclusive and eligible for remote evaluation.
+
+## 1.35.2
+
+### Patch Changes
+
+- de638c7: `posthogmcp` now sets `$exception_source: "mcp.tool_call"` on the `$exception` it emits alongside a failed tool call, and strips caller-supplied reserved exception metadata from MCP events.
+
 ## 1.35.1
 
 ### Patch Changes

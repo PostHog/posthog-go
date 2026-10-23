@@ -76,7 +76,7 @@ jobs:
           emoji_reaction: "white_check_mark"
       - name: Get GitHub App token
         id: releaser
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_APP_ID }}
           private-key: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_PRIVATE_KEY }}
@@ -94,13 +94,19 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup pnpm and Node.js
-        uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         with:
           # pnpm/setup installs runtimes via pnpm runtime, which requires pnpm >=11.1.0.
           version: 11.7.0
           runtime: node@24
           cache: true
           install: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.x'
+          cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -114,6 +120,14 @@ jobs:
           sed -i "s/const Version = \"${CURRENT_VERSION}\"/const Version = \"${NEW_VERSION}\"/" version.go
           echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
+
+      - name: Synchronize nested module core minimums
+        env:
+          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+        run: |
+          for MODULE in otel posthogmcpsdk; do
+            (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go@v${NEW_VERSION}")
+          done
 
       - name: Check for version bump changes
         id: check-changes
@@ -135,6 +149,17 @@ jobs:
           branch: main
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
+
+      # Nested modules require this core version before their tags can be installed.
+      - name: Create GitHub release
+        if: steps.commit-version-bump.outputs.commit-hash != ''
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+          RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
+        run: |
+          CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
+          gh release create "v${NEW_VERSION}" --target "$RELEASE_COMMIT" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
       - name: Create nested module tags
         if: steps.commit-version-bump.outputs.commit-hash != ''
@@ -158,16 +183,6 @@ jobs:
                 -f sha="$RELEASE_COMMIT"
             fi
           done
-
-      - name: Create GitHub release
-        if: steps.commit-version-bump.outputs.commit-hash != ''
-        env:
-          GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
-          RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
-        run: |
-          CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
-          gh release create "v${NEW_VERSION}" --target "$RELEASE_COMMIT" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
       - name: Dispatch posthog upgrade for posthog-go
         if: steps.commit-version-bump.outputs.commit-hash != ''
