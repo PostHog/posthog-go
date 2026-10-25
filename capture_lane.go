@@ -94,8 +94,8 @@ type lane struct {
 	inFlight atomic.Int64
 	// shutdown is closed by the lane's loop once it has drained.
 	shutdown chan struct{}
-	// http carries this lane's upload timeout. Lanes share one Transport, so
-	// they share the connection pool.
+	// http carries this lane's upload timeout and redirect rule. Lanes share one
+	// Transport, so they share the connection pool.
 	http *http.Client
 
 	// Flush requests are handled by the lane's loop. Delivery completion is
@@ -111,7 +111,7 @@ func newLane(cfg laneConfig, batchQueueSize int, transport http.RoundTripper) *l
 		msgs:     make(chan preparedMessage, cfg.maxQueueSize),
 		batches:  make(chan preparedBatch, batchQueueSize),
 		shutdown: make(chan struct{}),
-		http:     &http.Client{Transport: transport, Timeout: cfg.uploadTimeout},
+		http:     &http.Client{Transport: transport, Timeout: cfg.uploadTimeout, CheckRedirect: checkCaptureRedirect},
 
 		flushRequests: make(chan chan []<-chan struct{}),
 		deliveries:    make(map[*delivery]struct{}),

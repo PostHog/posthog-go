@@ -139,6 +139,17 @@ served where the deployment enables it**, so confirm your PostHog instance
 serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
 `eu.i.posthog.com`) does.
 
+### Redirects
+
+A capture request follows only `307` and `308` redirects, and only to the same
+scheme, host and port as `Endpoint`, at most 5 times. It resends the same body
+and headers. Any other redirect fails the batch without a retry:
+`Callback.Failure` gets a `CaptureRequestError` with the redirect's status.
+1.x followed up to 10 redirects of any kind to any host. A `301`, `302` or
+`303` resent the request as a `GET` without the events, and a `307` or `308`
+to another host received the events and the API key. Feature flag requests are
+unchanged.
+
 ### Request context
 
 `RequestContext.Properties` and `RequestContext.Options` now apply to

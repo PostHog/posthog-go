@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +44,48 @@ func newRequestID() string {
 		return v7.String()
 	}
 	return uuid.New().String()
+}
+
+// captureMaxRedirects is how many redirects one capture request follows.
+const captureMaxRedirects = 5
+
+// errRedirectNotFollowed is the cause of a batch failed by a redirect the lane
+// does not follow. It is terminal, like any other unexpected status.
+var errRedirectNotFollowed = fmt.Errorf("redirect not followed: capture follows only 307 and 308 redirects to the configured host, at most %d times", captureMaxRedirects)
+
+// checkCaptureRedirect follows only 307 and 308 redirects, which resend the
+// same body, and only to the origin of the first request, so events and the
+// API key never go to another host or over a downgraded scheme. Any other
+// redirect is returned to the caller unfollowed.
+func checkCaptureRedirect(req *http.Request, via []*http.Request) error {
+	status := req.Response.StatusCode
+	if (status != http.StatusTemporaryRedirect && status != http.StatusPermanentRedirect) ||
+		len(via) > captureMaxRedirects || !sameOrigin(req.URL, via[0].URL) {
+		return http.ErrUseLastResponse
+	}
+	// net/http drops Authorization when the host differs only in letter case.
+	req.Header.Set("Authorization", via[0].Header.Get("Authorization"))
+	return nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
+
+func isRedirectStatus(code int) bool {
+	return code >= 300 && code <= 399
 }
 
 // isRetryableStatus reports whether a non-2xx capture status should be
@@ -157,8 +201,12 @@ func (c *client) send(l *lane, pb preparedBatch) {
 			continue
 		}
 
-		// Terminal non-2xx (400/401/402/413/415/429/...): no retry.
-		c.failBatch(l, pendingMsgs, requestError(l, res))
+		// Terminal non-2xx (3xx/400/401/402/413/415/429/...): no retry.
+		var cause error
+		if isRedirectStatus(res.statusCode) {
+			cause = errRedirectNotFollowed
+		}
+		c.failBatch(l, pendingMsgs, newCaptureRequestError(l, res, cause))
 		return
 	}
 }
