@@ -68,8 +68,9 @@ Pass the context from the application operation that failed. The helper reads an
 valid active span, including spans that are not sampled. It does not require the
 AI span processor or export the span. IDs use lowercase hex with leading zeros.
 
-Event properties override request-context properties, and both override derived
-trace IDs. Missing, invalid, or unreadable span context does not prevent exception
+Event properties override request-context properties. If either sets `$trace_id`
+or `$span_id`, the helper adds neither derived ID, so an event never pairs one
+trace's ID with another trace's span. Missing, invalid, or unreadable span context does not prevent exception
 capture. The helper copies properties, so reusing an exception does not keep IDs
 from a previous span. Other message types use the core enqueue behavior.
 

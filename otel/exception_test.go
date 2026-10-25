@@ -31,11 +31,11 @@ func TestEnqueueWithContextExceptionTrace(t *testing.T) {
 		{name: "no span"},
 		{name: "zero trace", span: trace.NewSpanContext(trace.SpanContextConfig{SpanID: spanID})},
 		{name: "zero span", span: trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID})},
-		{name: "event trace", span: valid, eventProperties: posthog.Properties{"$trace_id": "event-trace"}, wantTrace: "event-trace", wantSpan: spanID.String()},
-		{name: "event span", span: valid, eventProperties: posthog.Properties{"$span_id": "event-span"}, wantTrace: traceID.String(), wantSpan: "event-span"},
-		{name: "request trace", span: valid, requestProperties: posthog.Properties{"$trace_id": "request-trace"}, wantTrace: "request-trace", wantSpan: spanID.String()},
-		{name: "request span", span: valid, requestProperties: posthog.Properties{"$span_id": "request-span"}, wantTrace: traceID.String(), wantSpan: "request-span"},
-		{name: "event overrides request", span: valid, eventProperties: posthog.Properties{"$trace_id": "event-trace"}, requestProperties: posthog.Properties{"$trace_id": "request-trace"}, wantTrace: "event-trace", wantSpan: spanID.String()},
+		{name: "event trace", span: valid, eventProperties: posthog.Properties{"$trace_id": "event-trace"}, wantTrace: "event-trace"},
+		{name: "event span", span: valid, eventProperties: posthog.Properties{"$span_id": "event-span"}, wantSpan: "event-span"},
+		{name: "request trace", span: valid, requestProperties: posthog.Properties{"$trace_id": "request-trace"}, wantTrace: "request-trace"},
+		{name: "request span", span: valid, requestProperties: posthog.Properties{"$span_id": "request-span"}, wantSpan: "request-span"},
+		{name: "event overrides request", span: valid, eventProperties: posthog.Properties{"$trace_id": "event-trace"}, requestProperties: posthog.Properties{"$trace_id": "request-trace"}, wantTrace: "event-trace"},
 		{name: "explicit empty values", span: valid, eventProperties: posthog.Properties{"$trace_id": "", "$span_id": nil}, wantTrace: ""},
 		{name: "invalid span keeps caller IDs", eventProperties: posthog.Properties{"$trace_id": "event-trace", "$span_id": "event-span"}, wantTrace: "event-trace", wantSpan: "event-span"},
 	}
@@ -157,8 +157,9 @@ func TestEnqueueWithContextRequestTraceOverridesForEnqueueClient(t *testing.T) {
 		requestProperties posthog.Properties
 		wantProperties    posthog.Properties
 	}{
-		{name: "request trace", requestProperties: posthog.Properties{"$trace_id": "request-trace"}, wantProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "0000000000000004"}},
-		{name: "request span", requestProperties: posthog.Properties{"$span_id": "request-span"}, wantProperties: posthog.Properties{"$trace_id": "00000000000000000000000000000003", "$span_id": "request-span"}},
+		{name: "request trace", requestProperties: posthog.Properties{"$trace_id": "request-trace"}, wantProperties: posthog.Properties{"$trace_id": "request-trace"}},
+		{name: "request span", requestProperties: posthog.Properties{"$span_id": "request-span"}, wantProperties: posthog.Properties{"$span_id": "request-span"}},
+		{name: "no caller IDs", wantProperties: posthog.Properties{"$trace_id": "00000000000000000000000000000003", "$span_id": "0000000000000004"}},
 		{name: "event trace wins", eventProperties: posthog.Properties{"$trace_id": "event-trace"}, requestProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "request-span"}, wantProperties: posthog.Properties{"$trace_id": "event-trace", "$span_id": "request-span"}},
 		{name: "event span wins", eventProperties: posthog.Properties{"$span_id": "event-span"}, requestProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "request-span"}, wantProperties: posthog.Properties{"$trace_id": "request-trace", "$span_id": "event-span"}},
 		{name: "empty request values", requestProperties: posthog.Properties{"$trace_id": "", "$span_id": nil}, wantProperties: posthog.Properties{"$trace_id": "", "$span_id": nil}},

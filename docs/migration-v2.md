@@ -412,6 +412,13 @@ whose only non-finite numbers are `float32` values, or whose custom
 `MarshalJSON` returns invalid JSON, can be sent as invalid JSON, and capture
 then rejects the whole request it is in.
 
+### OpenTelemetry exception trace IDs
+
+`posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and
+`$span_id` only when neither the event nor the request context sets either
+key. In 1.37 each ID filled on its own, so an event that set only `$trace_id`
+got the active span's `$span_id`.
+
 ## New: event options
 
 Capture v1 reads per-event processing controls, such as person profile
