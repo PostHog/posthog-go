@@ -266,7 +266,7 @@ func prepareForSend(msg Message, logger Logger) (json.RawMessage, APIMessage, st
 // properties APIfy assembles, minus $lib/$lib_version (the PostHog-Sdk-Info
 // header is the authoritative SDK identity).
 func (msg Capture) apifyEvent() apiEvent {
-	myProperties := Properties{}.Merge(msg.selectedProperties())
+	myProperties := Properties{}.Merge(msg.Properties)
 
 	if msg.Groups != nil {
 		myProperties.Set("$groups", mergeOverNested(myProperties["$groups"], msg.Groups))

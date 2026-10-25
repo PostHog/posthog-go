@@ -347,6 +347,11 @@ requests still follow `Config.DisableGeoIP`. The `IsServer` and `DisableGeoIP`
 fields of a message report the values left after `BeforeSend`. To change
 them, set the properties.
 
+A minimal `$feature_flag_called` event, which the server can turn on for
+flags without an experiment, is trimmed to its fixed set of properties before
+`BeforeSend`. The hook sees only that set, and the properties it adds are
+sent. In 1.x the trim ran after `BeforeSend` and removed them.
+
 For the feature flag properties, the only change is that a `$feature/<key>`
 set on the event or in the request context now wins over `SendFeatureFlags`.
 A `Flags` snapshot already let them win, and `DefaultEventProperties` already

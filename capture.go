@@ -129,7 +129,7 @@ type Capture struct {
 	// To change $is_server, set the property.
 	IsServer bool
 	// minimalFlagCalledEvent marks a $feature_flag_called event for the minimal
-	// shape: serialization keeps only the allowlisted properties. It is set only when the server enabled
+	// shape: Enqueue keeps only the allowlisted properties before BeforeSend. It is set only when the server enabled
 	// minimal_flag_called_events and the flag has no linked experiment. This is
 	// the resolved per-event decision (shouldMinimizeFlagCalledEvent's output),
 	// distinct from the plural minimalFlagCalledEvents gate that decision reads.
@@ -184,8 +184,8 @@ type CaptureInApi struct {
 // minimalFlagCalledEventAllowlist lists the only event properties kept on a
 // minimal $feature_flag_called event, per the cross-SDK contract. Everything
 // else — Config.DefaultEventProperties and request-context properties
-// included — is stripped at serialization so
-// the minimal shape stays predictable.
+// included — is stripped before BeforeSend, so the hook sees the minimal shape
+// and the properties it adds are sent.
 // $geoip_disable is kept because, like $process_person_profile, it is a
 // processing-control sentinel: stripping it would silently re-enable GeoIP
 // enrichment for events from clients that disabled it. $session_id,
@@ -246,22 +246,12 @@ func shouldMinimizeFlagCalledEvent(minimalFlagCalledEvents bool, hasExperiment *
 	return minimalFlagCalledEvents && hasExperiment != nil && !*hasExperiment
 }
 
-// selectedProperties returns the source properties for serialization: the
-// allowlisted minimal subset when minimalFlagCalledEvent is set, or the full
-// set otherwise.
-func (msg Capture) selectedProperties() Properties {
-	if msg.minimalFlagCalledEvent {
-		return minimalFlagCalledEventProperties(msg.Properties)
-	}
-	return msg.Properties
-}
-
 // APIfy converts a Capture message into the PostHog batch API representation.
 func (msg Capture) APIfy() APIMessage {
 	libraryVersion := getVersion()
 
 	myProperties := Properties{}.
-		Merge(msg.selectedProperties()).
+		Merge(msg.Properties).
 		Set("$lib", SDKName).
 		Set("$lib_version", libraryVersion)
 

@@ -846,6 +846,9 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 			}
 		}
 		m.Properties = fillSDKProperties(m.Properties, m.IsServer, c.GetDisableGeoIP())
+		if m.minimalFlagCalledEvent {
+			m.Properties = minimalFlagCalledEventProperties(m.Properties)
+		}
 		processed, shouldSend := c.processBeforeSend(m)
 		if !shouldSend {
 			return nil
