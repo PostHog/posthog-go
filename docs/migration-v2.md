@@ -418,6 +418,8 @@ then rejects the whole request it is in.
 `$span_id` only when neither the event nor the request context sets either
 key. In 1.37 each ID filled on its own, so an event that set only `$trace_id`
 got the active span's `$span_id`.
+The helper cannot see `Config.DefaultEventProperties`, so a `$trace_id` or
+`$span_id` set there does not stop the derived pair, which wins over it.
 
 ## New: event options
 
