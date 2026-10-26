@@ -419,6 +419,7 @@ it into its option:
 | `$process_person_profile` | `process_person_profile` |
 | `$cookieless_mode` | `cookieless_mode` |
 | `$ignore_sent_at` | `disable_skew_correction` |
+| `$product_tour_id` | `product_tour_id` |
 
 When both are set, the option wins. An option set to `nil` counts as not
 set, so the legacy property applies.
