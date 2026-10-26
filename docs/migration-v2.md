@@ -139,6 +139,21 @@ served where the deployment enables it**, so confirm your PostHog instance
 serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
 `eu.i.posthog.com`) does.
 
+If you send events through your own reverse proxy, update it before you
+upgrade:
+
+- Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.
+- Pass `Authorization` (the project API key, sent as `Bearer <key>`), every
+  `PostHog-*` header, `Content-Type`, `Content-Encoding` and `User-Agent`
+  through unchanged. PostHog answers `401` without `Authorization` and `400`
+  without the others, and the batch fails.
+- Accept request bodies up to 20 MB. AI requests are often larger than 1 MB,
+  the default limit in nginx and ingress-nginx. A `413` from the proxy fails
+  the batch.
+
+PostHog's managed reverse proxy already does this. See the
+[proxy guides](https://posthog.com/docs/advanced/proxy).
+
 ### Redirects
 
 A capture request follows only `307` and `308` redirects, and only to the same
