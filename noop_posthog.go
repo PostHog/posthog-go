@@ -61,6 +61,9 @@ func (c *noopClient) ReloadFeatureFlags() error {
 	return ErrSDKDisabled
 }
 
+// IsEnabled returns false because a client without a project API key sends no data.
+func (c *noopClient) IsEnabled() bool { return false }
+
 func (c *noopClient) Close() error {
 	return ErrSDKDisabled
 }
