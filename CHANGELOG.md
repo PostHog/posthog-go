@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.38.0
+
+### Minor Changes
+
+- 94ff576: Add an optional OpenTelemetry context processor and HTTP middleware for session and person IDs on application spans. Both take the PostHog client and add no IDs when that client is nil, disabled, or closed.
+
 ## 1.37.0
 
 ### Minor Changes
