@@ -244,15 +244,6 @@ errors. `Retry-After` is honoured, clamped to the new `Config.MaxRetryBackoff`
 (default 30s), which also caps the default exponential backoff. A custom
 `Config.RetryAfter` is used as given.
 
-### Non-finite numbers
-
-A `float64` NaN or ±Inf property value is sent as `null` and the event is kept,
-as in 1.36.1 and later. A struct value that holds one is sent as `null` as a whole.
-Unlike 1.36.1 and later, v2 does not re-validate each encoded event. An event
-whose only non-finite numbers are `float32` values, or whose custom
-`MarshalJSON` returns invalid JSON, can be sent as invalid JSON, and capture
-then rejects the whole request it is in.
-
 ### Event IDs
 
 The SDK generates UUIDv7 values for event `Uuid`s, the `PostHog-Request-Id`
@@ -378,6 +369,15 @@ each dropped copy to `Callback.Failure` as a `*CaptureEventError` with `Result`
 `drop` and `Details` `duplicate_event_uuid`, and never retries it. Older capture
 versions reject the whole request with a 400, which the SDK reports as a
 `*CaptureRequestError` (`duplicate_event_uuid`).
+
+### Non-finite numbers
+
+A `float64` NaN or ±Inf property value is sent as `null` and the event is kept,
+as in 1.36.1 and later. A struct value that holds one is sent as `null` as a whole.
+Unlike 1.36.1 and later, v2 does not re-validate each encoded event. An event
+whose only non-finite numbers are `float32` values, or whose custom
+`MarshalJSON` returns invalid JSON, can be sent as invalid JSON, and capture
+then rejects the whole request it is in.
 
 ## New: event options
 
