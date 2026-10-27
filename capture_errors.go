@@ -45,7 +45,7 @@ func (e *CaptureEventError) Error() string {
 // and unwraps to the underlying transport/parse error when there is one.
 //
 // This error type covers batch-level failures — transport errors, terminal HTTP
-// statuses (400/401/429/...), retryable statuses (5xx) whose retry budget is
+// statuses (400/401/402/...), retryable statuses (429, 5xx, ...) whose retry budget is
 // exhausted, and 2xx responses with unparseable bodies. For per-event failures
 // within a successful batch response, see CaptureEventError.
 type CaptureRequestError struct {

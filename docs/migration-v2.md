@@ -263,10 +263,9 @@ can include PostHog's error description, as 1.x logged the response body.
 
 ### Retries
 
-`429` is no longer retried: the capture endpoint does not emit it, though a
-proxy in front of it can, and billing limits arrive as a terminal `402`.
-Retryable statuses are `408`, `500`, `502`, `503` and `504`, plus network
-errors. `Retry-After` is honoured, clamped to the new `Config.MaxRetryBackoff`
+Retryable statuses are `404`, `408`, `429`, `500`, `502`, `503` and `504`,
+plus network errors. 1.x did not retry `404`, and retried every `5xx`; other
+`5xx` statuses are now terminal. Billing limits arrive as a terminal `402`. `Retry-After` is honoured, clamped to the new `Config.MaxRetryBackoff`
 (default 30s), which also caps the default exponential backoff. A custom
 `Config.RetryAfter` is used as given.
 
