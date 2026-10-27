@@ -243,10 +243,16 @@ func validateHarnessHost(raw string) (string, bool) {
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	// Harness contract keys: capture_v1 and capture_ai_v1 select the v1 suites,
-	// event_options selects the option pass-through tests, and encoding_<codec>
-	// selects the compression test for this adapter's codec. They are external
-	// strings, not internal version markers.
-	capabilities := []string{"capture_v1", "capture_ai_v1", "event_options", "encoding_" + compressionName}
+	// event_options selects the option pass-through tests, event_uuid_override,
+	// bounded_retries, disable_geoip and historical_migration select the tests
+	// for those adapter params, and encoding_<codec> selects the compression
+	// test for this adapter's codec. They are external strings, not internal
+	// version markers.
+	capabilities := []string{
+		"capture_v1", "capture_ai_v1", "event_options",
+		"event_uuid_override", "bounded_retries", "disable_geoip", "historical_migration",
+		"encoding_" + compressionName,
+	}
 	response := HealthResponse{
 		SDKName:        "posthog-go",
 		SDKVersion:     posthog.Version,
