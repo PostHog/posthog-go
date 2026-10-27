@@ -24,6 +24,10 @@ const (
 	// FeatureFlagErrorFlagMissing indicates the requested flag was not in the API response
 	FeatureFlagErrorFlagMissing = "flag_missing"
 
+	// FeatureFlagErrorLocalEvaluationInconclusive indicates the flag has a loaded local
+	// definition, but neither local evaluation nor a remote fallback resolved it
+	FeatureFlagErrorLocalEvaluationInconclusive = "local_evaluation_inconclusive"
+
 	// FeatureFlagErrorEvaluationFailed indicates the flag was present but failed to evaluate due to a transient server error
 	FeatureFlagErrorEvaluationFailed = "evaluation_failed"
 

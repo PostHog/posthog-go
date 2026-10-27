@@ -13,6 +13,7 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"github.com/stretchr/testify/require"
 )
 
 // flagsServer wraps an httptest server that responds with the v4 flags fixture.
@@ -1403,4 +1404,283 @@ func TestCaptureWithFlags_UserPropertiesOverrideGenerated(t *testing.T) {
 	if event.Properties["$feature/multi-variate-flag"] != "hello" {
 		t.Errorf("expected non-overridden $feature/multi-variate-flag to remain 'hello', got %v", event.Properties["$feature/multi-variate-flag"])
 	}
+}
+
+const (
+	betaUIDefinition             = `{"key": "beta-ui", "active": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}}`
+	continuityCheckoutDefinition = `{"key": "checkout", "active": true, "ensure_experience_continuity": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}}`
+	remoteCheckoutEnabled        = `{"flags": {"checkout": {"key": "checkout", "enabled": true, "metadata": {"id": 1, "version": 1}}}}`
+	remoteNoFlags                = `{"flags": {}}`
+)
+
+func localDefinitions(flags ...string) string {
+	return `{"flags": [` + strings.Join(flags, ",") + `], "group_type_mapping": {}, "cohorts": {}}`
+}
+
+// newUnresolvedFlagsClient serves local definitions and answers /flags with remote,
+// or with a 500 when remote is empty.
+func newUnresolvedFlagsClient(t *testing.T, definitions, remote string) (Client, *eventCapture, *atomic.Int32) {
+	t.Helper()
+	var remoteCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
+			w.Write([]byte(definitions))
+		case strings.HasPrefix(r.URL.Path, "/flags"):
+			remoteCalls.Add(1)
+			if remote == "" {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Write([]byte(remote))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, capture, _ := newEvalClient(t, server, func(c *Config) {
+		c.PersonalApiKey = "personal-key"
+		c.DefaultFeatureFlagsPollingInterval = time.Hour
+	})
+	waitForFlagDefinitions(t, client)
+	return client, capture, &remoteCalls
+}
+
+func flagCalledError(t *testing.T, client Client, capture *eventCapture, key string) string {
+	t.Helper()
+	flushEvaluationEvents(t, client)
+	event := findEvent(snapshotCapturedEvents(capture), "$feature_flag_called", key)
+	require.NotNil(t, event, "expected $feature_flag_called for %s", key)
+	errorString, _ := event.Properties["$feature_flag_error"].(string)
+	return errorString
+}
+
+func TestEvaluateFlags_LocalOnlyReportsExperienceContinuityFlagAsUnresolved(t *testing.T) {
+	t.Parallel()
+	client, capture, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(betaUIDefinition, continuityCheckoutDefinition), remoteNoFlags)
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", OnlyEvaluateLocally: true})
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"beta-ui"}, snapshot.Keys())
+	require.Equal(t, true, snapshot.flags["beta-ui"].Enabled)
+	require.Equal(t, map[string]UnresolvedFlagReason{"checkout": UnresolvedFlagReasonExperienceContinuity}, snapshot.UnresolvedFlags())
+	require.Zero(t, remoteCalls.Load())
+	require.Empty(t, snapshot.OnlyAccessed().Keys())
+	flushEvaluationEvents(t, client)
+	require.Zero(t, countFlagCalledEvents(snapshotCapturedEvents(capture), "checkout"))
+	require.Zero(t, countFlagCalledEvents(snapshotCapturedEvents(capture), "beta-ui"))
+
+	require.Empty(t, snapshot.Only([]string{"beta-ui", "checkout"}).UnresolvedFlags())
+	require.Empty(t, snapshot.OnlyAccessed().UnresolvedFlags())
+}
+
+func TestEvaluateFlags_EachInconclusiveCauseReportsItsReason(t *testing.T) {
+	t.Parallel()
+	const staticCohort = `{"key": "id", "type": "cohort", "value": 404}`
+	const planIsPro = `{"key": "plan", "type": "person", "operator": "exact", "value": "pro"}`
+	checkout := func(properties ...string) string {
+		return `{"key": "checkout", "active": true, "ensure_experience_continuity": false, "filters": {"groups": [{"properties": [` + strings.Join(properties, ",") + `], "rollout_percentage": 100}]}}`
+	}
+	// The device-bucketed row of the spec does not apply: without a device id this SDK
+	// buckets device-bucketed flags by the distinct id, so they resolve locally.
+	tests := []struct {
+		name       string
+		definition string
+		properties Properties
+		want       UnresolvedFlagReason
+	}{
+		{"missing person property", checkout(planIsPro), nil, UnresolvedFlagReasonMissingContext},
+		{"unknown operator", checkout(`{"key": "plan", "type": "person", "operator": "is_on_the_moon", "value": "pro"}`), NewProperties().Set("plan", "enterprise"), UnresolvedFlagReasonUnsupportedDefinition},
+		{"static cohort", checkout(staticCohort), nil, UnresolvedFlagReasonUnsupportedDefinition},
+		{"static cohort and missing person property", checkout(staticCohort, planIsPro), nil, UnresolvedFlagReasonUnsupportedDefinition},
+		{"missing person property and static cohort", checkout(planIsPro, staticCohort), nil, UnresolvedFlagReasonUnsupportedDefinition},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, _, _ := newUnresolvedFlagsClient(t, localDefinitions(tt.definition), remoteNoFlags)
+
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", PersonProperties: tt.properties, OnlyEvaluateLocally: true})
+			require.NoError(t, err)
+
+			require.Empty(t, snapshot.Keys())
+			require.Equal(t, map[string]UnresolvedFlagReason{"checkout": tt.want}, snapshot.UnresolvedFlags())
+		})
+	}
+}
+
+func TestEvaluateFlags_DependencyReasons(t *testing.T) {
+	t.Parallel()
+	const betaUIDependsOnCheckout = `{"key": "beta-ui", "active": true, "filters": {"groups": [{"properties": [{"key": "checkout", "type": "flag", "operator": "flag_evaluates_to", "value": true, "dependency_chain": ["checkout"]}], "rollout_percentage": 100}]}}`
+	tests := []struct {
+		name        string
+		definitions string
+		want        UnresolvedFlagReason
+	}{
+		{"dependency is unresolved", localDefinitions(continuityCheckoutDefinition, betaUIDependsOnCheckout), UnresolvedFlagReasonUnresolvedDependency},
+		{"dependency has no loaded definition", localDefinitions(betaUIDependsOnCheckout), UnresolvedFlagReasonUnsupportedDefinition},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, _, _ := newUnresolvedFlagsClient(t, tt.definitions, remoteNoFlags)
+
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", FlagKeys: []string{"beta-ui"}, OnlyEvaluateLocally: true})
+			require.NoError(t, err)
+
+			require.Empty(t, snapshot.Keys())
+			require.Equal(t, map[string]UnresolvedFlagReason{"beta-ui": tt.want}, snapshot.UnresolvedFlags())
+		})
+	}
+}
+
+func TestEvaluateFlags_RemoteFallbackResolvesUnresolvedFlag(t *testing.T) {
+	t.Parallel()
+	client, capture, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(continuityCheckoutDefinition), remoteCheckoutEnabled)
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123"})
+	require.NoError(t, err)
+
+	require.Equal(t, int32(1), remoteCalls.Load())
+	require.Equal(t, []string{"checkout"}, snapshot.Keys())
+	require.Empty(t, snapshot.UnresolvedFlags())
+
+	require.True(t, snapshot.IsEnabled("checkout"))
+	flushEvaluationEvents(t, client)
+	event := findEvent(snapshotCapturedEvents(capture), "$feature_flag_called", "checkout")
+	require.NotNil(t, event)
+	require.Equal(t, true, event.Properties["$feature_flag_response"])
+	require.NotContains(t, event.Properties, "$feature_flag_error")
+}
+
+func TestEvaluateFlags_RemoteFallbackThatDoesNotResolveLeavesFlagUnresolved(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		remote  string
+		wantErr bool
+	}{
+		{"remote request fails", "", true},
+		{"remote returns no flags", remoteNoFlags, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, capture, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(continuityCheckoutDefinition), tt.remote)
+
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123"})
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Equal(t, int32(1), remoteCalls.Load())
+			require.Empty(t, snapshot.Keys())
+			require.Equal(t, map[string]UnresolvedFlagReason{"checkout": UnresolvedFlagReasonExperienceContinuity}, snapshot.UnresolvedFlags())
+
+			require.False(t, snapshot.IsEnabled("checkout"))
+			errorString := flagCalledError(t, client, capture, "checkout")
+			require.Contains(t, errorString, FeatureFlagErrorLocalEvaluationInconclusive)
+			require.NotContains(t, errorString, FeatureFlagErrorFlagMissing)
+		})
+	}
+}
+
+func TestEvaluateFlags_KeyWithoutLocalDefinitionIsMissingNotUnresolved(t *testing.T) {
+	t.Parallel()
+	client, capture, _ := newUnresolvedFlagsClient(t, localDefinitions(betaUIDefinition), remoteNoFlags)
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", FlagKeys: []string{"beta-ui", "typo-flag"}})
+	require.NoError(t, err)
+
+	require.False(t, snapshot.IsEnabled("typo-flag"))
+	require.Empty(t, snapshot.UnresolvedFlags())
+	require.Equal(t, FeatureFlagErrorFlagMissing, flagCalledError(t, client, capture, "typo-flag"))
+}
+
+func TestEvaluateFlags_FlagOutsideRequestedKeysIsNotUnresolved(t *testing.T) {
+	t.Parallel()
+	client, _, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(betaUIDefinition, continuityCheckoutDefinition), remoteNoFlags)
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", FlagKeys: []string{"beta-ui"}})
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"beta-ui"}, snapshot.Keys())
+	require.True(t, snapshot.flags["beta-ui"].Enabled)
+	require.Empty(t, snapshot.UnresolvedFlags())
+	require.Zero(t, remoteCalls.Load())
+}
+
+func TestEvaluateFlags_InactiveFlagIsResolvedAsFalseNotUnresolved(t *testing.T) {
+	t.Parallel()
+	inactive := `{"key": "checkout", "active": false, "ensure_experience_continuity": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}}`
+	client, _, _ := newUnresolvedFlagsClient(t, localDefinitions(inactive), remoteNoFlags)
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", OnlyEvaluateLocally: true})
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"checkout"}, snapshot.Keys())
+	require.False(t, snapshot.flags["checkout"].Enabled)
+	require.Empty(t, snapshot.UnresolvedFlags())
+}
+
+func TestEvaluateFlags_ReadingUnresolvedFlagReportsInconclusiveLocalEvaluation(t *testing.T) {
+	t.Parallel()
+	client, capture, _ := newUnresolvedFlagsClient(t, localDefinitions(continuityCheckoutDefinition), remoteNoFlags)
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", OnlyEvaluateLocally: true})
+	require.NoError(t, err)
+
+	require.False(t, snapshot.IsEnabled("checkout"))
+	require.Equal(t, FeatureFlagErrorLocalEvaluationInconclusive, flagCalledError(t, client, capture, "checkout"))
+}
+
+func TestEvaluateFlags_UnexpectedLocalErrorIsNotUnresolved(t *testing.T) {
+	t.Parallel()
+	// A numeric filter value that is not a number fails with an unexpected error, not an
+	// inconclusive match.
+	notOrderable := `{"key": "checkout", "active": true, "filters": {"groups": [{"properties": [{"key": "age", "type": "person", "operator": "gt", "value": "abc"}], "rollout_percentage": 100}]}}`
+	client, capture, _ := newUnresolvedFlagsClient(t, localDefinitions(notOrderable), remoteNoFlags)
+
+	snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", PersonProperties: NewProperties().Set("age", 30), OnlyEvaluateLocally: true})
+	require.NoError(t, err)
+
+	require.Empty(t, snapshot.Keys())
+	require.Empty(t, snapshot.UnresolvedFlags())
+	require.False(t, snapshot.IsEnabled("checkout"))
+	require.Equal(t, FeatureFlagErrorFlagMissing, flagCalledError(t, client, capture, "checkout"))
+}
+
+func TestFeatureFlagEvaluations_UnresolvedFlagsErrorKeepsResponseErrors(t *testing.T) {
+	var errorsReported []string
+	snapshot := &FeatureFlagEvaluations{
+		host: featureFlagEvaluationsHost{captureFlagCalledIfNeeded: func(_, _ string, _ interface{}, _ *string, properties Properties, _ Groups, _ bool) {
+			errorsReported = append(errorsReported, properties["$feature_flag_error"].(string))
+		}},
+		distinctId:           "user-123",
+		flags:                map[string]evaluatedFlagRecord{"beta-ui": {Key: "beta-ui", Enabled: true}},
+		unresolved:           map[string]UnresolvedFlagReason{"checkout": UnresolvedFlagReasonExperienceContinuity},
+		errorsWhileComputing: true,
+	}
+
+	unresolved := snapshot.UnresolvedFlags()
+	unresolved["checkout"] = UnresolvedFlagReasonMissingContext
+	require.Equal(t, map[string]UnresolvedFlagReason{"checkout": UnresolvedFlagReasonExperienceContinuity}, snapshot.UnresolvedFlags())
+	require.Empty(t, errorsReported)
+	require.Empty(t, snapshot.OnlyAccessed().Keys())
+	filtered := snapshot.Only([]string{"beta-ui"})
+
+	require.Nil(t, snapshot.GetFlag("checkout"))
+	require.Equal(t, []string{FeatureFlagErrorErrorsWhileComputing + "," + FeatureFlagErrorLocalEvaluationInconclusive}, errorsReported)
+
+	// A filtered snapshot treats the key as any other key absent from its source.
+	filtered.IsEnabled("checkout")
+	require.Equal(t, []string{
+		FeatureFlagErrorErrorsWhileComputing + "," + FeatureFlagErrorLocalEvaluationInconclusive,
+		FeatureFlagErrorErrorsWhileComputing + "," + FeatureFlagErrorFlagMissing,
+	}, errorsReported)
 }
