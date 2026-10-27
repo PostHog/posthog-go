@@ -573,8 +573,8 @@ func TestSendStatusClassification(t *testing.T) {
 		wantReqs    int
 		wantFailure int
 	}{
-		{408, 3, 1}, {500, 3, 1}, {502, 3, 1}, {503, 3, 1}, {504, 3, 1},
-		{400, 1, 1}, {401, 1, 1}, {402, 1, 1}, {413, 1, 1}, {415, 1, 1}, {429, 1, 1},
+		{404, 3, 1}, {408, 3, 1}, {429, 3, 1}, {500, 3, 1}, {502, 3, 1}, {503, 3, 1}, {504, 3, 1},
+		{400, 1, 1}, {401, 1, 1}, {402, 1, 1}, {413, 1, 1}, {415, 1, 1},
 	}
 	for _, tc := range cases {
 		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
@@ -585,8 +585,17 @@ func TestSendStatusClassification(t *testing.T) {
 			ts := httptest.NewServer(srv.handler(t))
 			defer ts.Close()
 
+			var mu sync.Mutex
+			var errLogs []string
+			recordErr := func(format string, args ...interface{}) {
+				mu.Lock()
+				defer mu.Unlock()
+				errLogs = append(errLogs, fmt.Sprintf(format, args...))
+			}
 			// maxRetries=2 -> 3 attempts max.
-			c := newCaptureTestClient(t, ts.URL, cb, 2, nil)
+			c := newCaptureTestClient(t, ts.URL, cb, 2, func(cfg *Config) {
+				cfg.Logger = testLogger{errorf: recordErr}
+			})
 			c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 			if got := len(srv.snapshot()); got != tc.wantReqs {
@@ -594,6 +603,16 @@ func TestSendStatusClassification(t *testing.T) {
 			}
 			if _, f := cb.counts(); f != tc.wantFailure {
 				t.Errorf("status %d: failures=%d, want %d", tc.status, f, tc.wantFailure)
+			}
+			// An exhausted retry logs its cause, so the loss is diagnosable without the Callback.
+			if tc.wantReqs > 1 {
+				want := fmt.Sprintf("1 messages dropped after 3 attempts: capture request failed: %d boom", tc.status)
+				mu.Lock()
+				logged := strings.Join(errLogs, "\n")
+				mu.Unlock()
+				if !strings.Contains(logged, want) {
+					t.Errorf("status %d: error log %q, want it to contain %q", tc.status, logged, want)
+				}
 			}
 		})
 	}

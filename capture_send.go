@@ -89,11 +89,10 @@ func isRedirectStatus(code int) bool {
 }
 
 // isRetryableStatus reports whether a non-2xx capture status should be
-// retried. 429 is terminal: the capture endpoint never emits it (billing is a
-// terminal 402), matching posthog-rs retry.rs.
+// retried. Billing limits stay terminal as a 402.
 func isRetryableStatus(code int) bool {
 	switch code {
-	case 408, 500, 502, 503, 504:
+	case 404, 408, 429, 500, 502, 503, 504:
 		return true
 	default:
 		return false
@@ -201,7 +200,7 @@ func (c *client) send(l *lane, pb preparedBatch) {
 			continue
 		}
 
-		// Terminal non-2xx (3xx/400/401/402/413/415/429/...): no retry.
+		// Terminal non-2xx (3xx/400/401/402/413/415/...): no retry.
 		var cause error
 		if isRedirectStatus(res.statusCode) {
 			cause = errRedirectNotFollowed
@@ -319,9 +318,10 @@ func (c *client) waitBackoff(attemptIndex int, res *attemptResult) bool {
 }
 
 // dropMessages logs and notifies failure for events that are abandoned after
-// exhausting all retry attempts.
+// exhausting all retry attempts. The log carries the last error, so a lasting
+// 404 or 429 is visible without a Callback.
 func (c *client) dropMessages(l *lane, msgs []APIMessage, err error) {
-	c.Errorf("%s: %d messages dropped after %d attempts", l.cfg.name, len(msgs), c.maxAttempts)
+	c.Errorf("%s: %d messages dropped after %d attempts: %v", l.cfg.name, len(msgs), c.maxAttempts, err)
 	c.notifyFailure(msgs, err)
 }
 
