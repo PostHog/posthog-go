@@ -265,7 +265,10 @@ can include PostHog's error description, as 1.x logged the response body.
 
 Retryable statuses are `404`, `408`, `429`, `500`, `502`, `503` and `504`,
 plus network errors. 1.x did not retry `404`, and retried every `5xx`; other
-`5xx` statuses are now terminal. Billing limits arrive as a terminal `402`. `Retry-After` is honoured, clamped to the new `Config.MaxRetryBackoff`
+`5xx` statuses are now terminal. A `404` that lasts through every attempt can
+mean the PostHog deployment has no capture v1 route, for example an older
+self-hosted install. Billing limits arrive as a terminal `402`. `Retry-After`
+is honoured, clamped to the new `Config.MaxRetryBackoff`
 (default 30s), which also caps the default exponential backoff. A custom
 `Config.RetryAfter` is used as given.
 

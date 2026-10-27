@@ -318,9 +318,10 @@ func (c *client) waitBackoff(attemptIndex int, res *attemptResult) bool {
 }
 
 // dropMessages logs and notifies failure for events that are abandoned after
-// exhausting all retry attempts.
+// exhausting all retry attempts. The log carries the last error, so a lasting
+// 404 or 429 is visible without a Callback.
 func (c *client) dropMessages(l *lane, msgs []APIMessage, err error) {
-	c.Errorf("%s: %d messages dropped after %d attempts", l.cfg.name, len(msgs), c.maxAttempts)
+	c.Errorf("%s: %d messages dropped after %d attempts: %v", l.cfg.name, len(msgs), c.maxAttempts, err)
 	c.notifyFailure(msgs, err)
 }
 
