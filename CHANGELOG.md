@@ -16,7 +16,7 @@
 
 ### Patch Changes
 
-- Not in v2: 1.36.1 sends NaN and infinities as null and keeps the event. v2 drops that event alone and reports it to `Callback.Failure`, as 1.36.0 did. See `docs/migration-v2.md`.
+- v2 also sends NaN and infinities as null and keeps the event, but re-encodes only an event whose first encoding fails, so other events cost nothing extra (#394). See `docs/migration-v2.md`.
 
 ## 1.36.0
 

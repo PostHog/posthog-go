@@ -272,13 +272,6 @@ is honoured, clamped to the new `Config.MaxRetryBackoff`
 (default 30s), which also caps the default exponential backoff. A custom
 `Config.RetryAfter` is used as given.
 
-### Non-finite numbers
-
-An event with a `float64` NaN or ±Inf property value is not sent: the SDK
-drops that event alone and reports it to `Callback.Failure` as a
-`*CaptureLocalError`, as 1.36.0 did. 1.36.1 to 1.37.x sent these values as
-`null` and kept the event.
-
 ### OpenTelemetry exception trace IDs
 
 `posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and
