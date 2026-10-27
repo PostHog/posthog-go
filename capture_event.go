@@ -255,7 +255,7 @@ func boolProperty(props Properties, key string) bool {
 func prepareForSend(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
 	ev := buildEvent(msg.apifyEvent(), logger)
-	data, err := json.Marshal(ev)
+	data, err := marshalEventPayload(ev)
 	if err != nil {
 		return nil, apiMsg, canonicalUUID(ev.Uuid), err
 	}
