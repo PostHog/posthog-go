@@ -599,6 +599,116 @@ func TestSendStatusClassification(t *testing.T) {
 	}
 }
 
+func TestSendRedirects(t *testing.T) {
+	const endpoint = "https://capture.example.com"
+	sameOrigin := endpoint + "/moved"
+	cases := []struct {
+		name string
+		// chain is the status and Location of each redirect before a 200.
+		chain       []redirectHop
+		wantURLs    []string
+		wantSuccess bool
+	}{
+		{"307 same origin", []redirectHop{{307, "/moved"}}, []string{sameOrigin}, true},
+		{"308 same origin, explicit default port", []redirectHop{{308, "https://capture.example.com:443/moved"}}, []string{"https://capture.example.com:443/moved"}, true},
+		{"host compared without case", []redirectHop{{307, "https://CAPTURE.example.com/moved"}}, []string{"https://CAPTURE.example.com/moved"}, true},
+		{"five redirects", repeatHop(redirectHop{307, "/moved"}, 5), repeatURL(sameOrigin, 5), true},
+		{"six redirects", repeatHop(redirectHop{307, "/moved"}, 6), repeatURL(sameOrigin, 5), false},
+		{"other host", []redirectHop{{307, "https://other.example.com/i/v1/analytics/events"}}, nil, false},
+		{"other port", []redirectHop{{307, "https://capture.example.com:8443/moved"}}, nil, false},
+		{"https to http", []redirectHop{{308, "http://capture.example.com/moved"}}, nil, false},
+		{"301", []redirectHop{{301, "/moved"}}, nil, false},
+		{"302", []redirectHop{{302, "/moved"}}, nil, false},
+		{"303", []redirectHop{{303, "/moved"}}, nil, false},
+		{"307 without Location", []redirectHop{{307, ""}}, nil, false},
+	}
+	lanes := map[string]func(*client) *lane{
+		"analytics": func(c *client) *lane { return c.analytics },
+		"ai":        func(c *client) *lane { return c.aiLane() },
+	}
+	for laneName, laneOf := range lanes {
+		for _, tc := range cases {
+			t.Run(laneName+"/"+tc.name, func(t *testing.T) {
+				var mu sync.Mutex
+				var seen []*http.Request
+				var bodies [][]byte
+				transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+					var body []byte
+					if r.Body != nil {
+						body, _ = io.ReadAll(r.Body)
+					}
+					mu.Lock()
+					hop := len(seen)
+					seen = append(seen, r)
+					bodies = append(bodies, body)
+					mu.Unlock()
+					res := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Request: r,
+						Body: io.NopCloser(strings.NewReader(""))}
+					if hop < len(tc.chain) {
+						res.StatusCode = tc.chain[hop].status
+						if tc.chain[hop].location != "" {
+							res.Header.Set("Location", tc.chain[hop].location)
+						}
+						return res, nil
+					}
+					r.Body = io.NopCloser(bytes.NewReader(body))
+					res.Body = io.NopCloser(strings.NewReader(captureOKResponse(r)))
+					return res, nil
+				})
+				cb := &recordingCallback{}
+				// maxRetries=2: a refused redirect must not be retried.
+				c := newCaptureTestClient(t, endpoint, cb, 2, func(cfg *Config) { cfg.Transport = transport })
+				l := laneOf(c)
+				c.send(l, captureBatch(t, cap1(uuidA)))
+
+				wantURLs := append([]string{endpoint + l.cfg.path}, tc.wantURLs...)
+				gotURLs := make([]string, len(seen))
+				for i, r := range seen {
+					gotURLs[i] = r.URL.String()
+					require.Equal(t, http.MethodPost, r.Method, "request %d", i)
+					require.Equal(t, "Bearer phc_test", r.Header.Get("Authorization"), "request %d", i)
+					require.Equal(t, seen[0].Header.Get("PostHog-Request-Id"), r.Header.Get("PostHog-Request-Id"), "request %d", i)
+					require.Equal(t, "1", r.Header.Get("PostHog-Attempt"), "request %d", i)
+					require.Equal(t, bodies[0], bodies[i], "request %d body", i)
+				}
+				require.Equal(t, wantURLs, gotURLs)
+
+				successes, failures := cb.counts()
+				if tc.wantSuccess {
+					require.Equal(t, [2]int{1, 0}, [2]int{successes, failures})
+					return
+				}
+				require.Equal(t, [2]int{0, 1}, [2]int{successes, failures})
+				var reqErr *CaptureRequestError
+				require.ErrorAs(t, cb.failures[0].err, &reqErr)
+				require.Equal(t, tc.chain[len(tc.wantURLs)].status, reqErr.StatusCode)
+				require.ErrorIs(t, reqErr, errRedirectNotFollowed)
+			})
+		}
+	}
+}
+
+type redirectHop struct {
+	status   int
+	location string
+}
+
+func repeatHop(hop redirectHop, n int) []redirectHop {
+	hops := make([]redirectHop, n)
+	for i := range hops {
+		hops[i] = hop
+	}
+	return hops
+}
+
+func repeatURL(u string, n int) []string {
+	urls := make([]string, n)
+	for i := range urls {
+		urls[i] = u
+	}
+	return urls
+}
+
 func TestSendRetryableThenSuccess(t *testing.T) {
 	cb := &recordingCallback{}
 	srv := &captureTestServer{respond: func(attempt int, uuids []string) (int, string, string) {

@@ -2,13 +2,17 @@ package posthog
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 // minimalEventsFlagsResponse builds a v4 /flags response covering the three
@@ -191,6 +195,90 @@ func TestGetFeatureFlag_Remote_GatedNoExperiment_SendsMinimalEvent(t *testing.T)
 	}
 }
 
+// The trim runs before BeforeSend and before legacy option properties become
+// options, so it must keep those properties for the options to reach the wire.
+func TestMinimalFlagCalledEvent_TrimRunsBeforeBeforeSend(t *testing.T) {
+	t.Parallel()
+	type wireEvent struct {
+		Event      string                 `json:"event"`
+		Properties map[string]interface{} `json:"properties"`
+		Options    map[string]interface{} `json:"options"`
+	}
+	var mu sync.Mutex
+	var sent []wireEvent
+	var hookSaw Properties
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, capturePath) {
+			w.Write([]byte(minimalEventsFlagsResponse(true)))
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		body, err := decodeCaptureRequest(r.Header.Get("Content-Encoding"), raw)
+		if err != nil {
+			t.Errorf("decode capture body: %v", err)
+		}
+		var batch struct {
+			Batch []wireEvent `json:"batch"`
+		}
+		if err := json.Unmarshal(body, &batch); err != nil {
+			t.Errorf("unmarshal capture body: %v", err)
+		}
+		mu.Lock()
+		sent = append(sent, batch.Batch...)
+		mu.Unlock()
+		writeCaptureOK(w, body)
+	}))
+	t.Cleanup(server.Close)
+	client, capture, _ := newEvalClient(t, server, func(c *Config) {
+		c.DefaultEventProperties = NewProperties().
+			Set("app_version", "1.2.3").
+			Set(propertyCookielessMode, true).
+			Set(propertyIgnoreSentAt, true).
+			Set(propertyProductTourId, "tour_1").
+			Set(propertyProcessPersonProfile, false)
+		c.BeforeSend = func(msg Message) Message {
+			m, ok := msg.(Capture)
+			if !ok || m.Event != "$feature_flag_called" {
+				return msg
+			}
+			mu.Lock()
+			hookSaw = NewProperties().Merge(m.Properties)
+			mu.Unlock()
+			m.Properties.Set("hook_added", "kept")
+			return m
+		}
+	})
+
+	if _, err := client.GetFeatureFlag(FeatureFlagPayload{Key: "plain-flag", DistinctId: "user-1"}); err != nil {
+		t.Fatalf("GetFeatureFlag error: %v", err)
+	}
+	waitForEventCount(capture, 1, 5*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := hookSaw["app_version"]; ok || hookSaw["$feature_flag"] != "plain-flag" {
+		t.Errorf("expected BeforeSend to see the minimal shape, got %v", hookSaw)
+	}
+	if len(sent) != 1 || sent[0].Event != "$feature_flag_called" {
+		t.Fatalf("expected one $feature_flag_called on the wire, got %+v", sent)
+	}
+	if sent[0].Properties["hook_added"] != "kept" {
+		t.Errorf("expected the property BeforeSend added to be sent, got %v", sent[0].Properties)
+	}
+	if _, ok := sent[0].Properties["app_version"]; ok {
+		t.Errorf("expected DefaultEventProperties to stay stripped, got %v", sent[0].Properties)
+	}
+	wantOptions := map[string]interface{}{
+		"cookieless_mode":         true,
+		"disable_skew_correction": true,
+		"product_tour_id":         "tour_1",
+		"process_person_profile":  false,
+	}
+	if !reflect.DeepEqual(sent[0].Options, wantOptions) {
+		t.Errorf("expected legacy option properties to become options %v, got %v", wantOptions, sent[0].Options)
+	}
+}
+
 func TestGetFeatureFlag_Remote_FullEventWhenSignalMissing(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -358,7 +446,7 @@ func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 		IsServer:               true,
 		minimalFlagCalledEvent: true,
 	}
-	msg.Properties = fillSDKProperties(msg.Properties, msg.IsServer, false)
+	msg.Properties = minimalFlagCalledEventProperties(fillSDKProperties(msg.Properties, msg.IsServer, false))
 
 	ev := buildEvent(msg.apifyEvent(), nil)
 	wantOptions := map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": true, "product_tour_id": "tour_1"}

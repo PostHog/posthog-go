@@ -139,6 +139,32 @@ served where the deployment enables it**, so confirm your PostHog instance
 serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
 `eu.i.posthog.com`) does.
 
+If you send events through your own reverse proxy, update it before you
+upgrade:
+
+- Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.
+- Pass `Authorization` (the project API key, sent as `Bearer <key>`), every
+  `PostHog-*` header, `Content-Type`, `Content-Encoding` and `User-Agent`
+  through unchanged. PostHog answers `401` without `Authorization` and `400`
+  without the others, and the batch fails.
+- Accept request bodies up to 20 MB. AI requests are often larger than 1 MB,
+  the default limit in nginx and ingress-nginx. A `413` from the proxy fails
+  the batch.
+
+PostHog's managed reverse proxy already does this. See the
+[proxy guides](https://posthog.com/docs/advanced/proxy).
+
+### Redirects
+
+A capture request follows only `307` and `308` redirects, and only to the same
+scheme, host and port as `Endpoint`, at most 5 times. It resends the same body
+and headers. Any other redirect fails the batch without a retry:
+`Callback.Failure` gets a `CaptureRequestError` with the redirect's status.
+1.x followed up to 10 redirects of any kind to any host. A `301`, `302` or
+`303` resent the request as a `GET` without the events, and a `307` or `308`
+to another host received the events and the API key. Feature flag requests are
+unchanged.
+
 ### Request context
 
 `RequestContext.Properties` and `RequestContext.Options` now apply to
@@ -336,6 +362,11 @@ requests still follow `Config.DisableGeoIP`. The `IsServer` and `DisableGeoIP`
 fields of a message report the values left after `BeforeSend`. To change
 them, set the properties.
 
+A minimal `$feature_flag_called` event, which the server can turn on for
+flags without an experiment, is trimmed to its fixed set of properties before
+`BeforeSend`. The hook sees only that set, and the properties it adds are
+sent. In 1.x the trim ran after `BeforeSend` and removed them.
+
 For the feature flag properties, the only change is that a `$feature/<key>`
 set on the event or in the request context now wins over `SendFeatureFlags`.
 A `Flags` snapshot already let them win, and `DefaultEventProperties` already
@@ -412,6 +443,7 @@ it into its option:
 | `$process_person_profile` | `process_person_profile` |
 | `$cookieless_mode` | `cookieless_mode` |
 | `$ignore_sent_at` | `disable_skew_correction` |
+| `$product_tour_id` | `product_tour_id` |
 
 When both are set, the option wins. An option set to `nil` counts as not
 set, so the legacy property applies.
