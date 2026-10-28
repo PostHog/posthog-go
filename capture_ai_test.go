@@ -3,6 +3,7 @@ package posthog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -280,7 +281,9 @@ func TestAILaneDropsEventOverItsOwnCeiling(t *testing.T) {
 
 	var failures []error
 	var mu sync.Mutex
+	logs := &errorLines{}
 	c := aiTestClient(t, srv.URL, func(cfg *Config) {
+		cfg.Logger = logs
 		cfg.Callback = testCallback{nil, func(_ APIMessage, e error) {
 			mu.Lock()
 			failures = append(failures, e)
@@ -288,7 +291,7 @@ func TestAILaneDropsEventOverItsOwnCeiling(t *testing.T) {
 		}}
 	})
 
-	huge := NewProperties().Set("blob", strings.Repeat("x", aiMaxEventBytes+aiEnvelopeHeadroom))
+	huge := NewProperties().Set("blob", "SECRET-MARKER"+strings.Repeat("x", aiMaxEventBytes+aiEnvelopeHeadroom))
 	require.NoError(t, c.EnqueueAI(Capture{DistinctId: "d", Event: "$ai_generation", Properties: huge}))
 	require.NoError(t, c.Close())
 
@@ -297,6 +300,9 @@ func TestAILaneDropsEventOverItsOwnCeiling(t *testing.T) {
 	require.Len(t, failures, 1)
 	require.ErrorIs(t, failures[0], ErrMessageTooBig)
 	require.Zero(t, rec.count(aiCapturePath), "no request should be attempted for a pre-dropped event")
+	logged := logs.String()
+	require.Contains(t, logged, `"$ai_generation" exceeds maximum size`)
+	require.NotContains(t, logged, "SECRET-MARKER")
 }
 
 // TestCloseDrainsBothLanes pins that Close flushes the AI lane too, not just
@@ -739,4 +745,25 @@ func TestOptionsReachBothLanes(t *testing.T) {
 			require.NotContains(t, props, propertyIgnoreSentAt)
 		})
 	}
+}
+
+// errorLines records Errorf lines.
+type errorLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *errorLines) Debugf(string, ...interface{}) {}
+func (l *errorLines) Logf(string, ...interface{})   {}
+func (l *errorLines) Warnf(string, ...interface{})  {}
+func (l *errorLines) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *errorLines) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, "\n")
 }
