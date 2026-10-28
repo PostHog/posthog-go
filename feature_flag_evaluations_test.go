@@ -1414,7 +1414,11 @@ const (
 )
 
 func localDefinitions(flags ...string) string {
-	return `{"flags": [` + strings.Join(flags, ",") + `], "group_type_mapping": {}, "cohorts": {}}`
+	return localDefinitionsWithCohorts(`{}`, flags...)
+}
+
+func localDefinitionsWithCohorts(cohorts string, flags ...string) string {
+	return `{"flags": [` + strings.Join(flags, ",") + `], "group_type_mapping": {}, "cohorts": ` + cohorts + `}`
 }
 
 // newUnresolvedFlagsClient serves local definitions and answers /flags with remote,

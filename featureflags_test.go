@@ -167,10 +167,16 @@ func TestConditionLoopDoesNotStopAtFirstInconclusiveFilter(t *testing.T) {
 	earlyExit := func(conditions ...string) string {
 		return `{"key": "checkout", "active": true, "filters": {"early_exit": true, "groups": [` + strings.Join(conditions, ",") + `]}}`
 	}
+	dependencyOnStaticCohort := flagDependencyFilter("cohort-dependency", true, "cohort-dependency")
+	andCohort := func(filters ...string) string {
+		return `{"7": {"type": "AND", "values": [` + strings.Join(filters, ",") + `]}}`
+	}
+	const cohortFilter = `{"key": "id", "type": "cohort", "value": 7}`
 	canada := NewProperties().Set("country", "CA")
 	tests := []struct {
 		name       string
 		flags      []string
+		cohorts    string
 		properties Properties
 		want       interface{}
 		wantReason UnresolvedFlagReason
@@ -234,7 +240,7 @@ func TestConditionLoopDoesNotStopAtFirstInconclusiveFilter(t *testing.T) {
 			name: "server-required dependency does not override a higher reason",
 			flags: []string{
 				dependsOnStaticCohort,
-				flagDefinition("checkout", flagCondition(100, unknownOperatorFilter), flagCondition(100, flagDependencyFilter("cohort-dependency", true, "cohort-dependency"))),
+				flagDefinition("checkout", flagCondition(100, unknownOperatorFilter), flagCondition(100, dependencyOnStaticCohort)),
 			},
 			properties: canada,
 			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
@@ -244,7 +250,7 @@ func TestConditionLoopDoesNotStopAtFirstInconclusiveFilter(t *testing.T) {
 			name: "server-required dependency does not hide a higher reason in a later condition",
 			flags: []string{
 				dependsOnStaticCohort,
-				flagDefinition("checkout", flagCondition(100, flagDependencyFilter("cohort-dependency", true, "cohort-dependency")), flagCondition(100, unknownOperatorFilter)),
+				flagDefinition("checkout", flagCondition(100, dependencyOnStaticCohort), flagCondition(100, unknownOperatorFilter)),
 			},
 			properties: canada,
 			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
@@ -254,7 +260,33 @@ func TestConditionLoopDoesNotStopAtFirstInconclusiveFilter(t *testing.T) {
 			name: "server-required dependency then a higher reason in the same condition",
 			flags: []string{
 				dependsOnStaticCohort,
-				flagDefinition("checkout", flagCondition(100, flagDependencyFilter("cohort-dependency", true, "cohort-dependency"), unknownOperatorFilter)),
+				flagDefinition("checkout", flagCondition(100, dependencyOnStaticCohort, unknownOperatorFilter)),
+			},
+			properties: canada,
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+			wantServer: true,
+		},
+		{
+			name:       "server-required dependency then a higher reason in a cohort",
+			flags:      []string{dependsOnStaticCohort, flagDefinition("checkout", flagCondition(100, cohortFilter))},
+			cohorts:    andCohort(dependencyOnStaticCohort, unknownOperatorFilter),
+			properties: canada,
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+			wantServer: true,
+		},
+		{
+			name:       "higher reason then a server-required dependency in a cohort",
+			flags:      []string{dependsOnStaticCohort, flagDefinition("checkout", flagCondition(100, cohortFilter))},
+			cohorts:    andCohort(unknownOperatorFilter, dependencyOnStaticCohort),
+			properties: canada,
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+			wantServer: true,
+		},
+		{
+			name: "server-required dependency does not hide a higher reason in a condition ruled out earlier",
+			flags: []string{
+				dependsOnStaticCohort,
+				flagDefinition("checkout", flagCondition(100, countryIsUSFilter, unknownOperatorFilter), flagCondition(100, dependencyOnStaticCohort)),
 			},
 			properties: canada,
 			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
@@ -274,7 +306,11 @@ func TestConditionLoopDoesNotStopAtFirstInconclusiveFilter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := computeDefinedFlag(t, localDefinitions(tt.flags...), "checkout", tt.properties)
+			cohorts := tt.cohorts
+			if cohorts == "" {
+				cohorts = `{}`
+			}
+			got, err := computeDefinedFlag(t, localDefinitionsWithCohorts(cohorts, tt.flags...), "checkout", tt.properties)
 			if tt.wantReason == "" {
 				require.NoError(t, err)
 				require.Equal(t, tt.want, got)

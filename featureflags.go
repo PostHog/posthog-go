@@ -1117,17 +1117,13 @@ func definitionUnresolvedReason(flag FeatureFlag, flagsByKey map[string]FeatureF
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return UnresolvedFlagReasonExperienceContinuity
 	}
-	return conditionsDefinitionReason(flag.Filters.Groups, flag.Filters.AggregationGroupTypeIndex, flagsByKey, cohorts, matchingVersion)
-}
-
-// conditionsDefinitionReason returns unsupported_definition when a filter in any of the
-// conditions cannot be checked locally whatever the call passes.
-func conditionsDefinitionReason(conditions []FeatureFlagCondition, flagAggregation *uint8, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int) UnresolvedFlagReason {
+	// A filter in any condition that cannot be checked locally whatever the call passes
+	// makes the definition unsupported.
 	visitedCohorts := map[string]struct{}{}
-	for _, condition := range conditions {
+	for _, condition := range flag.Filters.Groups {
 		aggregation := condition.AggregationGroupTypeIndex
 		if aggregation == nil {
-			aggregation = flagAggregation
+			aggregation = flag.Filters.AggregationGroupTypeIndex
 		}
 		for _, property := range condition.Properties {
 			if isUnsupportedProperty(property, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
@@ -1714,7 +1710,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	groupTypeMapping := state.groups
 	var inconclusiveReason UnresolvedFlagReason
 
-	for i, condition := range conditions {
+	for _, condition := range conditions {
 		// Per-condition aggregation overrides only when the condition explicitly
 		// sets its own AggregationGroupTypeIndex that differs from the flag level
 		// (mixed targeting). When absent, fall back to the flag-level aggregation
@@ -1763,11 +1759,11 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			switch e := err.(type) {
 			case *RequiresServerEvaluationError:
 				// Static cohort or other missing server-side data - must fallback to API.
-				// Later conditions are not evaluated, so their definitions still count
-				// toward the reason.
+				// Evaluation stops here, and filters it skipped in any condition or cohort
+				// can still carry a higher reason.
 				reason := inconclusiveReason
-				if laterReason := conditionsDefinitionReason(conditions[i+1:], flagAggregation, flagsByKey, cohorts, state.propertyMatchingVersion); laterReason != "" {
-					reason = pickUnresolvedReason(reason, laterReason)
+				if definitionReason := definitionUnresolvedReason(flag, flagsByKey, cohorts, state.propertyMatchingVersion); definitionReason != "" {
+					reason = pickUnresolvedReason(reason, definitionReason)
 				}
 				return nil, e.withReason(reason)
 			case *InconclusiveMatchError:
