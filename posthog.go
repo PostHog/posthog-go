@@ -171,6 +171,15 @@ type Client interface {
 // The data field contains pre-serialized JSON for efficient batch building.
 // The msg field retains the original APIMessage for callbacks.
 // Size is obtained via len(data) - O(1) since json.RawMessage is []byte.
+// messageEventName names a message in log lines, which carry the event name but
+// never its content.
+func messageEventName(msg APIMessage) string {
+	if m, ok := msg.(CaptureInApi); ok {
+		return m.Event
+	}
+	return fmt.Sprintf("%T", msg)
+}
+
 type preparedMessage struct {
 	data json.RawMessage // pre-serialized JSON for batch submission
 	msg  APIMessage      // original message for callbacks
@@ -1761,7 +1770,7 @@ func (c *client) loop(l *lane) {
 		msgSize := len(prepared.data)
 
 		if l.cfg.maxEventBytes > 0 && msgSize > l.cfg.maxEventBytes {
-			c.Errorf("%s: message exceeds maximum size (%d > %d)", l.cfg.name, msgSize, l.cfg.maxEventBytes)
+			c.Errorf("%s: event %q exceeds maximum size (%d > %d)", l.cfg.name, messageEventName(prepared.msg), msgSize, l.cfg.maxEventBytes)
 			c.notifyLocalFailure(l, []APIMessage{prepared.msg}, ErrMessageTooBig)
 			return false
 		}
