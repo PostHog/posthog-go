@@ -64,6 +64,7 @@ const (
 	countryIsUSFilter     = `{"key": "country", "type": "person", "operator": "exact", "value": "US"}`
 	unknownOperatorFilter = `{"key": "country", "type": "person", "operator": "is_on_the_moon", "value": "US"}`
 	staticCohortFilter    = `{"key": "id", "type": "cohort", "value": 404}`
+	ageOver18Filter       = `{"key": "age", "type": "person", "operator": "gt", "value": 18}`
 )
 
 func flagDefinition(key string, conditions ...string) string {
@@ -107,13 +108,21 @@ func requireUnresolvedReason(t *testing.T, err error, want UnresolvedFlagReason)
 }
 
 func TestPickUnresolvedReasonFollowsSpecPrecedence(t *testing.T) {
-	for i, higher := range unresolvedFlagReasons {
+	specOrder := []UnresolvedFlagReason{
+		UnresolvedFlagReasonExperienceContinuity,
+		UnresolvedFlagReasonUnsupportedDefinition,
+		UnresolvedFlagReasonUnresolvedDependency,
+		UnresolvedFlagReasonMissingContext,
+	}
+	for i, higher := range specOrder {
 		require.Equal(t, higher, pickUnresolvedReason("", higher))
-		for _, lower := range unresolvedFlagReasons[i:] {
+		for _, lower := range specOrder[i:] {
 			require.Equal(t, higher, pickUnresolvedReason(higher, lower), "%s then %s", higher, lower)
 			require.Equal(t, higher, pickUnresolvedReason(lower, higher), "%s then %s", lower, higher)
 		}
 	}
+	require.Equal(t, UnresolvedFlagReasonUnsupportedDefinition, pickUnresolvedReason(UnresolvedFlagReasonMissingContext, ""))
+	requireUnresolvedReason(t, &InconclusiveMatchError{msg: "no reason"}, UnresolvedFlagReasonUnsupportedDefinition)
 }
 
 func TestMatchPropertyUnresolvedReasons(t *testing.T) {
@@ -191,6 +200,19 @@ func TestConditionLoopDoesNotStopAtFirstInconclusiveFilter(t *testing.T) {
 			want:  true,
 		},
 		{
+			name:       "plain error after an inconclusive filter lets later conditions resolve",
+			flags:      []string{flagDefinition("checkout", flagCondition(100, planIsProFilter, ageOver18Filter), flagCondition(100))},
+			properties: NewProperties().Set("age", "unknown"),
+			want:       true,
+		},
+		{
+			name:       "plain error after a static cohort still requires the server",
+			flags:      []string{flagDefinition("checkout", flagCondition(100, staticCohortFilter, ageOver18Filter), flagCondition(100))},
+			properties: NewProperties().Set("age", "unknown"),
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+			wantServer: true,
+		},
+		{
 			name:       "highest reason in a condition",
 			flags:      []string{flagDefinition("checkout", flagCondition(100, planIsProFilter, unknownOperatorFilter))},
 			properties: canada,
@@ -213,6 +235,26 @@ func TestConditionLoopDoesNotStopAtFirstInconclusiveFilter(t *testing.T) {
 			flags: []string{
 				dependsOnStaticCohort,
 				flagDefinition("checkout", flagCondition(100, unknownOperatorFilter), flagCondition(100, flagDependencyFilter("cohort-dependency", true, "cohort-dependency"))),
+			},
+			properties: canada,
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+			wantServer: true,
+		},
+		{
+			name: "server-required dependency does not hide a higher reason in a later condition",
+			flags: []string{
+				dependsOnStaticCohort,
+				flagDefinition("checkout", flagCondition(100, flagDependencyFilter("cohort-dependency", true, "cohort-dependency")), flagCondition(100, unknownOperatorFilter)),
+			},
+			properties: canada,
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+			wantServer: true,
+		},
+		{
+			name: "server-required dependency then a higher reason in the same condition",
+			flags: []string{
+				dependsOnStaticCohort,
+				flagDefinition("checkout", flagCondition(100, flagDependencyFilter("cohort-dependency", true, "cohort-dependency"), unknownOperatorFilter)),
 			},
 			properties: canada,
 			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
@@ -267,7 +309,7 @@ func TestHoldoutWithoutDeviceIDReportsHighestReason(t *testing.T) {
 
 // definitionsSequenceServer serves each body in turn on /flags/definitions, repeating
 // the last one, and counts remote evaluation requests. A body of "304" answers with
-// Not Modified.
+// Not Modified, and "402" with a quota limit.
 func definitionsSequenceServer(t *testing.T, bodies ...string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var definitionRequests atomic.Int32
@@ -284,6 +326,10 @@ func definitionsSequenceServer(t *testing.T, bodies ...string) (*httptest.Server
 		}
 		if bodies[index] == "304" {
 			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		if bodies[index] == "402" {
+			w.WriteHeader(http.StatusPaymentRequired)
 			return
 		}
 		w.Header().Set("ETag", fmt.Sprintf(`"etag-%d"`, index))
@@ -364,17 +410,28 @@ func TestUnresolvableFlagWarningRepeatsWhenDefinitionChanges(t *testing.T) {
 
 func TestUnresolvableFlagWarningForgetsRemovedFlags(t *testing.T) {
 	withCheckout := localDefinitions(betaUIDefinition, continuityCheckoutDefinition)
-	server, _ := definitionsSequenceServer(t, withCheckout, localDefinitions(betaUIDefinition), withCheckout)
-	logger := &captureLogger{}
-	poller := newTestPoller(t, server.URL)
-	poller.Logger = logger
-
-	for i := 0; i < 3; i++ {
-		poller.fetchNewFeatureFlags()
+	tests := []struct {
+		name    string
+		removal string
+	}{
+		{name: "removed from the definitions", removal: localDefinitions(betaUIDefinition)},
+		{name: "cleared by a quota limit", removal: "402"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, _ := definitionsSequenceServer(t, withCheckout, tt.removal, withCheckout)
+			logger := &captureLogger{}
+			poller := newTestPoller(t, server.URL)
+			poller.Logger = logger
 
-	require.Equal(t, 2, countUnresolvableWarnings(logger, "checkout", UnresolvedFlagReasonExperienceContinuity), logger.snapshot())
-	require.Len(t, poller.warnedUnresolvableFlags, 1)
+			for i := 0; i < 3; i++ {
+				poller.fetchNewFeatureFlags()
+			}
+
+			require.Equal(t, 2, countUnresolvableWarnings(logger, "checkout", UnresolvedFlagReasonExperienceContinuity), logger.snapshot())
+			require.Len(t, poller.warnedUnresolvableFlags, 1)
+		})
+	}
 }
 
 func TestUnresolvableFlagWarningCoversUnsupportedDefinitions(t *testing.T) {

@@ -524,6 +524,11 @@ func unresolvedReasonRank(reason UnresolvedFlagReason) int {
 // pickUnresolvedReason returns whichever of current and next comes first in the spec
 // order. An empty current means no reason was recorded yet.
 func pickUnresolvedReason(current, next UnresolvedFlagReason) UnresolvedFlagReason {
+	if next == "" {
+		// An error raised without a reason still leaves the flag unresolved, and the
+		// loops treat an empty reason as "nothing was inconclusive".
+		next = UnresolvedFlagReasonUnsupportedDefinition
+	}
 	if current == "" || unresolvedReasonRank(next) < unresolvedReasonRank(current) {
 		return next
 	}
@@ -534,9 +539,9 @@ func pickUnresolvedReason(current, next UnresolvedFlagReason) UnresolvedFlagReas
 func unresolvedReasonOf(err error) (UnresolvedFlagReason, bool) {
 	switch e := err.(type) {
 	case *InconclusiveMatchError:
-		return e.Reason, true
+		return pickUnresolvedReason("", e.Reason), true
 	case *RequiresServerEvaluationError:
-		return e.Reason, true
+		return pickUnresolvedReason("", e.Reason), true
 	}
 	return "", false
 }
@@ -658,21 +663,6 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	snapshots ...*flagsState,
 ) (bool, error) {
 	state := poller.evaluationState(snapshots)
-	// Some of these conditions should never happen, but we'll check them to be defensive.
-	if property.Value == nil {
-		return false, &InconclusiveMatchError{
-			msg:    fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key),
-			Reason: UnresolvedFlagReasonUnsupportedDefinition,
-		}
-	}
-
-	if property.Operator != "flag_evaluates_to" {
-		return false, &InconclusiveMatchError{
-			msg:    fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", property.Operator, property.Key),
-			Reason: UnresolvedFlagReasonUnsupportedDefinition,
-		}
-	}
-
 	if flagsByKey == nil || evaluationCache == nil {
 		// Cannot evaluate flag dependencies without required context
 		return false, &InconclusiveMatchError{
@@ -681,33 +671,15 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		}
 	}
 
-	// Check if dependency_chain is present - it should always be provided for flag dependencies
-	if property.DependencyChain == nil {
-		// Missing dependency_chain indicates malformed server data
-		return false, &InconclusiveMatchError{
-			msg:    fmt.Sprintf("Flag dependency property for '%s' is missing required 'dependency_chain' field", property.Key),
-			Reason: UnresolvedFlagReasonUnsupportedDefinition,
-		}
-	}
-
-	dependencyChain := property.DependencyChain
-
-	// Handle circular dependency (empty chain means circular)
-	if len(dependencyChain) == 0 {
-		if poller.Logger != nil {
-			poller.Logger.Debugf("Circular dependency detected for flag: %s", property.Key)
-		}
-		return false, &InconclusiveMatchError{
-			msg:    fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key),
-			Reason: UnresolvedFlagReasonUnsupportedDefinition,
-		}
-	}
-
 	// A problem in the definitions of the chain outranks a dependency that is only
 	// inconclusive, so check the whole chain before evaluating any of it.
-	if err := dependencyChainDefinitionError(dependencyChain, flagsByKey, aggregationGroupTypeIndex); err != nil {
+	if err := flagDependencyDefinitionError(property, flagsByKey, aggregationGroupTypeIndex); err != nil {
+		if property.DependencyChain != nil && len(property.DependencyChain) == 0 && poller.Logger != nil {
+			poller.Logger.Debugf("Circular dependency detected for flag: %s", property.Key)
+		}
 		return false, err
 	}
+	dependencyChain := property.DependencyChain
 
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
@@ -766,6 +738,24 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		msg:    fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
 		Reason: reason,
 	}
+}
+
+// flagDependencyDefinitionError reports a flag dependency filter that local evaluation
+// cannot use whatever the call passes. Evaluation and the load-time warning share it so
+// they agree on which dependencies are unsupported.
+func flagDependencyDefinitionError(property FlagProperty, flagsByKey map[string]FeatureFlag, aggregationGroupTypeIndex *uint8) error {
+	switch {
+	case property.Value == nil:
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	case property.Operator != "flag_evaluates_to":
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", property.Operator, property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	case property.DependencyChain == nil:
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Flag dependency property for '%s' is missing required 'dependency_chain' field", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	case len(property.DependencyChain) == 0:
+		// The server sends an empty chain for a circular dependency.
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	}
+	return dependencyChainDefinitionError(property.DependencyChain, flagsByKey, aggregationGroupTypeIndex)
 }
 
 // dependencyChainDefinitionError reports a dependency with no loaded definition, or one
@@ -1048,39 +1038,23 @@ func (poller *FeatureFlagsPoller) warnAboutUnresolvableFlags(state *flagsState) 
 	if poller.Logger == nil {
 		return
 	}
-	reasons := make([]UnresolvedFlagReason, len(state.featureFlags))
-	unresolvable := false
-	for i, flag := range state.featureFlags {
-		reasons[i] = definitionUnresolvedReason(flag, state.flagsByKey, state.cohorts, state.propertyMatchingVersion)
-		unresolvable = unresolvable || reasons[i] != ""
-	}
-	var rawDefinitions struct {
-		Flags []json.RawMessage `json:"flags"`
-	}
-	if unresolvable {
-		_ = json.Unmarshal(state.definitions, &rawDefinitions)
-	}
-
 	poller.warnedUnresolvableMu.Lock()
 	defer poller.warnedUnresolvableMu.Unlock()
 	// Rebuilt from the current definitions, so a flag that is deleted or becomes
 	// resolvable is forgotten and warns again if it later returns.
 	warned := make(map[string]unresolvableFlagFingerprint)
 	var experienceContinuityKeys, unsupportedDefinitionKeys []string
-	for i, flag := range state.featureFlags {
-		if reasons[i] == "" {
+	for _, flag := range state.featureFlags {
+		reason := definitionUnresolvedReason(flag, state.flagsByKey, state.cohorts, state.propertyMatchingVersion)
+		if reason == "" {
 			continue
 		}
-		var raw json.RawMessage
-		if len(rawDefinitions.Flags) == len(state.featureFlags) {
-			raw = rawDefinitions.Flags[i]
-		}
-		fingerprint := unresolvableFlagFingerprint{reason: reasons[i], definition: flagDefinitionHash(raw, flag)}
+		fingerprint := unresolvableFlagFingerprint{reason: reason, definition: flagDefinitionHash(flag)}
 		warned[flag.Key] = fingerprint
 		if poller.warnedUnresolvableFlags[flag.Key] == fingerprint {
 			continue
 		}
-		if reasons[i] == UnresolvedFlagReasonExperienceContinuity {
+		if reason == UnresolvedFlagReasonExperienceContinuity {
 			experienceContinuityKeys = append(experienceContinuityKeys, flag.Key)
 		} else {
 			unsupportedDefinitionKeys = append(unsupportedDefinitionKeys, flag.Key)
@@ -1102,21 +1076,12 @@ func (poller *FeatureFlagsPoller) warnAboutUnresolvableFlags(state *flagsState) 
 	}
 }
 
-// flagDefinitionHash hashes the flag's JSON with sorted keys, so that a cache provider
-// that serializes the same definition differently does not repeat the warning. It
-// falls back to the decoded flag when the raw JSON is unavailable.
-func flagDefinitionHash(raw json.RawMessage, flag FeatureFlag) [sha1.Size]byte {
-	var canonical []byte
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var decoded interface{}
-	if decoder.Decode(&decoded) == nil {
-		canonical, _ = json.Marshal(decoded)
-	}
-	if canonical == nil {
-		canonical, _ = json.Marshal(flag)
-	}
-	return sha1.Sum(canonical)
+// flagDefinitionHash hashes the decoded flag. Struct fields encode in a fixed order and
+// map keys sorted, so a cache provider that serializes the same definition differently
+// does not repeat the warning.
+func flagDefinitionHash(flag FeatureFlag) [sha1.Size]byte {
+	encoded, _ := json.Marshal(flag)
+	return sha1.Sum(encoded)
 }
 
 // definitionUnresolvedReason returns the unresolved reason that comes from the flag's
@@ -1129,11 +1094,17 @@ func definitionUnresolvedReason(flag FeatureFlag, flagsByKey map[string]FeatureF
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return UnresolvedFlagReasonExperienceContinuity
 	}
+	return conditionsDefinitionReason(flag.Filters.Groups, flag.Filters.AggregationGroupTypeIndex, flagsByKey, cohorts, matchingVersion)
+}
+
+// conditionsDefinitionReason returns unsupported_definition when a filter in any of the
+// conditions cannot be checked locally whatever the call passes.
+func conditionsDefinitionReason(conditions []FeatureFlagCondition, flagAggregation *uint8, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int) UnresolvedFlagReason {
 	visitedCohorts := map[string]struct{}{}
-	for _, condition := range flag.Filters.Groups {
+	for _, condition := range conditions {
 		aggregation := condition.AggregationGroupTypeIndex
 		if aggregation == nil {
-			aggregation = flag.Filters.AggregationGroupTypeIndex
+			aggregation = flagAggregation
 		}
 		for _, property := range condition.Properties {
 			if isUnsupportedProperty(property, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
@@ -1147,8 +1118,7 @@ func definitionUnresolvedReason(flag FeatureFlag, flagsByKey map[string]FeatureF
 func isUnsupportedProperty(property FlagProperty, aggregation *uint8, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int, visitedCohorts map[string]struct{}) bool {
 	switch property.Type {
 	case "flag":
-		return property.Value == nil || property.Operator != "flag_evaluates_to" || len(property.DependencyChain) == 0 ||
-			dependencyChainDefinitionError(property.DependencyChain, flagsByKey, aggregation) != nil
+		return flagDependencyDefinitionError(property, flagsByKey, aggregation) != nil
 	case "cohort":
 		cohortID := valueToString(property.Value)
 		cohort, ok := cohorts[cohortID]
@@ -1263,12 +1233,14 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 	// Handle quota limit response (HTTP 402)
 	if res.StatusCode == http.StatusPaymentRequired {
 		// Clear existing flags when quota limited - atomic swap
-		poller.state.Store(&flagsState{
+		cleared := &flagsState{
 			featureFlags: []FeatureFlag{},
 			cohorts:      map[string]PropertyGroup{},
 			groups:       map[string]string{},
 			flagsEtag:    "",
-		})
+		}
+		poller.state.Store(cleared)
+		poller.warnAboutUnresolvableFlags(cleared)
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
 		return
 	}
@@ -1719,7 +1691,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	groupTypeMapping := state.groups
 	var inconclusiveReason UnresolvedFlagReason
 
-	for _, condition := range conditions {
+	for i, condition := range conditions {
 		// Per-condition aggregation overrides only when the condition explicitly
 		// sets its own AggregationGroupTypeIndex that differs from the flag level
 		// (mixed targeting). When absent, fall back to the flag-level aggregation
@@ -1767,8 +1739,14 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
 			switch e := err.(type) {
 			case *RequiresServerEvaluationError:
-				// Static cohort or other missing server-side data - must fallback to API
-				return nil, e.withReason(inconclusiveReason)
+				// Static cohort or other missing server-side data - must fallback to API.
+				// Later conditions are not evaluated, so their definitions still count
+				// toward the reason.
+				reason := inconclusiveReason
+				if laterReason := conditionsDefinitionReason(conditions[i+1:], flagAggregation, flagsByKey, cohorts, state.propertyMatchingVersion); laterReason != "" {
+					reason = pickUnresolvedReason(reason, laterReason)
+				}
+				return nil, e.withReason(reason)
 			case *InconclusiveMatchError:
 				// Evaluation error (invalid date, missing property, etc.)
 				// Track that we had an inconclusive match, but try other conditions
@@ -1896,6 +1874,11 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, e.Reason)
 					continue
 				default:
+					// An earlier filter already left the condition undecided, so an
+					// unexpected error here must not fail the whole flag.
+					if inconclusiveReason != "" {
+						continue
+					}
 					return conditionNoMatch, err
 				}
 			}
@@ -1935,10 +1918,23 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	return matched, err
 }
 
+// propertyOperators lists the operators matchPropertyValue handles. An operator missing
+// here makes filterDefinitionError report a working operator as unknown.
+var propertyOperators = map[string]struct{}{
+	"exact": {}, "is_not": {}, "is_set": {}, "is_not_set": {}, "icontains": {}, "not_icontains": {},
+	"starts_with": {}, "not_starts_with": {}, "ends_with": {}, "not_ends_with": {}, "regex": {}, "not_regex": {},
+	"gt": {}, "gte": {}, "lt": {}, "lte": {}, "is_date_before": {}, "is_date_after": {},
+	"semver_eq": {}, "semver_neq": {}, "semver_gt": {}, "semver_gte": {}, "semver_lt": {}, "semver_lte": {},
+	"semver_tilde": {}, "semver_caret": {}, "semver_wildcard": {},
+}
+
 // filterDefinitionError returns an unsupported_definition error when local evaluation
 // cannot use a property filter whatever the call passes: an unknown operator, or a
 // filter value the operator cannot use.
 func filterDefinitionError(property FlagProperty, matchingVersions ...int) *InconclusiveMatchError {
+	if _, ok := propertyOperators[property.Operator]; !ok {
+		return &InconclusiveMatchError{msg: "Unknown operator: " + property.Operator, Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	}
 	value := property.Value
 	var err error
 	switch property.Operator {
@@ -1946,8 +1942,6 @@ func filterDefinitionError(property FlagProperty, matchingVersions ...int) *Inco
 		if exactFilterAlwaysAmbiguous(value, matchingVersions...) {
 			return errAmbiguousExactNumber
 		}
-	case "is_set", "is_not_set", "icontains", "not_icontains", "starts_with", "not_starts_with", "ends_with", "not_ends_with",
-		"gt", "gte", "lt", "lte", "is_date_before", "is_date_after":
 	case "regex", "not_regex":
 		if _, regexErr := getOrCompileRegex(valueToString(value)); isServerEvalError(regexErr) {
 			return &InconclusiveMatchError{msg: regexErr.Error(), Reason: UnresolvedFlagReasonUnsupportedDefinition}
@@ -1970,29 +1964,29 @@ func filterDefinitionError(property FlagProperty, matchingVersions ...int) *Inco
 		if err != nil {
 			return &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value %q is not valid for operator %s", valueStr, property.Operator), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
-	default:
-		return &InconclusiveMatchError{msg: "Unknown operator: " + property.Operator, Reason: UnresolvedFlagReasonUnsupportedDefinition}
 	}
 	return nil
 }
 
 // exactFilterAlwaysAmbiguous reports an exact filter that is inconclusive for any
 // value, because each number it compares with is an integral JSON number.
+// It runs whenever an exact filter's property is missing, so it checks the numbers
+// first to skip the lowercasing in isTruthyOrFalsyPropertyValue for string filters.
 func exactFilterAlwaysAmbiguous(value interface{}, matchingVersions ...int) bool {
-	explicitMatching := len(matchingVersions) > 0 && matchingVersions[0] == 2
-	if !explicitMatching && isTruthyOrFalsyPropertyValue(value) {
-		return false
-	}
-	list, ok := value.([]interface{})
-	if !ok {
-		return containsAmbiguousExactNumber(value)
-	}
-	for _, item := range list {
-		if !containsAmbiguousExactNumber(item) {
+	if list, ok := value.([]interface{}); ok {
+		if len(list) == 0 {
 			return false
 		}
+		for _, item := range list {
+			if !containsAmbiguousExactNumber(item) {
+				return false
+			}
+		}
+	} else if !containsAmbiguousExactNumber(value) {
+		return false
 	}
-	return len(list) > 0
+	explicitMatching := len(matchingVersions) > 0 && matchingVersions[0] == 2
+	return explicitMatching || !isTruthyOrFalsyPropertyValue(value)
 }
 
 func matchPropertyValue(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {
@@ -2251,6 +2245,7 @@ func matchPropertyValue(property FlagProperty, properties Properties, matchingVe
 		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
 	}
 
+	// A new operator above also needs an entry in propertyOperators.
 	return false, &InconclusiveMatchError{msg: "Unknown operator: " + operator, Reason: UnresolvedFlagReasonUnsupportedDefinition}
 
 }
