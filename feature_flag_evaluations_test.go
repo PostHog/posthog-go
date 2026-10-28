@@ -1536,6 +1536,59 @@ func TestEvaluateFlags_DependencyReasons(t *testing.T) {
 	}
 }
 
+func TestEvaluateFlags_DependencyThatNeedsServerForcesRemoteFallback(t *testing.T) {
+	t.Parallel()
+	dependency := func(filter string) string {
+		return `{"key": "dep", "active": true, "filters": {"groups": [{"properties": [` + filter + `], "rollout_percentage": 100}]}}`
+	}
+	const target = `{"key": "target", "active": true, "filters": {
+		"multivariate": {"variants": [{"key": "a", "rollout_percentage": 50}, {"key": "b", "rollout_percentage": 50}]},
+		"groups": [
+			{"properties": [{"key": "dep", "type": "flag", "value": true, "operator": "flag_evaluates_to", "dependency_chain": ["dep"]}], "rollout_percentage": 100, "variant": "a"},
+			{"properties": [], "rollout_percentage": 100, "variant": "b"}
+		]}}`
+	const remoteTargetA = `{"flags": {"target": {"key": "target", "enabled": true, "variant": "a", "metadata": {"id": 2, "version": 1}}}}`
+	staticCohortDependency := localDefinitions(dependency(`{"key": "id", "type": "cohort", "value": 999}`), target)
+	propertyDependency := localDefinitions(dependency(`{"key": "plan", "type": "person", "operator": "exact", "value": "pro"}`), target)
+	tests := []struct {
+		name            string
+		definitions     string
+		flagKeys        []string
+		localOnly       bool
+		want            interface{}
+		wantReason      UnresolvedFlagReason
+		wantRemoteCalls int32
+	}{
+		{"target requested alone", staticCohortDependency, []string{"target"}, false, "a", "", 1},
+		{"all flags requested", staticCohortDependency, nil, false, "a", "", 1},
+		{"local only", staticCohortDependency, []string{"target"}, true, nil, UnresolvedFlagReasonUnresolvedDependency, 0},
+		{"dependency resolves locally", propertyDependency, []string{"target"}, false, "a", "", 0},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, _, remoteCalls := newUnresolvedFlagsClient(t, tt.definitions, remoteTargetA)
+
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{
+				DistinctId:          "user-123",
+				FlagKeys:            tt.flagKeys,
+				PersonProperties:    NewProperties().Set("plan", "pro"),
+				OnlyEvaluateLocally: tt.localOnly,
+			})
+			require.NoError(t, err)
+
+			require.Equal(t, tt.wantRemoteCalls, remoteCalls.Load())
+			require.Equal(t, tt.want, snapshot.GetFlag("target"))
+			if tt.wantReason == "" {
+				require.NotContains(t, snapshot.UnresolvedFlags(), "target")
+			} else {
+				require.Equal(t, tt.wantReason, snapshot.UnresolvedFlags()["target"])
+			}
+		})
+	}
+}
+
 func TestEvaluateFlags_RemoteFallbackResolvesUnresolvedFlag(t *testing.T) {
 	t.Parallel()
 	client, capture, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(continuityCheckoutDefinition), remoteCheckoutEnabled)
