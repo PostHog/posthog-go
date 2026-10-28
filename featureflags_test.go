@@ -350,9 +350,9 @@ func countUnresolvableWarnings(logger *captureLogger, key string, reason Unresol
 }
 
 func TestUnresolvableFlagWarningIsLoggedOncePerDefinition(t *testing.T) {
-	definitions := localDefinitions(continuityCheckoutDefinition)
+	definitions := localDefinitions(`{"key": "checkout", "active": true, "ensure_experience_continuity": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}], "payloads": {"true": {"color": "blue", "size": 2}}}}`)
 	// The same definition serialized differently, as a shared cache may store it.
-	reserialized := `{"cohorts":{},"flags":[{"filters":{"groups":[{"rollout_percentage":100,"properties":[]}]},"ensure_experience_continuity":true,"active":true,"key":"checkout"}],"group_type_mapping":{}}`
+	reserialized := `{"cohorts":{},"flags":[{"filters":{"payloads":{"true":{"size":2,"color":"blue"}},"groups":[{"rollout_percentage":100,"properties":[]}]},"ensure_experience_continuity":true,"active":true,"key":"checkout"}],"group_type_mapping":{}}`
 	tests := []struct {
 		name   string
 		bodies []string

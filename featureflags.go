@@ -1080,8 +1080,31 @@ func (poller *FeatureFlagsPoller) warnAboutUnresolvableFlags(state *flagsState) 
 // map keys sorted, so a cache provider that serializes the same definition differently
 // does not repeat the warning.
 func flagDefinitionHash(flag FeatureFlag) [sha1.Size]byte {
+	// Payloads stay raw JSON with the key order of their source, so sort their keys too.
+	if len(flag.Filters.Payloads) > 0 {
+		payloads := make(map[string]json.RawMessage, len(flag.Filters.Payloads))
+		for key, raw := range flag.Filters.Payloads {
+			payloads[key] = canonicalJSON(raw)
+		}
+		flag.Filters.Payloads = payloads
+	}
 	encoded, _ := json.Marshal(flag)
 	return sha1.Sum(encoded)
+}
+
+// canonicalJSON re-encodes raw JSON with sorted object keys. Numbers keep their text.
+func canonicalJSON(raw json.RawMessage) json.RawMessage {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value interface{}
+	if err := decoder.Decode(&value); err != nil {
+		return raw
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return canonical
 }
 
 // definitionUnresolvedReason returns the unresolved reason that comes from the flag's
