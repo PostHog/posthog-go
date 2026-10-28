@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1538,6 +1539,99 @@ func TestEvaluateFlags_DependencyReasons(t *testing.T) {
 			require.Equal(t, map[string]UnresolvedFlagReason{"beta-ui": tt.want}, snapshot.UnresolvedFlags())
 		})
 	}
+}
+
+func companyCheckoutDefinitions(ensureExperienceContinuity bool, properties ...string) string {
+	return `{"flags": [{"key": "checkout", "active": true, "ensure_experience_continuity": ` + strconv.FormatBool(ensureExperienceContinuity) + `,
+		"filters": {"aggregation_group_type_index": 0, "groups": [{"properties": [` + strings.Join(properties, ",") + `], "rollout_percentage": 100}]}}],
+		"group_type_mapping": {"0": "company"}, "cohorts": {}}`
+}
+
+func TestEvaluateFlags_GroupFlagWithoutGroupKey(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		definitions     string
+		groups          Groups
+		localOnly       bool
+		remote          string
+		want            interface{}
+		wantReason      UnresolvedFlagReason
+		wantRemoteCalls int32
+	}{
+		{"group key passed", companyCheckoutDefinitions(false), Groups{"company": "acme"}, true, remoteNoFlags, true, "", 0},
+		{"local only", companyCheckoutDefinitions(false), nil, true, remoteNoFlags, nil, UnresolvedFlagReasonMissingContext, 0},
+		{"experience continuity outranks the group key", companyCheckoutDefinitions(true), nil, true, remoteNoFlags, nil, UnresolvedFlagReasonExperienceContinuity, 0},
+		{"static cohort outranks the group key", companyCheckoutDefinitions(false, `{"key": "id", "type": "cohort", "value": 404}`), nil, true, remoteNoFlags, nil, UnresolvedFlagReasonUnsupportedDefinition, 0},
+		{"remote fallback resolves the flag", companyCheckoutDefinitions(false), nil, false, remoteCheckoutEnabled, true, "", 1},
+		{"remote fallback does not return the flag", companyCheckoutDefinitions(false), nil, false, remoteNoFlags, nil, UnresolvedFlagReasonMissingContext, 1},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, capture, remoteCalls := newUnresolvedFlagsClient(t, tt.definitions, tt.remote)
+
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", Groups: tt.groups, OnlyEvaluateLocally: tt.localOnly})
+			require.NoError(t, err)
+
+			require.Equal(t, tt.wantRemoteCalls, remoteCalls.Load())
+			require.Equal(t, tt.want, snapshot.GetFlag("checkout"))
+			if tt.wantReason == "" {
+				require.Empty(t, snapshot.UnresolvedFlags())
+				require.Empty(t, flagCalledError(t, client, capture, "checkout"))
+				return
+			}
+			require.Equal(t, map[string]UnresolvedFlagReason{"checkout": tt.wantReason}, snapshot.UnresolvedFlags())
+			require.Equal(t, FeatureFlagErrorLocalEvaluationInconclusive, flagCalledError(t, client, capture, "checkout"))
+		})
+	}
+}
+
+// The legacy getters must keep their handling of a group flag without its group key.
+func TestLegacyGettersGroupFlagWithoutGroupKey(t *testing.T) {
+	t.Parallel()
+	const localError = "[FEATURE FLAGS] Can't compute group feature flag: checkout without group names passed in"
+	payload := FeatureFlagPayload{Key: "checkout", DistinctId: "user-123"}
+	t.Run("local only", func(t *testing.T) {
+		t.Parallel()
+		client, capture, remoteCalls := newUnresolvedFlagsClient(t, companyCheckoutDefinitions(false), remoteCheckoutEnabled)
+		localOnly := payload
+		localOnly.OnlyEvaluateLocally = true
+
+		value, err := client.GetFeatureFlag(localOnly)
+		require.EqualError(t, err, localError)
+		require.Nil(t, value)
+		require.Equal(t, FeatureFlagErrorUnknownError, flagCalledError(t, client, capture, "checkout"))
+
+		enabled, err := client.IsFeatureEnabled(localOnly)
+		require.EqualError(t, err, localError)
+		require.Nil(t, enabled)
+
+		flagPayload, err := client.GetFeatureFlagPayload(localOnly)
+		require.EqualError(t, err, localError)
+		require.Empty(t, flagPayload)
+
+		all, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-123", OnlyEvaluateLocally: true})
+		require.NoError(t, err)
+		require.Empty(t, all)
+
+		require.Zero(t, remoteCalls.Load())
+	})
+	t.Run("remote fallback", func(t *testing.T) {
+		t.Parallel()
+		client, _, remoteCalls := newUnresolvedFlagsClient(t, companyCheckoutDefinitions(false), remoteCheckoutEnabled)
+
+		value, err := client.GetFeatureFlag(payload)
+		require.NoError(t, err)
+		require.Equal(t, true, value)
+
+		all, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-123"})
+		require.NoError(t, err)
+		require.Equal(t, map[string]interface{}{"checkout": true}, all)
+
+		require.Equal(t, int32(2), remoteCalls.Load())
+	})
 }
 
 func TestEvaluateFlags_DependencyThatNeedsServerForcesRemoteFallback(t *testing.T) {

@@ -1573,8 +1573,12 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		groupKey, exists := groups[groupType]
 
 		if !exists {
-			errMessage := fmt.Sprintf("[FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
-			return nil, errors.New(errMessage)
+			// No condition can be checked without the group key, so a cause in the
+			// definition outranks the missing key.
+			return nil, &InconclusiveMatchError{
+				msg:    fmt.Sprintf("[FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key),
+				Reason: pickUnresolvedReason(definitionUnresolvedReason(flag, flagsByKey, cohorts, state.propertyMatchingVersion), UnresolvedFlagReasonMissingContext),
+			}
 		}
 
 		groupKeyStr, ok := groupKeyToString(groupKey)
