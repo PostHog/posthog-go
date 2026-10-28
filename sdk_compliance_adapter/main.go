@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -149,6 +151,15 @@ type AdapterState struct {
 	lastError           string
 	requestsMade        []RequestInfo
 	pendingEvents       int
+	reportedDrops       []ReportedDrop
+	logLines            []string
+}
+
+// ReportedDrop is one event the SDK reported as dropped through its Callback.
+type ReportedDrop struct {
+	UUID    string `json:"uuid"`
+	Event   string `json:"event"`
+	Details string `json:"details"`
 }
 
 // RequestInfo tracks HTTP request details
@@ -161,7 +172,137 @@ type RequestInfo struct {
 }
 
 var state = &AdapterState{
-	requestsMade: []RequestInfo{},
+	requestsMade:  []RequestInfo{},
+	reportedDrops: []ReportedDrop{},
+	logLines:      []string{},
+}
+
+// clearDiagnostics empties what /state reports from the SDK's own error and log
+// surfaces. Call it after the previous client is closed, because Close can still
+// log and report failures.
+func (s *AdapterState) clearDiagnostics() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reportedDrops = []ReportedDrop{}
+	s.logLines = []string{}
+}
+
+// stateCallback records every event the SDK fails to send, so /state can report
+// drops (reported_drops). Success needs no tracking: TrackedTransport counts it.
+type stateCallback struct {
+	state *AdapterState
+}
+
+func (c stateCallback) Success(posthog.APIMessage) {}
+
+func (c stateCallback) Failure(msg posthog.APIMessage, err error) {
+	drop := dropFromFailure(msg, err)
+	var localErr *posthog.CaptureLocalError
+	c.state.mu.Lock()
+	c.state.reportedDrops = append(c.state.reportedDrops, drop)
+	// An event the SDK refused itself never reaches TrackedTransport, so it
+	// would stay pending forever and make /flush wait out its full timeout.
+	if errors.As(err, &localErr) && c.state.pendingEvents > 0 {
+		c.state.pendingEvents--
+	}
+	c.state.mu.Unlock()
+}
+
+// dropFromFailure names the event behind a Callback.Failure. Details is the
+// capture endpoint's per-event tag (such as invalid_options or
+// duplicate_event_uuid) when it gave one, else the SDK's own error text.
+func dropFromFailure(msg posthog.APIMessage, err error) ReportedDrop {
+	drop := ReportedDrop{Details: err.Error()}
+	switch m := msg.(type) {
+	case posthog.CaptureInApi:
+		drop.UUID, drop.Event = m.Uuid, m.Event
+	case *posthog.CaptureInApi:
+		drop.UUID, drop.Event = m.Uuid, m.Event
+	}
+	var eventErr *posthog.CaptureEventError
+	if errors.As(err, &eventErr) {
+		drop.UUID = eventErr.EventUUID
+		if eventErr.Details != "" {
+			drop.Details = eventErr.Details
+		}
+	}
+	return drop
+}
+
+// stateLogger records every line the SDK logs for /state (log_capture) and still
+// prints it through the standard logger.
+type stateLogger struct {
+	state  *AdapterState
+	passTo posthog.Logger
+}
+
+func newStateLogger(state *AdapterState) posthog.Logger {
+	return stateLogger{state: state, passTo: posthog.StdLogger(log.New(os.Stderr, "posthog ", log.LstdFlags), false)}
+}
+
+func (l stateLogger) record(level, format string, args []interface{}) {
+	line := level + " " + fmt.Sprintf(format, args...)
+	l.state.mu.Lock()
+	l.state.logLines = append(l.state.logLines, line)
+	l.state.mu.Unlock()
+}
+
+func (l stateLogger) Debugf(format string, args ...interface{}) {
+	l.record("DEBUG", format, args)
+	l.passTo.Debugf(format, args...)
+}
+
+func (l stateLogger) Logf(format string, args ...interface{}) {
+	l.record("INFO", format, args)
+	l.passTo.Logf(format, args...)
+}
+
+func (l stateLogger) Warnf(format string, args ...interface{}) {
+	l.record("WARN", format, args)
+	l.passTo.Warnf(format, args...)
+}
+
+func (l stateLogger) Errorf(format string, args ...interface{}) {
+	l.record("ERROR", format, args)
+	l.passTo.Errorf(format, args...)
+}
+
+// paddingKey is the property /capture and /capture_ai add for
+// pad_properties_to_bytes.
+const paddingKey = "$test_padding"
+
+// compactJSONSize is the byte length of v as compact UTF-8 JSON, the way the
+// harness measures properties. HTML escaping is off because it would lengthen
+// the output.
+func compactJSONSize(v interface{}) (int, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		return 0, err
+	}
+	return buf.Len() - 1, nil // Encode appends a newline
+}
+
+// padProperties returns a copy of properties with one string property that makes
+// the compact JSON of the whole map exactly size bytes. The padding starts with
+// marker and continues with "x".
+func padProperties(properties map[string]interface{}, size int, marker string) (map[string]interface{}, error) {
+	padded := make(map[string]interface{}, len(properties)+1)
+	for k, v := range properties {
+		padded[k] = v
+	}
+	padded[paddingKey] = ""
+	base, err := compactJSONSize(padded)
+	if err != nil {
+		return nil, err
+	}
+	fill := size - base
+	if fill < len(marker) {
+		return nil, fmt.Errorf("pad_properties_to_bytes %d is too small for the properties and marker", size)
+	}
+	padded[paddingKey] = marker + strings.Repeat("x", fill-len(marker))
+	return padded, nil
 }
 
 // HealthResponse represents /health endpoint response
@@ -182,6 +323,33 @@ type InitRequest struct {
 	EnableCompression   *bool  `json:"enable_compression,omitempty"`
 	DisableGeoIP        *bool  `json:"disable_geoip,omitempty"`
 	HistoricalMigration *bool  `json:"historical_migration,omitempty"`
+	// SuperProperties become the SDK's DefaultEventProperties.
+	SuperProperties map[string]interface{} `json:"super_properties,omitempty"`
+	// BeforeSend installs a hook that sets SetProperties on every event.
+	BeforeSend *BeforeSendRequest `json:"before_send,omitempty"`
+}
+
+// BeforeSendRequest describes the BeforeSend hook /init installs.
+type BeforeSendRequest struct {
+	SetProperties map[string]interface{} `json:"set_properties"`
+}
+
+// setPropertiesHook returns a BeforeSend that sets each of set on the properties
+// of a Capture and passes every other message through unchanged.
+func setPropertiesHook(set map[string]interface{}) posthog.BeforeSendFunc {
+	return func(msg posthog.Message) posthog.Message {
+		capture, ok := msg.(posthog.Capture)
+		if !ok {
+			return msg
+		}
+		if capture.Properties == nil {
+			capture.Properties = posthog.Properties{}
+		}
+		for k, v := range set {
+			capture.Properties[k] = v
+		}
+		return capture
+	}
 }
 
 // CaptureRequest represents /capture endpoint request
@@ -194,6 +362,12 @@ type CaptureRequest struct {
 	// disable_skew_correction, process_person_profile, product_tour_id, ...),
 	// passed to the SDK unchanged.
 	Options posthog.Options `json:"options,omitempty"`
+	// PadPropertiesToBytes asks for a $test_padding property that makes the
+	// properties' compact JSON exactly this long, so the harness can send
+	// multi-megabyte events without a multi-megabyte request. Marker starts the
+	// padding string.
+	PadPropertiesToBytes *int   `json:"pad_properties_to_bytes,omitempty"`
+	Marker               string `json:"marker,omitempty"`
 	// UUID is the caller's event UUID, which must stay on the wire. Without
 	// one the adapter generates it, so /capture can return the UUID it sent.
 	UUID string `json:"uuid,omitempty"`
@@ -212,12 +386,14 @@ type FeatureFlagRequest struct {
 
 // StateResponse represents /state endpoint response
 type StateResponse struct {
-	PendingEvents       int           `json:"pending_events"`
-	TotalEventsCaptured int           `json:"total_events_captured"`
-	TotalEventsSent     int           `json:"total_events_sent"`
-	TotalRetries        int           `json:"total_retries"`
-	LastError           string        `json:"last_error,omitempty"`
-	RequestsMade        []RequestInfo `json:"requests_made"`
+	PendingEvents       int            `json:"pending_events"`
+	TotalEventsCaptured int            `json:"total_events_captured"`
+	TotalEventsSent     int            `json:"total_events_sent"`
+	TotalRetries        int            `json:"total_retries"`
+	LastError           string         `json:"last_error,omitempty"`
+	RequestsMade        []RequestInfo  `json:"requests_made"`
+	ReportedDrops       []ReportedDrop `json:"reported_drops"`
+	LogLines            []string       `json:"log_lines"`
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
@@ -243,10 +419,17 @@ func validateHarnessHost(raw string) (string, bool) {
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	// Harness contract keys: capture_v1 and capture_ai_v1 select the v1 suites,
-	// event_options selects the option pass-through tests, and encoding_<codec>
-	// selects the compression test for this adapter's codec. They are external
-	// strings, not internal version markers.
-	capabilities := []string{"capture_v1", "capture_ai_v1", "event_options", "encoding_" + compressionName}
+	// event_options selects the option pass-through tests, event_uuid_override,
+	// bounded_retries, disable_geoip and historical_migration select the tests
+	// for those adapter params, and encoding_<codec> selects the compression
+	// test for this adapter's codec. They are external strings, not internal
+	// version markers.
+	capabilities := []string{
+		"capture_v1", "capture_ai_v1", "event_options",
+		"event_uuid_override", "bounded_retries", "disable_geoip", "historical_migration",
+		"reported_drops", "log_capture", "generated_payloads", "property_layers", "fail_open",
+		"encoding_" + compressionName,
+	}
 	response := HealthResponse{
 		SDKName:        "posthog-go",
 		SDKVersion:     posthog.Version,
@@ -287,11 +470,14 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	if oldClient != nil {
 		oldClient.Close()
 	}
+	state.clearDiagnostics()
 
 	// Create new client with tracked transport
 	config := posthog.Config{
 		Endpoint:  validatedHost,
 		Transport: &TrackedTransport{base: http.DefaultTransport, state: state},
+		Callback:  stateCallback{state: state},
+		Logger:    newStateLogger(state),
 		// Set test-friendly defaults
 		BatchSize: 1,                     // Flush after each event by default
 		Interval:  20 * time.Millisecond, // Short interval for tests
@@ -318,6 +504,15 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		config.HistoricalMigration = *req.HistoricalMigration
 	}
 
+	if len(req.SuperProperties) > 0 {
+		config.DefaultEventProperties = posthog.Properties(req.SuperProperties)
+	}
+	if req.BeforeSend != nil {
+		config.BeforeSend = setPropertiesHook(req.BeforeSend.SetProperties)
+	}
+
+	// An empty or personal (phx_) key goes to the SDK as given: it disables
+	// itself instead of failing (fail_open).
 	client, err := posthog.NewWithConfig(req.APIKey, config)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -365,12 +560,29 @@ func handleCapture(w http.ResponseWriter, r *http.Request, enqueue func(posthog.
 	state.pendingEvents++
 	state.mu.Unlock()
 
-	capture := buildCapture(req)
+	capture, err := buildCaptureWithPadding(req)
+	if err != nil {
+		state.mu.Lock()
+		state.totalEventsCaptured--
+		state.pendingEvents--
+		state.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := enqueue(client, capture); err != nil {
 		state.mu.Lock()
 		state.totalEventsCaptured--
 		state.pendingEvents--
 		state.mu.Unlock()
+		// A disabled client (empty or personal API key) drops the event by
+		// design, which is a success from the caller's side (fail_open).
+		if errors.Is(err, posthog.ErrSDKDisabled) {
+			jsonResponse(w, map[string]interface{}{
+				"success": true,
+				"uuid":    capture.Uuid,
+			})
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -412,6 +624,18 @@ func buildCapture(req CaptureRequest) posthog.Capture {
 		}
 	}
 	return capture
+}
+
+// buildCaptureWithPadding is buildCapture plus the generated padding property.
+func buildCaptureWithPadding(req CaptureRequest) (posthog.Capture, error) {
+	if req.PadPropertiesToBytes != nil {
+		padded, err := padProperties(req.Properties, *req.PadPropertiesToBytes, req.Marker)
+		if err != nil {
+			return posthog.Capture{}, err
+		}
+		req.Properties = padded
+	}
+	return buildCapture(req), nil
 }
 
 func flushHandler(w http.ResponseWriter, r *http.Request) {
@@ -467,6 +691,8 @@ func stateHandler(w http.ResponseWriter, r *http.Request) {
 		TotalRetries:        state.totalRetries,
 		LastError:           state.lastError,
 		RequestsMade:        state.requestsMade,
+		ReportedDrops:       append([]ReportedDrop{}, state.reportedDrops...),
+		LogLines:            append([]string{}, state.logLines...),
 	}
 
 	jsonResponse(w, response)
@@ -655,6 +881,7 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
 	if oldClient != nil {
 		oldClient.Close()
 	}
+	state.clearDiagnostics()
 
 	jsonResponse(w, map[string]bool{"success": true})
 }
