@@ -6,7 +6,7 @@ This package contains the PostHog Go SDK compliance adapter used with the PostHo
 
 Tests run automatically in CI via GitHub Actions.
 
-CI runs the `compliance` job once per codec (gzip, deflate, br, zstd) against the `1.13.1` harness image.
+CI runs the `compliance` job once per codec (gzip, deflate, br, zstd) against the `1.25.0` harness image.
 The harness has one `enable_compression` flag but a test per codec, so the adapter reads its codec from the `COMPRESSION` env var (default `gzip`).
 
 The adapter advertises these capabilities on `/health`, which is how the harness selects tests:
@@ -46,7 +46,7 @@ docker run -d --name sdk-adapter --network test-network -p 8080:8080 -e COMPRESS
 docker run --rm \
   --name test-harness \
   --network test-network \
-  ghcr.io/posthog/sdk-test-harness:1.13.1 \
+  ghcr.io/posthog/sdk-test-harness:1.25.0 \
   run --adapter-url http://sdk-adapter:8080 --mock-url http://test-harness:8081
 
 # Cleanup
