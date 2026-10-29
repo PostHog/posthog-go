@@ -38,12 +38,12 @@ var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
 // Common sentinel errors for matchProperty — reused to avoid allocating new
 // InconclusiveMatchError structs on every evaluation of flags with missing properties.
 var (
-	errMissingPropertyValue     = &InconclusiveMatchError{"Can't match properties without a given property value"}
-	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
-	errAmbiguousExactNumber     = &InconclusiveMatchError{"Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float"}
-	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
-	errHoldoutMissingDeviceID   = &InconclusiveMatchError{msg: "Can't evaluate a device-bucketed holdout without a device id"}
-	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
+	errMissingPropertyValue     = &InconclusiveMatchError{msg: "Can't match properties without a given property value", Reason: UnresolvedFlagReasonMissingContext}
+	errInconclusiveMatch        = newInconclusiveSentinels("Can't determine if feature flag is enabled or not with given properties")
+	errAmbiguousExactNumber     = &InconclusiveMatchError{msg: "Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float", Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	errCohortPropertyValue      = newInconclusiveSentinels("Can't match cohort without a given cohort property value")
+	errHoldoutMissingDeviceID   = newInconclusiveSentinels("Can't evaluate a device-bucketed holdout without a device id")
+	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation", Reason: UnresolvedFlagReasonUnsupportedDefinition}
 )
 
 // regexCache caches compiled regexps for flag property matching.
@@ -52,7 +52,9 @@ var (
 var regexCache sync.Map // map[string]*flagRegex
 
 // A later matching condition cannot decide the variant while an earlier regex is unresolved.
-var errRegexRequiresServer = &RequiresServerEvaluationError{"Regex requires server evaluation"}
+var errRegexRequiresServer = &RequiresServerEvaluationError{msg: "Regex requires server evaluation", Reason: UnresolvedFlagReasonUnsupportedDefinition}
+
+var errDependencyAggregationRequiresServer = &RequiresServerEvaluationError{msg: "Flag dependency requires different aggregation context", Reason: UnresolvedFlagReasonUnsupportedDefinition}
 
 type flagRegex struct {
 	*regexp.Regexp
@@ -301,6 +303,16 @@ type FeatureFlagsPoller struct {
 	decider       decider
 	disableGeoIP  bool
 	cacheProvider FlagDefinitionCacheProvider
+
+	// warnedUnresolvableFlags maps each flag key already warned about as never locally
+	// resolvable to the definition it was warned about at.
+	warnedUnresolvableMu    sync.Mutex
+	warnedUnresolvableFlags map[string]unresolvableFlagFingerprint
+}
+
+type unresolvableFlagFingerprint struct {
+	reason     UnresolvedFlagReason
+	definition [sha1.Size]byte
 }
 
 // FeatureFlag is a feature flag definition returned by the local evaluation endpoint.
@@ -467,9 +479,98 @@ type DecideResponse struct {
 	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 
+// UnresolvedFlagReason explains why local evaluation could not resolve a flag.
+// Experience continuity and unsupported definitions come from the flag's
+// definition, missing context from the evaluation call, and unresolved
+// dependencies from a flag the definition depends on.
+type UnresolvedFlagReason string
+
+const (
+	// UnresolvedFlagReasonExperienceContinuity means the flag has experience continuity
+	// enabled, which local evaluation never resolves.
+	UnresolvedFlagReasonExperienceContinuity UnresolvedFlagReason = "experience_continuity"
+	// UnresolvedFlagReasonUnsupportedDefinition means the flag uses something local
+	// evaluation does not support, such as a static cohort, an unknown operator, a
+	// malformed value, or a missing or circular flag dependency.
+	UnresolvedFlagReasonUnsupportedDefinition UnresolvedFlagReason = "unsupported_definition"
+	// UnresolvedFlagReasonUnresolvedDependency means a flag this flag depends on has a
+	// loaded definition but local evaluation could not resolve it.
+	UnresolvedFlagReasonUnresolvedDependency UnresolvedFlagReason = "unresolved_dependency"
+	// UnresolvedFlagReasonMissingContext means the call did not pass a property, group
+	// property or device id the flag needs, or passed it in a form local evaluation
+	// cannot use.
+	UnresolvedFlagReasonMissingContext UnresolvedFlagReason = "missing_context"
+)
+
+// unresolvedFlagReasons lists the reasons in the order the spec reports them when
+// more than one cause applies, so every SDK reports the same reason whatever order
+// it inspects the filters in.
+var unresolvedFlagReasons = [...]UnresolvedFlagReason{
+	UnresolvedFlagReasonExperienceContinuity,
+	UnresolvedFlagReasonUnsupportedDefinition,
+	UnresolvedFlagReasonUnresolvedDependency,
+	UnresolvedFlagReasonMissingContext,
+}
+
+func unresolvedReasonRank(reason UnresolvedFlagReason) int {
+	for rank, candidate := range unresolvedFlagReasons {
+		if candidate == reason {
+			return rank
+		}
+	}
+	return len(unresolvedFlagReasons)
+}
+
+// pickUnresolvedReason returns whichever of current and next comes first in the spec
+// order. An empty current means no reason was recorded yet.
+func pickUnresolvedReason(current, next UnresolvedFlagReason) UnresolvedFlagReason {
+	if next == "" {
+		// An error raised without a reason still leaves the flag unresolved, and the
+		// loops treat an empty reason as "nothing was inconclusive".
+		next = UnresolvedFlagReasonUnsupportedDefinition
+	}
+	if current == "" || unresolvedReasonRank(next) < unresolvedReasonRank(current) {
+		return next
+	}
+	return current
+}
+
+// unresolvedReasonOf returns the reason an inconclusive or server-required error carries.
+func unresolvedReasonOf(err error) (UnresolvedFlagReason, bool) {
+	switch e := err.(type) {
+	case *InconclusiveMatchError:
+		return pickUnresolvedReason("", e.Reason), true
+	case *RequiresServerEvaluationError:
+		return pickUnresolvedReason("", e.Reason), true
+	}
+	return "", false
+}
+
+// inconclusiveSentinels holds one shared error per reason, so that merging reasons
+// does not allocate on every evaluation.
+type inconclusiveSentinels [len(unresolvedFlagReasons)]*InconclusiveMatchError
+
+func newInconclusiveSentinels(msg string) *inconclusiveSentinels {
+	var sentinels inconclusiveSentinels
+	for rank, reason := range unresolvedFlagReasons {
+		sentinels[rank] = &InconclusiveMatchError{msg: msg, Reason: reason}
+	}
+	return &sentinels
+}
+
+func (s *inconclusiveSentinels) withReason(reason UnresolvedFlagReason) *InconclusiveMatchError {
+	rank := unresolvedReasonRank(reason)
+	if rank == len(s) {
+		rank = unresolvedReasonRank(UnresolvedFlagReasonUnsupportedDefinition)
+	}
+	return s[rank]
+}
+
 // InconclusiveMatchError indicates that local evaluation could not conclusively match a condition.
 type InconclusiveMatchError struct {
 	msg string
+	// Reason is why local evaluation could not resolve the flag.
+	Reason UnresolvedFlagReason
 }
 
 // Error returns the inconclusive match message.
@@ -483,11 +584,22 @@ func (e *InconclusiveMatchError) Error() string {
 // API fallback, unlike InconclusiveMatchError which allows trying other conditions.
 type RequiresServerEvaluationError struct {
 	msg string
+	// Reason is why local evaluation could not resolve the flag.
+	Reason UnresolvedFlagReason
 }
 
 // Error returns the reason server-side evaluation is required.
 func (e *RequiresServerEvaluationError) Error() string {
 	return e.msg
+}
+
+// withReason returns e, or a copy of it when reason outranks the reason e carries.
+func (e *RequiresServerEvaluationError) withReason(reason UnresolvedFlagReason) *RequiresServerEvaluationError {
+	merged := pickUnresolvedReason(reason, e.Reason)
+	if merged == e.Reason {
+		return e
+	}
+	return &RequiresServerEvaluationError{msg: e.msg, Reason: merged}
 }
 
 // isServerEvalError returns true if err is a RequiresServerEvaluationError.
@@ -551,76 +663,31 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	snapshots ...*flagsState,
 ) (bool, error) {
 	state := poller.evaluationState(snapshots)
-	// Some of these conditions should never happen, but we'll check them to be defensive.
-	if property.Value == nil {
-		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key),
-		}
-	}
-
-	if property.Operator != "flag_evaluates_to" {
-		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", property.Operator, property.Key),
-		}
-	}
-
 	if flagsByKey == nil || evaluationCache == nil {
 		// Cannot evaluate flag dependencies without required context
 		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without flagsByKey and evaluationCache", property.Key),
+			msg:    fmt.Sprintf("Cannot evaluate flag dependency on '%s' without flagsByKey and evaluationCache", property.Key),
+			Reason: UnresolvedFlagReasonUnsupportedDefinition,
 		}
 	}
 
-	// Check if dependency_chain is present - it should always be provided for flag dependencies
-	if property.DependencyChain == nil {
-		// Missing dependency_chain indicates malformed server data
-		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Flag dependency property for '%s' is missing required 'dependency_chain' field", property.Key),
-		}
-	}
-
-	dependencyChain := property.DependencyChain
-
-	// Handle circular dependency (empty chain means circular)
-	if len(dependencyChain) == 0 {
-		if poller.Logger != nil {
+	// A problem in the definitions of the chain outranks a dependency that is only
+	// inconclusive, so check the whole chain before evaluating any of it.
+	if err := flagDependencyDefinitionError(property, flagsByKey, aggregationGroupTypeIndex); err != nil {
+		if property.DependencyChain != nil && len(property.DependencyChain) == 0 && poller.Logger != nil {
 			poller.Logger.Debugf("Circular dependency detected for flag: %s", property.Key)
 		}
-		return false, &InconclusiveMatchError{
-			msg: fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key),
-		}
+		return false, err
 	}
+	dependencyChain := property.DependencyChain
 
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
-		// Dependencies can reuse the caller's key and properties only for the
-		// same aggregation type. Check before the cache so repeated cohort
-		// references cannot bypass the cross-type server boundary.
-		depFlag := flagsByKey[depFlagKey]
-		if depFlag.Active {
-			if !uint8PtrEqual(depFlag.Filters.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
-				return false, &RequiresServerEvaluationError{"Flag dependency requires different aggregation context"}
-			}
-			for _, condition := range depFlag.Filters.Groups {
-				if condition.AggregationGroupTypeIndex != nil && !uint8PtrEqual(condition.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
-					return false, &RequiresServerEvaluationError{"Flag dependency requires different aggregation context"}
-				}
-			}
-		}
 		if _, exists := evaluationCache[depFlagKey]; exists {
 			continue
 		}
 
-		// Need to evaluate this dependency first
-		depFlag, flagExists := flagsByKey[depFlagKey]
-		if !flagExists {
-			// Missing flag dependency - cannot evaluate locally
-			evaluationCache[depFlagKey] = nil
-			return false, &InconclusiveMatchError{
-				msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
-			}
-		}
-
+		depFlag := flagsByKey[depFlagKey]
 		// Check if the flag is active (same check as in computeFlagLocally)
 		if !depFlag.Active {
 			evaluationCache[depFlagKey] = false
@@ -628,7 +695,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			// Dependencies must preserve the same server boundary as direct evaluation.
 			if depFlag.EnsureExperienceContinuity != nil && *depFlag.EnsureExperienceContinuity {
 				evaluationCache[depFlagKey] = nil
-				return false, &InconclusiveMatchError{"Flag dependency has experience continuity enabled"}
+				return false, &InconclusiveMatchError{msg: "Flag dependency has experience continuity enabled", Reason: UnresolvedFlagReasonUnresolvedDependency}
 			}
 			// Recursively evaluate the dependency
 			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
@@ -636,11 +703,15 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
 				if isServerEvalError(err) {
-					return false, err
+					return false, &RequiresServerEvaluationError{
+						msg:    fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+						Reason: UnresolvedFlagReasonUnresolvedDependency,
+					}
 				}
 				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{
-					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+					msg:    fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+					Reason: UnresolvedFlagReasonUnresolvedDependency,
 				}
 			}
 			evaluationCache[depFlagKey] = result
@@ -648,7 +719,8 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	}
 
 	// Check if the dependency result matches the expected value and operator
-	if cachedResult, exists := evaluationCache[property.Key]; exists && cachedResult != nil {
+	cachedResult, exists := evaluationCache[property.Key]
+	if exists && cachedResult != nil {
 		match, err := checkFlagDependencyValue(property.Value, cachedResult)
 		if err != nil {
 			return false, err
@@ -656,10 +728,63 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		return match, nil
 	}
 
-	// The main dependency couldn't be evaluated
-	return false, &InconclusiveMatchError{
-		msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
+	// The main dependency couldn't be evaluated. A key missing from its own chain is
+	// malformed server data rather than an unresolved dependency.
+	reason := UnresolvedFlagReasonUnresolvedDependency
+	if !exists {
+		reason = UnresolvedFlagReasonUnsupportedDefinition
 	}
+	return false, &InconclusiveMatchError{
+		msg:    fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
+		Reason: reason,
+	}
+}
+
+// flagDependencyDefinitionError reports a flag dependency filter that local evaluation
+// cannot use whatever the call passes. Evaluation and the load-time warning share it so
+// they agree on which dependencies are unsupported.
+func flagDependencyDefinitionError(property FlagProperty, flagsByKey map[string]FeatureFlag, aggregationGroupTypeIndex *uint8) error {
+	switch {
+	case property.Value == nil:
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	case property.Operator != "flag_evaluates_to":
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", property.Operator, property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	case property.DependencyChain == nil:
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Flag dependency property for '%s' is missing required 'dependency_chain' field", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	case len(property.DependencyChain) == 0:
+		// The server sends an empty chain for a circular dependency.
+		return &InconclusiveMatchError{msg: fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	}
+	return dependencyChainDefinitionError(property.DependencyChain, flagsByKey, aggregationGroupTypeIndex)
+}
+
+// dependencyChainDefinitionError reports a dependency with no loaded definition, or one
+// that needs a different aggregation context than the dependent condition.
+// Dependencies can reuse the caller's key and properties only for the same
+// aggregation type. This runs before the evaluation cache is read so repeated cohort
+// references cannot bypass the cross-type server boundary.
+func dependencyChainDefinitionError(dependencyChain []string, flagsByKey map[string]FeatureFlag, aggregationGroupTypeIndex *uint8) error {
+	for _, depFlagKey := range dependencyChain {
+		depFlag, flagExists := flagsByKey[depFlagKey]
+		if !flagExists {
+			return &InconclusiveMatchError{
+				msg:    fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
+				Reason: UnresolvedFlagReasonUnsupportedDefinition,
+			}
+		}
+		if !depFlag.Active {
+			continue
+		}
+		if !uint8PtrEqual(depFlag.Filters.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
+			return errDependencyAggregationRequiresServer
+		}
+		for _, condition := range depFlag.Filters.Groups {
+			if condition.AggregationGroupTypeIndex != nil && !uint8PtrEqual(condition.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
+				return errDependencyAggregationRequiresServer
+			}
+		}
+	}
+	return nil
 }
 
 // checkFlagDependencyValue checks if a flag dependency result matches the expected value and operator
@@ -892,7 +1017,7 @@ func (poller *FeatureFlagsPoller) applyFlagDefinitions(data json.RawMessage, dec
 		groups = *decoded.GroupTypeMapping
 	}
 
-	poller.state.Store(&flagsState{
+	state := &flagsState{
 		featureFlags:            flags,
 		flagsByKey:              buildFlagsByKey(flags),
 		cohorts:                 preParseCohortValues(decoded.Cohorts),
@@ -901,7 +1026,149 @@ func (poller *FeatureFlagsPoller) applyFlagDefinitions(data json.RawMessage, dec
 		minimalFlagCalledEvents: decoded.MinimalFlagCalledEvents,
 		propertyMatchingVersion: decoded.PropertyMatchingVersion,
 		definitions:             data,
-	})
+	}
+	poller.state.Store(state)
+	poller.warnAboutUnresolvableFlags(state)
+}
+
+// warnAboutUnresolvableFlags logs the flags whose definition local evaluation never
+// resolves. Each flag is warned about once until its definition changes, because the
+// cache provider applies the same definitions again on every poll.
+func (poller *FeatureFlagsPoller) warnAboutUnresolvableFlags(state *flagsState) {
+	if poller.Logger == nil {
+		return
+	}
+	poller.warnedUnresolvableMu.Lock()
+	defer poller.warnedUnresolvableMu.Unlock()
+	// Rebuilt from the current definitions, so a flag that is deleted or becomes
+	// resolvable is forgotten and warns again if it later returns.
+	warned := make(map[string]unresolvableFlagFingerprint)
+	var experienceContinuityKeys, unsupportedDefinitionKeys []string
+	for _, flag := range state.featureFlags {
+		reason := definitionUnresolvedReason(flag, state.flagsByKey, state.cohorts, state.propertyMatchingVersion)
+		if reason == "" {
+			continue
+		}
+		fingerprint := unresolvableFlagFingerprint{reason: reason, definition: flagDefinitionHash(flag)}
+		warned[flag.Key] = fingerprint
+		if poller.warnedUnresolvableFlags[flag.Key] == fingerprint {
+			continue
+		}
+		if reason == UnresolvedFlagReasonExperienceContinuity {
+			experienceContinuityKeys = append(experienceContinuityKeys, flag.Key)
+		} else {
+			unsupportedDefinitionKeys = append(unsupportedDefinitionKeys, flag.Key)
+		}
+	}
+	poller.warnedUnresolvableFlags = warned
+
+	if len(experienceContinuityKeys) > 0 {
+		poller.Logger.Warnf("[FEATURE FLAGS] You are using local evaluation but %d flag(s) have experience continuity enabled and cannot be resolved locally (reason: %s): %s. "+
+			"Evaluating these flags makes a /flags request, or leaves them unresolved with OnlyEvaluateLocally. "+
+			"To evaluate them locally, disable experience continuity on these flags in PostHog.",
+			len(experienceContinuityKeys), UnresolvedFlagReasonExperienceContinuity, strings.Join(experienceContinuityKeys, ", "))
+	}
+	if len(unsupportedDefinitionKeys) > 0 {
+		poller.Logger.Warnf("[FEATURE FLAGS] You are using local evaluation but %d flag(s) use something local evaluation does not support, such as a static cohort, an unknown operator, a malformed value, or a missing or circular flag dependency (reason: %s): %s. "+
+			"Evaluating these flags makes a /flags request when evaluation reaches that part, or leaves them unresolved with OnlyEvaluateLocally. "+
+			"To evaluate them locally, change these flags in PostHog or upgrade posthog-go.",
+			len(unsupportedDefinitionKeys), UnresolvedFlagReasonUnsupportedDefinition, strings.Join(unsupportedDefinitionKeys, ", "))
+	}
+}
+
+// flagDefinitionHash hashes the decoded flag. Struct fields encode in a fixed order and
+// map keys sorted, so a cache provider that serializes the same definition differently
+// does not repeat the warning.
+func flagDefinitionHash(flag FeatureFlag) [sha1.Size]byte {
+	// Payloads stay raw JSON with the key order of their source, so sort their keys too.
+	if len(flag.Filters.Payloads) > 0 {
+		payloads := make(map[string]json.RawMessage, len(flag.Filters.Payloads))
+		for key, raw := range flag.Filters.Payloads {
+			payloads[key] = canonicalJSON(raw)
+		}
+		flag.Filters.Payloads = payloads
+	}
+	encoded, _ := json.Marshal(flag)
+	return sha1.Sum(encoded)
+}
+
+// canonicalJSON re-encodes raw JSON with sorted object keys. Numbers keep their text.
+func canonicalJSON(raw json.RawMessage) json.RawMessage {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value interface{}
+	if err := decoder.Decode(&value); err != nil {
+		return raw
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return canonical
+}
+
+// definitionUnresolvedReason returns the unresolved reason that comes from the flag's
+// definition alone, so it is known when definitions load. It matches the reason local
+// evaluation reports for the same cause.
+func definitionUnresolvedReason(flag FeatureFlag, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int) UnresolvedFlagReason {
+	if !flag.Active {
+		return ""
+	}
+	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
+		return UnresolvedFlagReasonExperienceContinuity
+	}
+	// A filter in any condition that cannot be checked locally whatever the call passes
+	// makes the definition unsupported.
+	visitedCohorts := map[string]struct{}{}
+	for _, condition := range flag.Filters.Groups {
+		aggregation := condition.AggregationGroupTypeIndex
+		if aggregation == nil {
+			aggregation = flag.Filters.AggregationGroupTypeIndex
+		}
+		for _, property := range condition.Properties {
+			if isUnsupportedProperty(property, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
+				return UnresolvedFlagReasonUnsupportedDefinition
+			}
+		}
+	}
+	return ""
+}
+
+func isUnsupportedProperty(property FlagProperty, aggregation *uint8, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int, visitedCohorts map[string]struct{}) bool {
+	switch property.Type {
+	case "flag":
+		return flagDependencyDefinitionError(property, flagsByKey, aggregation) != nil
+	case "cohort":
+		cohortID := valueToString(property.Value)
+		cohort, ok := cohorts[cohortID]
+		if !ok {
+			return true
+		}
+		if _, visited := visitedCohorts[cohortID]; visited {
+			return false
+		}
+		visitedCohorts[cohortID] = struct{}{}
+		if len(cohort.ParsedValues) == 0 {
+			cohort = preParsePG(cohort)
+		}
+		return isUnsupportedPropertyGroup(cohort, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts)
+	default:
+		return filterDefinitionError(property, matchingVersion) != nil
+	}
+}
+
+func isUnsupportedPropertyGroup(group PropertyGroup, aggregation *uint8, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int, visitedCohorts map[string]struct{}) bool {
+	for i := range group.ParsedValues {
+		value := &group.ParsedValues[i]
+		if value.IsGroup {
+			if isUnsupportedPropertyGroup(value.Group, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
+				return true
+			}
+		} else if isUnsupportedProperty(value.Property, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
+			return true
+		}
+	}
+	return false
 }
 
 // publishFlagDefinitions stores definitions in the cache provider.
@@ -985,12 +1252,14 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 	// Handle quota limit response (HTTP 402)
 	if res.StatusCode == http.StatusPaymentRequired {
 		// Clear existing flags when quota limited - atomic swap
-		poller.state.Store(&flagsState{
+		cleared := &flagsState{
 			featureFlags: []FeatureFlag{},
 			cohorts:      map[string]PropertyGroup{},
 			groups:       map[string]string{},
 			flagsEtag:    "",
-		})
+		}
+		poller.state.Store(cleared)
+		poller.warnAboutUnresolvableFlags(cleared)
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
 		return
 	}
@@ -1275,12 +1544,12 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	snapshots ...*flagsState,
 ) (interface{}, error) {
 	state := poller.evaluationState(snapshots)
-	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
-		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
-	}
-
 	if !flag.Active {
 		return false, nil
+	}
+
+	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
+		return nil, &InconclusiveMatchError{msg: "Flag has experience continuity enabled", Reason: UnresolvedFlagReasonExperienceContinuity}
 	}
 
 	// Use pre-built flagsByKey index (built once when flags are fetched, not per evaluation)
@@ -1304,8 +1573,12 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		groupKey, exists := groups[groupType]
 
 		if !exists {
-			errMessage := fmt.Sprintf("[FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
-			return nil, errors.New(errMessage)
+			// No condition can be checked without the group key, so a cause in the
+			// definition outranks the missing key.
+			return nil, &InconclusiveMatchError{
+				msg:    fmt.Sprintf("[FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key),
+				Reason: pickUnresolvedReason(definitionUnresolvedReason(flag, flagsByKey, cohorts, state.propertyMatchingVersion), UnresolvedFlagReasonMissingContext),
+			}
 		}
 
 		groupKeyStr, ok := groupKeyToString(groupKey)
@@ -1427,7 +1700,10 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	// Per-condition aggregation below never changes holdout membership.
 	holdoutVariant, held, err := getHoldoutVariant(flag, distinctId, deviceId)
 	if err != nil {
-		return nil, err
+		// No condition can be checked without the bucketing value, so a cause in the
+		// definition outranks the missing device id.
+		reason := pickUnresolvedReason(definitionUnresolvedReason(flag, flagsByKey, cohorts, state.propertyMatchingVersion), UnresolvedFlagReasonMissingContext)
+		return nil, errHoldoutMissingDeviceID.withReason(reason)
 	}
 	if held {
 		return holdoutVariant, nil
@@ -1436,7 +1712,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 
 	flagAggregation := flag.Filters.AggregationGroupTypeIndex
 	groupTypeMapping := state.groups
-	isInconclusive := false
+	var inconclusiveReason UnresolvedFlagReason
 
 	for _, condition := range conditions {
 		// Per-condition aggregation overrides only when the condition explicitly
@@ -1465,7 +1741,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 				}
 				focusedGroupProperties, hasProps := groupProperties[groupType]
 				if !hasProps {
-					isInconclusive = true
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, UnresolvedFlagReasonMissingContext)
 					continue
 				}
 				groupKeyStr, ok := groupKeyToString(groupKey)
@@ -1484,14 +1760,20 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
-			switch err.(type) {
+			switch e := err.(type) {
 			case *RequiresServerEvaluationError:
-				// Static cohort or other missing server-side data - must fallback to API
-				return nil, err
+				// Static cohort or other missing server-side data - must fallback to API.
+				// Evaluation stops here, and filters it skipped in any condition or cohort
+				// can still carry a higher reason.
+				reason := inconclusiveReason
+				if definitionReason := definitionUnresolvedReason(flag, flagsByKey, cohorts, state.propertyMatchingVersion); definitionReason != "" {
+					reason = pickUnresolvedReason(reason, definitionReason)
+				}
+				return nil, e.withReason(reason)
 			case *InconclusiveMatchError:
 				// Evaluation error (invalid date, missing property, etc.)
 				// Track that we had an inconclusive match, but try other conditions
-				isInconclusive = true
+				inconclusiveReason = pickUnresolvedReason(inconclusiveReason, e.Reason)
 			default:
 				return nil, err
 			}
@@ -1515,8 +1797,8 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			// inconclusive we can't decide locally, so return errInconclusiveMatch
 			// to force a server fallback rather than continuing evaluation.
 			if flag.Filters.EarlyExit {
-				if isInconclusive {
-					return false, errInconclusiveMatch
+				if inconclusiveReason != "" {
+					return false, errInconclusiveMatch.withReason(inconclusiveReason)
 				}
 				return false, nil
 			}
@@ -1526,8 +1808,8 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 		}
 	}
 
-	if isInconclusive {
-		return false, errInconclusiveMatch
+	if inconclusiveReason != "" {
+		return false, errInconclusiveMatch.withReason(inconclusiveReason)
 	}
 
 	return false, nil
@@ -1585,6 +1867,11 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 			// original person's ID or device, for dependent flag bucketing.
 			dependencyDistinctId, dependencyDeviceId = bucketingId, nil
 		}
+		// Filters in a condition have no defined order, so an inconclusive filter does not
+		// stop the loop: a later filter can still rule the condition out or carry a
+		// higher-precedence reason.
+		var inconclusiveReason UnresolvedFlagReason
+		var serverEvaluationErr *RequiresServerEvaluationError
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
 				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, aggregationGroupTypeIndex, state)
@@ -1595,11 +1882,39 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 			}
 
 			if err != nil {
-				return conditionNoMatch, err
+				switch e := err.(type) {
+				case *RequiresServerEvaluationError:
+					// Fall back to the server only when this is the first filter that could
+					// not be checked, as when the loop stopped there. After another
+					// inconclusive filter, later conditions must still be able to resolve
+					// the flag locally.
+					if inconclusiveReason == "" {
+						serverEvaluationErr = e
+					}
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, e.Reason)
+					continue
+				case *InconclusiveMatchError:
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, e.Reason)
+					continue
+				default:
+					// An earlier filter already left the condition undecided, so an
+					// unexpected error here must not fail the whole flag.
+					if inconclusiveReason != "" {
+						continue
+					}
+					return conditionNoMatch, err
+				}
 			}
 			if !isMatch {
 				return conditionNoMatch, nil
 			}
+		}
+
+		if serverEvaluationErr != nil {
+			return conditionNoMatch, serverEvaluationErr.withReason(inconclusiveReason)
+		}
+		if inconclusiveReason != "" {
+			return conditionNoMatch, errInconclusiveMatch.withReason(inconclusiveReason)
 		}
 	}
 
@@ -1616,6 +1931,88 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 }
 
 func matchProperty(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {
+	matched, err := matchPropertyValue(property, properties, matchingVersions...)
+	// An unusable filter outranks missing context, so check the filter before blaming the context.
+	if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok && inconclusiveErr.Reason == UnresolvedFlagReasonMissingContext {
+		if filterErr := filterDefinitionError(property, matchingVersions...); filterErr != nil {
+			return false, filterErr
+		}
+	}
+	return matched, err
+}
+
+// propertyOperators lists the operators matchPropertyValue handles. An operator missing
+// here makes filterDefinitionError report a working operator as unknown.
+var propertyOperators = map[string]struct{}{
+	"exact": {}, "is_not": {}, "is_set": {}, "is_not_set": {}, "icontains": {}, "not_icontains": {},
+	"starts_with": {}, "not_starts_with": {}, "ends_with": {}, "not_ends_with": {}, "regex": {}, "not_regex": {},
+	"gt": {}, "gte": {}, "lt": {}, "lte": {}, "is_date_before": {}, "is_date_after": {},
+	"semver_eq": {}, "semver_neq": {}, "semver_gt": {}, "semver_gte": {}, "semver_lt": {}, "semver_lte": {},
+	"semver_tilde": {}, "semver_caret": {}, "semver_wildcard": {},
+}
+
+// filterDefinitionError returns an unsupported_definition error when local evaluation
+// cannot use a property filter whatever the call passes: an unknown operator, or a
+// filter value the operator cannot use.
+func filterDefinitionError(property FlagProperty, matchingVersions ...int) *InconclusiveMatchError {
+	if _, ok := propertyOperators[property.Operator]; !ok {
+		return &InconclusiveMatchError{msg: "Unknown operator: " + property.Operator, Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	}
+	value := property.Value
+	var err error
+	switch property.Operator {
+	case "exact", "is_not":
+		if exactFilterAlwaysAmbiguous(value, matchingVersions...) {
+			return errAmbiguousExactNumber
+		}
+	case "regex", "not_regex":
+		if _, regexErr := getOrCompileRegex(valueToString(value)); isServerEvalError(regexErr) {
+			return &InconclusiveMatchError{msg: regexErr.Error(), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+		}
+	case "semver_eq", "semver_neq", "semver_gt", "semver_gte", "semver_lt", "semver_lte", "semver_tilde", "semver_caret", "semver_wildcard":
+		valueStr, ok := value.(string)
+		if !ok {
+			return &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value must be a string, got %T", value), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+		}
+		switch property.Operator {
+		case "semver_tilde":
+			_, _, err = computeTildeBounds(valueStr)
+		case "semver_caret":
+			_, _, err = computeCaretBounds(valueStr)
+		case "semver_wildcard":
+			_, _, err = computeWildcardBounds(valueStr)
+		default:
+			_, err = parseSemver(valueStr)
+		}
+		if err != nil {
+			return &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value %q is not valid for operator %s", valueStr, property.Operator), Reason: UnresolvedFlagReasonUnsupportedDefinition}
+		}
+	}
+	return nil
+}
+
+// exactFilterAlwaysAmbiguous reports an exact filter that is inconclusive for any
+// value, because each number it compares with is an integral JSON number.
+// It runs whenever an exact filter's property is missing, so it checks the numbers
+// first to skip the lowercasing in isTruthyOrFalsyPropertyValue for string filters.
+func exactFilterAlwaysAmbiguous(value interface{}, matchingVersions ...int) bool {
+	if list, ok := value.([]interface{}); ok {
+		if len(list) == 0 {
+			return false
+		}
+		for _, item := range list {
+			if !containsAmbiguousExactNumber(item) {
+				return false
+			}
+		}
+	} else if !containsAmbiguousExactNumber(value) {
+		return false
+	}
+	explicitMatching := len(matchingVersions) > 0 && matchingVersions[0] == 2
+	return explicitMatching || !isTruthyOrFalsyPropertyValue(value)
+}
+
+func matchPropertyValue(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {
 	key := property.Key
 	operator := property.Operator
 	value := property.Value
@@ -1760,22 +2157,22 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 
 		overrideStr, ok := override_value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("semver comparison requires string value, got %T", override_value), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("property value %q is not a valid semver", overrideStr), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		valueStr, ok := value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value must be a string, got %T", value), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		valueParsed, err := parseSemver(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not a valid semver", valueStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value %q is not a valid semver", valueStr), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		cmp := overrideParsed.compareTo(valueParsed)
@@ -1799,22 +2196,22 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "semver_tilde" {
 		overrideStr, ok := override_value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("semver comparison requires string value, got %T", override_value), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("property value %q is not a valid semver", overrideStr), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		valueStr, ok := value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value must be a string, got %T", value), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		lower, upper, err := computeTildeBounds(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for tilde operator", valueStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value %q is not valid for tilde operator", valueStr), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		// Check: lower <= override < upper
@@ -1824,22 +2221,22 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "semver_caret" {
 		overrideStr, ok := override_value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("semver comparison requires string value, got %T", override_value), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("property value %q is not a valid semver", overrideStr), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		valueStr, ok := value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value must be a string, got %T", value), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		lower, upper, err := computeCaretBounds(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for caret operator", valueStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value %q is not valid for caret operator", valueStr), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		// Check: lower <= override < upper
@@ -1849,29 +2246,30 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 	if operator == "semver_wildcard" {
 		overrideStr, ok := override_value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("semver comparison requires string value, got %T", override_value), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		overrideParsed, err := parseSemver(overrideStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("property value %q is not a valid semver", overrideStr), Reason: UnresolvedFlagReasonMissingContext}
 		}
 
 		valueStr, ok := value.(string)
 		if !ok {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value must be a string, got %T", value), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		lower, upper, err := computeWildcardBounds(valueStr)
 		if err != nil {
-			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for wildcard operator", valueStr)}
+			return false, &InconclusiveMatchError{msg: fmt.Sprintf("flag semver value %q is not valid for wildcard operator", valueStr), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 
 		// Check: lower <= override < upper
 		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
 	}
 
-	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
+	// A new operator above also needs an entry in propertyOperators.
+	return false, &InconclusiveMatchError{msg: "Unknown operator: " + operator, Reason: UnresolvedFlagReasonUnsupportedDefinition}
 
 }
 
@@ -2662,7 +3060,7 @@ func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (v
 	percentage := math.Min(math.Max(*holdout.ExclusionPercentage, 0), 100)
 	if percentage != 100 {
 		if flag.Filters.AggregationGroupTypeIndex == nil && isDeviceBucketed(flag) && (deviceId == nil || *deviceId == "") {
-			return "", false, errHoldoutMissingDeviceID
+			return "", false, errHoldoutMissingDeviceID.withReason(UnresolvedFlagReasonMissingContext)
 		}
 		if holdoutHash(getBucketingID(flag, distinctId, deviceId)) > percentage/100 {
 			return "", false, nil

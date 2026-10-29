@@ -709,8 +709,9 @@ func TestFeatureFlagWithDependencies(t *testing.T) {
 		t.Error("Should return error when flag dependencies can't be evaluated locally")
 	}
 
-	// Test with email that doesn't match - should also error due to missing dependency
-	_, err = client.IsFeatureEnabled(
+	// An email that doesn't match rules the condition out whatever the missing dependency
+	// would return, so the flag resolves locally.
+	enabled, err := client.IsFeatureEnabled(
 		FeatureFlagPayload{
 			Key:                 "flag-with-dependencies",
 			DistinctId:          "test-user-2",
@@ -719,8 +720,8 @@ func TestFeatureFlagWithDependencies(t *testing.T) {
 		},
 	)
 
-	if err == nil {
-		t.Error("Should return error when flag dependencies can't be evaluated locally")
+	if err != nil || enabled != false {
+		t.Errorf("Should resolve to false locally when another filter does not match, got %v, %v", enabled, err)
 	}
 }
 

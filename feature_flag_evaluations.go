@@ -30,6 +30,10 @@ type FeatureFlagEvaluations struct {
 	// granularity the legacy single-flag path emits.
 	errorsWhileComputing bool
 	quotaLimited         bool
+	// unresolved maps each flag with a loaded local definition that neither
+	// local evaluation nor the remote fallback resolved to the reason.
+	// Filtered snapshots leave it empty.
+	unresolved map[string]UnresolvedFlagReason
 
 	mu       sync.Mutex
 	accessed map[string]struct{}
@@ -128,6 +132,24 @@ func (e *FeatureFlagEvaluations) Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// UnresolvedFlags returns the flags that have a loaded local definition but
+// that neither local evaluation nor a remote fallback resolved, mapped to the
+// reason local evaluation was inconclusive. These flags are absent from Keys,
+// IsEnabled returns false and GetFlag returns nil for them. Reading this does
+// not record an access and does not fire an event. The returned map is a copy.
+//
+// Snapshots returned by Only and OnlyAccessed have no unresolved flags.
+func (e *FeatureFlagEvaluations) UnresolvedFlags() map[string]UnresolvedFlagReason {
+	if e == nil {
+		return nil
+	}
+	unresolved := make(map[string]UnresolvedFlagReason, len(e.unresolved))
+	for key, reason := range e.unresolved {
+		unresolved[key] = reason
+	}
+	return unresolved
 }
 
 // OnlyAccessed returns a filtered copy of this snapshot containing only the
@@ -281,8 +303,8 @@ func (e *FeatureFlagEvaluations) recordAccess(key string) {
 
 	// Build the comma-joined $feature_flag_error matching the single-flag
 	// path's granularity: response-level errors (errors-while-computing,
-	// quota-limited) are combined with per-flag errors so consumers can
-	// filter by type.
+	// quota-limited) are combined with per-flag errors (flag-missing or
+	// local-evaluation-inconclusive) so consumers can filter by type.
 	var errs []string
 	if e.errorsWhileComputing {
 		errs = append(errs, FeatureFlagErrorErrorsWhileComputing)
@@ -291,7 +313,11 @@ func (e *FeatureFlagEvaluations) recordAccess(key string) {
 		errs = append(errs, FeatureFlagErrorQuotaLimited)
 	}
 	if !found {
-		errs = append(errs, FeatureFlagErrorFlagMissing)
+		if _, unresolved := e.unresolved[key]; unresolved {
+			errs = append(errs, FeatureFlagErrorLocalEvaluationInconclusive)
+		} else {
+			errs = append(errs, FeatureFlagErrorFlagMissing)
+		}
 	} else if flag.Error != nil {
 		errs = append(errs, *flag.Error)
 	}
@@ -311,7 +337,7 @@ func (e *FeatureFlagEvaluations) recordAccess(key string) {
 
 // cloneWith builds a child snapshot with the given flag set. The accessed set
 // is copied so further access on the child does not leak back into the
-// parent's accessed set.
+// parent's accessed set. The child carries no unresolved flags.
 func (e *FeatureFlagEvaluations) cloneWith(flags map[string]evaluatedFlagRecord) *FeatureFlagEvaluations {
 	e.mu.Lock()
 	accessedCopy := make(map[string]struct{}, len(e.accessed))

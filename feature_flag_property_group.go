@@ -35,19 +35,19 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 // reconstruction from map[string]any. This is the fast path for cohort matching.
 func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, parsedValues []parsedPropertyValue, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string, aggregationGroupTypeIndex *uint8, snapshots ...*flagsState) (bool, error) {
 	state := poller.evaluationState(snapshots)
-	errorMatchingLocally := false
+	var inconclusiveReason UnresolvedFlagReason
 
 	for i := range parsedValues {
 		pv := &parsedValues[i]
 		if pv.IsGroup {
 			matches, err := poller.matchPropertyGroup(pv.Group, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, aggregationGroupTypeIndex, state)
 			if err != nil {
-				if isServerEvalError(err) {
-					return false, err
-				} else if isInconclusiveError(err) {
+				if serverErr, ok := err.(*RequiresServerEvaluationError); ok {
+					return false, serverErr.withReason(inconclusiveReason)
+				} else if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok {
 					// An inconclusive entry is neither a match nor a mismatch, so it
 					// can't decide the group, with or without negation.
-					errorMatchingLocally = true
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, inconclusiveErr.Reason)
 					continue
 				} else {
 					return false, err
@@ -76,12 +76,12 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 			}
 
 			if err != nil {
-				if isServerEvalError(err) {
-					return false, err
-				} else if isInconclusiveError(err) {
+				if serverErr, ok := err.(*RequiresServerEvaluationError); ok {
+					return false, serverErr.withReason(inconclusiveReason)
+				} else if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok {
 					// An inconclusive entry is neither a match nor a mismatch, so it
 					// can't decide the group, with or without negation.
-					errorMatchingLocally = true
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, inconclusiveErr.Reason)
 					continue
 				} else {
 					return false, err
@@ -107,8 +107,8 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 		}
 	}
 
-	if errorMatchingLocally {
-		return false, errCohortPropertyValue
+	if inconclusiveReason != "" {
+		return false, errCohortPropertyValue.withReason(inconclusiveReason)
 	}
 
 	return groupType == "AND", nil

@@ -38,6 +38,8 @@ const (
 
 	FeatureFlagErrorFlagMissing = "flag_missing"
 
+	FeatureFlagErrorLocalEvaluationInconclusive = "local_evaluation_inconclusive"
+
 	FeatureFlagErrorEvaluationFailed = "evaluation_failed"
 
 	FeatureFlagErrorQuotaLimited = "quota_limited"
@@ -551,6 +553,9 @@ func (e *FeatureFlagEvaluations) OnlyAccessed() *FeatureFlagEvaluations
 
 
 
+func (e *FeatureFlagEvaluations) UnresolvedFlags() map[string]UnresolvedFlagReason
+
+
 type FeatureFlagPayload struct {
 	Key string
 	DistinctId string
@@ -783,6 +788,8 @@ type IdentifyInApi struct {
 type InAppDecider func(frame runtime.Frame) bool
 
 type InconclusiveMatchError struct {
+
+	Reason UnresolvedFlagReason
 }
 
 func (e *InconclusiveMatchError) Error() string
@@ -852,6 +859,8 @@ type RequestContextOptions struct {
 }
 
 type RequiresServerEvaluationError struct {
+
+	Reason UnresolvedFlagReason
 }
 
 func (e *RequiresServerEvaluationError) Error() string
@@ -940,6 +949,14 @@ type Ticker struct {
 
 func (t *Ticker) Stop()
 
+type UnresolvedFlagReason string
+
+const (
+	UnresolvedFlagReasonExperienceContinuity UnresolvedFlagReason = "experience_continuity"
+	UnresolvedFlagReasonUnsupportedDefinition UnresolvedFlagReason = "unsupported_definition"
+	UnresolvedFlagReasonUnresolvedDependency UnresolvedFlagReason = "unresolved_dependency"
+	UnresolvedFlagReasonMissingContext UnresolvedFlagReason = "missing_context"
+)
 type Variants struct {
 	Variants []FlagVariant `json:"variants"`
 }

@@ -558,3 +558,86 @@ func TestMultiLevelMultivariateDependencyChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, resultBool)
 }
+
+func TestFlagDependencyUnresolvedReasons(t *testing.T) {
+	inactiveContinuity := `{"key": "checkout", "active": false, "ensure_experience_continuity": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}}`
+	needsPlan := flagDefinition("checkout", flagCondition(100, planIsProFilter))
+	needsServer := flagDefinition("checkout", flagCondition(100, staticCohortFilter))
+	groupFlag := `{"key": "checkout", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [{"properties": [], "rollout_percentage": 100}]}}`
+	dependent := func(properties ...string) string {
+		return flagDefinition("beta-ui", flagCondition(100, properties...))
+	}
+	tests := []struct {
+		name       string
+		flags      []string
+		want       interface{}
+		wantReason UnresolvedFlagReason
+		wantServer bool
+	}{
+		{
+			name:       "dependency has experience continuity",
+			flags:      []string{continuityCheckoutDefinition, dependent(flagDependencyFilter("checkout", true, "checkout"))},
+			wantReason: UnresolvedFlagReasonUnresolvedDependency,
+		},
+		{
+			name:  "inactive dependency with experience continuity is false",
+			flags: []string{inactiveContinuity, dependent(flagDependencyFilter("checkout", false, "checkout"))},
+			want:  true,
+		},
+		{
+			name:       "dependency is inconclusive",
+			flags:      []string{needsPlan, dependent(flagDependencyFilter("checkout", true, "checkout"))},
+			wantReason: UnresolvedFlagReasonUnresolvedDependency,
+		},
+		{
+			name:       "dependency requires the server",
+			flags:      []string{needsServer, dependent(flagDependencyFilter("checkout", true, "checkout"))},
+			wantReason: UnresolvedFlagReasonUnresolvedDependency,
+			wantServer: true,
+		},
+		{
+			name:       "dependency has no loaded definition",
+			flags:      []string{dependent(flagDependencyFilter("checkout", true, "checkout"))},
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+		},
+		{
+			name:       "missing definition later in the chain outranks an unresolved dependency",
+			flags:      []string{continuityCheckoutDefinition, dependent(flagDependencyFilter("gone", true, "checkout", "gone"))},
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+		},
+		{
+			name:       "circular dependency",
+			flags:      []string{continuityCheckoutDefinition, dependent(flagDependencyFilter("checkout", true))},
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+		},
+		{
+			name:       "dependency needs a different aggregation",
+			flags:      []string{groupFlag, dependent(flagDependencyFilter("checkout", true, "checkout"))},
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+			wantServer: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := computeDefinedFlag(t, localDefinitions(tt.flags...), "beta-ui", nil)
+			if tt.wantReason == "" {
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+				return
+			}
+			require.Equal(t, tt.wantServer, isServerEvalError(err), "%v", err)
+			requireUnresolvedReason(t, err, tt.wantReason)
+		})
+	}
+}
+
+func TestRepeatedReferenceToMissingDependencyKeepsReason(t *testing.T) {
+	poller := newDefinitionsPoller(t, localDefinitions(continuityCheckoutDefinition))
+	state := poller.state.Load()
+	property := FlagProperty{Key: "gone", Type: "flag", Operator: "flag_evaluates_to", Value: true, DependencyChain: []string{"gone"}}
+	cache := map[string]interface{}{}
+	for i := 0; i < 2; i++ {
+		_, err := poller.evaluateFlagDependency(property, state.flagsByKey, cache, "user-123", nil, nil, state.cohorts, nil, state)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+	}
+}
