@@ -41,7 +41,7 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 				map[string]any{"key": "country", "operator": "exact", "value": "US"},
 			}},
 			properties: NewProperties().Set("country", "US"),
-			wantErr:    errCohortPropertyValue,
+			wantErr:    errCohortPropertyValue.withReason(UnresolvedFlagReasonMissingContext),
 		},
 		{
 			name: "OR match overrides an inconclusive result",
@@ -66,7 +66,7 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 				map[string]any{"key": "missing", "operator": "exact", "value": "value", "negation": true},
 			}},
 			properties: NewProperties().Set("country", "US"),
-			wantErr:    errCohortPropertyValue,
+			wantErr:    errCohortPropertyValue.withReason(UnresolvedFlagReasonMissingContext),
 		},
 		{
 			name: "inconclusive leaf is not an AND mismatch",
@@ -75,7 +75,7 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 				map[string]any{"key": "country", "operator": "exact", "value": "US"},
 			}},
 			properties: NewProperties().Set("country", "US"),
-			wantErr:    errCohortPropertyValue,
+			wantErr:    errCohortPropertyValue.withReason(UnresolvedFlagReasonMissingContext),
 		},
 		{
 			name: "inconclusive nested group is not an AND mismatch",
@@ -86,7 +86,7 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 				map[string]any{"key": "country", "operator": "exact", "value": "US"},
 			}},
 			properties: NewProperties().Set("country", "US"),
-			wantErr:    errCohortPropertyValue,
+			wantErr:    errCohortPropertyValue.withReason(UnresolvedFlagReasonMissingContext),
 		},
 		{
 			name: "AND mismatch after an inconclusive leaf is still a mismatch",
@@ -95,6 +95,15 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 				map[string]any{"key": "country", "operator": "exact", "value": "US"},
 			}},
 			properties: NewProperties().Set("country", "CA"),
+		},
+		{
+			name: "inconclusive result keeps the highest reason",
+			group: PropertyGroup{Type: "AND", Values: []any{
+				map[string]any{"key": "missing", "operator": "exact", "value": "value"},
+				map[string]any{"key": "country", "operator": "is_on_the_moon", "value": "US"},
+			}},
+			properties: NewProperties().Set("country", "US"),
+			wantErr:    errCohortPropertyValue.withReason(UnresolvedFlagReasonUnsupportedDefinition),
 		},
 		{
 			name: "missing cohort requires server evaluation",
