@@ -18,6 +18,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -256,6 +257,13 @@ type otlpServer struct {
 	names   []string
 	calls   int
 	perCall []int
+	spans   []exportedSpan
+}
+
+// exportedSpan is a span as decoded from an OTLP request.
+type exportedSpan struct {
+	name       string
+	attributes map[string]*commonpb.AnyValue
 }
 
 func newOTLPServer(t *testing.T) *otlpServer {
@@ -276,6 +284,11 @@ func newOTLPServer(t *testing.T) *otlpServer {
 			for _, ss := range rs.GetScopeSpans() {
 				for _, span := range ss.GetSpans() {
 					s.names = append(s.names, span.GetName())
+					attributes := make(map[string]*commonpb.AnyValue, len(span.GetAttributes()))
+					for _, kv := range span.GetAttributes() {
+						attributes[kv.GetKey()] = kv.GetValue()
+					}
+					s.spans = append(s.spans, exportedSpan{name: span.GetName(), attributes: attributes})
 					count++
 				}
 			}
@@ -295,6 +308,13 @@ func (s *otlpServer) snapshot() (calls int, auth, path string, names []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls, s.auth, s.path, append([]string(nil), s.names...)
+}
+
+// exportedSpans returns the spans received so far, in arrival order.
+func (s *otlpServer) exportedSpans() []exportedSpan {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]exportedSpan(nil), s.spans...)
 }
 
 // batchSizes returns the number of spans carried by each export request, in

@@ -25,7 +25,7 @@ The package name is still `posthog`, so only the import line changes.
 
 Subpackages such as `posthogmcp` move with it, to `github.com/posthog/posthog-go/v2/posthogmcp`.
 The MCP Go SDK adapter is a separate module that moves in lockstep with the core, so import `github.com/posthog/posthog-go/posthogmcpsdk/v2`.
-The `otel` bridge versions independently and keeps its import path.
+The `otel` bridge imports the core SDK, so it also moves in lockstep with the core: import `github.com/posthog/posthog-go/otel/v2`.
 
 ## Constructors
 
@@ -271,6 +271,15 @@ self-hosted install. Billing limits arrive as a terminal `402`. `Retry-After`
 is honoured, clamped to the new `Config.MaxRetryBackoff`
 (default 30s), which also caps the default exponential backoff. A custom
 `Config.RetryAfter` is used as given.
+
+### OpenTelemetry exception trace IDs
+
+`posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and
+`$span_id` only when neither the event nor the request context sets either
+key. In 1.37 each ID filled on its own, so an event that set only `$trace_id`
+got the active span's `$span_id`.
+The helper cannot see `Config.DefaultEventProperties`, so a `$trace_id` or
+`$span_id` set there does not stop the derived pair, which wins over it.
 
 ### Event IDs
 

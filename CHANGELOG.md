@@ -1,5 +1,59 @@
 ## Unreleased
 
+## 1.38.0
+
+### Minor Changes
+
+- 94ff576: Add an optional OpenTelemetry context processor and HTTP middleware for session and person IDs on application spans. Both take the PostHog client and add no IDs when that client is nil, disabled, or closed.
+
+## 1.37.0
+
+### Minor Changes
+
+- 729bcf7: Add an opt-in OpenTelemetry enqueue helper that adds active trace and span IDs to exception events.
+
+## 1.36.2
+
+### Patch Changes
+
+- e8c7d37: Fall back to remote feature flag evaluation for regex syntax and character-class semantics that cannot be evaluated consistently with the flags service, including through negated cohorts.
+
+## 1.36.1
+
+### Patch Changes
+
+- v2 also sends NaN and infinities as null and keeps the event, but re-encodes only an event whose first encoding fails, so other events cost nothing extra (#394). See `docs/migration-v2.md`.
+
+## 1.36.0
+
+### Minor Changes
+
+- d170fc5: Local flag evaluation honors experiment holdouts. A flag whose definition carries `filters.holdout` now resolves a held-out identifier to `holdout-<id>` before its release conditions, matching the server instead of silently bucketing the identifier into a regular variant.
+
+## 1.35.3
+
+### Patch Changes
+
+- 870af8a: Fix local feature flag string and regex operators to stringify explicit null values as "null", matching the flags service. Flag results and variant selection can change for explicit-null properties; missing properties remain inconclusive and eligible for remote evaluation.
+
+## 1.35.2
+
+### Patch Changes
+
+- de638c7: `posthogmcp` now sets `$exception_source: "mcp.tool_call"` on the `$exception` it emits alongside a failed tool call, and strips caller-supplied reserved exception metadata from MCP events.
+
+## 1.35.1
+
+### Patch Changes
+
+- 88d8397: Allow local feature flag evaluation and definition refreshes from an external cache provider without a secret key, with cache-only readers skipping fetch coordination.
+
+## 1.35.0
+
+### Minor Changes
+
+- c203229: The `otel` `SpanProcessor` now adds the PostHog request context from each span's parent `context.Context` (set with `posthog.WithRequestContext` or `posthog.NewRequestContextMiddleware`) to the AI spans it exports: distinct ID, session ID (as `$session_id`) and properties. Attributes already on a span are kept. With `NewRequestContextMiddleware`, request metadata such as `$ip` and `$user_agent` now appears on the AI spans exported to PostHog. The `otel` module now depends on the core module.
+
 ## 1.34.0
 
 ### Minor Changes

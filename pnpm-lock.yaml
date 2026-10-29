@@ -12,8 +12,6 @@ importers:
         specifier: ^3.0.3
         version: 3.0.3
 
-  otel: {}
-
 packages:
 
   '@changesets/apply-release-plan@8.1.1':
