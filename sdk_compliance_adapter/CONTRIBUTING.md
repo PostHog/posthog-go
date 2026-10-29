@@ -6,7 +6,7 @@ This package contains the PostHog Go SDK compliance adapter used with the PostHo
 
 Tests run automatically in CI via GitHub Actions.
 
-CI runs the `compliance` job once per codec (gzip, deflate, br, zstd) against the `1.25.0` harness image.
+CI runs the `compliance` job once per codec (gzip, deflate, br, zstd) against the `1.26.0` harness image.
 The harness has one `enable_compression` flag but a test per codec, so the adapter reads its codec from the `COMPRESSION` env var (default `gzip`).
 
 The adapter advertises these capabilities on `/health`, which is how the harness selects tests:
