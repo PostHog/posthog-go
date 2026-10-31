@@ -478,6 +478,11 @@ default off for one event, set the option to `false` on the event or in
 legacy property that the hook adds does not replace an option that is already
 set.
 
+Review your `BeforeSend` hooks for the new message shape. A hook that returns
+a new message must copy `Options`, or the event is sent without them. That
+includes the personless default below, so PostHog would create a person for
+the generated ID.
+
 An option at any layer wins over the matching legacy property at any layer.
 For example, `DefaultEventOptions` with `cookieless_mode: true` wins over an
 event's `$cookieless_mode: false`, and the SDK still removes
