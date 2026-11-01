@@ -1449,6 +1449,9 @@ func newUnresolvedFlagsClient(t *testing.T, definitions, remote string) (Client,
 	t.Helper()
 	var remoteCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(definitions))
