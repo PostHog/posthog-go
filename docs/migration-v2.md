@@ -108,7 +108,8 @@ Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
 
 `Validate` now rejects a negative `BatchUploadTimeout`,
 `CaptureAIBatchUploadTimeout`, `MaxRetryBackoff`, `MaxEventBytes`,
-`MaxBatchBytes` or `MaxQueueSize`. Only zero selects the default.
+`MaxBatchBytes`, `MaxQueueSize` or `CaptureAIMaxQueueSize`. Only zero selects
+the default.
 
 ## Groups
 
@@ -298,7 +299,7 @@ is honoured, clamped to the new `Config.MaxRetryBackoff`
 Default retry waits now vary randomly by up to 25% either way, so clients
 that fail together do not all retry at the same moment. `DefaultBackoff()`
 now has the same jitter; in 1.x it had none. A server `Retry-After` stays the
-minimum wait.
+minimum wait. A custom `Config.RetryAfter` is used as given.
 
 ### OpenTelemetry exception trace IDs
 

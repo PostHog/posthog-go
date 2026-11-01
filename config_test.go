@@ -310,6 +310,7 @@ func TestConfigRejectsNegativeKnobs(t *testing.T) {
 		{"MaxEventBytes", Config{MaxEventBytes: -1}},
 		{"MaxBatchBytes", Config{MaxBatchBytes: -1}},
 		{"MaxQueueSize", Config{MaxQueueSize: -1}},
+		{"CaptureAIMaxQueueSize", Config{CaptureAIMaxQueueSize: -1}},
 		{"MaxRetryBackoff", Config{MaxRetryBackoff: -1}},
 		{"BatchUploadTimeout", Config{BatchUploadTimeout: -1}},
 		{"CaptureAIBatchUploadTimeout", Config{CaptureAIBatchUploadTimeout: -1}},
