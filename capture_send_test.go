@@ -777,22 +777,39 @@ func TestSendMaxAttemptsExhaustion(t *testing.T) {
 	}
 }
 
-func TestSendMalformed200IsTerminal(t *testing.T) {
-	cb := &recordingCallback{}
-	srv := &captureTestServer{respond: func(_ int, _ []string) (int, string, string) {
-		return http.StatusOK, "not json", ""
-	}}
-	ts := httptest.NewServer(srv.handler(t))
-	defer ts.Close()
-
-	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
-	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
-
-	if got := len(srv.snapshot()); got != 1 {
-		t.Fatalf("expected 1 request (no retry on malformed 200), got %d", got)
+func TestSendUnreadable2xxIsTerminal(t *testing.T) {
+	cases := map[string]string{
+		"not json":       "not json",
+		"no results":     `{}`,
+		"null results":   `{"results":null}`,
+		"array results":  `{"results":[]}`,
+		"string results": `{"results":"ok"}`,
+		"empty body":     ``,
 	}
-	if s, f := cb.counts(); s != 0 || f != 1 {
-		t.Errorf("callbacks: success=%d failure=%d, want 0/1", s, f)
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			cb := &recordingCallback{}
+			srv := &captureTestServer{respond: func(_ int, _ []string) (int, string, string) {
+				return http.StatusOK, body, ""
+			}}
+			ts := httptest.NewServer(srv.handler(t))
+			defer ts.Close()
+
+			c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+			c.send(c.analytics, captureBatch(t, cap1(uuidA), cap1(uuidB)))
+
+			require.Len(t, srv.snapshot(), 1, "an unreadable 2xx is not resent")
+			cb.mu.Lock()
+			defer cb.mu.Unlock()
+			require.Empty(t, cb.successes)
+			require.Len(t, cb.failures, 2, "the whole batch fails")
+			for _, f := range cb.failures {
+				var requestErr *CaptureRequestError
+				require.ErrorAs(t, f.err, &requestErr)
+				require.Equal(t, http.StatusOK, requestErr.StatusCode)
+				require.ErrorContains(t, requestErr, "parsing capture response")
+			}
+		})
 	}
 }
 

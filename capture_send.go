@@ -130,7 +130,7 @@ func (c *client) send(l *lane, pb preparedBatch) {
 		res, err := c.upload(l, c.ctx, body, requestId, attempt)
 		if err != nil {
 			reqErr := newCaptureRequestError(l, res, err)
-			// A 2xx with an unparseable body is terminal for this batch -
+			// A 2xx with an unparseable body or no results object is terminal for this batch -
 			// retrying a malformed success would loop forever.
 			if res != nil && isSuccessStatus(res.statusCode) {
 				c.failBatch(l, pendingMsgs, reqErr)
@@ -411,7 +411,8 @@ func (c *client) upload(l *lane, ctx context.Context, b []byte, requestId string
 }
 
 // report reads and classifies a capture response. For a 2xx it parses the
-// per-uuid results (returning an error if the body is unreadable/malformed). For
+// per-uuid results (returning an error if the body is unreadable/malformed or
+// has no results object). For
 // a non-2xx it best-effort parses the error body; classification is left to send.
 func (c *client) report(res *http.Response) (*attemptResult, error) {
 	retryAfter, hasRetryAfter := parseRetryAfter(res.Header.Get("Retry-After"), c.now())
@@ -426,7 +427,11 @@ func (c *client) report(res *http.Response) (*attemptResult, error) {
 	if isSuccessStatus(res.StatusCode) {
 		c.debugf("response %s", res.Status)
 		var parsed captureResponse
-		if err := json.Unmarshal(body, &parsed); err != nil {
+		err := json.Unmarshal(body, &parsed)
+		if err == nil && parsed.Results == nil {
+			err = errNoCaptureResults
+		}
+		if err != nil {
 			c.Errorf("parsing capture response body %d - %s", res.StatusCode, err)
 			return result, fmt.Errorf("parsing capture response: %w", err)
 		}
@@ -445,6 +450,10 @@ func (c *client) report(res *http.Response) (*attemptResult, error) {
 func isSuccessStatus(code int) bool {
 	return code >= 200 && code <= 299
 }
+
+// errNoCaptureResults fails a 2xx whose results key is missing, null, or not an
+// object. Treating it as delivered would hide a capture or proxy bug.
+var errNoCaptureResults = errors.New("no results object")
 
 // errShutdownDuringBackoff is the underlying cause when retries are abandoned
 // because the client is shutting down mid-backoff.
