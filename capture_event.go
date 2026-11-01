@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -67,11 +68,53 @@ type eventPayload struct {
 	Event      string                 `json:"event"`
 	Uuid       string                 `json:"uuid"`
 	DistinctId string                 `json:"distinct_id"`
-	Timestamp  time.Time              `json:"timestamp"`
+	Timestamp  wireTime               `json:"timestamp"`
 	SessionId  *string                `json:"session_id,omitempty"`
 	WindowId   *string                `json:"window_id,omitempty"`
 	Options    map[string]interface{} `json:"options"`
 	Properties Properties             `json:"properties"`
+}
+
+// Wire timestamp layouts. Capture requires at least millisecond digits.
+const (
+	wireTimestampMillis = "2006-01-02T15:04:05.000Z07:00"
+	wireTimestampMicros = "2006-01-02T15:04:05.000000Z07:00"
+	wireTimestampNanos  = "2006-01-02T15:04:05.000000000Z07:00"
+)
+
+// appendWireTimestamp appends t in UTC as RFC 3339 with 3, 6 or 9 fractional
+// digits: the fewest that keep t's precision, never fewer than 3.
+func appendWireTimestamp(b []byte, t time.Time) []byte {
+	t = t.UTC()
+	layout := wireTimestampNanos
+	switch ns := t.Nanosecond(); {
+	case ns%int(time.Millisecond) == 0:
+		layout = wireTimestampMillis
+	case ns%int(time.Microsecond) == 0:
+		layout = wireTimestampMicros
+	}
+	return t.AppendFormat(b, layout)
+}
+
+// formatWireTimestamp formats the batch created_at and the
+// PostHog-Request-Timestamp header like an event timestamp.
+func formatWireTimestamp(t time.Time) string {
+	return string(appendWireTimestamp(nil, t))
+}
+
+// wireTime is an event timestamp in the wire format of appendWireTimestamp.
+type wireTime time.Time
+
+// MarshalJSON fails, as time.Time does, for a year RFC 3339 cannot hold, so the
+// event fails locally instead of reaching capture.
+func (t wireTime) MarshalJSON() ([]byte, error) {
+	if year := time.Time(t).UTC().Year(); year < 0 || year > 9999 {
+		return nil, errors.New("timestamp year outside of range [0,9999]")
+	}
+	b := make([]byte, 0, len(wireTimestampNanos)+2)
+	b = append(b, '"')
+	b = appendWireTimestamp(b, time.Time(t))
+	return append(b, '"'), nil
 }
 
 // captureResponse is the 200 body: a per-uuid map of outcomes.
@@ -124,7 +167,7 @@ func buildEvent(e apiEvent, logger Logger) eventPayload {
 		Event:      e.event,
 		Uuid:       e.uuid,
 		DistinctId: e.distinctId,
-		Timestamp:  e.timestamp.UTC(),
+		Timestamp:  wireTime(e.timestamp),
 		SessionId:  sessionId,
 		WindowId:   windowId,
 		Options:    options,
