@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,7 +92,7 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 				capture.Properties["panic_leaked"] = true
 				panic("boom")
 			},
-			expectLog: "panic in BeforeSend hook for posthog.Capture: boom; dropping message",
+			expectLog: `panic in BeforeSend hook for event "test-event" (string); dropping message`,
 		},
 		{
 			name: "invalid return drops message",
@@ -194,6 +195,68 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 			message := firstMessage(t, batch)
 			properties := firstProperties(t, batch)
 			tt.assert(t, message, properties)
+		})
+	}
+}
+
+func TestBeforeSendPanicLogNamesEventNotPanicValue(t *testing.T) {
+	const secret = "user@example.com"
+	exceptionList := []ExceptionItem{{Type: "t", Value: "v"}}
+	tests := []struct {
+		msg       Message
+		wantEvent string
+	}{
+		{msg: Capture{DistinctId: "d", Event: "signed_up"}, wantEvent: "signed_up"},
+		{msg: Exception{DistinctId: "d", ExceptionList: exceptionList}, wantEvent: "$exception"},
+		{msg: Identify{DistinctId: "d"}, wantEvent: "$identify"},
+		{msg: Alias{DistinctId: "d", Alias: "a"}, wantEvent: "$create_alias"},
+		{msg: GroupIdentify{Type: "company", Key: "k"}, wantEvent: "$groupidentify"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			var (
+				errorLogs, otherLogs []string
+				loggedMu             sync.Mutex
+			)
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				BeforeSend: func(Message) Message {
+					panic(errors.New(secret))
+				},
+				Logger: testLogger{
+					errorf: func(format string, args ...interface{}) {
+						loggedMu.Lock()
+						errorLogs = append(errorLogs, formatMessage(format, args...))
+						loggedMu.Unlock()
+					},
+					logf: func(format string, args ...interface{}) {
+						loggedMu.Lock()
+						otherLogs = append(otherLogs, formatMessage(format, args...))
+						loggedMu.Unlock()
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			require.NoError(t, client.Enqueue(tt.msg))
+			require.NoError(t, client.Close())
+
+			loggedMu.Lock()
+			defer loggedMu.Unlock()
+			want := fmt.Sprintf("panic in BeforeSend hook for event %q (*errors.errorString); dropping message", tt.wantEvent)
+			require.Equal(t, []string{want}, errorLogs)
+			for _, line := range otherLogs {
+				require.NotContains(t, line, secret)
+			}
+			require.Zero(t, requests.Load())
 		})
 	}
 }
