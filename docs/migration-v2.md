@@ -226,10 +226,14 @@ Three consequences for `Callback`:
 
 - `Failure` can fire on an HTTP **200**, for an individual event the backend
   dropped while accepting the rest of the batch.
-- An event whose uuid is absent from the `results` map fires neither callback.
-  A proxy or gateway that answers the capture path with its own `200` body
-  therefore reports nothing at all, where the old endpoint treated any `< 300`
-  as success. Confirm intermediaries pass the capture response through.
+- A `2xx` whose body is not JSON, or whose `results` is missing, `null` or
+  not an object, fails the whole batch: each event reaches `Failure` with a
+  `*CaptureRequestError` and is not resent. The old endpoint treated any
+  `< 300` as success, so a proxy or gateway that answers the capture path with
+  its own `200` body now shows up as failures. Confirm intermediaries pass the
+  capture response through.
+- An event whose uuid is absent from a valid `results` object fires neither
+  callback.
 - Errors are typed. Check them with `errors.As`:
 
 ```go
@@ -319,6 +323,14 @@ form, so the `Callback` message carries that form. An empty `Uuid` gets a
 generated one. An invalid `Uuid` is replaced with a generated one, and the SDK
 logs one warning that does not include the value. The SDK applies this rule
 before `BeforeSend` and again to a `Uuid` that `BeforeSend` sets.
+
+### Timestamps
+
+The event `timestamp`, the batch `created_at` and the
+`PostHog-Request-Timestamp` header are sent in UTC with at least millisecond
+digits, for example `2025-01-02T03:04:05.000Z`. The SDK keeps finer precision
+from your `Timestamp` or the clock, up to nanoseconds. 1.x dropped trailing
+zeros from event timestamps, so a timestamp on a whole second had no fraction.
 
 ### Session and window IDs
 
