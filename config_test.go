@@ -312,6 +312,7 @@ func TestConfigRejectsNegativeKnobs(t *testing.T) {
 		{"MaxQueueSize", Config{MaxQueueSize: -1}},
 		{"MaxRetryBackoff", Config{MaxRetryBackoff: -1}},
 		{"BatchUploadTimeout", Config{BatchUploadTimeout: -1}},
+		{"CaptureAIBatchUploadTimeout", Config{CaptureAIBatchUploadTimeout: -1}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.field, func(t *testing.T) {

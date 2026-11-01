@@ -106,8 +106,9 @@ Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
 
 `Config.MaxRetryBackoff` is new (see [Retries](#retries)).
 
-`Validate` now rejects a negative `BatchUploadTimeout`, `MaxRetryBackoff`,
-`MaxEventBytes` or `MaxBatchBytes`. Only zero selects the default.
+`Validate` now rejects a negative `BatchUploadTimeout`,
+`CaptureAIBatchUploadTimeout`, `MaxRetryBackoff`, `MaxEventBytes`,
+`MaxBatchBytes` or `MaxQueueSize`. Only zero selects the default.
 
 ## Groups
 

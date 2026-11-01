@@ -469,6 +469,7 @@ func (c *Config) Validate() error {
 	}{
 		{"MaxRetryBackoff", c.MaxRetryBackoff},
 		{"BatchUploadTimeout", c.BatchUploadTimeout},
+		{"CaptureAIBatchUploadTimeout", c.CaptureAIBatchUploadTimeout},
 	} {
 		if f.value < 0 {
 			return ConfigError{Reason: "must not be negative", Field: f.field, Value: f.value}
