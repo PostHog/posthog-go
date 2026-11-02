@@ -817,7 +817,9 @@ func TestEmailsCloseKeepsToItsTimeoutDuringARetryBackoff(t *testing.T) {
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(started), time.Second)
-	require.Equal(t, "delivery_unavailable", requireEmailError(t, <-sent).Code)
+	sendErr := <-sent
+	require.Equal(t, "delivery_unavailable", requireEmailError(t, sendErr).Code)
+	require.ErrorIs(t, sendErr, context.Canceled)
 	require.Len(t, server.received(), 1)
 }
 
