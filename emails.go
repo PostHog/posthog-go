@@ -505,8 +505,11 @@ func (s *emailSender) do(ctx context.Context, method, url string, header http.He
 	if err != nil {
 		// A cut-off answer can't say what PostHog decided: a send may already be
 		// queued, or a refusal may have been retryable. It stays a retryable
-		// network error, and the idempotency key keeps the retry safe.
-		return emailReply{}, newEmailError("network_error", "Reading PostHog's answer failed.", err)
+		// network error, and the idempotency key keeps the retry safe. A
+		// Retry-After in the headers still holds.
+		readErr := newEmailError("network_error", "Reading PostHog's answer failed.", err)
+		readErr.RetryAfter = reply.retryAfter
+		return emailReply{}, readErr
 	}
 	if json.Unmarshal(raw, &reply.fields) != nil {
 		// A reply that isn't JSON as a whole says nothing, even when its start parsed.

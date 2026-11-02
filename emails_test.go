@@ -474,6 +474,43 @@ func TestEmailsSendRetriesACutOffAnswer(t *testing.T) {
 	}
 }
 
+func TestEmailsSendKeepsRetryAfterOfACutOffAnswer(t *testing.T) {
+	cutOff := func(retryAfter string) roundTripFunc {
+		attempts := 0
+		return func(r *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return &http.Response{StatusCode: http.StatusTooManyRequests, Body: cutOffBody{strings.NewReader(`{"code":"rate_li`)}, Header: http.Header{"Retry-After": {retryAfter}}}, nil
+			}
+			return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(`{"message_id":"msg_1"}`)), Header: http.Header{}}, nil
+		}
+	}
+	newClient := func(t *testing.T, transport roundTripFunc) Client {
+		client, err := NewWithConfig("phc_test", Config{SecretKey: "phs_test", Transport: transport})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = client.Close() })
+		senderOf(client).backoff = func(int) time.Duration { return 0 }
+		return client
+	}
+
+	t.Run("a long wait fails at once", func(t *testing.T) {
+		_, err := newClient(t, cutOff("60")).Emails().Send(context.Background(), templateEmail())
+
+		emailErr := requireEmailError(t, err)
+		require.Equal(t, "network_error", emailErr.Code)
+		require.Equal(t, 60*time.Second, emailErr.RetryAfter)
+	})
+
+	t.Run("a short wait is kept", func(t *testing.T) {
+		started := time.Now()
+		result, err := newClient(t, cutOff("1")).Emails().Send(context.Background(), templateEmail())
+
+		require.NoError(t, err)
+		require.Equal(t, "msg_1", result.ID)
+		require.GreaterOrEqual(t, time.Since(started), time.Second)
+	})
+}
+
 func TestEmailsSendRetryLimits(t *testing.T) {
 	unavailable := failed(http.StatusServiceUnavailable, "delivery_unavailable")
 	tests := []struct {
