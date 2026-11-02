@@ -599,7 +599,7 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 	}
 
 	messageType := fmt.Sprintf("%T", msg)
-	next, ok := c.runBeforeSendHook(c.BeforeSend, isolateBeforeSendMessage(msg), messageType)
+	next, ok := c.runBeforeSendHook(c.BeforeSend, isolateBeforeSendMessage(msg))
 	if !ok {
 		return nil, false
 	}
@@ -624,10 +624,12 @@ func (c *client) processBeforeSend(msg Message) (Message, bool) {
 	return next, true
 }
 
-func (c *client) runBeforeSendHook(hook BeforeSendFunc, msg Message, messageType string) (next Message, ok bool) {
+func (c *client) runBeforeSendHook(hook BeforeSendFunc, msg Message) (next Message, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("panic in BeforeSend hook for %s: %v; dropping message", messageType, r)
+			// Log the panic's type, never its value: the value can hold the
+			// event data the hook was removing.
+			c.Errorf("panic in BeforeSend hook for event %q (%T); dropping message", msg.apifyEvent().event, r)
 			next = nil
 			ok = false
 		}
