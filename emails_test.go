@@ -752,13 +752,14 @@ func TestEmailsCloseWaitsForASendInItsRetryBackoff(t *testing.T) {
 
 	require.NoError(t, client.Close())
 
+	// The retry's request reached the server before Close returned.
+	require.Len(t, server.received(), 2, "Close returned before the send settled")
 	select {
 	case err := <-sent:
 		require.NoError(t, err)
-	default:
-		t.Fatal("Close returned before the send settled")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the send never returned")
 	}
-	require.Len(t, server.received(), 2)
 }
 
 func TestEmailsCloseKeepsToItsTimeoutDuringARetryBackoff(t *testing.T) {

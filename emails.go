@@ -345,15 +345,11 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	header := s.header()
 	header.Set("Content-Type", "application/json")
 	header.Set("Idempotency-Key", send.idempotencyKey)
-	var result *SendEmailResult
-	err = s.withRetries(ctx, maxRetries, func() *EmailError {
-		reply, err := s.do(ctx, http.MethodPost, s.appHost+emailSendPath, header, send.body)
-		if err != nil {
-			return err
-		}
-		result, err = reply.sendResult()
-		return err
-	})
+	reply, err := s.request(ctx, maxRetries, http.MethodPost, s.appHost+emailSendPath, header, send.body)
+	if err != nil {
+		return nil, err
+	}
+	result, err := reply.sendResult()
 	if err != nil {
 		return nil, err
 	}
@@ -374,16 +370,11 @@ func (s *emailSender) Get(ctx context.Context, messageID string) (*EmailStatus, 
 	defer finish()
 
 	url := s.appHost + emailStatusPath + strings.ToLower(messageID) + "/"
-	header := s.header()
-	var status *EmailStatus
-	err = s.withRetries(ctx, s.maxRetries, func() *EmailError {
-		reply, err := s.do(ctx, http.MethodGet, url, header, nil)
-		if err != nil {
-			return err
-		}
-		status, err = reply.emailStatus()
-		return err
-	})
+	reply, err := s.request(ctx, s.maxRetries, http.MethodGet, url, s.header(), nil)
+	if err != nil {
+		return nil, err
+	}
+	status, err := reply.emailStatus()
 	if err != nil {
 		return nil, err
 	}
@@ -423,25 +414,31 @@ func (s *emailSender) header() http.Header {
 	return header
 }
 
-func (s *emailSender) withRetries(ctx context.Context, maxRetries int, attempt func() *EmailError) *EmailError {
+// request sends the request until PostHog accepts it, retrying what waiting
+// can fix. Every attempt carries the same header, so a send's idempotency key
+// holds across retries. A reply it returns is always a 2xx.
+func (s *emailSender) request(ctx context.Context, maxRetries int, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
 	for n := 0; ; n++ {
-		err := attempt()
+		reply, err := s.do(ctx, method, url, header, body)
+		if err == nil && !reply.accepted() {
+			err = reply.error()
+		}
 		if err == nil {
-			return nil
+			return reply, nil
 		}
 		delay, retry := s.retryDelay(err, n, maxRetries)
 		if !retry {
-			return err
+			return emailReply{}, err
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			return err
+			return emailReply{}, err
 		case <-s.ctx.Done():
 			timer.Stop()
-			return err
+			return emailReply{}, err
 		}
 	}
 }
@@ -554,9 +551,6 @@ func (r emailReply) apiError(message string) *EmailError {
 }
 
 func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
-	if !r.accepted() {
-		return nil, r.error()
-	}
 	id := r.text("message_id")
 	if id == "" {
 		return nil, r.apiError("PostHog answered without a message ID.")
@@ -584,9 +578,6 @@ func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 }
 
 func (r emailReply) emailStatus() (*EmailStatus, *EmailError) {
-	if !r.accepted() {
-		return nil, r.error()
-	}
 	createdAt, createdErr := time.Parse(time.RFC3339Nano, r.text("created_at"))
 	statusAt, statusErr := time.Parse(time.RFC3339Nano, r.text("status_at"))
 	status := &EmailStatus{ID: r.text("id"), Status: r.text("status"), CreatedAt: createdAt, StatusAt: statusAt, Reason: r.text("reason")}
