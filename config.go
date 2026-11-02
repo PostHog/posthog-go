@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
+
+var headerTokenPattern = regexp.MustCompile(`^[\x21-\x7e]+$`)
 
 // CompressionMode specifies the compression algorithm for batch payloads.
 type CompressionMode uint8
@@ -223,6 +226,28 @@ type Config struct {
 	// POST /i/v1/analytics/events.
 	CaptureMode CaptureMode
 
+	// AppHost is the PostHog app host that Client.Emails sends to, such as
+	// https://posthog.example.com for a self-hosted instance. If empty, a
+	// PostHog Cloud Endpoint maps to its region's app host, us.posthog.com or
+	// eu.posthog.com. Any other Endpoint may be a reverse proxy for ingestion,
+	// so the secret key never goes there: without AppHost, email requests fail
+	// with the code missing_app_host.
+	AppHost string
+
+	// EmailRequestTimeout is the timeout of each Client.Emails request. If
+	// zero, it defaults to DefaultEmailRequestTimeout.
+	EmailRequestTimeout time.Duration
+
+	// EmailRequestMaxRetries is the number of retries of a Client.Emails
+	// request after its first attempt. If nil, it defaults to
+	// DefaultEmailRequestMaxRetries. Set Ptr(0) when a job runner already
+	// retries the send, and pass an IdempotencyKey that names the email.
+	EmailRequestMaxRetries *int
+
+	// MigratedFrom names the email provider your sends moved from, such as
+	// "resend". Client.Emails sends it as the X-PostHog-Migrated-From header.
+	MigratedFrom string
+
 	// A function called by the client to get the current time, `time.Now` is
 	// used by default.
 	// This field is not exported and only exposed internally to control concurrency.
@@ -287,12 +312,20 @@ const (
 	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
 	// posthog-node defaults so backend SDKs behave consistently under bursty load.
 	DefaultMaxQueueSize = 10000
+
+	// DefaultEmailRequestTimeout is the default timeout of each Client.Emails request.
+	DefaultEmailRequestTimeout = 15 * time.Second
+
+	// DefaultEmailRequestMaxRetries is the default number of retries of a
+	// Client.Emails request after its first attempt.
+	DefaultEmailRequestMaxRetries = 2
 )
 
 func (c *Config) normalize() {
 	c.Endpoint = strings.TrimSpace(c.Endpoint)
 	c.SecretKey = strings.TrimSpace(c.SecretKey)
 	c.PersonalApiKey = strings.TrimSpace(c.PersonalApiKey)
+	c.AppHost = strings.TrimSpace(c.AppHost)
 }
 
 // effectiveSecretKey prefers SecretKey and falls back to the deprecated PersonalApiKey.
@@ -385,6 +418,44 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return c.validateEmailOptions()
+}
+
+func (c *Config) validateEmailOptions() error {
+	if c.AppHost != "" {
+		if u, err := url.Parse(c.AppHost); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return ConfigError{
+				Reason: "app host must be an http or https URL",
+				Field:  "AppHost",
+				Value:  c.AppHost,
+			}
+		}
+	}
+
+	if c.EmailRequestTimeout < 0 {
+		return ConfigError{
+			Reason: "negative email request timeouts are not supported",
+			Field:  "EmailRequestTimeout",
+			Value:  c.EmailRequestTimeout,
+		}
+	}
+
+	if c.EmailRequestMaxRetries != nil && *c.EmailRequestMaxRetries < 0 {
+		return ConfigError{
+			Reason: "negative email request retries are not supported",
+			Field:  "EmailRequestMaxRetries",
+			Value:  *c.EmailRequestMaxRetries,
+		}
+	}
+
+	if c.MigratedFrom != "" && !headerTokenPattern.MatchString(c.MigratedFrom) {
+		return ConfigError{
+			Reason: "migrated from must be visible ASCII characters, such as resend",
+			Field:  "MigratedFrom",
+			Value:  c.MigratedFrom,
+		}
+	}
+
 	return nil
 }
 
@@ -456,6 +527,14 @@ func makeConfig(c Config) Config {
 
 	if c.MaxEnqueuedRequests == 0 {
 		c.MaxEnqueuedRequests = DefaultMaxEnqueuedRequests
+	}
+
+	if c.EmailRequestTimeout == 0 {
+		c.EmailRequestTimeout = DefaultEmailRequestTimeout
+	}
+
+	if c.EmailRequestMaxRetries == nil {
+		c.EmailRequestMaxRetries = Ptr(DefaultEmailRequestMaxRetries)
 	}
 
 	if c.GetDisableGeoIP() {
