@@ -1272,7 +1272,8 @@ type EvaluateFlagsPayload struct {
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
 	GroupProperties map[string]Properties
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests. Flags
-	// that cannot be resolved from loaded local definitions are omitted.
+	// that cannot be resolved from loaded local definitions are omitted, and
+	// FeatureFlagEvaluations.UnresolvedFlags lists them with a reason.
 	OnlyEvaluateLocally bool
 	// DisableGeoIP, when non-nil, overrides the client-level DisableGeoIP for
 	// this evaluation only.
@@ -1341,10 +1342,11 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 
 	records := make(map[string]evaluatedFlagRecord)
 	locallyEvaluated := make(map[string]struct{})
+	unresolved := make(map[string]UnresolvedFlagReason)
 	fallbackToRemote := true
 
 	if c.featureFlagsPoller != nil {
-		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, payload)
+		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, unresolved, payload)
 	} else if payload.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyMissing("EvaluateFlags")
 		return emptyFeatureFlagEvaluations, ErrNoSecretKey
@@ -1395,12 +1397,20 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 		}
 	}
 
+	// A flag the remote fallback resolved has a value, so it is not unresolved.
+	for key := range unresolved {
+		if _, resolved := records[key]; resolved {
+			delete(unresolved, key)
+		}
+	}
+
 	return &FeatureFlagEvaluations{
 		host:                 host,
 		distinctId:           payload.DistinctId,
 		deviceId:             payload.DeviceId,
 		groups:               payload.Groups,
 		flags:                records,
+		unresolved:           unresolved,
 		requestId:            requestId,
 		evaluatedAt:          evaluatedAt,
 		errorsWhileComputing: errorsWhileComputing,
@@ -1409,12 +1419,13 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 	}, remoteErr
 }
 
-// populateLocalEvaluations fills records with locally-resolved flags. It
-// returns whether the caller should fall back to a remote /flags request to
+// populateLocalEvaluations fills records with locally-resolved flags and
+// unresolved with the reason of each flag local evaluation found inconclusive.
+// It returns whether the caller should fall back to a remote /flags request to
 // fill in the rest. The local-evaluation loop here mirrors
 // FeatureFlagsPoller.GetAllFlags but stores the rich record needed to power
 // $feature_flag_called events with locally_evaluated=true.
-func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord, locallyEvaluated map[string]struct{}, payload EvaluateFlagsPayload) bool {
+func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord, locallyEvaluated map[string]struct{}, unresolved map[string]UnresolvedFlagReason, payload EvaluateFlagsPayload) bool {
 	poller := c.featureFlagsPoller
 	state, err := poller.getLoadedState()
 	if err != nil {
@@ -1456,6 +1467,9 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 		)
 		if err != nil {
 			c.debugf("Unable to compute flag '%s' locally - %s", storedFlag.Key, err)
+			if reason, ok := unresolvedReasonOf(err); ok {
+				unresolved[storedFlag.Key] = reason
+			}
 			fallbackToRemote = true
 			continue
 		}
