@@ -619,6 +619,7 @@ func TestEmailsSendHonorsTheRequestTimeout(t *testing.T) {
 	defer close(release)
 	client, err := NewWithConfig("phc_test", Config{Endpoint: server.URL, AppHost: server.URL, SecretKey: "phs_test", EmailRequestTimeout: 50 * time.Millisecond, EmailRequestMaxRetries: Ptr(0)})
 	require.NoError(t, err)
+	defer client.Close()
 
 	_, err = client.Emails().Send(context.Background(), templateEmail())
 
