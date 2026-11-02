@@ -437,6 +437,43 @@ func TestEmailsSendRetriesNetworkErrors(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
+// cutOffBody yields part of a reply, then fails as a dropped connection does.
+type cutOffBody struct{ part io.Reader }
+
+func (b cutOffBody) Read(p []byte) (int, error) {
+	if n, _ := b.part.Read(p); n > 0 {
+		return n, nil
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (cutOffBody) Close() error { return nil }
+
+func TestEmailsSendRetriesACutOffAnswer(t *testing.T) {
+	for _, status := range []int{http.StatusConflict, http.StatusAccepted} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			attempts := 0
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				attempts++
+				if attempts == 1 {
+					return &http.Response{StatusCode: status, Body: cutOffBody{strings.NewReader(`{"code":"idempotency_key_in`)}, Header: http.Header{}}, nil
+				}
+				return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(`{"message_id":"msg_1"}`)), Header: http.Header{}}, nil
+			})
+			client, err := NewWithConfig("phc_test", Config{SecretKey: "phs_test", Transport: transport})
+			require.NoError(t, err)
+			defer client.Close()
+			senderOf(client).backoff = func(int) time.Duration { return 0 }
+
+			result, err := client.Emails().Send(context.Background(), templateEmail())
+
+			require.NoError(t, err)
+			require.Equal(t, "msg_1", result.ID)
+			require.Equal(t, 2, attempts)
+		})
+	}
+}
+
 func TestEmailsSendRetryLimits(t *testing.T) {
 	unavailable := failed(http.StatusServiceUnavailable, "delivery_unavailable")
 	tests := []struct {

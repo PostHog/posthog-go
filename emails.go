@@ -502,8 +502,10 @@ func (s *emailSender) do(ctx context.Context, method, url string, header http.He
 	reply := emailReply{status: res.StatusCode}
 	reply.retryAfter, _ = parseRetryAfter(res.Header.Get("Retry-After"), time.Now())
 	raw, err := io.ReadAll(io.LimitReader(res.Body, maxEmailReplyBytes))
-	if err != nil && reply.accepted() {
-		// An accepted send may already be queued, so a failed read stays a retryable network error.
+	if err != nil {
+		// A cut-off answer can't say what PostHog decided: a send may already be
+		// queued, or a refusal may have been retryable. It stays a retryable
+		// network error, and the idempotency key keeps the retry safe.
 		return emailReply{}, newEmailError("network_error", "Reading PostHog's answer failed.", err)
 	}
 	if json.Unmarshal(raw, &reply.fields) != nil {
