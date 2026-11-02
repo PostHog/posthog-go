@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -325,7 +326,7 @@ func resolveEmailAppHost(endpoint, appHost string) string {
 }
 
 func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, error) {
-	if email == nil {
+	if isNilEmail(email) {
 		return nil, newEmailError("invalid_form", "Send needs a TemplateEmail or a CodeEmail.", nil)
 	}
 	send, err := email.prepare()
@@ -379,6 +380,15 @@ func (s *emailSender) Get(ctx context.Context, messageID string) (*EmailStatus, 
 		return nil, err
 	}
 	return status, nil
+}
+
+// isNilEmail reports a nil Email, including a nil *TemplateEmail or *CodeEmail.
+func isNilEmail(email Email) bool {
+	if email == nil {
+		return true
+	}
+	value := reflect.ValueOf(email)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }
 
 // start admits one request into the in-flight set, or says why it can't run.
@@ -435,10 +445,10 @@ func (s *emailSender) request(ctx context.Context, maxRetries int, method, url s
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			return emailReply{}, err
+			return emailReply{}, err.interruptedBy(ctx.Err())
 		case <-s.ctx.Done():
 			timer.Stop()
-			return emailReply{}, err
+			return emailReply{}, err.interruptedBy(s.ctx.Err())
 		}
 	}
 }
@@ -482,7 +492,10 @@ func (s *emailSender) do(ctx context.Context, method, url string, header http.He
 		// An accepted send may already be queued, so a failed read stays a retryable network error.
 		return emailReply{}, newEmailError("network_error", "Reading PostHog's answer failed.", err)
 	}
-	_ = json.Unmarshal(raw, &reply.fields)
+	if json.Unmarshal(raw, &reply.fields) != nil {
+		// A reply that isn't JSON as a whole says nothing, even when its start parsed.
+		reply.fields = nil
+	}
 	return reply, nil
 }
 

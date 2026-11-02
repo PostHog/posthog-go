@@ -561,6 +561,11 @@ func TestEmailsSendAnswersWithoutACode(t *testing.T) {
 			want:  EmailError{Name: EmailErrorApplication, Code: "api_error", Message: "PostHog answered without a message ID.", StatusCode: http.StatusAccepted},
 		},
 		{
+			name:  "accepted with JSON and trailing bytes",
+			reply: stubReply{status: http.StatusAccepted, body: `{"message_id": "msg_1"}garbage`},
+			want:  EmailError{Name: EmailErrorApplication, Code: "api_error", Message: "PostHog answered without a message ID.", StatusCode: http.StatusAccepted},
+		},
+		{
 			name:  "proxy error page",
 			reply: stubReply{status: http.StatusBadGateway, body: "<html>Bad gateway</html>"},
 			want:  EmailError{Name: EmailErrorApplication, Code: "api_error", Message: "PostHog answered HTTP 502.", StatusCode: http.StatusBadGateway},
@@ -630,7 +635,35 @@ func TestEmailsSendStopsWhenTheContextEnds(t *testing.T) {
 	_, err := client.Emails().Send(ctx, templateEmail())
 
 	require.Equal(t, "delivery_unavailable", requireEmailError(t, err).Code)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Len(t, server.received(), 1)
+}
+
+func TestEmailsGetStopsWhenTheContextEnds(t *testing.T) {
+	server := newEmailServer(t, failed(http.StatusServiceUnavailable, "delivery_unavailable"))
+	client := newEmailClient(t, server)
+	senderOf(client).backoff = func(int) time.Duration { return time.Hour }
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := client.Emails().Get(ctx, testMessageID)
+
+	require.Equal(t, "delivery_unavailable", requireEmailError(t, err).Code)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Len(t, server.received(), 1)
+}
+
+func TestEmailsSendRefusesANilEmail(t *testing.T) {
+	server := newEmailServer(t)
+	for _, email := range []Email{nil, (*TemplateEmail)(nil), (*CodeEmail)(nil)} {
+		for name, client := range map[string]Client{"enabled": newEmailClient(t, server), "disabled": New("")} {
+			_, err := client.Emails().Send(context.Background(), email)
+
+			emailErr := requireEmailError(t, err)
+			require.Equal(t, "invalid_form", emailErr.Code, "%T on the %s client", email, name)
+		}
+	}
+	require.Empty(t, server.received())
 }
 
 func TestEmailsGet(t *testing.T) {

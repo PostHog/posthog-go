@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -76,6 +77,13 @@ func (e *EmailError) Error() string {
 // Unwrap returns the cause, such as a network error, context.DeadlineExceeded,
 // ErrSDKDisabled or ErrClosed.
 func (e *EmailError) Unwrap() error { return e.cause }
+
+// interruptedBy adds why the wait before a retry ended, such as
+// context.DeadlineExceeded, to the last attempt's error.
+func (e *EmailError) interruptedBy(cause error) *EmailError {
+	e.cause = errors.Join(e.cause, cause)
+	return e
+}
 
 func newEmailError(code, message string, cause error) *EmailError {
 	return &EmailError{Name: emailErrorName(0, code), Code: code, Message: message, cause: cause}
