@@ -83,6 +83,10 @@ constants are removed with it.
 interface — a hand-written test mock needs the new method. Callers are
 unaffected.
 
+`Alias` gained the `EventProperties` and `Options` maps, and `Backoff` gained
+a function field. Neither type can be compared with `==` or used as a map key
+any more, so code that does this no longer compiles.
+
 `CompressionZstd`, `CompressionDeflate` and `CompressionBrotli` no longer
 require an opt-in. A config that previously failed `Validate()` with
 `"zstd compression requires CaptureModeAnalyticsV1"` now succeeds.
@@ -102,8 +106,10 @@ Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
 
 `Config.MaxRetryBackoff` is new (see [Retries](#retries)).
 
-`Validate` now rejects a negative `BatchUploadTimeout`, `MaxRetryBackoff`,
-`MaxEventBytes` or `MaxBatchBytes`. Only zero selects the default.
+`Validate` now rejects a negative `BatchUploadTimeout`,
+`CaptureAIBatchUploadTimeout`, `MaxRetryBackoff`, `MaxEventBytes`,
+`MaxBatchBytes`, `MaxQueueSize` or `CaptureAIMaxQueueSize`. Only zero selects
+the default.
 
 ## Groups
 
@@ -146,7 +152,11 @@ upgrade:
 - Pass `Authorization` (the project API key, sent as `Bearer <key>`), every
   `PostHog-*` header, `Content-Type`, `Content-Encoding` and `User-Agent`
   through unchanged. PostHog answers `401` without `Authorization` and `400`
-  without the others, and the batch fails.
+  without the others, and the batch fails. If your proxy strips credentials,
+  keep an `Authorization` header that starts with `Bearer phc_`,
+  `Bearer phs_` or `Bearer phx_`, because PostHog SDKs send their keys there.
+  Keys created before these prefixes need their exact `Bearer <key>` value
+  allowed too.
 - Accept request bodies up to 20 MB. AI requests are often larger than 1 MB,
   the default limit in nginx and ingress-nginx. A `413` from the proxy fails
   the batch.
@@ -180,6 +190,12 @@ An empty or whitespace-only `DistinctId` is now treated as missing, so a
 `Capture` or `Exception` sent with a request context gets the context's ID or a
 personless one. In 1.x it was sent, and PostHog dropped the event.
 
+Without a request context, `Enqueue` now returns a `FieldError` for a
+`Capture` or `Exception` whose `DistinctId` is only whitespace. It does the
+same, with or without a request context, for an `Identify` or `Alias` whose
+`DistinctId` is only whitespace and for an `Alias` whose `Alias` is only
+whitespace. 1.x sent these events.
+
 PostHog drops an event whose distinct ID is over 200 UTF-8 bytes, with the
 per-event result `distinct_id_too_large`, which reaches `Callback.Failure` as a
 `CaptureEventError`. 1.x sent events to legacy capture, which shortened the ID
@@ -210,10 +226,14 @@ Three consequences for `Callback`:
 
 - `Failure` can fire on an HTTP **200**, for an individual event the backend
   dropped while accepting the rest of the batch.
-- An event whose uuid is absent from the `results` map fires neither callback.
-  A proxy or gateway that answers the capture path with its own `200` body
-  therefore reports nothing at all, where the old endpoint treated any `< 300`
-  as success. Confirm intermediaries pass the capture response through.
+- A `2xx` whose body is not JSON, or whose `results` is missing, `null` or
+  not an object, fails the whole batch: each event reaches `Failure` with a
+  `*CaptureRequestError` and is not resent. The old endpoint treated any
+  `< 300` as success, so a proxy or gateway that answers the capture path with
+  its own `200` body now shows up as failures. Confirm intermediaries pass the
+  capture response through.
+- An event whose uuid is absent from a valid `results` object fires neither
+  callback.
 - Errors are typed. Check them with `errors.As`:
 
 ```go
@@ -256,10 +276,18 @@ JSON serialization is reported before `Enqueue` returns. Do not re-enqueue the
 same message from `Failure`, because it fails again and the calls recurse.
 This was also true in 1.x.
 
-Without a `Callback`, the SDK logs one warning per batch that loses events,
-for example `analytics: 3 event(s) dropped: <cause>; set Config.Callback to
-inspect failures`. For a failed request the cause is the error text, which
-can include PostHog's error description, as 1.x logged the response body.
+Without a `Callback`, the SDK logs one warning each time a request loses
+events, never one per event, for example `analytics: 3 event(s) dropped:
+<cause>; set Config.Callback to inspect failures`. For a failed request the
+cause is the error text, which can include PostHog's error description, as
+1.x logged the response body. Events that still fail after the last retry are
+logged as an error instead, with or without a `Callback`, for example
+`analytics: 3 messages dropped after 4 attempts`.
+
+Capture log lines now start with the lane name, `analytics:` or
+`capture-ai:`, and some of their text changed. Update log-based alerts that
+match the 1.x text. With `Verbose` on, 1.x logged every queued message in
+full. v2 logs batch counts and sizes, not the messages.
 
 ### Retries
 
@@ -271,6 +299,11 @@ self-hosted install. Billing limits arrive as a terminal `402`. `Retry-After`
 is honoured, clamped to the new `Config.MaxRetryBackoff`
 (default 30s), which also caps the default exponential backoff. A custom
 `Config.RetryAfter` is used as given.
+
+Default retry waits now vary randomly by up to 25% either way, so clients
+that fail together do not all retry at the same moment. `DefaultBackoff()`
+now has the same jitter; in 1.x it had none. A server `Retry-After` stays the
+minimum wait. A custom `Config.RetryAfter` is used as given.
 
 ### OpenTelemetry exception trace IDs
 
@@ -291,9 +324,13 @@ generated one. An invalid `Uuid` is replaced with a generated one, and the SDK
 logs one warning that does not include the value. The SDK applies this rule
 before `BeforeSend` and again to a `Uuid` that `BeforeSend` sets.
 
-Default retry waits now vary randomly by up to 25% either way, so clients
-that fail together do not all retry at the same moment. A server `Retry-After`
-stays the minimum wait. A custom `Config.RetryAfter` is used as given.
+### Timestamps
+
+The event `timestamp`, the batch `created_at` and the
+`PostHog-Request-Timestamp` header are sent in UTC with at least millisecond
+digits, for example `2025-01-02T03:04:05.000Z`. The SDK keeps finer precision
+from your `Timestamp` or the clock, up to nanoseconds. 1.x dropped trailing
+zeros from event timestamps, so a timestamp on a whole second had no fraction.
 
 ### Session and window IDs
 
@@ -468,6 +505,15 @@ Options can also be set for every event and for a request:
   `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
+These layers now reach `Identify`, `Alias` and `GroupIdentify` events, and so
+does a `$process_person_profile` property in `DefaultEventProperties` or
+`RequestContext.Properties`. In 1.x none of them did. PostHog drops an
+`$identify`, `$create_alias` or `$groupidentify` event that has person
+processing off, with an ingestion warning. `Callback` does not report the
+drop, because capture accepts the event. So do not turn person processing off
+in `DefaultEventOptions`, `DefaultEventProperties` or a request context. Set
+it on each message that needs it instead.
+
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
 option that is still missing or `nil`, from these layers in order:
 `RequestContext.Options`, then `DefaultEventOptions`, then the SDK's
@@ -558,6 +604,12 @@ closes at about 5 MiB. `MaxEventBytes` and `MaxBatchBytes` do not apply to it.
 Tune it with `Config.CaptureAICompression`, `Config.CaptureAIMaxQueueSize` and
 `Config.CaptureAIBatchUploadTimeout` (30s, longer than the analytics lane's
 because AI batches are much larger).
+`CaptureAICompression` does not inherit `Compression`: AI requests are sent
+uncompressed unless you set it. The AI lane does not use `MaxQueueSize` or
+`BatchUploadTimeout` either. It shares `BatchSize`, `Interval`, `MaxRetries`,
+`RetryAfter`, `MaxRetryBackoff`, `Callback`, `BeforeSend`,
+`HistoricalMigration`, `DefaultEventProperties` and `DefaultEventOptions`
+with the analytics lane.
 Use `EnqueueAIWithContext` from HTTP handlers, as you would
 `EnqueueWithContext`. It takes a `Client` rather than an `EnqueueClient`,
 because only a real client has an AI lane.
