@@ -3,6 +3,7 @@ package posthog
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"reflect"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	json "github.com/goccy/go-json"
 	"github.com/google/uuid"
 )
 
@@ -200,7 +200,7 @@ func (e TemplateEmail) prepare() (emailSend, *EmailError) {
 	if messageData == nil {
 		messageData = map[string]interface{}{}
 	}
-	body, err := json.MarshalNoEscape(templateEmailBody{
+	body, err := encodeEmailBody(templateEmailBody{
 		TemplateID:  strings.ToLower(e.TemplateID),
 		To:          e.To,
 		MessageData: messageData,
@@ -230,7 +230,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 			return emailSend{}, invalidEmail("invalid_reply_to", "ReplyTo", "ReplyTo must not hold a blank address.")
 		}
 	}
-	body, err := json.MarshalNoEscape(codeEmailBody{
+	body, err := encodeEmailBody(codeEmailBody{
 		To:                e.To,
 		TemplateKey:       e.TemplateKey,
 		Subject:           e.Subject,
@@ -380,6 +380,20 @@ func (s *emailSender) Get(ctx context.Context, messageID string) (*EmailStatus, 
 		return nil, err
 	}
 	return status, nil
+}
+
+// encodeEmailBody encodes a request body with the standard library, keeping
+// HTML as written. goccy/go-json's MarshalNoEscape hides its argument from
+// escape analysis, so a body built on the stack can move while it encodes;
+// the Go 1.21 race tests caught it reading such a body as garbage.
+func encodeEmailBody(body interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(body); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // isNilEmail reports a nil Email, including a nil *TemplateEmail or *CodeEmail.

@@ -27,6 +27,7 @@ type receivedRequest struct {
 	Path   string
 	Header http.Header
 	Body   map[string]interface{}
+	Raw    string
 }
 
 type stubReply struct {
@@ -56,7 +57,7 @@ func newEmailServer(t *testing.T, replies ...stubReply) *emailServer {
 			require.NoError(t, json.Unmarshal(raw, &body))
 		}
 		s.mu.Lock()
-		s.requests = append(s.requests, receivedRequest{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone(), Body: body})
+		s.requests = append(s.requests, receivedRequest{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone(), Body: body, Raw: string(raw)})
 		reply := stubReply{status: http.StatusInternalServerError, body: `{"detail":"no reply left"}`}
 		if len(s.replies) > 0 {
 			reply, s.replies = s.replies[0], s.replies[1:]
@@ -179,6 +180,7 @@ func TestEmailsSendCode(t *testing.T) {
 		"capture_engagement": true,
 		"distinct_id":        "user_123",
 	}, server.received()[0].Body)
+	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
 }
 
 func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
