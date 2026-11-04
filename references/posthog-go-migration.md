@@ -1,0 +1,623 @@
+---
+title: "PostHog Go SDK migration guides"
+sidebar: Docs
+showTitle: true
+---
+
+## Migrating to posthog-go v2
+
+v2 makes capture v1 the only capture path. The legacy `/batch/` pipeline is
+removed, along with the `Config.CaptureMode` switch that chose between them.
+
+For the changes every capture v1 SDK shares, such as event options, limits
+and per-event results, see
+[Upgrading to capture v1 SDKs](https://posthog.com/docs/libraries/capture-v1).
+
+### Import path
+
+Go requires the major version in the module path:
+
+```bash
+go get github.com/posthog/posthog-go/v2
+```
+
+```go
+// before
+import "github.com/posthog/posthog-go"
+
+// after
+import "github.com/posthog/posthog-go/v2"
+```
+
+The package name is still `posthog`, so only the import line changes.
+
+Subpackages such as `posthogmcp` move with it, to `github.com/posthog/posthog-go/v2/posthogmcp`.
+The MCP Go SDK adapter is a separate module that moves in lockstep with the core, so import `github.com/posthog/posthog-go/posthogmcpsdk/v2`.
+The `otel` bridge imports the core SDK, so it also moves in lockstep with the core: import `github.com/posthog/posthog-go/otel/v2`.
+
+### Constructors
+
+`New` now returns `(Client, error)`, like `NewWithConfig`. Handle the error
+before using or closing the client:
+
+```go
+// before
+client := posthog.New(apiKey)
+
+// after
+client, err := posthog.New(apiKey)
+if err != nil {
+    return err
+}
+defer client.Close()
+```
+
+Either constructor returns a nil client and an error only for invalid
+configuration. An empty project API key still gives a disabled client and a
+nil error, as in 1.x, and a personal (`phx_...`) key now does too. Both log an
+error. A disabled client
+sends nothing, and its methods return default values and `ErrSDKDisabled`.
+Set `Config.Disabled` to build one on purpose, for example in tests.
+
+Integrations follow the same rule. `posthogmcpsdk.NewMiddleware` and
+`Instrument` no longer panic on a nil `*posthogmcp.Analytics`: they report one
+error and install middleware that changes nothing. The `otel` bridge's
+`NewExporter` and `NewSpanProcessor` no longer return an error for an empty or
+personal API key: they log one error and return an exporter or processor that
+exports nothing. They still return an error for an invalid `WithHost`.
+
+### Config
+
+`Config.CaptureMode` is gone. If you opted into v1, delete the field — it is
+now the only behavior:
+
+```go
+// before
+client, err := posthog.NewWithConfig(apiKey, posthog.Config{
+    Endpoint:    "https://us.i.posthog.com",
+    CaptureMode: posthog.CaptureModeAnalyticsV1,
+})
+
+// after
+client, err := posthog.NewWithConfig(apiKey, posthog.Config{
+    Endpoint: "https://us.i.posthog.com",
+})
+```
+
+The `CaptureMode` type and the `CaptureModeLegacy` / `CaptureModeAnalyticsV1`
+constants are removed with it.
+
+`Client` gained `EnqueueAI`. This only affects code that *implements* the
+interface — a hand-written test mock needs the new method. Callers are
+unaffected.
+
+`Alias` gained the `EventProperties` and `Options` maps, and `Backoff` gained
+a function field. Neither type can be compared with `==` or used as a map key
+any more, so code that does this no longer compiles.
+
+`CompressionZstd`, `CompressionDeflate` and `CompressionBrotli` no longer
+require an opt-in. A config that previously failed `Validate()` with
+`"zstd compression requires CaptureModeAnalyticsV1"` now succeeds.
+
+`Config.MaxBatchBytes` is new. It defaults to 500000 bytes, the request limit
+1.x applied internally. It targets the combined serialized size of the events
+in one request, excluding the request envelope. An event larger than
+`MaxBatchBytes` is sent in a request of its own.
+
+There is no per-event size cap by default, unlike the 500000-byte cap in 1.x.
+Within PostHog's request limits, PostHog now drops an oversized event on its
+own and reports it to `Callback`, without failing the other events in the
+request. Set the new
+`Config.MaxEventBytes` to refuse large events locally with `ErrMessageTooBig`;
+`Validate`, and so `NewWithConfig`, then rejects a `MaxBatchBytes` below it.
+Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
+
+`Config.MaxRetryBackoff` is new (see [Retries](#retries)).
+
+`Validate` now rejects a negative `BatchUploadTimeout`,
+`CaptureAIBatchUploadTimeout`, `MaxRetryBackoff`, `MaxEventBytes`,
+`MaxBatchBytes`, `MaxQueueSize` or `CaptureAIMaxQueueSize`. Only zero selects
+the default.
+
+### Groups
+
+`Groups` is now `map[string]string`, and `Groups.Set` takes a string value. A
+group key identifies a group, so numbers, maps and other values no longer
+compile. This matches `GroupIdentify.Key`, which was already a string.
+
+Convert a numeric group ID to its decimal string:
+
+```go
+// before
+groups := posthog.NewGroups().Set("company", companyID) // companyID is an int64
+
+// after
+groups := posthog.NewGroups().Set("company", strconv.FormatInt(companyID, 10))
+```
+
+v1 bucketed a numeric group key for feature flags by its decimal form, so a key
+converted this way keeps every group in the same rollout bucket and variant.
+
+### Behavior changes
+
+None of these produce a compile error, so read them even if your code builds
+unchanged.
+
+#### Endpoint and network path
+
+Events are sent to `POST /i/v1/analytics/events` instead of `POST /batch/`.
+
+Check anything that pins the old path: reverse proxies, API gateways, egress
+allowlists, WAF rules, and self-hosted deployments. **The v1 route is only
+served where the deployment enables it**, so confirm your PostHog instance
+serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
+`eu.i.posthog.com`) does.
+
+If you send events through your own reverse proxy, update it before you
+upgrade:
+
+- Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.
+- Pass `Authorization` (the project API key, sent as `Bearer <key>`), every
+  `PostHog-*` header, `Content-Type`, `Content-Encoding` and `User-Agent`
+  through unchanged. PostHog answers `401` without `Authorization` and `400`
+  without the others, and the batch fails. If your proxy strips credentials,
+  keep an `Authorization` header that starts with `Bearer phc_`,
+  `Bearer phs_` or `Bearer phx_`, because PostHog SDKs send their keys there.
+  Keys created before these prefixes need their exact `Bearer <key>` value
+  allowed too.
+- Accept request bodies up to 20 MB. AI requests are often larger than 1 MB,
+  the default limit in nginx and ingress-nginx. A `413` from the proxy fails
+  the batch.
+
+PostHog's managed reverse proxy already does this. See the
+[proxy guides](https://posthog.com/docs/advanced/proxy).
+
+#### Redirects
+
+A capture request follows only `307` and `308` redirects, and only to the same
+scheme, host and port as `Endpoint`, at most 5 times. It resends the same body
+and headers. Any other redirect fails the batch without a retry:
+`Callback.Failure` gets a `CaptureRequestError` with the redirect's status.
+1.x followed up to 10 redirects of any kind to any host. A `301`, `302` or
+`303` resent the request as a `GET` without the events, and a `307` or `308`
+to another host received the events and the API key. Feature flag requests are
+unchanged.
+
+#### Request context
+
+`RequestContext.Properties` and `RequestContext.Options` now apply to
+`Identify`, `Alias` and `GroupIdentify` events sent with `EnqueueWithContext`,
+not only to `Capture` and `Exception`. The context's session ID fills
+`Identify` and `Alias`, but never `GroupIdentify`. A session's person in
+PostHog follows the distinct IDs of the session's events, so an event sent
+under a different distinct ID with the context's session ID can change the
+person shown for that session. The context's distinct ID never changes an
+`Identify` or an `Alias`.
+
+An empty or whitespace-only `DistinctId` is now treated as missing, so a
+`Capture` or `Exception` sent with a request context gets the context's ID or a
+personless one. In 1.x it was sent, and PostHog dropped the event.
+
+Without a request context, `Enqueue` now returns a `FieldError` for a
+`Capture` or `Exception` whose `DistinctId` is only whitespace. It does the
+same, with or without a request context, for an `Identify` or `Alias` whose
+`DistinctId` is only whitespace and for an `Alias` whose `Alias` is only
+whitespace. 1.x sent these events.
+
+PostHog drops an event whose distinct ID is over 200 UTF-8 bytes, with the
+per-event result `distinct_id_too_large`, which reaches `Callback.Failure` as a
+`CaptureEventError`. 1.x sent events to legacy capture, which shortened the ID
+to 200 characters and kept the event.
+
+#### Group identify distinct ID
+
+`GroupIdentify.DistinctId` is now sent as the event's distinct ID. If it is
+empty, the SDK uses the request context's distinct ID, then `$<type>_<key>`.
+In 1.x the field was accepted and ignored, and every `$groupidentify` was sent
+as `$<type>_<key>`.
+If `$<type>_<key>` is over 200 bytes, set `DistinctId`, or PostHog drops the
+event.
+
+#### Authentication
+
+The project API key moves from an `api_key` body field to an
+`Authorization: Bearer <key>` header. Anything that inspected, logged or
+rewrote the request body to find the key needs updating.
+
+#### Delivery results are per event
+
+The old endpoint accepted or rejected a whole batch. v1 returns a result for
+each event, and the client only re-sends the events the backend asks it to
+retry.
+
+Three consequences for `Callback`:
+
+- `Failure` can fire on an HTTP **200**, for an individual event the backend
+  dropped while accepting the rest of the batch.
+- A `2xx` whose body is not JSON, or whose `results` is missing, `null` or
+  not an object, fails the whole batch: each event reaches `Failure` with a
+  `*CaptureRequestError` and is not resent. The old endpoint treated any
+  `< 300` as success, so a proxy or gateway that answers the capture path with
+  its own `200` body now shows up as failures. Confirm intermediaries pass the
+  capture response through.
+- An event whose uuid is absent from a valid `results` object fires neither
+  callback.
+- Errors are typed. Check them with `errors.As`:
+
+```go
+func (c myCallback) Failure(msg posthog.APIMessage, err error) {
+    var eventErr *posthog.CaptureEventError
+    if errors.As(err, &eventErr) {
+        // One event: eventErr.EventUUID, .Result ("drop"/"retry"),
+        // .Details, .Exhausted when retries ran out, and .Endpoint
+        // to tell the analytics and AI lanes apart.
+        return
+    }
+
+    var localErr *posthog.CaptureLocalError
+    if errors.As(err, &localErr) {
+        // Refused before sending: localErr.Endpoint names the lane, and it
+        // unwraps to ErrMessageTooBig and friends.
+        return
+    }
+
+    var reqErr *posthog.CaptureRequestError
+    if errors.As(err, &reqErr) {
+        // Whole request: reqErr.StatusCode, .Code, .Description,
+        // .Endpoint. Unwraps to the transport error when there was one.
+        return
+    }
+}
+```
+
+Local failures, such as an event over `MaxEventBytes` or a full
+batch-submission queue, reach `Failure` wrapped in a `*CaptureLocalError`. A
+full message queue is different: `Enqueue` returns `ErrQueueFull` and
+`Failure` is not called, so check the error `Enqueue` returns. In 1.x they were the bare
+sentinel errors, so `err == posthog.ErrMessageTooBig` no longer matches. Use
+`errors.Is(err, posthog.ErrMessageTooBig)`, which works in both. The new
+`Endpoint` field on all three error types names the lane: the analytics path
+or the AI path.
+
+`Failure` can run on the goroutine that called `Enqueue`: a message that fails
+JSON serialization is reported before `Enqueue` returns. Do not re-enqueue the
+same message from `Failure`, because it fails again and the calls recurse.
+This was also true in 1.x.
+
+Without a `Callback`, the SDK logs one warning each time a request loses
+events, never one per event, for example `analytics: 3 event(s) dropped:
+&lt;cause>; set Config.Callback to inspect failures`. For a failed request the
+cause is the error text, which can include PostHog's error description, as
+1.x logged the response body. Events that still fail after the last retry are
+logged as an error instead, with or without a `Callback`, for example
+`analytics: 3 messages dropped after 4 attempts`.
+
+Capture log lines now start with the lane name, `analytics:` or
+`capture-ai:`, and some of their text changed. Update log-based alerts that
+match the 1.x text. With `Verbose` on, 1.x logged every queued message in
+full. v2 logs batch counts and sizes, not the messages.
+
+#### Retries
+
+Retryable statuses are `404`, `408`, `429`, `500`, `502`, `503` and `504`,
+plus network errors. 1.x did not retry `404`, and retried every `5xx`; other
+`5xx` statuses are now terminal. A `404` that lasts through every attempt can
+mean the PostHog deployment has no capture v1 route, for example an older
+self-hosted install. Billing limits arrive as a terminal `402`. `Retry-After`
+is honoured, clamped to the new `Config.MaxRetryBackoff`
+(default 30s), which also caps the default exponential backoff. A custom
+`Config.RetryAfter` is used as given.
+
+Default retry waits now vary randomly by up to 25% either way, so clients
+that fail together do not all retry at the same moment. `DefaultBackoff()`
+now has the same jitter; in 1.x it had none. A server `Retry-After` stays the
+minimum wait. A custom `Config.RetryAfter` is used as given.
+
+#### OpenTelemetry exception trace IDs
+
+`posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and
+`$span_id` only when neither the event nor the request context sets either
+key. In 1.37 each ID filled on its own, so an event that set only `$trace_id`
+got the active span's `$span_id`.
+The helper cannot see `Config.DefaultEventProperties`, so a `$trace_id` or
+`$span_id` set there does not stop the derived pair, which wins over it.
+
+#### Event IDs
+
+The SDK generates UUIDv7 values for event `Uuid`s, the `PostHog-Request-Id`
+header and the distinct ID of a personless capture. It falls back to v4 if v7
+generation fails. A `Uuid` you set is normalized to the lowercase hyphenated
+form, so the `Callback` message carries that form. An empty `Uuid` gets a
+generated one. An invalid `Uuid` is replaced with a generated one, and the SDK
+logs one warning that does not include the value. The SDK applies this rule
+before `BeforeSend` and again to a `Uuid` that `BeforeSend` sets.
+
+#### Timestamps
+
+The event `timestamp`, the batch `created_at` and the
+`PostHog-Request-Timestamp` header are sent in UTC with at least millisecond
+digits, for example `2025-01-02T03:04:05.000Z`. The SDK keeps finer precision
+from your `Timestamp` or the clock, up to nanoseconds. 1.x dropped trailing
+zeros from event timestamps, so a timestamp on a whole second had no fraction.
+
+#### Session and window IDs
+
+The SDK sends `$session_id` and `$window_id` as top-level fields of the event,
+because capture reads them there and requires strings. A value whose JSON form
+is a string is sent as that string: a `string`, including `""`, a named string
+type, or a `uuid.UUID`. Any other value is dropped, and the SDK logs a warning
+for each drop that names the key and the value's type, never the value. A `nil`
+value counts as unset and drops without a warning. In 1.x the SDK sent any
+value as a property.
+
+#### Event properties
+
+`$lib` and `$lib_version` are no longer sent in properties. SDK identity
+travels in the `PostHog-Sdk-Info` header, which is always
+`posthog-go/<version>`, and the backend sets both properties from it. If you
+set them explicitly, the SDK removes them before it sends the event, so stored
+events always report `posthog-go`. `BeforeSend` still sees the value you set.
+
+`Capture.Library` and `Exception.Library` (added in 1.33) are removed. One
+request carries one header, so a per-event library name cannot reach the
+backend. `posthogmcp` events now report `posthog-go`, like every other event.
+Delete the field.
+
+`$lib_version` now reports the SDK version from a Go test binary too. 1.x
+reported `1.0.0` from any test binary, including your application's own.
+
+`Config.DefaultEventProperties` are now defaults too. The SDK fills them in
+before `BeforeSend`, only for keys that the event and the request context left
+unset. A key set to `nil` counts as set, so it keeps the default out.
+`RequestContext.Properties` fill in the same way and win over the defaults. In
+1.x the default value overwrote the event's value, except for an event's
+`$process_person_profile: false`.
+
+`$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. When the
+event and a default both set one of them to a map, the default adds only the
+keys the event left out. For example, a default
+`"$set": {"plan": "free", "source": "web"}` and an event
+`"$set": {"plan": "pro"}` send `{"plan": "pro", "source": "web"}`. In 1.x the
+default replaced the event's whole map. `Capture.Groups` now merges into a
+`$groups` map in `Properties` and wins key by key; in 1.x it replaced it.
+
+`BeforeSend` sees the filled `DefaultEventProperties`,
+`RequestContext.Properties` and SDK values (below), and can change or remove
+them. Its changes are
+final. The request context's session ID is part of the event's identity, so it
+is set as `$session_id` first, unless the event has its own.
+
+`DefaultEventProperties` now apply to `Exception`, `Identify`, `Alias` and
+`GroupIdentify` events too, not only to `Capture`. For `Identify`, `Alias` and
+`GroupIdentify` they fill the new `EventProperties` field: the properties of
+the event itself, separate from the `$set` or `$group_set` that `Properties`
+sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
+`GroupIdentify.EventProperties` merges under `Properties`, which win key by
+key. The `Config.Callback` message for an `Alias` does not include its
+`EventProperties`.
+
+The values the SDK adds are defaults too. The SDK fills them before
+`BeforeSend`, only for keys the caller left unset:
+
+- `$is_server`, from `Config.IsServer`
+- `$geoip_disable`, from `Config.DisableGeoIP`
+- `$os`, `$os_version`, `$os_distro` and `$go_version`
+- `$feature/<key>` and `$active_feature_flags`, from a `Flags` snapshot or
+  `SendFeatureFlags`
+
+All of them fill last, under the event, the request context and
+`DefaultEventProperties`. So a `$feature/<key>` set in the request context or
+`DefaultEventProperties` wins over the flag value, and one set in the event's
+own `Properties` wins over both.
+
+In 1.x the SDK overwrote the values you set for `$is_server`,
+`$geoip_disable` and the system properties. So a
+`DefaultEventProperties` value of `$geoip_disable: false` now turns GeoIP
+lookup back on for events, even when `Config.DisableGeoIP` is on. Feature flag
+requests still follow `Config.DisableGeoIP`. The `IsServer` and `DisableGeoIP`
+fields of a message report the values left after `BeforeSend`. To change
+them, set the properties.
+
+A minimal `$feature_flag_called` event, which the server can turn on for
+flags without an experiment, is trimmed to its fixed set of properties before
+`BeforeSend`. The hook sees only that set, and the properties it adds are
+sent. In 1.x the trim ran after `BeforeSend` and removed them.
+
+For the feature flag properties, the only change is that a `$feature/<key>`
+set on the event or in the request context now wins over `SendFeatureFlags`.
+A `Flags` snapshot already let them win, and `DefaultEventProperties` already
+beat the flag values on both paths.
+
+#### Compression
+
+`Content-Encoding` must be one of `gzip`, `deflate`, `br` or `zstd`. The
+legacy `lz64` and `base64` encodings and the `?compression=` query parameter
+are gone. If a configured codec fails at runtime the batch is still sent,
+uncompressed.
+
+#### Per-event validation
+
+These are rejected individually inside an otherwise successful batch, and
+surface as `*CaptureEventError`:
+
+- event names longer than 200 bytes
+- distinct IDs longer than 200 bytes
+- `$performance_event`
+- properties that are not a JSON object
+- an event option value PostHog cannot read (`Details` is `invalid_options`,
+  see [Event options](#new-event-options))
+
+The event name limit is new: 1.x sent events to legacy capture, which had no
+limit on event name length. Check your event names before you upgrade.
+
+Each event needs its own uuid. When a request contains the same uuid more than
+once, capture keeps the first event and drops the later copies. The SDK reports
+each dropped copy to `Callback.Failure` as a `*CaptureEventError` with `Result`
+`drop` and `Details` `duplicate_event_uuid`, and never retries it. Older capture
+versions reject the whole request with a 400, which the SDK reports as a
+`*CaptureRequestError` (`duplicate_event_uuid`).
+
+#### Non-finite numbers
+
+A `float64` NaN or ±Inf property value is sent as `null` and the event is kept,
+as in 1.36.1 and later. A struct value that holds one is sent as `null` as a whole.
+Unlike 1.36.1 and later, v2 does not re-validate each encoded event. An event
+whose only non-finite numbers are `float32` values, or whose custom
+`MarshalJSON` returns invalid JSON, can be sent as invalid JSON, and capture
+then rejects the whole request it is in.
+
+### New: event options
+
+Capture v1 reads per-event processing controls, such as person profile
+processing, from an `options` object sent next to `properties`. Every message
+type (`Capture`, `Identify`, `Alias`, `GroupIdentify` and `Exception`) has an
+`Options` field, and it works the same with `Enqueue` and `EnqueueAI`:
+
+```go
+client.Enqueue(posthog.Capture{
+    DistinctId: "user-123",
+    Event:      "signed_up",
+    Options:    posthog.NewOptions().Set("process_person_profile", false),
+})
+```
+
+Keys are strings and values are any JSON-serializable value. The SDK sends
+options unchanged, so an option that PostHog adds later needs no SDK upgrade.
+PostHog validates them: it ignores keys it does not know, reads common forms
+of a known key's value (for a boolean, `"yes"`, `"off"` or `0`), and drops the
+event if a known key has a value it cannot read. That drop reaches
+`Callback.Failure` as a `*CaptureEventError` whose `Details` is
+`invalid_options`. A `BeforeSend` hook can read and change `Options` like
+`Properties`, and `Options` is never nil inside the hook.
+
+The legacy option properties, the `$`-prefixed properties legacy capture reads
+as settings, still work. The SDK removes each one from `properties` and moves
+it into its option:
+
+| Legacy option property | Option |
+| --- | --- |
+| `$process_person_profile` | `process_person_profile` |
+| `$cookieless_mode` | `cookieless_mode` |
+| `$ignore_sent_at` | `disable_skew_correction` |
+| `$product_tour_id` | `product_tour_id` |
+
+When both are set, the option wins. An option set to `nil` counts as not
+set, so the legacy property applies.
+
+Options can also be set for every event and for a request:
+
+- `Config.DefaultEventOptions` applies to every `Capture`, `Exception`,
+  `Identify`, `Alias` and `GroupIdentify` event, like
+  `Config.DefaultEventProperties`.
+- `RequestContext.Options` applies to every event sent with
+  `EnqueueWithContext` or `EnqueueAIWithContext`, like
+  `RequestContext.Properties`. A child context inherits its parent's options.
+
+These layers now reach `Identify`, `Alias` and `GroupIdentify` events, and so
+does a `$process_person_profile` property in `DefaultEventProperties` or
+`RequestContext.Properties`. In 1.x none of them did. PostHog drops an
+`$identify`, `$create_alias` or `$groupidentify` event that has person
+processing off, with an ingestion warning. `Callback` does not report the
+drop, because capture accepts the event. So do not turn person processing off
+in `DefaultEventOptions`, `DefaultEventProperties` or a request context. Set
+it on each message that needs it instead.
+
+The event's `Options` come first. Before `BeforeSend`, the SDK fills each
+option that is still missing or `nil`, from these layers in order:
+`RequestContext.Options`, then `DefaultEventOptions`, then the SDK's
+personless default (below). So a `nil` event option still gets the default.
+`BeforeSend` sees the filled options and can change or remove them. To turn a
+default off for one event, set the option to `false` on the event or in
+`BeforeSend`. To change an option in `BeforeSend`, set it in `Options`: a
+legacy property that the hook adds does not replace an option that is already
+set.
+
+Review your `BeforeSend` hooks for the new message shape. A hook that returns
+a new message must copy `Options`, or the event is sent without them. That
+includes the personless default below, so PostHog would create a person for
+the generated ID.
+
+An option at any layer wins over the matching legacy property at any layer.
+For example, `DefaultEventOptions` with `cookieless_mode: true` wins over an
+event's `$cookieless_mode: false`, and the SDK still removes
+`$cookieless_mode` from the properties. When you move a default to options,
+move the per-event overrides of that key to options too.
+
+When a `Capture` or `Exception` with a request context has no distinct ID, the
+SDK generates
+one and sets the option `process_person_profile: false`, so it does not create
+a person for every generated ID. A default, request-context or event option
+can turn processing back on; a legacy `$process_person_profile` property
+cannot. `posthogmcp` sets the same option on events without an identity, and
+on events whose properties set `$process_person_profile: false`. This covers
+tool calls and the `$mcp_unknown_tool`, `$mcp_input_required` and
+`$mcp_missing_capability` events.
+
+`posthogmcp.ToolCall` has a new `Options` field, and tool calls also take
+`RequestContext.Options`. The call's options override the request context's.
+The other MCP events take the same layers through `EventContext.Options`.
+A call without an identity always gets `process_person_profile: false`, whatever
+its options say. With an identity, a `process_person_profile` option overrides
+a `$process_person_profile: false` property.
+
+`posthogmcp` events take `RequestContext.Properties` under the call's
+properties with any client, as in 1.x, and `RequestContext.Options` under the
+call's options in the same way. The call's values win, and the context's values win over
+`DefaultEventProperties` and `DefaultEventOptions`. `posthogmcp` still drops
+the reserved keys, such as `$mcp_*`, `$set` and `$session_id`, from the
+context properties and sanitizes their values first.
+
+Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
+
+- PostHog now reads common forms of the value, so
+  `"$process_person_profile": "false"` turns person processing off. 1.x
+  ignored that string.
+- A value PostHog cannot read, such as `"$process_person_profile": "maybe"`,
+  now drops the event as `invalid_options`. 1.x kept the event and ignored the
+  value, except for `$cookieless_mode`, where any non-boolean value failed the
+  whole batch.
+
+If you used `CaptureModeAnalyticsV1`, note that the SDK no longer converts
+these values or silently removes the ones it cannot read. PostHog validates
+them as described above.
+
+Minimal `$feature_flag_called` events now keep the legacy option properties,
+so they get those options. 1.x removed them from these events.
+
+### New: AI events
+
+`EnqueueAI` sends to PostHog's dedicated AI capture endpoint, which accepts
+much larger events than the analytics endpoint:
+
+```go
+client.EnqueueAI(posthog.Capture{
+    DistinctId: "user-1",
+    Event:      "$ai_generation",
+    Properties: props,
+})
+```
+
+It runs on its own queue, batching and retry state, started on first use.
+Routing is by method: `Enqueue` never reroutes an `$ai_`-prefixed event, so
+existing code keeps sending those as ordinary analytics events. `EnqueueAI`
+accepts every message type and does no routing check of its own: capture
+decides, and returns a per-event drop for an event the AI endpoint does not
+take. `Flush` and `FlushWithContext` also wait for the AI lane once
+`EnqueueAI` has started it.
+
+The AI lane's size limits are fixed, because they track the endpoint: an event
+over 8 MiB plus 64 KiB of envelope headroom is refused locally, and a batch
+closes at about 5 MiB. `MaxEventBytes` and `MaxBatchBytes` do not apply to it.
+
+Tune it with `Config.CaptureAICompression`, `Config.CaptureAIMaxQueueSize` and
+`Config.CaptureAIBatchUploadTimeout` (30s, longer than the analytics lane's
+because AI batches are much larger).
+`CaptureAICompression` does not inherit `Compression`: AI requests are sent
+uncompressed unless you set it. The AI lane does not use `MaxQueueSize` or
+`BatchUploadTimeout` either. It shares `BatchSize`, `Interval`, `MaxRetries`,
+`RetryAfter`, `MaxRetryBackoff`, `Callback`, `BeforeSend`,
+`HistoricalMigration`, `DefaultEventProperties` and `DefaultEventOptions`
+with the analytics lane.
+Use `EnqueueAIWithContext` from HTTP handlers, as you would
+`EnqueueWithContext`. It takes a `Client` rather than an `EnqueueClient`,
+because only a real client has an AI lane.
