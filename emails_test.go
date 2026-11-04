@@ -259,9 +259,9 @@ func TestEmailsSendCodeLeavesOutEmptyCopiesAndAttachments(t *testing.T) {
 
 func TestEmailsSendNamesAFieldTheServerDoesNotTakeYet(t *testing.T) {
 	server := newEmailServer(t, stubReply{status: http.StatusBadRequest, body: `{
-		"type": "invalid_request",
-		"code": "invalid_request",
-		"detail": "PostHog doesn't take this field yet, so it didn't send the email.",
+		"type": "validation_error",
+		"code": "invalid_input",
+		"detail": "PostHog doesn't take this field, so it doesn't send the email without it.",
 		"attr": "attachments"
 	}`})
 	client := newEmailClient(t, server)
@@ -442,6 +442,7 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 		{name: "blank cc", email: code(func(e *CodeEmail) { e.Cc = []string{""} }), code: "invalid_cc", field: "Cc"},
 		{name: "blank bcc", email: code(func(e *CodeEmail) { e.Bcc = []string{"a@example.com", "\t"} }), code: "invalid_bcc", field: "Bcc"},
 		{name: "attachment without a filename", email: code(func(e *CodeEmail) { e.Attachments = []EmailAttachment{{Content: []byte("hi")}} }), code: "invalid_attachment", field: "Attachments[0].Filename"},
+		{name: "attachment with a blank filename", email: code(func(e *CodeEmail) { e.Attachments = []EmailAttachment{{Filename: " ", Content: []byte("hi")}} }), code: "invalid_attachment", field: "Attachments[0].Filename"},
 		{name: "attachment without content", email: code(func(e *CodeEmail) {
 			e.Attachments = []EmailAttachment{{Filename: "a.txt", Content: []byte("hi")}, {Filename: "b.txt", Content: []byte{}}}
 		}), code: "invalid_attachment", field: "Attachments[1].Content"},

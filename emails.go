@@ -144,15 +144,15 @@ type CodeEmail struct {
 type EmailAttachment struct {
 	// Filename is the name the recipient sees, such as "invoice.pdf", with no
 	// path.
-	Filename string
+	Filename string `json:"filename"`
 	// Content is the file's bytes. The client sends them Base64 encoded.
-	Content []byte
+	Content []byte `json:"content"`
 	// ContentType is a MIME type, such as "application/pdf". Without it, the
 	// type follows from Filename.
-	ContentType string
+	ContentType string `json:"content_type,omitempty"`
 	// ContentID shows the file inline: the HTML references it as
 	// <img src="cid:logo"> when ContentID is "logo".
-	ContentID string
+	ContentID string `json:"content_id,omitempty"`
 }
 
 // SendEmailResult is an email that PostHog queued.
@@ -205,27 +205,18 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string                `json:"to"`
-	TemplateKey       string                `json:"template_key"`
-	Subject           string                `json:"subject"`
-	HTML              string                `json:"html,omitempty"`
-	Text              string                `json:"text,omitempty"`
-	From              string                `json:"from,omitempty"`
-	ReplyTo           []string              `json:"reply_to,omitempty"`
-	Cc                []string              `json:"cc,omitempty"`
-	Bcc               []string              `json:"bcc,omitempty"`
-	Attachments       []emailAttachmentBody `json:"attachments,omitempty"`
-	CaptureEngagement bool                  `json:"capture_engagement"`
-	DistinctID        string                `json:"distinct_id,omitempty"`
-}
-
-// emailAttachmentBody is one attachment on the wire. encoding/json writes a
-// []byte as standard Base64, the encoding PostHog reads.
-type emailAttachmentBody struct {
-	Filename    string `json:"filename"`
-	Content     []byte `json:"content"`
-	ContentType string `json:"content_type,omitempty"`
-	ContentID   string `json:"content_id,omitempty"`
+	To                string            `json:"to"`
+	TemplateKey       string            `json:"template_key"`
+	Subject           string            `json:"subject"`
+	HTML              string            `json:"html,omitempty"`
+	Text              string            `json:"text,omitempty"`
+	From              string            `json:"from,omitempty"`
+	ReplyTo           []string          `json:"reply_to,omitempty"`
+	Cc                []string          `json:"cc,omitempty"`
+	Bcc               []string          `json:"bcc,omitempty"`
+	Attachments       []EmailAttachment `json:"attachments,omitempty"`
+	CaptureEngagement bool              `json:"capture_engagement"`
+	DistinctID        string            `json:"distinct_id,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -278,9 +269,8 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 			}
 		}
 	}
-	attachments, invalid := attachmentBodies(e.Attachments)
-	if invalid != nil {
-		return emailSend{}, invalid
+	if err := checkAttachments(e.Attachments); err != nil {
+		return emailSend{}, err
 	}
 	body, err := encodeEmailBody(codeEmailBody{
 		To:                e.To,
@@ -292,7 +282,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		ReplyTo:           e.ReplyTo,
 		Cc:                e.Cc,
 		Bcc:               e.Bcc,
-		Attachments:       attachments,
+		Attachments:       e.Attachments,
 		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
 	})
@@ -302,21 +292,17 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	return newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
 }
 
-// attachmentBodies refuses an attachment without a name or bytes before any
-// request. Its error never holds the file's content.
-func attachmentBodies(attachments []EmailAttachment) ([]emailAttachmentBody, *EmailError) {
-	bodies := make([]emailAttachmentBody, 0, len(attachments))
+func checkAttachments(attachments []EmailAttachment) *EmailError {
 	for i, attachment := range attachments {
 		field := "Attachments[" + strconv.Itoa(i) + "]"
-		if attachment.Filename == "" {
-			return nil, invalidEmail("invalid_attachment", field+".Filename", "An attachment needs a Filename, such as \"invoice.pdf\".")
+		if strings.TrimSpace(attachment.Filename) == "" {
+			return invalidEmail("invalid_attachment", field+".Filename", "An attachment needs a Filename, such as \"invoice.pdf\".")
 		}
 		if len(attachment.Content) == 0 {
-			return nil, invalidEmail("invalid_attachment", field+".Content", "An attachment needs Content, the file's bytes.")
+			return invalidEmail("invalid_attachment", field+".Content", "An attachment needs Content, the file's bytes.")
 		}
-		bodies = append(bodies, emailAttachmentBody(attachment))
 	}
-	return bodies, nil
+	return nil
 }
 
 func checkRecipient(to string) *EmailError {

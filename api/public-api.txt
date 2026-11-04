@@ -454,10 +454,10 @@ type Email interface {
 }
 
 type EmailAttachment struct {
-	Filename string
-	Content []byte
-	ContentType string
-	ContentID string
+	Filename string `json:"filename"`
+	Content []byte `json:"content"`
+	ContentType string `json:"content_type,omitempty"`
+	ContentID string `json:"content_id,omitempty"`
 }
 
 type EmailError struct {
