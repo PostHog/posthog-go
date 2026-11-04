@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -20,13 +21,13 @@ const (
 	emailSendPath      = "/api/projects/@current/messaging/send/email/"
 	emailStatusPath    = "/api/projects/@current/messaging/emails/"
 	maxEmailRetryDelay = 30 * time.Second
+	maxEmailRetries    = 9
 	maxEmailReplyBytes = 1 << 20
 	emailNotSent       = "no email was sent"
 	emailStatusNotRead = "no email status was read"
 )
 
 var (
-	emailUUIDPattern      = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	idempotencyKeyPattern = regexp.MustCompile(`^[\x21-\x7e]{1,255}$`)
 	templateKeyPattern    = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,400}$`)
 	cloudAppHosts         = map[string]string{
@@ -193,7 +194,7 @@ func (e TemplateEmail) prepare() (emailSend, *EmailError) {
 	if err := checkRecipient(e.To); err != nil {
 		return emailSend{}, err
 	}
-	if !emailUUIDPattern.MatchString(e.TemplateID) {
+	if !isHyphenatedUUID(e.TemplateID) {
 		return emailSend{}, invalidEmail("invalid_template_id", "TemplateID", "TemplateID must be the template's UUID.")
 	}
 	messageData := e.TemplateData
@@ -260,8 +261,8 @@ func newEmailSend(body []byte, idempotencyKey string, maxRetries *int) (emailSen
 	} else if !idempotencyKeyPattern.MatchString(idempotencyKey) {
 		return emailSend{}, invalidEmail("invalid_idempotency_key", "IdempotencyKey", "IdempotencyKey must be 1 to 255 visible ASCII characters without spaces.")
 	}
-	if maxRetries != nil && *maxRetries < 0 {
-		return emailSend{}, invalidEmail("invalid_max_retries", "MaxRetries", "MaxRetries must not be negative.")
+	if maxRetries != nil && (*maxRetries < 0 || *maxRetries > maxEmailRetries) {
+		return emailSend{}, invalidEmail("invalid_max_retries", "MaxRetries", "MaxRetries must be 0 to 9.")
 	}
 	return emailSend{body: body, idempotencyKey: idempotencyKey, maxRetries: maxRetries}, nil
 }
@@ -297,15 +298,20 @@ func newEmailSender(config Config, transport http.RoundTripper) *emailSender {
 		maxRetries:   *config.EmailRequestMaxRetries,
 		migratedFrom: config.MigratedFrom,
 		http: http.Client{
-			Transport: transport,
-			// A redirect would move the secret key or turn the send into a GET.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			Transport:     transport,
+			CheckRedirect: keepSecretKeyAndMethodOnRedirect,
 		},
 		logger:  config.Logger,
 		backoff: NewBackoff(time.Second, 2, 0.2, maxEmailRetryDelay).Duration,
 		ctx:     ctx,
 		cancel:  cancel,
 	}
+}
+
+// keepSecretKeyAndMethodOnRedirect answers a redirect with the redirect itself,
+// since following it would move the secret key or turn a send into a GET.
+func keepSecretKeyAndMethodOnRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 func newDisabledEmailSender() *emailSender {
@@ -317,12 +323,29 @@ func newDisabledEmailSender() *emailSender {
 // so they map to their region's app host.
 func resolveEmailAppHost(endpoint, appHost string) string {
 	if appHost = strings.TrimRight(appHost, "/"); appHost != "" {
-		if cloud, ok := cloudAppHosts[appHost]; ok {
+		if cloud, ok := cloudAppHosts[canonicalHTTPSOrigin(appHost)]; ok {
 			return cloud
 		}
 		return appHost
 	}
-	return cloudAppHosts[strings.TrimRight(endpoint, "/")]
+	return cloudAppHosts[canonicalHTTPSOrigin(endpoint)]
+}
+
+// canonicalHTTPSOrigin spells an https origin the way cloudAppHosts does:
+// a lower-case host without the default port or a trailing slash.
+func canonicalHTTPSOrigin(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || strings.Trim(parsed.Path, "/") != "" {
+		return rawURL
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return rawURL
+	}
+	return "https://" + strings.ToLower(parsed.Hostname())
+}
+
+func isHyphenatedUUID(id string) bool {
+	return len(id) == 36 && uuid.Validate(id) == nil
 }
 
 func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, error) {
@@ -361,7 +384,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 }
 
 func (s *emailSender) Get(ctx context.Context, messageID string) (*EmailStatus, error) {
-	if !emailUUIDPattern.MatchString(messageID) {
+	if !isHyphenatedUUID(messageID) {
 		return nil, newEmailError("invalid_message_id", "messageID must be the message ID that Send returned.", nil)
 	}
 	finish, err := s.start(emailStatusNotRead, "Reading an email status needs Config.SecretKey, a project secret API key with the hog_flow:read or hog_flow:write scope.")
@@ -417,7 +440,6 @@ func (s *emailSender) start(nothingDone, keyNeeded string) (finish func(), err *
 		return nil, newEmailError("client_closed", "The PostHog client is shut down, so "+nothingDone+".", ErrClosed)
 	}
 	if s.appHost == "" {
-		// A custom endpoint is often an ingestion proxy, which must not receive the secret key.
 		return nil, newEmailError("missing_app_host", "The client's Endpoint is not PostHog Cloud, so the client can't tell where to send email. Set Config.AppHost to your PostHog app host.", nil)
 	}
 	if s.secretKey == "" {
@@ -442,6 +464,9 @@ func (s *emailSender) header() http.Header {
 // can fix. Every attempt carries the same header, so a send's idempotency key
 // holds across retries. A reply it returns is always a 2xx.
 func (s *emailSender) request(ctx context.Context, maxRetries int, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(s.ctx, cancel)()
 	for n := 0; ; n++ {
 		reply, err := s.do(ctx, method, url, header, body)
 		if err == nil && !reply.accepted() {
@@ -460,16 +485,12 @@ func (s *emailSender) request(ctx context.Context, maxRetries int, method, url s
 		case <-ctx.Done():
 			timer.Stop()
 			return emailReply{}, err.interruptedBy(ctx.Err())
-		case <-s.ctx.Done():
-			timer.Stop()
-			return emailReply{}, err.interruptedBy(s.ctx.Err())
 		}
 	}
 }
 
 func (s *emailSender) retryDelay(err *EmailError, attempt, maxRetries int) (time.Duration, bool) {
-	// Retrying before a longer Retry-After would break the server's rate limit.
-	if attempt >= maxRetries || !err.isRetryable() || err.RetryAfter > maxEmailRetryDelay {
+	if attempt >= maxRetries || !err.isRetryable() || asksForALongerWaitThanWeRetry(err) {
 		return 0, false
 	}
 	delay := s.backoff(attempt)
@@ -479,10 +500,16 @@ func (s *emailSender) retryDelay(err *EmailError, attempt, maxRetries int) (time
 	return delay, true
 }
 
+// asksForALongerWaitThanWeRetry is a Retry-After past the longest retry wait.
+// Retrying sooner would break the server's rate limit, so the error goes back
+// to the caller at once.
+func asksForALongerWaitThanWeRetry(err *EmailError) bool {
+	return err.RetryAfter > maxEmailRetryDelay
+}
+
 func (s *emailSender) do(ctx context.Context, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	defer context.AfterFunc(s.ctx, cancel)()
 
 	var reader io.Reader
 	if body != nil {
@@ -503,19 +530,30 @@ func (s *emailSender) do(ctx context.Context, method, url string, header http.He
 	reply.retryAfter, _ = parseRetryAfter(res.Header.Get("Retry-After"), time.Now())
 	raw, err := io.ReadAll(io.LimitReader(res.Body, maxEmailReplyBytes))
 	if err != nil {
-		// A cut-off answer can't say what PostHog decided: a send may already be
-		// queued, or a refusal may have been retryable. It stays a retryable
-		// network error, and the idempotency key keeps the retry safe. A
-		// Retry-After in the headers still holds.
-		readErr := newEmailError("network_error", "Reading PostHog's answer failed.", err)
-		readErr.RetryAfter = reply.retryAfter
-		return emailReply{}, readErr
+		return emailReply{}, cutOffAnswer(err, reply.retryAfter)
 	}
-	if json.Unmarshal(raw, &reply.fields) != nil {
-		// A reply that isn't JSON as a whole says nothing, even when its start parsed.
-		reply.fields = nil
-	}
+	reply.fields = jsonObjectOrNothing(raw)
 	return reply, nil
+}
+
+// cutOffAnswer is an answer that broke off mid-body. It can't say what PostHog
+// decided: a send may already be queued, or a refusal may have been
+// retryable. So it is a retryable network error, which the idempotency key
+// keeps safe, and a Retry-After in its headers still holds.
+func cutOffAnswer(cause error, retryAfter time.Duration) *EmailError {
+	err := newEmailError("network_error", "Reading PostHog's answer failed.", cause)
+	err.RetryAfter = retryAfter
+	return err
+}
+
+// jsonObjectOrNothing decodes a whole JSON object. A body that isn't one as a
+// whole says nothing, even when its start parsed.
+func jsonObjectOrNothing(raw []byte) map[string]interface{} {
+	var fields map[string]interface{}
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil
+	}
+	return fields
 }
 
 // close stops new requests. Requests already admitted keep running.
@@ -579,7 +617,7 @@ func (r emailReply) error() *EmailError {
 }
 
 func (r emailReply) apiError(message string) *EmailError {
-	return &EmailError{Name: emailErrorName(r.status, "api_error"), Code: "api_error", Message: message, StatusCode: r.status}
+	return &EmailError{Name: emailErrorName(r.status, "api_error"), Code: "api_error", Message: message, StatusCode: r.status, RetryAfter: r.retryAfter}
 }
 
 func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {

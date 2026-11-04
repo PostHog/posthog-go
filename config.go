@@ -230,8 +230,9 @@ type Config struct {
 	// https://posthog.example.com for a self-hosted instance. If empty, a
 	// PostHog Cloud Endpoint maps to its region's app host, us.posthog.com or
 	// eu.posthog.com. Any other Endpoint may be a reverse proxy for ingestion,
-	// so the secret key never goes there: without AppHost, email requests fail
-	// with the code missing_app_host.
+	// so email requests never go there: without AppHost, they fail with the
+	// code missing_app_host. SecretKey also turns on local flag evaluation,
+	// which fetches flag definitions from Endpoint with it.
 	AppHost string
 
 	// EmailRequestTimeout is the timeout of each Client.Emails request. If
@@ -239,7 +240,7 @@ type Config struct {
 	EmailRequestTimeout time.Duration
 
 	// EmailRequestMaxRetries is the number of retries of a Client.Emails
-	// request after its first attempt. If nil, it defaults to
+	// request after its first attempt, 0 to 9. If nil, it defaults to
 	// DefaultEmailRequestMaxRetries. Set Ptr(0) when a job runner already
 	// retries the send, and pass an IdempotencyKey that names the email.
 	EmailRequestMaxRetries *int
@@ -440,9 +441,9 @@ func (c *Config) validateEmailOptions() error {
 		}
 	}
 
-	if c.EmailRequestMaxRetries != nil && *c.EmailRequestMaxRetries < 0 {
+	if c.EmailRequestMaxRetries != nil && (*c.EmailRequestMaxRetries < 0 || *c.EmailRequestMaxRetries > maxEmailRetries) {
 		return ConfigError{
-			Reason: "negative email request retries are not supported",
+			Reason: "email request max retries out of range [0,9]",
 			Field:  "EmailRequestMaxRetries",
 			Value:  *c.EmailRequestMaxRetries,
 		}

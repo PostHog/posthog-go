@@ -269,6 +269,8 @@ func TestEmailsAppHost(t *testing.T) {
 		{name: "legacy app host", endpoint: "https://app.posthog.com", want: "https://us.posthog.com"},
 		{name: "explicit app host wins", endpoint: "https://us.i.posthog.com", appHost: "https://posthog.example.com/", want: "https://posthog.example.com"},
 		{name: "explicit cloud ingestion host maps", endpoint: "https://proxy.example.com", appHost: "https://eu.i.posthog.com", want: "https://eu.posthog.com"},
+		{name: "ingestion host with the default port and upper case", endpoint: "https://EU.i.PostHog.com:443/", want: "https://eu.posthog.com"},
+		{name: "explicit cloud host with the default port", endpoint: "https://proxy.example.com", appHost: "https://us.i.posthog.com:443", want: "https://us.posthog.com"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -354,6 +356,8 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 		{name: "blank reply-to", email: code(func(e *CodeEmail) { e.ReplyTo = []string{"a@example.com", " "} }), code: "invalid_reply_to", field: "ReplyTo"},
 		{name: "code idempotency key", email: code(func(e *CodeEmail) { e.IdempotencyKey = "é" }), code: "invalid_idempotency_key", field: "IdempotencyKey"},
 		{name: "code negative retries", email: code(func(e *CodeEmail) { e.MaxRetries = Ptr(-2) }), code: "invalid_max_retries", field: "MaxRetries"},
+		{name: "more than nine retries", email: template(func(e *TemplateEmail) { e.MaxRetries = Ptr(10) }), code: "invalid_max_retries", field: "MaxRetries"},
+		{name: "template ID with braces", email: template(func(e *TemplateEmail) { e.TemplateID = "{" + testTemplateID + "}" }), code: "invalid_template_id", field: "TemplateID"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -642,6 +646,11 @@ func TestEmailsSendAnswersWithoutACode(t *testing.T) {
 			want:  EmailError{Name: EmailErrorApplication, Code: "api_error", Message: "PostHog answered without a message ID.", StatusCode: http.StatusAccepted},
 		},
 		{
+			name:  "accepted without a message ID keeps Retry-After",
+			reply: stubReply{status: http.StatusAccepted, body: `{}`, header: map[string]string{"Retry-After": "60"}},
+			want:  EmailError{Name: EmailErrorApplication, Code: "api_error", Message: "PostHog answered without a message ID.", StatusCode: http.StatusAccepted, RetryAfter: time.Minute},
+		},
+		{
 			name:  "proxy error page",
 			reply: stubReply{status: http.StatusBadGateway, body: "<html>Bad gateway</html>"},
 			want:  EmailError{Name: EmailErrorApplication, Code: "api_error", Message: "PostHog answered HTTP 502.", StatusCode: http.StatusBadGateway},
@@ -862,7 +871,6 @@ func TestEmailsCloseWaitsForASendInItsRetryBackoff(t *testing.T) {
 
 	require.NoError(t, client.Close())
 
-	// The retry's request reached the server before Close returned.
 	require.Len(t, server.received(), 2, "Close returned before the send settled")
 	select {
 	case err := <-sent:
@@ -908,6 +916,7 @@ func TestConfigRejectsInvalidEmailOptions(t *testing.T) {
 	}{
 		{name: "negative timeout", config: Config{EmailRequestTimeout: -time.Second}, field: "EmailRequestTimeout"},
 		{name: "negative retries", config: Config{EmailRequestMaxRetries: Ptr(-1)}, field: "EmailRequestMaxRetries"},
+		{name: "more retries than the other request options take", config: Config{EmailRequestMaxRetries: Ptr(10)}, field: "EmailRequestMaxRetries"},
 		{name: "migrated from with a space", config: Config{MigratedFrom: "send grid"}, field: "MigratedFrom"},
 		{name: "migrated from with a line break", config: Config{MigratedFrom: "resend\r\nX-Evil: 1"}, field: "MigratedFrom"},
 	}
