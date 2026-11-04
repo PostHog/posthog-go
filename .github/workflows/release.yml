@@ -129,6 +129,9 @@ jobs:
             (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go@v${NEW_VERSION}")
           done
 
+      - name: Regenerate SDK reference
+        run: python3 bin/docs_scripts/generate_markdown.py --latest
+
       - name: Check for version bump changes
         id: check-changes
         run: |

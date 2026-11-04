@@ -9,6 +9,8 @@ var _ Message = (*Identify)(nil)
 // Identify represents an identify call that sets person properties for a user.
 // Enqueue validates that DistinctId is set, fills Type, Uuid, Timestamp, and
 // DisableGeoIP, then sends the message as a $identify event.
+//
+// posthog-capability: identify
 type Identify struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.

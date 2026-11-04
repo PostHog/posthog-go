@@ -31,6 +31,8 @@ type SlogCaptureHandler struct {
 //	    return "my-user-id" // or pull from ctx
 //	  }),
 //	))
+//
+// posthog-capability: capture-exception
 func NewSlogCaptureHandler(next slog.Handler, client EnqueueClient, opts ...SlogOption) *SlogCaptureHandler {
 	cfg := defaultCaptureConfig()
 	for _, opt := range opts {
