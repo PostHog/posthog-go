@@ -294,6 +294,9 @@ type CodeEmail struct {
 	Text string
 	From    string
 	ReplyTo []string
+	Cc []string
+	Bcc []string
+	Attachments []EmailAttachment
 	CaptureEngagement *bool
 	DistinctID string
 	IdempotencyKey string
@@ -448,6 +451,13 @@ type DescriptionExtractor interface {
 
 
 type Email interface {
+}
+
+type EmailAttachment struct {
+	Filename string
+	Content []byte
+	ContentType string
+	ContentID string
 }
 
 type EmailError struct {
