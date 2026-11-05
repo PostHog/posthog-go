@@ -382,6 +382,8 @@ type Config struct {
 
 	AppHost string
 
+	AllowInsecureAppHost bool
+
 	EmailRequestTimeout time.Duration
 
 	EmailRequestMaxRetries *int

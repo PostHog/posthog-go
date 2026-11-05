@@ -54,6 +54,7 @@ type EmailError struct {
 	Code    string
 	Message string
 	// StatusCode is the HTTP status when PostHog answered, and 0 otherwise.
+	// A network_error keeps the status of an answer that broke off mid-body.
 	StatusCode int
 	Why        string
 	Fix        string
@@ -137,11 +138,16 @@ func emailErrorName(status int, code string) EmailErrorName {
 }
 
 // isRetryable says whether waiting can fix the error. A send carries an
-// idempotency key, so a retry can't queue a second email.
+// idempotency key, so a retry can't queue a second email. A network_error is
+// retryable whatever its status: an answer cut off mid-body can't say what
+// PostHog decided, and the retry's full answer does.
 func (e *EmailError) isRetryable() bool {
+	if e.Code == "network_error" {
+		return true
+	}
 	switch e.StatusCode {
 	case 0:
-		return e.Code == "network_error"
+		return false
 	case http.StatusConflict:
 		return e.Code == "idempotency_key_in_flight"
 	case http.StatusTooManyRequests:

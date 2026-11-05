@@ -90,7 +90,7 @@ func failed(status int, code string) stubReply {
 type emailClientOption func(*Config)
 
 func newEmailClient(t *testing.T, server *emailServer, options ...emailClientOption) Client {
-	config := Config{Endpoint: server.URL, AppHost: server.URL, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
+	config := Config{Endpoint: server.URL, AppHost: server.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
 	for _, option := range options {
 		option(&config)
 	}
@@ -342,10 +342,11 @@ func TestEmailsSendLogsWarnings(t *testing.T) {
 
 func TestEmailsAppHost(t *testing.T) {
 	tests := []struct {
-		name     string
-		endpoint string
-		appHost  string
-		want     string
+		name          string
+		endpoint      string
+		appHost       string
+		allowInsecure bool
+		want          string
 	}{
 		{name: "default endpoint", want: "https://us.posthog.com"},
 		{name: "US ingestion host", endpoint: "https://us.i.posthog.com", want: "https://us.posthog.com"},
@@ -356,6 +357,7 @@ func TestEmailsAppHost(t *testing.T) {
 		{name: "explicit cloud ingestion host maps", endpoint: "https://proxy.example.com", appHost: "https://eu.i.posthog.com", want: "https://eu.posthog.com"},
 		{name: "ingestion host with the default port and upper case", endpoint: "https://EU.i.PostHog.com:443/", want: "https://eu.posthog.com"},
 		{name: "explicit cloud host with the default port", endpoint: "https://proxy.example.com", appHost: "https://us.i.posthog.com:443", want: "https://us.posthog.com"},
+		{name: "explicit http app host with AllowInsecureAppHost", appHost: "http://localhost:8010", allowInsecure: true, want: "http://localhost:8010"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -364,7 +366,7 @@ func TestEmailsAppHost(t *testing.T) {
 				gotURL = r.URL.String()
 				return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(`{"message_id":"msg_1"}`)), Header: http.Header{}}, nil
 			})
-			client, err := NewWithConfig("phc_test", Config{Endpoint: tt.endpoint, AppHost: tt.appHost, SecretKey: "phs_test", Transport: transport})
+			client, err := NewWithConfig("phc_test", Config{Endpoint: tt.endpoint, AppHost: tt.appHost, AllowInsecureAppHost: tt.allowInsecure, SecretKey: "phs_test", Transport: transport})
 			require.NoError(t, err)
 			defer client.Close()
 
@@ -546,7 +548,7 @@ func (b cutOffBody) Read(p []byte) (int, error) {
 func (cutOffBody) Close() error { return nil }
 
 func TestEmailsSendRetriesACutOffAnswer(t *testing.T) {
-	for _, status := range []int{http.StatusConflict, http.StatusAccepted} {
+	for _, status := range []int{http.StatusBadRequest, http.StatusConflict, http.StatusAccepted} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			attempts := 0
 			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -594,6 +596,8 @@ func TestEmailsSendKeepsRetryAfterOfACutOffAnswer(t *testing.T) {
 
 		emailErr := requireEmailError(t, err)
 		require.Equal(t, "network_error", emailErr.Code)
+		require.Equal(t, EmailErrorServiceUnavailable, emailErr.Name)
+		require.Equal(t, http.StatusTooManyRequests, emailErr.StatusCode)
 		require.Equal(t, 60*time.Second, emailErr.RetryAfter)
 	})
 
@@ -792,7 +796,7 @@ func TestEmailsSendHonorsTheRequestTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 	defer close(release)
-	client, err := NewWithConfig("phc_test", Config{Endpoint: server.URL, AppHost: server.URL, SecretKey: "phs_test", EmailRequestTimeout: 50 * time.Millisecond, EmailRequestMaxRetries: Ptr(0)})
+	client, err := NewWithConfig("phc_test", Config{Endpoint: server.URL, AppHost: server.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", EmailRequestTimeout: 50 * time.Millisecond, EmailRequestMaxRetries: Ptr(0)})
 	require.NoError(t, err)
 	defer client.Close()
 
@@ -1005,7 +1009,10 @@ func TestConfigRejectsInvalidEmailOptions(t *testing.T) {
 		name   string
 		config Config
 		field  string
+		reason string
 	}{
+		{name: "http app host", config: Config{AppHost: "http://posthog.example.com"}, field: "AppHost", reason: "AllowInsecureAppHost"},
+		{name: "http app host in upper case", config: Config{AppHost: "HTTP://localhost:8010"}, field: "AppHost", reason: "AllowInsecureAppHost"},
 		{name: "negative timeout", config: Config{EmailRequestTimeout: -time.Second}, field: "EmailRequestTimeout"},
 		{name: "negative retries", config: Config{EmailRequestMaxRetries: Ptr(-1)}, field: "EmailRequestMaxRetries"},
 		{name: "more retries than the other request options take", config: Config{EmailRequestMaxRetries: Ptr(10)}, field: "EmailRequestMaxRetries"},
@@ -1019,6 +1026,7 @@ func TestConfigRejectsInvalidEmailOptions(t *testing.T) {
 			var configErr ConfigError
 			require.True(t, errors.As(err, &configErr), "want ConfigError, got %v", err)
 			require.Equal(t, tt.field, configErr.Field)
+			require.Contains(t, configErr.Reason, tt.reason)
 		})
 	}
 }

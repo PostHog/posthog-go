@@ -151,7 +151,7 @@ type Client interface {
 	// Emails sends transactional email from PostHog email templates or from
 	// content your code rendered, and reads the status of each email it sent.
 	// It needs Config.SecretKey, a project secret API key with the
-	// hog_flow:write scope. Close waits for email requests in flight, and a
+	// transactional_email:write scope. Close waits for email requests in flight, and a
 	// request after Close fails with the code client_closed.
 	Emails() Emails
 }
@@ -226,6 +226,10 @@ type client struct {
 	// This HTTP client is used to send requests to the backend, it uses the
 	// HTTP transport provided in the configuration.
 	http http.Client
+
+	// secretKeyHTTP sends the requests that carry the secret key. See
+	// secretKeyHTTPClient.
+	secretKeyHTTP http.Client
 
 	// A background poller for fetching feature flags
 	featureFlagsPoller *FeatureFlagsPoller
@@ -309,6 +313,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
+	c.secretKeyHTTP = secretKeyHTTPClient(config, c.http)
 	c.emails = newEmailSender(config, c.http.Transport)
 
 	if config.CaptureMode == CaptureModeAnalyticsV1 {
@@ -328,8 +333,8 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.key,
 			secretKey,
 			c.Logger,
-			c.Endpoint,
-			c.http,
+			c.Config.secretKeyHost(),
+			c.secretKeyHTTP,
 			c.DefaultFeatureFlagsPollingInterval,
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
@@ -1982,7 +1987,7 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 }
 
 func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
-	baseURL, err := url.JoinPath(c.Endpoint, "api/projects/@current/feature_flags", flagKey, "remote_config")
+	baseURL, err := url.JoinPath(c.Config.secretKeyHost(), "api/projects/@current/feature_flags", flagKey, "remote_config")
 	if err != nil {
 		return "", fmt.Errorf("building URL: %v", err)
 	}
@@ -2011,7 +2016,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "posthog-go/"+Version)
 
-	res, err := c.http.Do(req)
+	res, err := c.secretKeyHTTP.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("sending request: %v", err)
 	}

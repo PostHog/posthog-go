@@ -43,9 +43,10 @@ var (
 // one recipient per call, and reads the status of an email it sent.
 //
 // It needs Config.SecretKey, a project secret API key (phs_...) with the
-// hog_flow:write scope. A key with only hog_flow:read can read statuses but
-// not send. Requests go to Config.AppHost, or to the PostHog Cloud app host of
-// Config.Endpoint.
+// transactional_email:write scope, the "Send transactional email" preset in
+// your project settings. A key with only transactional_email:read can read
+// statuses but not send. Keys made with hog_flow:write still work. Requests go
+// to Config.AppHost, or to the PostHog Cloud app host of Config.Endpoint.
 //
 // Every error is an *EmailError. Network errors, rate limits, an idempotency
 // key in flight and an unavailable service are retried up to
@@ -413,7 +414,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	if err != nil {
 		return nil, err
 	}
-	finish, err := s.start(emailNotSent, "Sending email needs Config.SecretKey, a project secret API key with the hog_flow:write scope.")
+	finish, err := s.start(emailNotSent, "Sending email needs Config.SecretKey, a project secret API key with the transactional_email:write scope.")
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +445,7 @@ func (s *emailSender) Get(ctx context.Context, messageID string) (*EmailStatus, 
 	if !isHyphenatedUUID(messageID) {
 		return nil, newEmailError("invalid_message_id", "messageID must be the message ID that Send returned.", nil)
 	}
-	finish, err := s.start(emailStatusNotRead, "Reading an email status needs Config.SecretKey, a project secret API key with the hog_flow:read or hog_flow:write scope.")
+	finish, err := s.start(emailStatusNotRead, "Reading an email status needs Config.SecretKey, a project secret API key with the transactional_email:read or transactional_email:write scope.")
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +588,7 @@ func (s *emailSender) do(ctx context.Context, method, url string, header http.He
 	reply.retryAfter, _ = parseRetryAfter(res.Header.Get("Retry-After"), time.Now())
 	raw, err := io.ReadAll(io.LimitReader(res.Body, maxEmailReplyBytes))
 	if err != nil {
-		return emailReply{}, cutOffAnswer(err, reply.retryAfter)
+		return emailReply{}, cutOffAnswer(err, reply.status, reply.retryAfter)
 	}
 	reply.fields = jsonObjectOrNothing(raw)
 	return reply, nil
@@ -596,9 +597,10 @@ func (s *emailSender) do(ctx context.Context, method, url string, header http.He
 // cutOffAnswer is an answer that broke off mid-body. It can't say what PostHog
 // decided: a send may already be queued, or a refusal may have been
 // retryable. So it is a retryable network error, which the idempotency key
-// keeps safe, and a Retry-After in its headers still holds.
-func cutOffAnswer(cause error, retryAfter time.Duration) *EmailError {
+// keeps safe. Its status line and a Retry-After in its headers still hold.
+func cutOffAnswer(cause error, status int, retryAfter time.Duration) *EmailError {
 	err := newEmailError("network_error", "Reading PostHog's answer failed.", cause)
+	err.StatusCode = status
 	err.RetryAfter = retryAfter
 	return err
 }

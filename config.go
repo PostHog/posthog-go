@@ -231,9 +231,16 @@ type Config struct {
 	// PostHog Cloud Endpoint maps to its region's app host, us.posthog.com or
 	// eu.posthog.com. Any other Endpoint may be a reverse proxy for ingestion,
 	// so email requests never go there: without AppHost, they fail with the
-	// code missing_app_host. SecretKey also turns on local flag evaluation,
-	// which fetches flag definitions from Endpoint with it.
+	// code missing_app_host. It must use https unless AllowInsecureAppHost is
+	// set. When AppHost is set, every request that carries SecretKey goes to
+	// it: email requests, flag definitions for local evaluation, and remote
+	// config payloads. Without AppHost, flag requests use Endpoint.
 	AppHost string
+
+	// AllowInsecureAppHost lets Client.Emails send to an http AppHost, such as
+	// http://localhost:8010 during local development. Email requests carry
+	// SecretKey and the email itself, so over http both travel unencrypted.
+	AllowInsecureAppHost bool
 
 	// EmailRequestTimeout is the timeout of each Client.Emails request. If
 	// zero, it defaults to DefaultEmailRequestTimeout.
@@ -337,6 +344,26 @@ func (c *Config) effectiveSecretKey() string {
 	return c.PersonalApiKey
 }
 
+// secretKeyHost returns the host for requests that carry the secret key. An
+// explicit AppHost is the trusted PostHog host, while Endpoint may be a
+// reverse proxy for ingestion.
+func (c *Config) secretKeyHost() string {
+	if c.AppHost == "" {
+		return c.Endpoint
+	}
+	return resolveEmailAppHost(c.Endpoint, c.AppHost)
+}
+
+// secretKeyHTTPClient returns the client for requests that carry the secret
+// key. With an AppHost set, it refuses redirects: Go resends Authorization to a
+// subdomain, such as an Endpoint proxy under the AppHost domain.
+func secretKeyHTTPClient(c Config, base http.Client) http.Client {
+	if c.AppHost != "" {
+		base.CheckRedirect = keepSecretKeyAndMethodOnRedirect
+	}
+	return base
+}
+
 // Validate verifies that fields that don't have zero-values are set to valid values,
 // returns an error describing the problem if a field was invalid.
 func (c *Config) Validate() error {
@@ -427,6 +454,12 @@ func (c *Config) validateEmailOptions() error {
 		if u, err := url.Parse(c.AppHost); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return ConfigError{
 				Reason: "app host must be an http or https URL",
+				Field:  "AppHost",
+				Value:  c.AppHost,
+			}
+		} else if u.Scheme == "http" && !c.AllowInsecureAppHost {
+			return ConfigError{
+				Reason: "app host must use https, or set AllowInsecureAppHost for local development",
 				Field:  "AppHost",
 				Value:  c.AppHost,
 			}

@@ -2,6 +2,38 @@
 "posthog-go": minor
 ---
 
-Add `Client.Emails()` to send transactional email and read its status. `Send` takes a `TemplateEmail`, a template made in PostHog sent by its ID with `TemplateData`, or a `CodeEmail`, content your code rendered and named by a `TemplateKey`, with `Subject`, `HTML` and/or `Text`, `From`, `ReplyTo` and `CaptureEngagement`. `Get` reads an email's status by its message ID. Both need `Config.SecretKey`, a project secret API key with the `hog_flow:write` scope, and go to the PostHog app host: `Config.AppHost`, or the app host of a PostHog Cloud `Endpoint`. Every send carries an idempotency key, and network errors, rate limits and an unavailable service are retried with it (`Config.EmailRequestMaxRetries`, default 2). Errors are `*EmailError` values with PostHog's `Code` and a coarse `Name`. `Close` waits for email requests in flight. New `Config` options: `AppHost`, `EmailRequestTimeout`, `EmailRequestMaxRetries` and `MigratedFrom`.
+The new `Client.Emails()` sends transactional email from your Go code and reads each email's delivery status.
 
-`Client` gains the `Emails` method, so a type that implements `Client` itself needs it too.
+**Breaking for custom clients.** A type that implements `Client` itself now needs an `Emails` method.
+
+```go
+client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+if err != nil {
+	log.Fatal(err)
+}
+defer client.Close()
+
+result, err := client.Emails().Send(ctx, posthog.CodeEmail{
+	To:          "user@example.com",
+	DistinctID:  "user_123",
+	TemplateKey: "password-reset",
+	Subject:     "Reset your password",
+	HTML:        renderedHTML,
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+status, err := client.Emails().Get(ctx, result.ID)
+fmt.Println(status.Status) // "delivered", "bounced", ...
+```
+
+You can also send a template made in PostHog with a `TemplateEmail` and its `TemplateID`.
+
+You need a project secret API key, the kind that starts with `phs_`. Create one under **Project secret API keys** in your project settings. Set its **Transactional email** scope to Write to send emails, or to Read for a key that only reads statuses. Set it as `SecretKey` in `posthog.Config`. Set `AppHost` to your PostHog app URL when you self-host PostHog or send through a reverse proxy. The client also loads feature flags with this key, so give it **Feature flags: Read** too, or it logs an error each time it polls.
+
+PostHog records each email's delivery, opens and clicks on the person with that `DistinctID`. It groups every email with the same `TemplateKey`, so you see their metrics and logs in one place. The SDK retries a request that hits a network error, a rate limit or an outage twice by default. Every send carries an idempotency key, so a retry never sends the email twice. Pass your own `IdempotencyKey`, such as `welcome:user_123`, and your job runner's retries are safe too.
+
+A `CodeEmail` also takes `From`, `ReplyTo` and `CaptureEngagement: posthog.Ptr(false)`. Set `MigratedFrom` in `posthog.Config` to tell PostHog which email provider you moved from. A failed call returns an `*EmailError` with PostHog's `Code` and the HTTP `StatusCode`.
+
+Docs: [Send transactional emails with Go](https://posthog.com/docs/workflows/transactional-emails/go) and the [transactional email overview](https://posthog.com/docs/workflows/transactional-emails).
