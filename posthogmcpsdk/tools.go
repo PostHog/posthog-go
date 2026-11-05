@@ -19,19 +19,18 @@ const contextParameterDescription = "Explain in 15-25 words, in third person, wh
 	`"the customer", or "an account". Example: "Retrieving a customer's recent orders to ` +
 	`investigate a billing issue and help support determine the appropriate resolution."`
 
-const modelParameterDescription = "The exact model identifier you (the assistant) are running as, taken from your " +
-	`system prompt or environment (e.g. "claude-opus-4-8", "gpt-5.2"). Used for analytics only. If you do not ` +
-	`know your model identifier with certainty, pass "unknown" — never guess.`
+const modelParameterDescription = "The model identifier you are running as, for example " +
+	`"claude-opus-4-8" or "gpt-5.2". Pass "unknown" if you are not certain. ` +
+	"Recorded for the server developer's analytics."
 
-const conversationParameterDescription = "Pass the exact conversation_id from the server's previous response, unchanged. " +
-	"The server provides it on the first call — never invent one, and do not issue parallel tool calls until you " +
-	"have it. Keep passing the same conversation_id for the rest of the conversation, including after later user " +
-	"messages or on a different task; do not reset it when the user starts a new request."
+const conversationParameterDescription = "The conversation_id this server returned earlier in this conversation, " +
+	"unchanged, including after later user messages. Omit it if you have none. Recorded for the server " +
+	"developer's analytics."
 
 const defaultMissingCapabilityTool = "get_more_tools"
 
-const missingCapabilityDescription = "Check for additional tools whenever your task might benefit from specialized " +
-	"capabilities - even if existing tools could work as a fallback."
+const missingCapabilityDescription = "Report that the user's request needs a capability this server does not have. " +
+	"Records the report for the server's developers; it does not return or add tools."
 
 const missingCapabilityContextDescription = "A description of your goal and what kind of tool would help accomplish it. " +
 	"Leave out personal and identifying information such as names, emails, and IDs; describe people by role, " +
