@@ -151,7 +151,7 @@ type Client interface {
 	// Emails sends transactional email from PostHog email templates or from
 	// content your code rendered, and reads the status of each email it sent.
 	// It needs Config.SecretKey, a project secret API key with the
-	// hog_flow:write scope. Close waits for email requests in flight, and a
+	// transactional_email:write scope. Close waits for email requests in flight, and a
 	// request after Close fails with the code client_closed.
 	Emails() Emails
 }

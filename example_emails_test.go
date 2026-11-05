@@ -10,7 +10,7 @@ import (
 )
 
 // A template made transactional in PostHog, sent by its ID. The secret key is
-// a project secret API key with the hog_flow:write scope.
+// a project secret API key with the transactional_email:write scope.
 func ExampleEmails_template() {
 	client, err := posthog.NewWithConfig("phc_...", posthog.Config{
 		Endpoint:  "https://eu.i.posthog.com",
