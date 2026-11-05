@@ -4,7 +4,7 @@ sidebar: Docs
 showTitle: true
 ---
 
-## Migrating to posthog-go v2
+# Migrating to posthog-go v2
 
 v2 makes capture v1 the only capture path. The legacy `/batch/` pipeline is
 removed, along with the `Config.CaptureMode` switch that chose between them.
@@ -13,7 +13,7 @@ For the changes every capture v1 SDK shares, such as event options, limits
 and per-event results, see
 [Upgrading to capture v1 SDKs](https://posthog.com/docs/libraries/capture-v1).
 
-### Import path
+## Import path
 
 Go requires the major version in the module path:
 
@@ -35,7 +35,7 @@ Subpackages such as `posthogmcp` move with it, to `github.com/posthog/posthog-go
 The MCP Go SDK adapter is a separate module that moves in lockstep with the core, so import `github.com/posthog/posthog-go/posthogmcpsdk/v2`.
 The `otel` bridge imports the core SDK, so it also moves in lockstep with the core: import `github.com/posthog/posthog-go/otel/v2`.
 
-### Constructors
+## Constructors
 
 `New` now returns `(Client, error)`, like `NewWithConfig`. Handle the error
 before using or closing the client:
@@ -66,7 +66,7 @@ error and install middleware that changes nothing. The `otel` bridge's
 personal API key: they log one error and return an exporter or processor that
 exports nothing. They still return an error for an invalid `WithHost`.
 
-### Config
+## Config
 
 `Config.CaptureMode` is gone. If you opted into v1, delete the field — it is
 now the only behavior:
@@ -119,7 +119,7 @@ Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
 `MaxBatchBytes`, `MaxQueueSize` or `CaptureAIMaxQueueSize`. Only zero selects
 the default.
 
-### Groups
+## Groups
 
 `Groups` is now `map[string]string`, and `Groups.Set` takes a string value. A
 group key identifies a group, so numbers, maps and other values no longer
@@ -138,12 +138,12 @@ groups := posthog.NewGroups().Set("company", strconv.FormatInt(companyID, 10))
 v1 bucketed a numeric group key for feature flags by its decimal form, so a key
 converted this way keeps every group in the same rollout bucket and variant.
 
-### Behavior changes
+## Behavior changes
 
 None of these produce a compile error, so read them even if your code builds
 unchanged.
 
-#### Endpoint and network path
+### Endpoint and network path
 
 Events are sent to `POST /i/v1/analytics/events` instead of `POST /batch/`.
 
@@ -172,7 +172,7 @@ upgrade:
 PostHog's managed reverse proxy already does this. See the
 [proxy guides](https://posthog.com/docs/advanced/proxy).
 
-#### Redirects
+### Redirects
 
 A capture request follows only `307` and `308` redirects, and only to the same
 scheme, host and port as `Endpoint`, at most 5 times. It resends the same body
@@ -183,7 +183,7 @@ and headers. Any other redirect fails the batch without a retry:
 to another host received the events and the API key. Feature flag requests are
 unchanged.
 
-#### Request context
+### Request context
 
 `RequestContext.Properties` and `RequestContext.Options` now apply to
 `Identify`, `Alias` and `GroupIdentify` events sent with `EnqueueWithContext`,
@@ -209,7 +209,7 @@ per-event result `distinct_id_too_large`, which reaches `Callback.Failure` as a
 `CaptureEventError`. 1.x sent events to legacy capture, which shortened the ID
 to 200 characters and kept the event.
 
-#### Group identify distinct ID
+### Group identify distinct ID
 
 `GroupIdentify.DistinctId` is now sent as the event's distinct ID. If it is
 empty, the SDK uses the request context's distinct ID, then `$<type>_<key>`.
@@ -218,13 +218,13 @@ as `$<type>_<key>`.
 If `$<type>_<key>` is over 200 bytes, set `DistinctId`, or PostHog drops the
 event.
 
-#### Authentication
+### Authentication
 
 The project API key moves from an `api_key` body field to an
 `Authorization: Bearer <key>` header. Anything that inspected, logged or
 rewrote the request body to find the key needs updating.
 
-#### Delivery results are per event
+### Delivery results are per event
 
 The old endpoint accepted or rejected a whole batch. v1 returns a result for
 each event, and the client only re-sends the events the backend asks it to
@@ -285,8 +285,9 @@ same message from `Failure`, because it fails again and the calls recurse.
 This was also true in 1.x.
 
 Without a `Callback`, the SDK logs one warning each time a request loses
-events, never one per event, for example `analytics: 3 event(s) dropped:
-&lt;cause>; set Config.Callback to inspect failures`. For a failed request the
+events, never one per event, for example
+`analytics: 3 event(s) dropped: <cause>; set Config.Callback to inspect failures`.
+For a failed request the
 cause is the error text, which can include PostHog's error description, as
 1.x logged the response body. Events that still fail after the last retry are
 logged as an error instead, with or without a `Callback`, for example
@@ -297,7 +298,7 @@ Capture log lines now start with the lane name, `analytics:` or
 match the 1.x text. With `Verbose` on, 1.x logged every queued message in
 full. v2 logs batch counts and sizes, not the messages.
 
-#### Retries
+### Retries
 
 Retryable statuses are `404`, `408`, `429`, `500`, `502`, `503` and `504`,
 plus network errors. 1.x did not retry `404`, and retried every `5xx`; other
@@ -313,7 +314,7 @@ that fail together do not all retry at the same moment. `DefaultBackoff()`
 now has the same jitter; in 1.x it had none. A server `Retry-After` stays the
 minimum wait. A custom `Config.RetryAfter` is used as given.
 
-#### OpenTelemetry exception trace IDs
+### OpenTelemetry exception trace IDs
 
 `posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and
 `$span_id` only when neither the event nor the request context sets either
@@ -322,7 +323,7 @@ got the active span's `$span_id`.
 The helper cannot see `Config.DefaultEventProperties`, so a `$trace_id` or
 `$span_id` set there does not stop the derived pair, which wins over it.
 
-#### Event IDs
+### Event IDs
 
 The SDK generates UUIDv7 values for event `Uuid`s, the `PostHog-Request-Id`
 header and the distinct ID of a personless capture. It falls back to v4 if v7
@@ -332,7 +333,7 @@ generated one. An invalid `Uuid` is replaced with a generated one, and the SDK
 logs one warning that does not include the value. The SDK applies this rule
 before `BeforeSend` and again to a `Uuid` that `BeforeSend` sets.
 
-#### Timestamps
+### Timestamps
 
 The event `timestamp`, the batch `created_at` and the
 `PostHog-Request-Timestamp` header are sent in UTC with at least millisecond
@@ -340,7 +341,7 @@ digits, for example `2025-01-02T03:04:05.000Z`. The SDK keeps finer precision
 from your `Timestamp` or the clock, up to nanoseconds. 1.x dropped trailing
 zeros from event timestamps, so a timestamp on a whole second had no fraction.
 
-#### Session and window IDs
+### Session and window IDs
 
 The SDK sends `$session_id` and `$window_id` as top-level fields of the event,
 because capture reads them there and requires strings. A value whose JSON form
@@ -350,7 +351,7 @@ for each drop that names the key and the value's type, never the value. A `nil`
 value counts as unset and drops without a warning. In 1.x the SDK sent any
 value as a property.
 
-#### Event properties
+### Event properties
 
 `$lib` and `$lib_version` are no longer sent in properties. SDK identity
 travels in the `PostHog-Sdk-Info` header, which is always
@@ -428,14 +429,14 @@ set on the event or in the request context now wins over `SendFeatureFlags`.
 A `Flags` snapshot already let them win, and `DefaultEventProperties` already
 beat the flag values on both paths.
 
-#### Compression
+### Compression
 
 `Content-Encoding` must be one of `gzip`, `deflate`, `br` or `zstd`. The
 legacy `lz64` and `base64` encodings and the `?compression=` query parameter
 are gone. If a configured codec fails at runtime the batch is still sent,
 uncompressed.
 
-#### Per-event validation
+### Per-event validation
 
 These are rejected individually inside an otherwise successful batch, and
 surface as `*CaptureEventError`:
@@ -457,7 +458,7 @@ each dropped copy to `Callback.Failure` as a `*CaptureEventError` with `Result`
 versions reject the whole request with a 400, which the SDK reports as a
 `*CaptureRequestError` (`duplicate_event_uuid`).
 
-#### Non-finite numbers
+### Non-finite numbers
 
 A `float64` NaN or ±Inf property value is sent as `null` and the event is kept,
 as in 1.36.1 and later. A struct value that holds one is sent as `null` as a whole.
@@ -466,7 +467,7 @@ whose only non-finite numbers are `float32` values, or whose custom
 `MarshalJSON` returns invalid JSON, can be sent as invalid JSON, and capture
 then rejects the whole request it is in.
 
-### New: event options
+## New: event options
 
 Capture v1 reads per-event processing controls, such as person profile
 processing, from an `options` object sent next to `properties`. Every message
@@ -584,7 +585,7 @@ them as described above.
 Minimal `$feature_flag_called` events now keep the legacy option properties,
 so they get those options. 1.x removed them from these events.
 
-### New: AI events
+## New: AI events
 
 `EnqueueAI` sends to PostHog's dedicated AI capture endpoint, which accepts
 much larger events than the analytics endpoint:
