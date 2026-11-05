@@ -24,7 +24,8 @@ const modelParameterDescription = "The model identifier you are running as, for 
 	"Recorded for the server developer's analytics."
 
 const conversationParameterDescription = "The conversation_id this server returned earlier in this conversation, " +
-	"unchanged. Omit it if you have none. Recorded for the server developer's analytics."
+	"unchanged, including after later user messages. Omit it if you have none. Recorded for the server " +
+	"developer's analytics."
 
 const defaultMissingCapabilityTool = "get_more_tools"
 
