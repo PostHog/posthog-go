@@ -149,10 +149,6 @@ func (in *instrumentation) capturesInMiddleware(ctx context.Context) bool {
 // here, so it is never captured.
 func (in *instrumentation) runsAsTask(ctx context.Context, req mcp.CallToolRequest) bool {
 	tool, _ := in.registeredTool(ctx, req.Params.Name)
-	return taskRun(tool, req)
-}
-
-func taskRun(tool mcp.Tool, req mcp.CallToolRequest) bool {
 	return req.Params.Task != nil && tool.Execution != nil &&
 		(tool.Execution.TaskSupport == mcp.TaskSupportOptional || tool.Execution.TaskSupport == mcp.TaskSupportRequired)
 }
@@ -202,10 +198,12 @@ func (in *instrumentation) unregistered(ctx context.Context, session server.Clie
 }
 
 // beforeCall starts tracking a call to a tool the middleware wraps, so calls to
-// unknown tools, task tools, and tools run as tasks are never captured.
+// unknown tools and task tools are never captured. A call run as a task is
+// tracked until mcp-go answers it: an error, such as a tool filter's denial
+// before any task exists, is captured, and the task it creates is not.
 func (in *instrumentation) beforeCall(ctx context.Context, _ any, req *mcp.CallToolRequest) {
 	defer in.recoverHook(ctx, "before tools/call")
-	if tool, wrapped := in.registeredTool(ctx, req.Params.Name); !wrapped || !in.ours(ctx) || taskRun(tool, *req) {
+	if _, wrapped := in.registeredTool(ctx, req.Params.Name); !wrapped || !in.ours(ctx) {
 		return
 	}
 	in.calls.start(req, callStart{at: time.Now(), protocolVersion: in.protocols.of(server.ClientSessionFromContext(ctx))})

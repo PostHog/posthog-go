@@ -114,15 +114,20 @@ intent. Examples are `additionalProperties: false` (which
 `WithStrictInputSchemaDefault` sets on every tool), `unevaluatedProperties`,
 `minProperties` (removing the added arguments would leave fewer properties
 than it requires), `maxProperties`, `propertyNames`, `patternProperties`,
-`not`, `if`, `$ref`, and `allOf`. A schema that refers back to its root with
-`"$ref": "#"` anywhere is also left unchanged, because a required argument
-added at the root would apply to every nested object that refers to it.
+`not`, `if`, `$ref`, and `allOf`. A schema that may refer back to its root
+anywhere is also left unchanged, because a required argument added at the root
+would apply to every nested object that refers to it. That is any `$ref` other
+than a pointer below the root such as `"#/$defs/item"` (so `"#"`, an anchor, or
+a URI that may name the root's `$id`), and any `$dynamicRef` or
+`$recursiveRef`.
 
 Task tools, registered with `AddTaskTool`, are listed unchanged and their
 calls are not captured, because mcp-go runs no tool handler middleware for
 them. A regular tool that supports tasks gets its analytics arguments removed
-when called as a task, but the call sends no event: mcp-go answers it with the
-task, and the adapter does not observe the task's final status.
+when called as a task. If mcp-go refuses the call before creating a task, for
+example because a tool filter denies the tool, the failure is captured.
+Otherwise the call sends no event: mcp-go answers it with the task, and the
+adapter does not observe the task's final status.
 
 ## The llm_model argument
 

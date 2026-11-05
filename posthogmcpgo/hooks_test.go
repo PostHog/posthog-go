@@ -46,6 +46,11 @@ func TestInstrumentKeepsValidatingServersAcceptingAdvertisedCalls(t *testing.T) 
 		{name: "a ref that is not the root", schema: `{"type":"object","properties":{"n":{"$ref":"#/$defs/count"}},"$defs":{"count":{"type":"integer"}}}`, wantInjected: true},
 		{name: "minProperties", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"minProperties":1}`},
 		{name: "a recursive property", schema: `{"type":"object","properties":{"n":{"type":"integer"},"child":{"$ref":"#"}}}`},
+		{name: "a ref to the root's $id", schema: `{"$id":"https://example.test/node","type":"object","properties":{"child":{"$ref":"https://example.test/node"}}}`},
+		{name: "a relative ref, which may resolve to the root", schema: `{"$id":"https://example.test/node","type":"object","properties":{"child":{"$ref":"node"}}}`},
+		{name: "a ref to a root anchor", schema: `{"type":"object","properties":{"child":{"$ref":"#self"}}}`},
+		{name: "a dynamic ref", schema: `{"type":"object","properties":{"child":{"$dynamicRef":"#meta"}}}`},
+		{name: "a recursive ref", schema: `{"type":"object","properties":{"child":{"$recursiveRef":"#"}}}`},
 		{name: "a recursive definition", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"$defs":{"tree":{"type":"object","properties":{"kids":{"type":"array","items":{"$ref":"#"}}}}}}`},
 		{name: "no properties", schema: `{"type":"object"}`, wantInjected: true},
 		{name: "additionalProperties false", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"additionalProperties":false}`},
@@ -233,6 +238,49 @@ func TestInstrumentWithTaskAugmentedCalls(t *testing.T) {
 				t.Fatal("the handler never ran")
 			}
 			assert.Never(t, func() bool { return len(queue.toolCalls()) > 0 }, 200*time.Millisecond, 10*time.Millisecond)
+		})
+	}
+}
+
+// TestInstrumentCapturesTaskCallsDeniedBeforeATaskExists calls a tool that a
+// tool filter denies, which mcp-go refuses before it would create a task.
+func TestInstrumentCapturesTaskCallsDeniedBeforeATaskExists(t *testing.T) {
+	for _, asTask := range []bool{false, true} {
+		t.Run(fmt.Sprintf("as task %t", asTask), func(t *testing.T) {
+			queue := &fakeQueue{}
+			denied := false
+			s := server.NewMCPServer("weather-server", "1.2.3",
+				server.WithToolCapabilities(true),
+				server.WithTaskCapabilities(true, true, true),
+				Instrument(posthogmcp.New(queue)),
+				server.WithToolFilter(func(_ context.Context, tools []mcp.Tool) []mcp.Tool {
+					if denied {
+						return nil
+					}
+					return tools
+				}),
+			)
+			s.AddTool(mcp.NewTool("forecast", mcp.WithString("city"), mcp.WithTaskSupport(mcp.TaskSupportOptional)),
+				func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					t.Error("the handler ran")
+					return mcp.NewToolResultText("Sunny"), nil
+				})
+			c := connectInProcess(t, s)
+			denied = true
+
+			req := mcp.CallToolRequest{}
+			req.Params.Name = "forecast"
+			req.Params.Arguments = map[string]any{"city": "Paris", "context": "Planning a trip"}
+			if asTask {
+				task := mcp.NewTaskParams(nil)
+				req.Params.Task = &task
+			}
+			_, err := c.CallTool(t.Context(), req)
+			require.Error(t, err)
+
+			captures := queue.toolCalls()
+			require.Len(t, captures, 1)
+			assert.Equal(t, true, captures[0].Properties["$mcp_is_error"])
 		})
 	}
 }

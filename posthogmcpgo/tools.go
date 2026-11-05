@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -143,20 +144,31 @@ var openSchemaKeywords = map[string]func(value any) bool{
 	"writeOnly":            anything,
 }
 
-// refersToRoot is whether a "$ref": "#" appears anywhere in a decoded schema.
-func refersToRoot(value any) bool {
+// mayReferToRoot is whether a decoded schema holds a reference that could
+// resolve to its root: any $dynamicRef or $recursiveRef, and any $ref other
+// than a JSON pointer below the root ("#/..."), such as "#", an anchor, or a
+// URI that may name the root's $id. Resolving them is left to validators.
+func mayReferToRoot(value any) bool {
 	switch value := value.(type) {
 	case map[string]any:
-		if value["$ref"] == "#" {
+		if _, dynamic := value["$dynamicRef"]; dynamic {
 			return true
 		}
+		if _, recursive := value["$recursiveRef"]; recursive {
+			return true
+		}
+		if ref, isRef := value["$ref"]; isRef {
+			if pointer, ok := ref.(string); !ok || !strings.HasPrefix(pointer, "#/") {
+				return true
+			}
+		}
 		for _, nested := range value {
-			if refersToRoot(nested) {
+			if mayReferToRoot(nested) {
 				return true
 			}
 		}
 	case []any:
-		return slices.ContainsFunc(value, refersToRoot)
+		return slices.ContainsFunc(value, mayReferToRoot)
 	}
 	return false
 }
@@ -175,14 +187,14 @@ func anything(any) bool { return true }
 
 // extensibleSchema decodes a JSON schema that accepts any extra property, so
 // arguments can be added to it. Numbers stay json.Number, so a large integer
-// survives being encoded again. A schema that refers back to its root is left
-// out, since a required argument added at the root would also apply to every
-// nested object that refers to it.
+// survives being encoded again. A schema that may refer back to its root is
+// left out, since a required argument added at the root would also apply to
+// every nested object that refers to it.
 func extensibleSchema(raw json.RawMessage) (map[string]any, bool) {
 	var schema map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	if decoder.Decode(&schema) != nil || decoder.More() || schema == nil || refersToRoot(schema) {
+	if decoder.Decode(&schema) != nil || decoder.More() || schema == nil || mayReferToRoot(schema) {
 		return nil, false
 	}
 	for keyword, value := range schema {

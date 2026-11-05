@@ -81,8 +81,8 @@ func WithCaptureResponses(enabled bool) Option {
 // context argument in which the agent states why it is calling the tool,
 // captured as the event's intent. The argument is removed before the tool's
 // handler sees the call. Tools that declare their own context argument keep
-// it, and their value is still captured as the intent. It is enabled by
-// default.
+// it, and its value is captured as tool data in $mcp_parameters, not as the
+// intent. It is enabled by default.
 func WithContextParameter(enabled bool) Option {
 	return func(cfg *config) { cfg.contextParameter = enabled }
 }
