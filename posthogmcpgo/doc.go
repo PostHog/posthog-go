@@ -1,11 +1,11 @@
 // Package posthogmcpgo captures PostHog MCP analytics for servers built with
 // github.com/mark3labs/mcp-go.
 //
-// [Instrument] returns a server option that records every tools/call that
-// reaches a registered tool's handler as a $mcp_tool_call event through a
-// [posthogmcp.Analytics], with the same properties the posthogmcpsdk adapter
-// and the Python and TypeScript SDKs send. A returned error or an isError
-// result marks the call as failed. Analytics errors and panics never change
+// [Instrument] returns a server option that records every tools/call to a
+// registered tool as a $mcp_tool_call event through a [posthogmcp.Analytics],
+// with the same properties the posthogmcpsdk adapter and the Python and
+// TypeScript SDKs send. A returned error or an isError result the client
+// receives, including a schema validation failure, marks the call as failed. Analytics errors and panics never change
 // the MCP response.
 //
 // Like the other SDKs, it advertises a required context argument on each

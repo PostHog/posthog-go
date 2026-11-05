@@ -110,3 +110,39 @@ func fnv1aHex(input string) string {
 	}
 	return fmt.Sprintf("%08x%08x", lane1, lane2)
 }
+
+// protocolVersions are the protocol versions negotiated by initialize on
+// one-client connections (stdio, in-process, SSE), until the session ends.
+// Streamable HTTP sends the version in a header on every request instead.
+type protocolVersions struct {
+	mu       sync.Mutex
+	versions map[server.ClientSession]string
+}
+
+func newProtocolVersions() *protocolVersions {
+	return &protocolVersions{versions: map[server.ClientSession]string{}}
+}
+
+func (p *protocolVersions) record(session server.ClientSession, version string) {
+	if _, streamable := session.(server.SessionWithStreamableHTTPConfig); streamable || session == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.versions[session] = version
+}
+
+func (p *protocolVersions) of(session server.ClientSession) string {
+	if session == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.versions[session]
+}
+
+func (p *protocolVersions) forget(session server.ClientSession) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.versions, session)
+}

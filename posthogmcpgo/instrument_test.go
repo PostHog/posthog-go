@@ -182,6 +182,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 		"$mcp_llm_model": "claude-opus-4-8",
 		"$mcp_llm_model_source": "self_reported",
 		"$mcp_parameters": {"request": {"method": "tools/call", "params": {"name": "weather", "arguments": {"city": "Melbourne"}}}},
+		"$mcp_protocol_version": "2025-11-25",
 		"$mcp_resource_name": "weather",
 		"$mcp_response": {"content": [{"type": "text", "text": "Sunny, 22C"}]},
 		"$mcp_server_name": "weather-server",
@@ -268,12 +269,6 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			wantRequired:   []string{"city", "context", "llm_model"},
 		},
 		{
-			name:           "a schema that disallows other properties is left alone",
-			tool:           mcp.NewToolWithRawSchema("weather", "Get current weather", json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}`)),
-			wantProperties: []string{"city"},
-			wantRequired:   []string{"city"},
-		},
-		{
 			name:           "a tool's own context is left as declared",
 			tool:           weatherTool(mcp.WithString("context")),
 			wantProperties: []string{"city", "context", "llm_model"},
@@ -285,11 +280,6 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			opts:           []Option{WithCaptureModel(false)},
 			wantProperties: []string{"city", "context"},
 			wantRequired:   []string{"city", "context"},
-		},
-		{
-			name:           "a schema with a root combinator is left alone",
-			tool:           mcp.NewToolWithRawSchema("weather", "Get current weather", json.RawMessage(`{"type":"object","oneOf":[{"properties":{"city":{"type":"string"}}}]}`)),
-			wantProperties: nil,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

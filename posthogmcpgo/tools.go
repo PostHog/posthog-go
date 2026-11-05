@@ -2,6 +2,8 @@ package posthogmcpgo
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -30,6 +32,10 @@ var (
 	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription}
 )
 
+func (argument analyticsArgument) schema() map[string]any {
+	return map[string]any{"type": "string", "description": argument.description}
+}
+
 // toolInfo is what instrumentation knows about a registered tool.
 type toolInfo struct {
 	description string
@@ -41,24 +47,32 @@ type toolInfo struct {
 
 // present returns tool as clients should see it, with the analytics arguments
 // it does not declare added to its input schema, and what instrumentation
-// knows about it. The registered tool is never modified.
+// knows about it. The schema keeps its representation, typed or raw, and the
+// registered tool is never modified.
 func present(tool mcp.Tool, arguments []analyticsArgument) (mcp.Tool, toolInfo) {
 	info := toolInfo{description: tool.Description}
 	if tool.Meta != nil {
 		info.category, _ = tool.Meta.AdditionalFields["category"].(string)
 	}
-	schema, injected := withArguments(inputSchema(tool), arguments)
-	if len(injected) == 0 {
+	schema, ok := extensibleSchema(inputSchema(tool))
+	if !ok {
 		return tool, info
 	}
-	encoded, err := json.Marshal(schema)
-	if err != nil {
+	properties, _ := schema["properties"].(map[string]any)
+	var added []analyticsArgument
+	for _, argument := range arguments {
+		if _, declared := properties[argument.name]; !declared {
+			added = append(added, argument)
+		}
+	}
+	advertised, err := withArguments(tool, schema, added)
+	if len(added) == 0 || err != nil {
 		return tool, info
 	}
-	tool.InputSchema = mcp.ToolInputSchema{}
-	tool.RawInputSchema = encoded
-	info.injected = injected
-	return tool, info
+	for _, argument := range added {
+		info.injected = append(info.injected, argument.name)
+	}
+	return advertised, info
 }
 
 func inputSchema(tool mcp.Tool) json.RawMessage {
@@ -69,58 +83,88 @@ func inputSchema(tool mcp.Tool) json.RawMessage {
 	return encoded
 }
 
-// withArguments returns a copy of inputSchema that declares each of arguments
-// the schema does not, all required, and the names it added. A schema whose
-// properties cannot be extended safely is left alone.
-func withArguments(inputSchema json.RawMessage, arguments []analyticsArgument) (map[string]any, []string) {
-	schema, properties, ok := extensibleSchema(inputSchema)
-	if !ok {
-		return nil, nil
-	}
-	required, _ := schema["required"].([]any)
-	var injected []string
-	for _, argument := range arguments {
-		if _, declared := properties[argument.name]; declared {
-			continue
+// withArguments returns tool with arguments added to its input schema, all
+// required, in the representation the tool uses. schema is the decoded raw
+// schema, which it may change.
+func withArguments(tool mcp.Tool, schema map[string]any, arguments []analyticsArgument) (mcp.Tool, error) {
+	if tool.RawInputSchema != nil {
+		properties, _ := schema["properties"].(map[string]any)
+		if properties == nil {
+			properties = map[string]any{}
+			schema["properties"] = properties
 		}
-		properties[argument.name] = map[string]any{"type": "string", "description": argument.description}
-		required = append(required, argument.name)
-		injected = append(injected, argument.name)
-	}
-	if len(required) > 0 {
+		required, _ := schema["required"].([]any)
+		for _, argument := range arguments {
+			properties[argument.name] = argument.schema()
+			required = append(required, argument.name)
+		}
 		schema["required"] = required
+		encoded, err := json.Marshal(schema)
+		tool.RawInputSchema = encoded
+		return tool, err
 	}
-	return schema, injected
+	properties := maps.Clone(tool.InputSchema.Properties)
+	if properties == nil {
+		properties = map[string]any{}
+	}
+	required := slices.Clone(tool.InputSchema.Required)
+	for _, argument := range arguments {
+		properties[argument.name] = argument.schema()
+		required = append(required, argument.name)
+	}
+	tool.InputSchema.Properties, tool.InputSchema.Required = properties, required
+	return tool, nil
 }
 
-// extensibleSchema decodes a JSON schema whose properties can be extended
-// safely, and its properties: an object schema, or one without a type, that
-// allows other properties, with no $ref, allOf, anyOf, or oneOf at its root,
-// whose properties, if any, are an object.
-func extensibleSchema(raw json.RawMessage) (schema, properties map[string]any, ok bool) {
+// openSchemaKeywords are the root keywords that cannot make a schema reject an
+// extra property. mcp-go's WithInputSchemaValidation checks a call against the
+// registered schema before any middleware runs, so a schema with any other
+// root keyword (unevaluatedProperties, maxProperties, propertyNames,
+// patternProperties, not, if, $ref, allOf, and the rest) could reject the
+// added arguments, and is left unchanged.
+var openSchemaKeywords = map[string]func(value any) bool{
+	"type":                 func(value any) bool { return value == "object" },
+	"properties":           isObject,
+	"required":             isArray,
+	"additionalProperties": func(value any) bool { return value == true },
+	"minProperties":        anything,
+	"title":                anything,
+	"description":          anything,
+	"$schema":              anything,
+	"$id":                  anything,
+	"$comment":             anything,
+	"$defs":                anything,
+	"definitions":          anything,
+	"examples":             anything,
+	"default":              anything,
+	"deprecated":           anything,
+	"readOnly":             anything,
+	"writeOnly":            anything,
+}
+
+func isObject(value any) bool {
+	_, ok := value.(map[string]any)
+	return ok
+}
+
+func isArray(value any) bool {
+	_, ok := value.([]any)
+	return ok
+}
+
+func anything(any) bool { return true }
+
+// extensibleSchema decodes a JSON schema that accepts any extra property, so
+// arguments can be added to it.
+func extensibleSchema(raw json.RawMessage) (map[string]any, bool) {
+	var schema map[string]any
 	if json.Unmarshal(raw, &schema) != nil || schema == nil {
-		return nil, nil, false
+		return nil, false
 	}
-	if kind := schema["type"]; kind != nil && kind != "object" {
-		return nil, nil, false
-	}
-	// mcp-go's WithInputSchemaValidation checks a call against the registered
-	// schema before any middleware runs, so it would reject the added arguments.
-	if schema["additionalProperties"] == false {
-		return nil, nil, false
-	}
-	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
-		if _, blocked := schema[key]; blocked {
-			return nil, nil, false
+	for keyword, value := range schema {
+		if allowed, known := openSchemaKeywords[keyword]; !known || !allowed(value) {
+			return nil, false
 		}
 	}
-	properties, ok = schema["properties"].(map[string]any)
-	if !ok {
-		if schema["properties"] != nil {
-			return nil, nil, false
-		}
-		properties = map[string]any{}
-		schema["properties"] = properties
-	}
-	return schema, properties, true
+	return schema, true
 }

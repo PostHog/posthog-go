@@ -69,10 +69,7 @@ func TestToolCallPropertiesMatchPosthogmcpsdk(t *testing.T) {
 				delete(want, volatile)
 				delete(got, volatile)
 			}
-			// mcp-go keeps no negotiated protocol version on a session, so a
-			// one-client connection cannot report it.
-			assert.NotEmpty(t, want["$mcp_protocol_version"])
-			delete(want, "$mcp_protocol_version")
+			require.NotEmpty(t, want["$mcp_protocol_version"])
 			assert.JSONEq(t, jsonString(t, want), jsonString(t, got))
 
 			sdkExceptions, exceptions := sdkQueue.exceptions(), queue.exceptions()

@@ -60,8 +60,11 @@ func (a toolArguments) hasAny(names []string) bool {
 	})
 }
 
+// without returns a copy of a without names, empty rather than nil when a is
+// absent, as posthogmcpsdk captures absent arguments.
 func (a toolArguments) without(names ...string) toolArguments {
-	kept := maps.Clone(a)
+	kept := make(toolArguments, len(a))
+	maps.Copy(kept, a)
 	for _, name := range names {
 		delete(kept, name)
 	}
