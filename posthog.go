@@ -328,7 +328,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.key,
 			secretKey,
 			c.Logger,
-			c.Endpoint,
+			c.Config.secretKeyHost(),
 			c.http,
 			c.DefaultFeatureFlagsPollingInterval,
 			c.NextFeatureFlagsPollingTick,
@@ -1982,7 +1982,7 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 }
 
 func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
-	baseURL, err := url.JoinPath(c.Endpoint, "api/projects/@current/feature_flags", flagKey, "remote_config")
+	baseURL, err := url.JoinPath(c.Config.secretKeyHost(), "api/projects/@current/feature_flags", flagKey, "remote_config")
 	if err != nil {
 		return "", fmt.Errorf("building URL: %v", err)
 	}

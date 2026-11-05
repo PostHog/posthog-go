@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,6 +305,68 @@ func TestRemoteConfigAuthUsesResolvedSecretKey(t *testing.T) {
 			require.Equal(t, tc.wantAuth, gotAuth)
 		})
 	}
+}
+
+func TestSecretKeyRequestsGoToAppHostNotEndpoint(t *testing.T) {
+	const secretKey = "phs_secret"
+	var (
+		mu           sync.Mutex
+		proxyPaths   []string
+		appHostPaths []string
+	)
+
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Authorization"), secretKey) {
+			t.Errorf("proxy got the secret key on %s", r.URL.Path)
+		}
+		mu.Lock()
+		proxyPaths = append(proxyPaths, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+
+	appHost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+secretKey {
+			t.Errorf("app host Authorization = %q on %s", got, r.URL.Path)
+		}
+		mu.Lock()
+		appHostPaths = append(appHostPaths, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/remote_config") {
+			_, _ = w.Write([]byte(`"ok"`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
+	}))
+	defer appHost.Close()
+
+	client, err := NewWithConfig("phc_test", Config{
+		Endpoint:             proxy.URL,
+		AppHost:              appHost.URL,
+		AllowInsecureAppHost: true,
+		SecretKey:            secretKey,
+		BatchSize:            1,
+	})
+	require.NoError(t, err)
+
+	payload, err := client.GetRemoteConfigPayload("test-flag")
+	require.NoError(t, err)
+	require.Equal(t, "ok", payload)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(appHostPaths, "/flags/definitions")
+	}, 5*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}))
+	require.NoError(t, client.Close())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Contains(t, appHostPaths, "/api/projects/@current/feature_flags/test-flag/remote_config")
+	require.Equal(t, []string{"/batch/"}, proxyPaths)
 }
 
 var _ Message = (*testErrorMessage)(nil)

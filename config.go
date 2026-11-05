@@ -232,8 +232,9 @@ type Config struct {
 	// eu.posthog.com. Any other Endpoint may be a reverse proxy for ingestion,
 	// so email requests never go there: without AppHost, they fail with the
 	// code missing_app_host. It must use https unless AllowInsecureAppHost is
-	// set. SecretKey also turns on local flag evaluation, which fetches flag
-	// definitions from Endpoint with it.
+	// set. When AppHost is set, every request that carries SecretKey goes to
+	// it: email requests, flag definitions for local evaluation, and remote
+	// config payloads. Without AppHost, flag requests use Endpoint.
 	AppHost string
 
 	// AllowInsecureAppHost lets Client.Emails send to an http AppHost, such as
@@ -341,6 +342,16 @@ func (c *Config) effectiveSecretKey() string {
 		return c.SecretKey
 	}
 	return c.PersonalApiKey
+}
+
+// secretKeyHost returns the host for requests that carry the secret key. An
+// explicit AppHost is the trusted PostHog host, while Endpoint may be a
+// reverse proxy for ingestion.
+func (c *Config) secretKeyHost() string {
+	if c.AppHost == "" {
+		return c.Endpoint
+	}
+	return resolveEmailAppHost(c.Endpoint, c.AppHost)
 }
 
 // Validate verifies that fields that don't have zero-values are set to valid values,
