@@ -84,9 +84,10 @@ func (in *instrumentation) advertise(ctx context.Context, tools []mcp.Tool) (adv
 		}
 	}()
 	advertised = make([]mcp.Tool, len(tools))
+	registered := in.registeredTools(ctx)
 	for i, tool := range tools {
 		advertised[i] = tool
-		if _, wrapped := in.registeredTool(ctx, tool.Name); wrapped {
+		if _, wrapped := registered(tool.Name); wrapped {
 			advertised[i], _ = present(tool, in.inject)
 		}
 	}
@@ -96,7 +97,7 @@ func (in *instrumentation) advertise(ctx context.Context, tools []mcp.Tool) (adv
 func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		dispatch := in.strip(ctx, req)
-		if !in.capturesInMiddleware(ctx, req) {
+		if in.runsAsTask(ctx, req) || !in.capturesInMiddleware(ctx) {
 			return next(ctx, dispatch)
 		}
 		started := callStart{at: time.Now(), protocolVersion: in.protocols.of(server.ClientSessionFromContext(ctx))}
@@ -130,13 +131,9 @@ func (in *instrumentation) strip(ctx context.Context, req mcp.CallToolRequest) (
 }
 
 // capturesInMiddleware is whether the middleware, rather than the call hooks,
-// captures this call: when the call runs as a task, whose hooks see the task
-// rather than the tool's result, or when the server's hooks were replaced
-// after Instrument added to them.
-func (in *instrumentation) capturesInMiddleware(ctx context.Context, req mcp.CallToolRequest) bool {
-	if tool, ok := in.registeredTool(ctx, req.Params.Name); ok && runsAsTask(tool, req) {
-		return true
-	}
+// captures this call, which is when the server's hooks were replaced after
+// Instrument added to them.
+func (in *instrumentation) capturesInMiddleware(ctx context.Context) bool {
 	if in.server.GetHooks() == in.hooks {
 		return false
 	}
@@ -147,8 +144,15 @@ func (in *instrumentation) capturesInMiddleware(ctx context.Context, req mcp.Cal
 	return true
 }
 
-// runsAsTask mirrors mcp-go's choice to run a tools/call as a task.
-func runsAsTask(tool mcp.Tool, req mcp.CallToolRequest) bool {
+// runsAsTask mirrors mcp-go's choice to run a tools/call as a task. mcp-go
+// answers such a call with the task, and the task's outcome is not observable
+// here, so it is never captured.
+func (in *instrumentation) runsAsTask(ctx context.Context, req mcp.CallToolRequest) bool {
+	tool, _ := in.registeredTool(ctx, req.Params.Name)
+	return taskRun(tool, req)
+}
+
+func taskRun(tool mcp.Tool, req mcp.CallToolRequest) bool {
 	return req.Params.Task != nil && tool.Execution != nil &&
 		(tool.Execution.TaskSupport == mcp.TaskSupportOptional || tool.Execution.TaskSupport == mcp.TaskSupportRequired)
 }
@@ -157,15 +161,25 @@ func runsAsTask(tool mcp.Tool, req mcp.CallToolRequest) bool {
 // the session's own tool of that name, else the server's, as mcp-go resolves
 // it. Task tools are not among them.
 func (in *instrumentation) registeredTool(ctx context.Context, name string) (mcp.Tool, bool) {
+	return in.registeredTools(ctx)(name)
+}
+
+// registeredTools returns registeredTool for many names, copying the session's
+// tools once.
+func (in *instrumentation) registeredTools(ctx context.Context) func(name string) (mcp.Tool, bool) {
+	var sessionTools map[string]server.ServerTool
 	if session, ok := server.ClientSessionFromContext(ctx).(server.SessionWithTools); ok {
-		if tool, ok := session.GetSessionTools()[name]; ok {
+		sessionTools = session.GetSessionTools()
+	}
+	return func(name string) (mcp.Tool, bool) {
+		if tool, ok := sessionTools[name]; ok {
 			return tool.Tool, true
 		}
+		if tool := in.server.GetTool(name); tool != nil {
+			return tool.Tool, true
+		}
+		return mcp.Tool{}, false
 	}
-	if tool := in.server.GetTool(name); tool != nil {
-		return tool.Tool, true
-	}
-	return mcp.Tool{}, false
 }
 
 // ours is whether a hook fired for this server's request. Servers can share
@@ -188,18 +202,17 @@ func (in *instrumentation) unregistered(ctx context.Context, session server.Clie
 }
 
 // beforeCall starts tracking a call to a tool the middleware wraps, so calls to
-// unknown tools and task tools are never captured.
+// unknown tools, task tools, and tools run as tasks are never captured.
 func (in *instrumentation) beforeCall(ctx context.Context, _ any, req *mcp.CallToolRequest) {
 	defer in.recoverHook(ctx, "before tools/call")
-	if _, wrapped := in.registeredTool(ctx, req.Params.Name); !wrapped || !in.ours(ctx) {
+	if tool, wrapped := in.registeredTool(ctx, req.Params.Name); !wrapped || !in.ours(ctx) || taskRun(tool, *req) {
 		return
 	}
 	in.calls.start(req, callStart{at: time.Now(), protocolVersion: in.protocols.of(server.ClientSessionFromContext(ctx))})
 }
 
 // afterCall captures a call with the result mcp-go sends, after input and
-// output schema validation. A task-augmented call's result is the task, so
-// the middleware captures it instead.
+// output schema validation.
 func (in *instrumentation) afterCall(ctx context.Context, _ any, req *mcp.CallToolRequest, result any) {
 	defer in.recoverHook(ctx, "after tools/call")
 	started, ok := in.calls.finish(req)
@@ -209,8 +222,8 @@ func (in *instrumentation) afterCall(ctx context.Context, _ any, req *mcp.CallTo
 }
 
 // callFailed captures a tools/call answered with a JSON-RPC error, such as a
-// handler's returned error. A call to an unknown tool is not a tool call, as
-// in posthogmcpsdk, and a request mcp-go cannot parse never started one.
+// handler's returned error. A call to an unknown tool never started one, as
+// in posthogmcpsdk, and neither did a request mcp-go cannot parse.
 func (in *instrumentation) callFailed(ctx context.Context, _ any, method mcp.MCPMethod, message any, err error) {
 	defer in.recoverHook(ctx, "tools/call error")
 	req, isCall := message.(*mcp.CallToolRequest)
@@ -218,7 +231,7 @@ func (in *instrumentation) callFailed(ctx context.Context, _ any, method mcp.MCP
 		return
 	}
 	started, ok := in.calls.finish(req)
-	if ok && !errors.Is(err, server.ErrToolNotFound) {
+	if ok {
 		// mcp-go wraps the handler's error in its own request error.
 		if handlerErr := errors.Unwrap(err); handlerErr != nil {
 			err = handlerErr
@@ -282,7 +295,7 @@ func (in *instrumentation) captureToolCall(
 		call.ClientName, call.ClientVersion = client.Name, client.Version
 	}
 
-	if intent := arguments.text(contextArgument); in.contextParameter && intent != "" && intent != emptyJSONObject {
+	if intent := arguments.text(contextArgument); info.injects(contextArgument) && intent != "" && intent != emptyJSONObject {
 		call.Intent, call.IntentSource = intent, posthogmcp.IntentSourceContextParameter
 	}
 	if in.captureParameters {

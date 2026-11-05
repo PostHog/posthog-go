@@ -1,9 +1,13 @@
 package posthogmcpgo
 
 import (
+	"context"
+	"io"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
@@ -22,6 +26,7 @@ func TestDeterministicSessionIDMatchesTheOtherSDKs(t *testing.T) {
 }
 
 func TestSessionIDPerTransport(t *testing.T) {
+	var sseSessionID atomic.Value
 	for _, test := range []struct {
 		name    string
 		connect func(t *testing.T, s *server.MCPServer) *client.Client
@@ -33,6 +38,28 @@ func TestSessionIDPerTransport(t *testing.T) {
 			connect: connectInProcess,
 			want: func(t *testing.T, _ *client.Client, first, second any) {
 				assert.Regexp(t, generatedSessionID, first)
+				assert.Equal(t, first, second)
+			},
+		},
+		{
+			name:    "stdio keeps one generated session",
+			connect: connectStdio,
+			want: func(t *testing.T, _ *client.Client, first, second any) {
+				assert.Regexp(t, generatedSessionID, first)
+				assert.Equal(t, first, second)
+			},
+		},
+		{
+			name: "SSE derives the session from its transport session id",
+			connect: func(t *testing.T, s *server.MCPServer) *client.Client {
+				s.GetHooks().AddOnRegisterSession(func(_ context.Context, session server.ClientSession) {
+					sseSessionID.Store(session.SessionID())
+				})
+				return connectSSE(t, s)
+			},
+			want: func(t *testing.T, _ *client.Client, first, second any) {
+				require.NotEmpty(t, sseSessionID.Load())
+				assert.Equal(t, deterministicSessionID(sseSessionID.Load().(string)), first)
 				assert.Equal(t, first, second)
 			},
 		},
@@ -83,6 +110,24 @@ func TestStreamableHTTPCapturesClientAndHeaders(t *testing.T) {
 	assert.Equal(t, "2.0.0", properties["$mcp_client_version"])
 	assert.Equal(t, mcp.LATEST_PROTOCOL_VERSION, properties["$mcp_protocol_version"])
 	assert.NotEmpty(t, properties["$mcp_client_user_agent"])
+}
+
+func connectStdio(t *testing.T, s *server.MCPServer) *client.Client {
+	t.Helper()
+	serverIn, clientOut := io.Pipe()
+	clientIn, serverOut := io.Pipe()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = server.NewStdioServer(s).Listen(ctx, serverIn, serverOut)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = clientOut.Close()
+		<-done
+	})
+	return initialize(t, client.NewClient(transport.NewIO(clientIn, clientOut, nil)))
 }
 
 func connectHTTP(opts ...server.StreamableHTTPOption) func(t *testing.T, s *server.MCPServer) *client.Client {

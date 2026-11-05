@@ -1,6 +1,7 @@
 package posthogmcpgo
 
 import (
+	"bytes"
 	"encoding/json"
 	"maps"
 	"slices"
@@ -121,13 +122,13 @@ func withArguments(tool mcp.Tool, schema map[string]any, arguments []analyticsAr
 // registered schema before any middleware runs, so a schema with any other
 // root keyword (unevaluatedProperties, maxProperties, propertyNames,
 // patternProperties, not, if, $ref, allOf, and the rest) could reject the
-// added arguments, and is left unchanged.
+// added arguments, and is left unchanged. minProperties is among them: the
+// added arguments would satisfy it, and removing them would not.
 var openSchemaKeywords = map[string]func(value any) bool{
 	"type":                 func(value any) bool { return value == "object" },
 	"properties":           isObject,
 	"required":             isArray,
 	"additionalProperties": func(value any) bool { return value == true },
-	"minProperties":        anything,
 	"title":                anything,
 	"description":          anything,
 	"$schema":              anything,
@@ -140,6 +141,24 @@ var openSchemaKeywords = map[string]func(value any) bool{
 	"deprecated":           anything,
 	"readOnly":             anything,
 	"writeOnly":            anything,
+}
+
+// refersToRoot is whether a "$ref": "#" appears anywhere in a decoded schema.
+func refersToRoot(value any) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if value["$ref"] == "#" {
+			return true
+		}
+		for _, nested := range value {
+			if refersToRoot(nested) {
+				return true
+			}
+		}
+	case []any:
+		return slices.ContainsFunc(value, refersToRoot)
+	}
+	return false
 }
 
 func isObject(value any) bool {
@@ -155,10 +174,15 @@ func isArray(value any) bool {
 func anything(any) bool { return true }
 
 // extensibleSchema decodes a JSON schema that accepts any extra property, so
-// arguments can be added to it.
+// arguments can be added to it. Numbers stay json.Number, so a large integer
+// survives being encoded again. A schema that refers back to its root is left
+// out, since a required argument added at the root would also apply to every
+// nested object that refers to it.
 func extensibleSchema(raw json.RawMessage) (map[string]any, bool) {
 	var schema map[string]any
-	if json.Unmarshal(raw, &schema) != nil || schema == nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&schema) != nil || decoder.More() || schema == nil || refersToRoot(schema) {
 		return nil, false
 	}
 	for keyword, value := range schema {

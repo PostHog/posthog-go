@@ -59,17 +59,17 @@ arguments. Middleware given after it sees them removed.
 - The session as `$session_id`, always set. On stateful streamable HTTP, the
   `Mcp-Session-Id` becomes `ses_` plus a hash every PostHog MCP SDK computes
   the same way, so replicas and SDKs in other languages agree. On stateless
-  streamable HTTP, each call gets its own `ses_<UUIDv7>`. On a one-client
-  connection (stdio, in-process, SSE), the adapter generates `ses_<UUIDv7>`
-  per mcp-go session and starts a new one after 30 minutes without a tool
-  call.
+  streamable HTTP, each call gets its own `ses_<UUIDv7>`. On SSE, the
+  transport's session id is hashed the same way. On a one-client connection
+  (stdio, in-process), the adapter generates `ses_<UUIDv7>` per mcp-go session
+  and starts a new one after 30 minutes without a tool call.
 - The client name and version from the `initialize` handshake, when the call
   arrives on the session that made it.
 - The protocol version: on HTTP from the `MCP-Protocol-Version` header, and on
   other transports the version the session negotiated in `initialize`.
 - On HTTP, the `User-Agent` and `X-Anthropic-Client` headers.
 - The tool's description and `_meta.category`, read from the registered tool.
-- The agent's intent, from the `context` argument described below.
+- The agent's intent, from the injected `context` argument described below.
 - The model that made the call, from the client's request `_meta`
   (`io.modelcontextprotocol/aiInvocation` or `x-codex-turn-metadata`) when it
   names one, else from the `llm_model` argument described below.
@@ -97,8 +97,9 @@ the agent to say in a sentence why it is calling the tool. That text is
 captured as `$mcp_intent`, with personal data redacted.
 
 The argument is removed before the tool's handler sees the call, from both
-`GetArguments` and `BindArguments`. Tools that declare their own `context`
-argument keep it, and its value is still captured as the intent. A typed
+`GetArguments` and `BindArguments`. A tool that declares its own `context`
+argument keeps it: the adapter does not advertise or remove it, and its value
+is the tool's data, captured in `$mcp_parameters` rather than as the intent. A typed
 `InputSchema` stays typed and a `RawInputSchema` stays raw, so a tool filter
 given after `Instrument` can still read `InputSchema.Properties`.
 
@@ -106,28 +107,30 @@ The adapter changes a schema only when nothing at its root could reject an
 extra property. mcp-go's `WithInputSchemaValidation` checks each call against
 the registered schema before any middleware runs, so such a schema would
 reject the calls an agent builds from the advertised one. The root may hold
-`type: "object"`, `properties`, `required`, `additionalProperties: true`,
-`minProperties`, and annotations such as `title`, `description`, `$schema`,
+`type: "object"`, `properties`, `required`, `additionalProperties: true`, and annotations such as `title`, `description`, `$schema`,
 `$id`, `$comment`, `$defs`, `definitions`, `examples`, and `default`. Any other
 root keyword leaves the schema unchanged, so calls to that tool carry no
 intent. Examples are `additionalProperties: false` (which
 `WithStrictInputSchemaDefault` sets on every tool), `unevaluatedProperties`,
-`maxProperties`, `propertyNames`, `patternProperties`, `not`, `if`, `$ref`,
-and `allOf`.
+`minProperties` (removing the added arguments would leave fewer properties
+than it requires), `maxProperties`, `propertyNames`, `patternProperties`,
+`not`, `if`, `$ref`, and `allOf`. A schema that refers back to its root with
+`"$ref": "#"` anywhere is also left unchanged, because a required argument
+added at the root would apply to every nested object that refers to it.
 
 Task tools, registered with `AddTaskTool`, are listed unchanged and their
 calls are not captured, because mcp-go runs no tool handler middleware for
-them. A regular tool that supports tasks is still captured when called as a
-task. Its event records the handler's result, before mcp-go's output schema
-validation.
+them. A regular tool that supports tasks gets its analytics arguments removed
+when called as a task, but the call sends no event: mcp-go answers it with the
+task, and the adapter does not observe the task's final status.
 
 ## The llm_model argument
 
 MCP has no standard way for a client to say which model is calling, so the
 adapter also adds a required `llm_model` string, asking the agent for its
 exact model identifier or `"unknown"`. It is handled like `context`: removed
-before the handler, kept by tools that declare their own, and left off
-`$mcp_parameters`. A model named in the client's `_meta` wins over it. Turn
+before the handler and left off `$mcp_parameters`, while a tool that declares
+its own keeps it as the tool's data. A model named in the client's `_meta` wins over it. Turn
 both sources off with `WithCaptureModel(false)`.
 
 ## Not yet supported

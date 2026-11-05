@@ -3,7 +3,9 @@ package posthogmcpgo
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,7 +42,11 @@ func TestInstrumentKeepsValidatingServersAcceptingAdvertisedCalls(t *testing.T) 
 	}{
 		{name: "an open schema", schema: `{"type":"object","properties":{"n":{"type":"integer"}}}`, wantInjected: true},
 		{name: "additionalProperties true", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"additionalProperties":true}`, wantInjected: true},
-		{name: "minProperties and annotations", schema: `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"n","type":"object","properties":{"n":{"type":"integer"}},"minProperties":1,"$defs":{"x":{}}}`, wantInjected: true},
+		{name: "annotations", schema: `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"n","type":"object","properties":{"n":{"type":"integer"}},"$defs":{"x":{}}}`, wantInjected: true},
+		{name: "a ref that is not the root", schema: `{"type":"object","properties":{"n":{"$ref":"#/$defs/count"}},"$defs":{"count":{"type":"integer"}}}`, wantInjected: true},
+		{name: "minProperties", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"minProperties":1}`},
+		{name: "a recursive property", schema: `{"type":"object","properties":{"n":{"type":"integer"},"child":{"$ref":"#"}}}`},
+		{name: "a recursive definition", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"$defs":{"tree":{"type":"object","properties":{"kids":{"type":"array","items":{"$ref":"#"}}}}}}`},
 		{name: "no properties", schema: `{"type":"object"}`, wantInjected: true},
 		{name: "additionalProperties false", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"additionalProperties":false}`},
 		{name: "additionalProperties schema", schema: `{"type":"object","properties":{"n":{"type":"integer"}},"additionalProperties":{"type":"integer"}}`},
@@ -83,6 +89,17 @@ func TestInstrumentKeepsValidatingServersAcceptingAdvertisedCalls(t *testing.T) 
 			assert.Equal(t, false, queue.onlyToolCall(t)["$mcp_is_error"])
 		})
 	}
+}
+
+func TestInstrumentKeepsLargeIntegersInSchemas(t *testing.T) {
+	schema := `{"type":"object","properties":{"id":{"type":"integer","const":9007199254740993}}}`
+	s := server.NewMCPServer("weather-server", "1.2.3", server.WithToolCapabilities(true), Instrument(posthogmcp.New(&fakeQueue{})))
+	s.AddTool(mcp.NewToolWithRawSchema("count", "Count", json.RawMessage(schema)), (&weatherHandler{}).handle)
+
+	listed := s.HandleMessage(t.Context(), json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+
+	assert.Contains(t, jsonString(t, listed), `"const":9007199254740993`)
+	assert.Contains(t, jsonString(t, listed), `"context"`, "the schema was extended")
 }
 
 // TestInstrumentCapturesWhatTheClientReceives checks the event against the
@@ -161,7 +178,6 @@ func TestInstrumentWithTaskAugmentedCalls(t *testing.T) {
 		register       func(s *server.MCPServer, received chan<- map[string]any)
 		wantAdvertised bool
 		wantReceived   map[string]any
-		wantEvents     int
 	}{
 		{
 			name: "a task tool, which runs no middleware, is left unchanged and not captured",
@@ -175,7 +191,7 @@ func TestInstrumentWithTaskAugmentedCalls(t *testing.T) {
 			wantReceived: arguments,
 		},
 		{
-			name: "a regular tool run as a task is stripped and captured",
+			name: "a regular tool run as a task is stripped and not captured, since its outcome is not observed",
 			register: func(s *server.MCPServer, received chan<- map[string]any) {
 				s.AddTool(mcp.NewTool("forecast", mcp.WithString("city"), mcp.WithTaskSupport(mcp.TaskSupportOptional)),
 					func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -185,7 +201,6 @@ func TestInstrumentWithTaskAugmentedCalls(t *testing.T) {
 			},
 			wantAdvertised: true,
 			wantReceived:   map[string]any{"city": "Paris"},
-			wantEvents:     1,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -217,10 +232,7 @@ func TestInstrumentWithTaskAugmentedCalls(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("the handler never ran")
 			}
-			assert.Eventually(t, func() bool { return len(queue.toolCalls()) == test.wantEvents }, time.Second, 10*time.Millisecond)
-			if test.wantEvents > 0 {
-				assert.Equal(t, "Planning a trip", queue.toolCalls()[0].Properties["$mcp_intent"])
-			}
+			assert.Never(t, func() bool { return len(queue.toolCalls()) > 0 }, 200*time.Millisecond, 10*time.Millisecond)
 		})
 	}
 }
@@ -465,4 +477,37 @@ func TestSessionResolverForgetsClosedSessions(t *testing.T) {
 
 	assert.Empty(t, resolver.generated)
 	assert.NotEqual(t, first, resolver.resolve(session, now), "a new session id after the session closed")
+}
+
+// countingSession is a session with its own tools, which counts how often
+// they are copied.
+type countingSession struct {
+	*server.InProcessSession
+	copies *atomic.Int32
+}
+
+func (s countingSession) GetSessionTools() map[string]server.ServerTool {
+	s.copies.Add(1)
+	return map[string]server.ServerTool{}
+}
+
+func (s countingSession) SetSessionTools(map[string]server.ServerTool) {}
+
+func TestInstrumentCopiesSessionToolsOncePerListing(t *testing.T) {
+	copiesFor := func(toolCount int) int32 {
+		s := server.NewMCPServer("weather-server", "1.2.3", server.WithToolCapabilities(true), Instrument(posthogmcp.New(&fakeQueue{})))
+		for i := range toolCount {
+			s.AddTool(mcp.NewTool(fmt.Sprintf("tool_%d", i)), (&weatherHandler{}).handle)
+		}
+		copies := &atomic.Int32{}
+		session := countingSession{server.NewInProcessSession("counted", nil), copies}
+		require.NoError(t, s.RegisterSession(t.Context(), session))
+		copies.Store(0)
+
+		listed := s.HandleMessage(s.WithContext(t.Context(), session), json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		assert.Contains(t, jsonString(t, listed), `"context"`)
+		return copies.Load()
+	}
+
+	assert.Equal(t, copiesFor(1), copiesFor(30), "copies do not grow with the number of listed tools")
 }

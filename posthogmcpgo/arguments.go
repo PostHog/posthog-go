@@ -93,11 +93,11 @@ func withoutArguments(req mcp.CallToolRequest, arguments toolArguments, names []
 }
 
 // capturedParameters shapes $mcp_parameters as the JSON-RPC request, like the
-// other SDKs. context is left out, since intent is captured separately with
-// personal data redacted, and so are the injected arguments. Every other
-// argument, including a tool's own llm_model, is the tool's data.
+// other SDKs. The injected arguments are left out, since intent and model are
+// captured separately. Every other argument, including a tool's own context
+// or llm_model, is the tool's data.
 func capturedParameters(name string, raw json.RawMessage, arguments toolArguments, injected []string) map[string]any {
-	var captured any = arguments.without(slices.Concat([]string{contextArgument}, injected)...)
+	var captured any = arguments.without(injected...)
 	if trimmed := bytes.TrimSpace(raw); arguments == nil && len(trimmed) > 0 && string(trimmed) != "null" {
 		captured = raw
 	}

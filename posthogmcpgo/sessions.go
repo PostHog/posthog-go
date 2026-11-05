@@ -16,11 +16,11 @@ const (
 	maxGeneratedSessions = 1024
 )
 
-// sessionResolver picks the $session_id of a tool call. A streamable HTTP
-// session id becomes the id every PostHog MCP SDK derives from it. A stateless
-// streamable HTTP request, which mcp-go gives an empty session id, gets a
-// fresh id per call. Any other session (stdio, in-process, SSE) is a
-// one-client connection: it gets a generated id that rotates after
+// sessionResolver picks the $session_id of a tool call. A transport session id
+// (streamable HTTP or SSE) becomes the id every PostHog MCP SDK derives from
+// it. A stateless streamable HTTP request, which mcp-go gives an empty session
+// id, gets a fresh id per call. A stdio or in-process session is a one-client
+// connection: it gets a generated id that rotates after
 // [sessionInactivityTimeout] without a tool call.
 type sessionResolver struct {
 	mu        sync.Mutex
@@ -41,7 +41,7 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) s
 	if session == nil {
 		return newGeneratedSessionID()
 	}
-	if _, streamable := session.(server.SessionWithStreamableHTTPConfig); streamable {
+	if !oneClient(session) {
 		if id := session.SessionID(); id != "" {
 			return deterministicSessionID(id)
 		}
@@ -60,6 +60,19 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) s
 	entry.lastActivity = now
 	r.generated[session] = entry
 	return entry.id
+}
+
+// stdioSessionType is mcp-go's unexported stdio session, which reports the
+// session id "stdio" for any process.
+const stdioSessionType = "*server.stdioSession"
+
+// oneClient is whether a session is a connection with a single client, whose
+// transport has no session id of its own to derive from.
+func oneClient(session server.ClientSession) bool {
+	if _, inProcess := session.(*server.InProcessSession); inProcess {
+		return true
+	}
+	return fmt.Sprintf("%T", session) == stdioSessionType
 }
 
 // forget drops a closed session's generated id, so the map holds only open

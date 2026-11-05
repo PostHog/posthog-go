@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"sync"
 	"testing"
@@ -206,34 +207,47 @@ func TestInstrumentRemovesAnalyticsArgumentsBeforeTheHandler(t *testing.T) {
 		wantSeen   map[string]any
 		wantIntent any
 		wantModel  any
+		// wantCaptured are the arguments in $mcp_parameters.
+		wantCaptured map[string]any
 	}{
 		{
-			name:       "injected arguments are removed",
-			tool:       weatherTool(),
-			arguments:  map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
-			wantSeen:   map[string]any{"city": "Melbourne"},
-			wantIntent: "Planning a trip",
-			wantModel:  "gpt-5.2",
+			name:         "injected arguments are removed",
+			tool:         weatherTool(),
+			arguments:    map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+			wantSeen:     map[string]any{"city": "Melbourne"},
+			wantIntent:   "Planning a trip",
+			wantModel:    "gpt-5.2",
+			wantCaptured: map[string]any{"city": "Melbourne"},
 		},
 		{
-			name:       "a tool's own context and llm_model are kept, and its context is still the intent",
-			tool:       weatherTool(mcp.WithString("context"), mcp.WithString("llm_model")),
-			arguments:  map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
-			wantSeen:   map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
-			wantIntent: "Planning a trip",
+			name:         "a tool's own context and llm_model are the tool's data, not intent or model",
+			tool:         weatherTool(mcp.WithString("context"), mcp.WithString("llm_model")),
+			arguments:    map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+			wantSeen:     map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+			wantCaptured: map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
 		},
 		{
-			name:      "disabled arguments are not removed or read",
-			tool:      weatherTool(),
-			opts:      []Option{WithContextParameter(false), WithCaptureModel(false)},
-			arguments: map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
-			wantSeen:  map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+			name:         "only the injected argument is removed when a tool declares the other",
+			tool:         weatherTool(mcp.WithString("context")),
+			arguments:    map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+			wantSeen:     map[string]any{"city": "Melbourne", "context": "Planning a trip"},
+			wantModel:    "gpt-5.2",
+			wantCaptured: map[string]any{"city": "Melbourne", "context": "Planning a trip"},
 		},
 		{
-			name:      "an unknown model is not recorded",
-			tool:      weatherTool(),
-			arguments: map[string]any{"city": "Melbourne", "llm_model": "unknown"},
-			wantSeen:  map[string]any{"city": "Melbourne"},
+			name:         "disabled arguments are not removed or read",
+			tool:         weatherTool(),
+			opts:         []Option{WithContextParameter(false), WithCaptureModel(false)},
+			arguments:    map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+			wantSeen:     map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+			wantCaptured: map[string]any{"city": "Melbourne", "context": "Planning a trip", "llm_model": "gpt-5.2"},
+		},
+		{
+			name:         "an unknown model is not recorded",
+			tool:         weatherTool(),
+			arguments:    map[string]any{"city": "Melbourne", "llm_model": "unknown"},
+			wantSeen:     map[string]any{"city": "Melbourne"},
+			wantCaptured: map[string]any{"city": "Melbourne"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -250,6 +264,7 @@ func TestInstrumentRemovesAnalyticsArgumentsBeforeTheHandler(t *testing.T) {
 			properties := queue.onlyToolCall(t)
 			assert.Equal(t, test.wantIntent, properties["$mcp_intent"])
 			assert.Equal(t, test.wantModel, properties["$mcp_llm_model"])
+			assert.JSONEq(t, jsonString(t, test.wantCaptured), jsonString(t, properties["$mcp_parameters"].(map[string]any)["request"].(map[string]any)["params"].(map[string]any)["arguments"]))
 		})
 	}
 }
@@ -352,6 +367,18 @@ func TestInstrumentCapturesFailures(t *testing.T) {
 			name:        "a returned error",
 			handler:     &weatherHandler{err: errors.New("upstream timeout")},
 			wantMessage: "upstream timeout",
+			wantRPCErr:  true,
+		},
+		{
+			name:        "a returned ErrToolNotFound, since the tool is registered",
+			handler:     &weatherHandler{err: server.ErrToolNotFound},
+			wantMessage: server.ErrToolNotFound.Error(),
+			wantRPCErr:  true,
+		},
+		{
+			name:        "a wrapped ErrToolNotFound",
+			handler:     &weatherHandler{err: fmt.Errorf("forecast backend: %w", server.ErrToolNotFound)},
+			wantMessage: "forecast backend: " + server.ErrToolNotFound.Error(),
 			wantRPCErr:  true,
 		},
 	} {
