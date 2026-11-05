@@ -57,8 +57,6 @@ type EnqueueClient interface {
 	// Bulk or backfill workloads that can enqueue faster than the client uploads
 	// should check the returned error for ErrQueueFull and throttle or retry (or
 	// raise Config.MaxQueueSize); otherwise events are dropped, not delayed.
-	//
-	// posthog-capability: capture
 	Enqueue(Message) error
 }
 
@@ -75,23 +73,17 @@ type Client interface {
 	// Callback.Failure; a nil result does not guarantee successful ingestion.
 	// Use FlushWithContext to bound the wait. Do not call a blocking Flush from
 	// a delivery callback, which is itself part of the delivery cycle.
-	//
-	// posthog-capability: flush
 	Flush() error
 
 	// FlushWithContext is Flush with a caller-controlled deadline. Cancellation
 	// stops only this caller's wait, not delivery or future use of the client.
 	// Messages accepted before the call are covered; concurrent Enqueue calls may
 	// be included in this cycle or a later one. Calls after Close return ErrClosed.
-	//
-	// posthog-capability: flush
 	FlushWithContext(context.Context) error
 
 	// Close gracefully shuts down the client and flushes pending messages.
 	// If Config.ShutdownTimeout is positive, Close uses it as the shutdown deadline;
 	// otherwise it waits indefinitely. Repeated calls return ErrClosed.
-	//
-	// posthog-capability: shutdown
 	Close() error
 
 	// IsFeatureEnabled evaluates one feature flag for a user and returns the same
@@ -99,16 +91,12 @@ type Client interface {
 	// for boolean flags. The FeatureFlagPayload parameter supplies the flag key,
 	// distinct ID, optional groups/properties, and evaluation options.
 	// Deprecated: Prefer EvaluateFlags for new code.
-	//
-	// posthog-capability: is-feature-enabled
 	IsFeatureEnabled(FeatureFlagPayload) (interface{}, error)
 
 	// GetFeatureFlag evaluates one feature flag for a user. It returns a variant
 	// string for multivariate flags, true or false for boolean flags, false with
 	// nil error when the flag is missing/disabled, and an error for evaluation failures.
 	// Deprecated: Prefer EvaluateFlags for new code.
-	//
-	// posthog-capability: get-feature-flag
 	GetFeatureFlag(FeatureFlagPayload) (interface{}, error)
 
 	// GetFeatureFlagResult evaluates one feature flag and returns its value and payload together.
@@ -116,16 +104,12 @@ type Client interface {
 	// It returns ErrFlagNotFound when the flag cannot be found or evaluated and
 	// ErrNoSecretKey when OnlyEvaluateLocally is true without SecretKey or a
 	// FlagDefinitionCacheProvider.
-	//
-	// posthog-capability: get-feature-flag-result
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
 	// GetFeatureFlagPayload returns the payload for the matching flag value, or an
 	// empty string when no payload is configured or the flag is missing/disabled.
 	// Deprecated: Use GetFeatureFlagResult instead, which returns both the flag value
 	// and payload while properly tracking feature flag usage.
-	//
-	// posthog-capability: get-feature-flag-payload
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
 
 	// GetRemoteConfigPayload returns the decrypted payload for a remote config flag key.
@@ -135,8 +119,6 @@ type Client interface {
 	// GetAllFlags evaluates all flags for a user. Returned values are booleans for
 	// boolean flags and strings for multivariate variants. It returns ErrNoSecretKey
 	// when OnlyEvaluateLocally is true without SecretKey or a FlagDefinitionCacheProvider.
-	//
-	// posthog-capability: get-feature-flags
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
@@ -155,21 +137,15 @@ type Client interface {
 	// branch on what was resolved.
 	// If OnlyEvaluateLocally is true and neither SecretKey nor a
 	// FlagDefinitionCacheProvider is configured, returns ErrNoSecretKey.
-	//
-	// posthog-capability: evaluate-flags
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
 	// ReloadFeatureFlags forces a reload of feature flags.
 	// If neither SecretKey nor a FlagDefinitionCacheProvider is configured,
 	// returns ErrNoSecretKey.
-	//
-	// posthog-capability: reload-feature-flags
 	ReloadFeatureFlags() error
 
 	// CloseWithContext gracefully shuts down the client with the provided context.
 	// The context can be used to control the shutdown deadline.
-	//
-	// posthog-capability: shutdown
 	CloseWithContext(context.Context) error
 }
 
@@ -274,8 +250,6 @@ type flagUser struct {
 //
 // The apiKey parameter is trimmed before use. If it is empty, New returns a
 // no-op client whose methods return default values and ErrSDKDisabled where applicable.
-//
-// posthog-capability: setup
 func New(apiKey string) Client {
 	// Here we can ignore the error because the default config is always valid.
 	c, _ := NewWithConfig(apiKey, Config{})
@@ -288,8 +262,6 @@ func New(apiKey string) Client {
 // It returns a ConfigError when config contains invalid values such as negative
 // intervals or out-of-range retry settings; in that case the returned Client is nil.
 // If apiKey is empty after trimming, NewWithConfig returns a no-op client and nil error.
-//
-// posthog-capability: setup
 func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 	if err = config.Validate(); err != nil {
 		return
@@ -1188,8 +1160,6 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 }
 
 // EvaluateFlagsPayload is the input to Client.EvaluateFlags.
-//
-// posthog-capability: evaluate-flags
 type EvaluateFlagsPayload struct {
 	// DistinctId is the user distinct ID to evaluate flags for. It is required
 	// unless EvaluateFlagsWithContext can read one from RequestContext.

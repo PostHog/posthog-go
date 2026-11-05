@@ -8,8 +8,6 @@ import (
 // GroupIdentify represents a group analytics call that sets properties on a group.
 // Enqueue validates Type and Key, fills Uuid, Timestamp, and DisableGeoIP, then
 // sends the message as a $groupidentify event.
-//
-// posthog-capability: group-identify
 type GroupIdentify struct {
 	// Type is the group type, such as "company" or "organization".
 	Type string

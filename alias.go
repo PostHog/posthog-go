@@ -9,8 +9,6 @@ var _ Message = (*Alias)(nil)
 // Alias represents an alias call that links another distinct ID to an existing user.
 // Enqueue validates that DistinctId and Alias are both set, fills Type, Uuid,
 // Timestamp, and DisableGeoIP, then sends the message as a $create_alias event.
-//
-// posthog-capability: alias
 type Alias struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
