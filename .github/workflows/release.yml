@@ -138,7 +138,10 @@ jobs:
           persist-credentials: false
 
       - name: Regenerate SDK reference
-        run: go run ./internal/cmd/reference --sdk-specs .sdk-specs
+        # Stage the pages, so a new page shows in git status as a file, not as an untracked folder.
+        run: |
+          go run ./internal/cmd/reference --sdk-specs .sdk-specs
+          git add references
 
       - name: Check for version bump changes
         id: check-changes
