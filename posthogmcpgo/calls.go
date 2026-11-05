@@ -21,11 +21,14 @@ type callsInFlight struct {
 	order   *list.List
 }
 
-// callStart is what a call's capture needs from when it started. The protocol
-// version is read then, since the session may close before the call ends.
+// callStart is what a call's capture needs from when it arrived. It is read
+// then, since the handler may unregister the tool and the session may close or
+// sit past its inactivity timeout before the call ends.
 type callStart struct {
 	at              time.Time
 	protocolVersion string
+	sessionID       string
+	tool            toolInfo
 }
 
 type trackedCall struct {

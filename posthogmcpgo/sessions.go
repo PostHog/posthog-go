@@ -167,3 +167,14 @@ func (p *protocolVersions) forget(session server.ClientSession) {
 	defer p.mu.Unlock()
 	delete(p.versions, session)
 }
+
+// touch records a call's completion as activity on a one-client session, so a
+// call that runs past the timeout does not rotate the session it started in.
+func (r *sessionResolver) touch(session server.ClientSession, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.generated[session]; ok {
+		entry.lastActivity = now
+		r.generated[session] = entry
+	}
+}

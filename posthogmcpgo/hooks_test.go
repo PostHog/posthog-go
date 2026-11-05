@@ -559,3 +559,36 @@ func TestInstrumentCopiesSessionToolsOncePerListing(t *testing.T) {
 
 	assert.Equal(t, copiesFor(1), copiesFor(30), "copies do not grow with the number of listed tools")
 }
+
+// TestInstrumentKeepsArgumentOwnershipWhenAToolRemovesItself captures a call to
+// a one-shot tool that unregisters itself in its handler, next to a tool that
+// stays registered.
+func TestInstrumentKeepsArgumentOwnershipWhenAToolRemovesItself(t *testing.T) {
+	for _, removesItself := range []bool{false, true} {
+		t.Run(fmt.Sprintf("removes itself %t", removesItself), func(t *testing.T) {
+			queue := &fakeQueue{}
+			s := server.NewMCPServer("weather-server", "1.2.3", server.WithToolCapabilities(true), Instrument(posthogmcp.New(queue)))
+			s.AddTool(mcp.NewTool("weather", mcp.WithString("city")),
+				func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					if removesItself {
+						s.DeleteTools("weather")
+					}
+					return mcp.NewToolResultText("done"), nil
+				})
+			c := connectInProcess(t, s)
+
+			_, err := callTool(t, c, "weather", map[string]any{
+				"city":      "Example City",
+				"context":   "Checking a forecast for person@example.test",
+				"llm_model": "synthetic-model",
+			})
+			require.NoError(t, err)
+
+			properties := queue.onlyToolCall(t)
+			assert.Contains(t, properties["$mcp_intent"], "Checking a forecast for")
+			assert.NotContains(t, properties["$mcp_intent"], "person@example.test")
+			assert.Equal(t, "synthetic-model", properties["$mcp_llm_model"])
+			assert.JSONEq(t, `{"city":"Example City"}`, jsonString(t, properties["$mcp_parameters"].(map[string]any)["request"].(map[string]any)["params"].(map[string]any)["arguments"]))
+		})
+	}
+}

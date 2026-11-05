@@ -100,7 +100,8 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 		if in.runsAsTask(ctx, req) || !in.capturesInMiddleware(ctx) {
 			return next(ctx, dispatch)
 		}
-		started := callStart{at: time.Now(), protocolVersion: in.protocols.of(server.ClientSessionFromContext(ctx))}
+		tool, _ := in.registeredTool(ctx, req.Params.Name)
+		started := in.startCall(ctx, tool)
 		result, err := next(ctx, dispatch)
 		in.observe(ctx, req, result, err, started)
 		return result, err
@@ -203,10 +204,25 @@ func (in *instrumentation) unregistered(ctx context.Context, session server.Clie
 // before any task exists, is captured, and the task it creates is not.
 func (in *instrumentation) beforeCall(ctx context.Context, _ any, req *mcp.CallToolRequest) {
 	defer in.recoverHook(ctx, "before tools/call")
-	if _, wrapped := in.registeredTool(ctx, req.Params.Name); !wrapped || !in.ours(ctx) {
+	if !in.ours(ctx) {
 		return
 	}
-	in.calls.start(req, callStart{at: time.Now(), protocolVersion: in.protocols.of(server.ClientSessionFromContext(ctx))})
+	if tool, wrapped := in.registeredTool(ctx, req.Params.Name); wrapped {
+		in.calls.start(req, in.startCall(ctx, tool))
+	}
+}
+
+// startCall records what capture needs from a call to tool as it arrives.
+func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool) callStart {
+	session := server.ClientSessionFromContext(ctx)
+	now := time.Now()
+	_, info := present(tool, in.inject)
+	return callStart{
+		at:              now,
+		protocolVersion: in.protocols.of(session),
+		sessionID:       in.sessions.resolve(session, now),
+		tool:            info,
+	}
 }
 
 // afterCall captures a call with the result mcp-go sends, after input and
@@ -271,15 +287,15 @@ func (in *instrumentation) captureToolCall(
 	started callStart,
 ) error {
 	session := server.ClientSessionFromContext(ctx)
-	tool, _ := in.registeredTool(ctx, req.Params.Name)
-	_, info := present(tool, in.inject)
+	in.sessions.touch(session, time.Now())
+	info := started.tool
 	raw := rawArguments(req.Params)
 	arguments := parseArguments(raw)
 	call := posthogmcp.ToolCall{
 		ToolName:        req.Params.Name,
 		ToolDescription: info.description,
 		ToolCategory:    info.category,
-		SessionID:       in.sessions.resolve(session, time.Now()),
+		SessionID:       started.sessionID,
 		ServerName:      in.serverName,
 		ServerVersion:   in.serverVersion,
 		ProtocolVersion: cmp.Or(req.Header.Get("Mcp-Protocol-Version"), started.protocolVersion),

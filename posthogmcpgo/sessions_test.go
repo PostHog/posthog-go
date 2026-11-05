@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -138,5 +139,31 @@ func connectHTTP(opts ...server.StreamableHTTPOption) func(t *testing.T, s *serv
 		c, err := client.NewStreamableHttpClient(httpServer.URL + "/mcp")
 		require.NoError(t, err)
 		return initialize(t, c)
+	}
+}
+
+// TestGeneratedSessionSpansALongCall resolves a one-client session when a call
+// arrives, records the call's completion, and resolves the next call.
+func TestGeneratedSessionSpansALongCall(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		completedAt  time.Duration
+		nextArriveAt time.Duration
+		wantSame     bool
+	}{
+		{name: "a call that runs past the timeout keeps its session", completedAt: 40 * time.Minute, nextArriveAt: 41 * time.Minute, wantSame: true},
+		{name: "inactivity after a completed call rotates the session", completedAt: time.Minute, nextArriveAt: 32 * time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sessions := newSessionResolver()
+			session := server.NewInProcessSession("in-process", nil)
+			arrived := time.Now()
+
+			first := sessions.resolve(session, arrived)
+			sessions.touch(session, arrived.Add(test.completedAt))
+			next := sessions.resolve(session, arrived.Add(test.nextArriveAt))
+
+			assert.Equal(t, test.wantSame, first == next)
+		})
 	}
 }
