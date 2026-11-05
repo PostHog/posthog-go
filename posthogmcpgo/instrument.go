@@ -99,7 +99,7 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 		if !in.capturesInMiddleware(ctx, req) {
 			return next(ctx, dispatch)
 		}
-		started := time.Now()
+		started := callStart{at: time.Now(), protocolVersion: in.protocols.of(server.ClientSessionFromContext(ctx))}
 		result, err := next(ctx, dispatch)
 		in.observe(ctx, req, result, err, started)
 		return result, err
@@ -168,9 +168,15 @@ func (in *instrumentation) registeredTool(ctx context.Context, name string) (mcp
 	return mcp.Tool{}, false
 }
 
+// ours is whether a hook fired for this server's request. Servers can share
+// one *server.Hooks, and each instrumented server adds its hooks to it.
+func (in *instrumentation) ours(ctx context.Context) bool {
+	return server.ServerFromContext(ctx) == in.server
+}
+
 func (in *instrumentation) initialized(ctx context.Context, _ any, _ *mcp.InitializeRequest, result *mcp.InitializeResult) {
 	defer in.recoverHook(ctx, "after initialize")
-	if result != nil {
+	if result != nil && in.ours(ctx) {
 		in.protocols.record(server.ClientSessionFromContext(ctx), result.ProtocolVersion)
 	}
 }
@@ -178,11 +184,17 @@ func (in *instrumentation) initialized(ctx context.Context, _ any, _ *mcp.Initia
 func (in *instrumentation) unregistered(ctx context.Context, session server.ClientSession) {
 	defer in.recoverHook(ctx, "unregister session")
 	in.protocols.forget(session)
+	in.sessions.forget(session)
 }
 
+// beforeCall starts tracking a call to a tool the middleware wraps, so calls to
+// unknown tools and task tools are never captured.
 func (in *instrumentation) beforeCall(ctx context.Context, _ any, req *mcp.CallToolRequest) {
 	defer in.recoverHook(ctx, "before tools/call")
-	in.calls.start(req, time.Now())
+	if _, wrapped := in.registeredTool(ctx, req.Params.Name); !wrapped || !in.ours(ctx) {
+		return
+	}
+	in.calls.start(req, callStart{at: time.Now(), protocolVersion: in.protocols.of(server.ClientSessionFromContext(ctx))})
 }
 
 // afterCall captures a call with the result mcp-go sends, after input and
@@ -228,7 +240,7 @@ func (in *instrumentation) observe(
 	req mcp.CallToolRequest,
 	result *mcp.CallToolResult,
 	handlerErr error,
-	started time.Time,
+	started callStart,
 ) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -245,7 +257,7 @@ func (in *instrumentation) captureToolCall(
 	req mcp.CallToolRequest,
 	result *mcp.CallToolResult,
 	handlerErr error,
-	started time.Time,
+	started callStart,
 ) error {
 	session := server.ClientSessionFromContext(ctx)
 	tool, _ := in.registeredTool(ctx, req.Params.Name)
@@ -259,11 +271,11 @@ func (in *instrumentation) captureToolCall(
 		SessionID:       in.sessions.resolve(session, time.Now()),
 		ServerName:      in.serverName,
 		ServerVersion:   in.serverVersion,
-		ProtocolVersion: cmp.Or(req.Header.Get("Mcp-Protocol-Version"), in.protocols.of(session)),
+		ProtocolVersion: cmp.Or(req.Header.Get("Mcp-Protocol-Version"), started.protocolVersion),
 		ClientUserAgent: req.Header.Get("User-Agent"),
 		VendorClient:    req.Header.Get("X-Anthropic-Client"),
-		Duration:        time.Since(started),
-		Timestamp:       started,
+		Duration:        time.Since(started.at),
+		Timestamp:       started.at,
 	}
 	if session, ok := session.(server.SessionWithClientInfo); ok {
 		client := session.GetClientInfo()

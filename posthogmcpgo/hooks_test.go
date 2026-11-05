@@ -386,3 +386,83 @@ func connectSSE(t *testing.T, s *server.MCPServer) *client.Client {
 	require.NoError(t, err)
 	return initialize(t, c)
 }
+
+func TestInstrumentCapturesOnlyItsOwnServersCalls(t *testing.T) {
+	hooks := &server.Hooks{}
+	newServer := func(queue *fakeQueue) *server.MCPServer {
+		opts := []server.ServerOption{server.WithToolCapabilities(true), server.WithHooks(hooks)}
+		if queue != nil {
+			opts = append(opts, Instrument(posthogmcp.New(queue)))
+		}
+		s := server.NewMCPServer("weather-server", "1.2.3", opts...)
+		s.AddTool(weatherTool(), (&weatherHandler{}).handle)
+		return s
+	}
+	first, second := &fakeQueue{}, &fakeQueue{}
+	instrumented := newServer(first)
+	_ = newServer(second)
+	uninstrumented := newServer(nil)
+
+	_, err := callTool(t, connectInProcess(t, instrumented), "weather", map[string]any{"city": "Paris"})
+	require.NoError(t, err)
+	_, err = callTool(t, connectInProcess(t, uninstrumented), "weather", map[string]any{"city": "Lisbon"})
+	require.NoError(t, err)
+
+	assert.Len(t, first.toolCalls(), 1, "the instrumented server's call, once")
+	assert.Empty(t, second.toolCalls(), "another server sharing the hooks")
+}
+
+func TestInstrumentIgnoresSynchronousCallsToTaskTools(t *testing.T) {
+	for _, support := range []mcp.TaskSupport{mcp.TaskSupportOptional, mcp.TaskSupportRequired} {
+		t.Run(string(support), func(t *testing.T) {
+			queue := &fakeQueue{}
+			s := server.NewMCPServer("weather-server", "1.2.3",
+				server.WithToolCapabilities(true), server.WithTaskCapabilities(true, true, true), Instrument(posthogmcp.New(queue)))
+			s.AddTaskTool(mcp.NewTool("forecast", mcp.WithString("city"), mcp.WithTaskSupport(support)),
+				func(context.Context, mcp.CallToolRequest) (*mcp.CreateTaskResult, error) {
+					return &mcp.CreateTaskResult{}, nil
+				})
+
+			_, _ = callTool(t, connectInProcess(t, s), "forecast", map[string]any{"city": "Paris"})
+
+			assert.Empty(t, queue.toolCalls())
+			assert.Empty(t, queue.exceptions())
+		})
+	}
+}
+
+func TestInstrumentKeepsTheProtocolVersionWhenTheSessionClosesMidCall(t *testing.T) {
+	queue := &fakeQueue{}
+	s := server.NewMCPServer("weather-server", "1.2.3", server.WithToolCapabilities(true), Instrument(posthogmcp.New(queue)))
+	started, release := make(chan struct{}), make(chan struct{})
+	s.AddTool(mcp.NewTool("slow"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		close(started)
+		<-release
+		return mcp.NewToolResultText("done"), nil
+	})
+	c := connectInProcess(t, s)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = callTool(t, c, "slow", nil)
+	}()
+	<-started
+	_ = c.Close()
+	close(release)
+	<-done
+
+	require.Len(t, queue.toolCalls(), 1)
+	assert.Equal(t, mcp.LATEST_PROTOCOL_VERSION, queue.toolCalls()[0].Properties["$mcp_protocol_version"])
+}
+
+func TestSessionResolverForgetsClosedSessions(t *testing.T) {
+	resolver := newSessionResolver()
+	session := server.NewInProcessSession("closed", nil)
+	now := time.Now()
+	first := resolver.resolve(session, now)
+
+	resolver.forget(session)
+
+	assert.Empty(t, resolver.generated)
+	assert.NotEqual(t, first, resolver.resolve(session, now), "a new session id after the session closed")
+}

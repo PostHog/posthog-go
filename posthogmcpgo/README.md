@@ -29,8 +29,14 @@ you already pass to `server.NewMCPServer`. It installs three things:
 Pass `Instrument` after `server.WithHooks`. `Instrument` adds its hooks to the
 server's existing `server.Hooks`, and `WithHooks` replaces the whole set. If
 `WithHooks` comes later, your hooks still run and calls are still captured,
-but by the middleware: input and output validation failures send no event,
-and the error handler receives one error saying so.
+but by the middleware, and the error handler receives one error saying so.
+The middleware sees neither validator: a call rejected by input validation
+sends no event, one rejected by output validation is recorded with the
+handler's result, and on stdio, in-process, and SSE the protocol version is
+missing.
+
+Servers may share one `server.Hooks`. Each instrumented server captures only
+its own calls, and a server without `Instrument` sends nothing.
 
 mcp-go runs tool handler middleware in the order its options are given,
 outermost first. Middleware given before `Instrument` sees the analytics
@@ -72,6 +78,16 @@ Use `WithIdentity` to attach a distinct ID, groups, and person properties,
 `WithProperties` to add event properties, and `WithErrorHandler` to see
 instrumentation failures. Analytics errors and panics never change the MCP
 response.
+
+The identity and properties resolvers run from mcp-go's call hooks, so they
+receive the request's context, not the one your tool handler middleware
+builds. Put request-scoped values such as the authenticated user on the
+context with `server.WithHTTPContextFunc` or `server.WithStdioContextFunc`,
+or read them from the request's headers.
+
+A handler that panics without `server.WithRecovery` sends no event, because
+mcp-go then reports neither a result nor an error. With `WithRecovery`, the
+panic is captured as a failed call.
 
 ## The context argument
 

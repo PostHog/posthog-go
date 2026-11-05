@@ -62,6 +62,14 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) s
 	return entry.id
 }
 
+// forget drops a closed session's generated id, so the map holds only open
+// sessions.
+func (r *sessionResolver) forget(session server.ClientSession) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.generated, session)
+}
+
 func newGeneratedSessionID() string {
 	return "ses_" + uuid.Must(uuid.NewV7()).String()
 }

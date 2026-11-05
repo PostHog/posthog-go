@@ -12,33 +12,41 @@ import (
 // error, so only a handler panic that a transport recovers leaves one behind.
 const abandonedCallAge = time.Hour
 
-// callsInFlight are the start times of the tools/calls mcp-go is handling,
-// keyed by the request its call hooks share.
+// callsInFlight are the tools/calls mcp-go is handling, keyed by the request
+// its call hooks share.
 type callsInFlight struct {
 	mu        sync.Mutex
-	started   map[*mcp.CallToolRequest]time.Time
+	started   map[*mcp.CallToolRequest]callStart
 	lastSweep time.Time
 }
 
-func newCallsInFlight() *callsInFlight {
-	return &callsInFlight{started: map[*mcp.CallToolRequest]time.Time{}}
+// callStart is what a call's capture needs from when it started. The protocol
+// version is read then, since the session may close before the call ends.
+type callStart struct {
+	at              time.Time
+	protocolVersion string
 }
 
-func (c *callsInFlight) start(req *mcp.CallToolRequest, now time.Time) {
+func newCallsInFlight() *callsInFlight {
+	return &callsInFlight{started: map[*mcp.CallToolRequest]callStart{}}
+}
+
+func (c *callsInFlight) start(req *mcp.CallToolRequest, call callStart) {
+	now := call.at
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if now.Sub(c.lastSweep) > abandonedCallAge {
 		c.lastSweep = now
 		for abandoned, started := range c.started {
-			if now.Sub(started) > abandonedCallAge {
+			if now.Sub(started.at) > abandonedCallAge {
 				delete(c.started, abandoned)
 			}
 		}
 	}
-	c.started[req] = now
+	c.started[req] = call
 }
 
-func (c *callsInFlight) finish(req *mcp.CallToolRequest) (time.Time, bool) {
+func (c *callsInFlight) finish(req *mcp.CallToolRequest) (callStart, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	started, ok := c.started[req]
