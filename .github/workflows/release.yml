@@ -140,12 +140,17 @@ jobs:
           persist-credentials: false
 
       - name: Regenerate SDK reference
+        id: reference
         # Best-effort: a failure never blocks the release. Run generate-references.yml to retry.
         continue-on-error: true
         # Stage the pages, so a new page shows in git status as a file, not as an untracked folder.
         run: |
           go run ./internal/cmd/reference --sdk-specs .sdk-specs
           git add references
+
+      - name: Warn if the SDK reference didn't regenerate
+        if: steps.reference.outcome == 'failure'
+        run: echo "::warning::The SDK reference didn't regenerate. Run generate-references.yml to retry."
 
       - name: Check for version bump changes
         id: check-changes
