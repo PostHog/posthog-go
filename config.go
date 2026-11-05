@@ -354,6 +354,16 @@ func (c *Config) secretKeyHost() string {
 	return resolveEmailAppHost(c.Endpoint, c.AppHost)
 }
 
+// secretKeyHTTPClient returns the client for requests that carry the secret
+// key. With an AppHost set, it refuses redirects: Go resends Authorization to a
+// subdomain, such as an Endpoint proxy under the AppHost domain.
+func secretKeyHTTPClient(c Config, base http.Client) http.Client {
+	if c.AppHost != "" {
+		base.CheckRedirect = keepSecretKeyAndMethodOnRedirect
+	}
+	return base
+}
+
 // Validate verifies that fields that don't have zero-values are set to valid values,
 // returns an error describing the problem if a field was invalid.
 func (c *Config) Validate() error {

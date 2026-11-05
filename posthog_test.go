@@ -369,6 +369,79 @@ func TestSecretKeyRequestsGoToAppHostNotEndpoint(t *testing.T) {
 	require.Equal(t, []string{"/batch/"}, proxyPaths)
 }
 
+func TestSecretKeyRequestsRefuseRedirects(t *testing.T) {
+	const (
+		secretKey = "phs_secret"
+		appHost   = "https://analytics.example.com"
+	)
+	redirects := []struct {
+		name   string
+		target string
+	}{
+		{name: "to a subdomain at Endpoint", target: "https://ingest.analytics.example.com"},
+		{name: "to another port", target: "https://analytics.example.com:8443"},
+		{name: "from https to http", target: "http://analytics.example.com"},
+	}
+	credentials := []struct {
+		name   string
+		config Config
+	}{
+		{name: "SecretKey", config: Config{SecretKey: secretKey}},
+		{name: "PersonalApiKey", config: Config{PersonalApiKey: secretKey}},
+	}
+	for _, redirect := range redirects {
+		for _, credential := range credentials {
+			t.Run(redirect.name+"/"+credential.name, func(t *testing.T) {
+				var (
+					mu           sync.Mutex
+					appHostPaths []string
+					leaked       []string
+				)
+				transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+					rec := httptest.NewRecorder()
+					mu.Lock()
+					defer mu.Unlock()
+					switch r.URL.Scheme + "://" + r.URL.Host {
+					case appHost:
+						appHostPaths = append(appHostPaths, r.URL.Path)
+						rec.Header().Set("Location", redirect.target+r.URL.RequestURI())
+						rec.WriteHeader(http.StatusFound)
+					case redirect.target:
+						if strings.Contains(r.Header.Get("Authorization"), secretKey) {
+							leaked = append(leaked, r.URL.Path)
+						}
+						rec.Header().Set("Content-Type", "application/json")
+						_, _ = rec.WriteString(`"ok"`)
+					default:
+						rec.WriteHeader(http.StatusNotFound)
+					}
+					return rec.Result(), nil
+				})
+				config := credential.config
+				config.Endpoint = "https://ingest.analytics.example.com"
+				config.AppHost = appHost
+				config.Transport = transport
+				client, err := NewWithConfig("phc_test", config)
+				require.NoError(t, err)
+
+				_, err = client.GetRemoteConfigPayload("test-flag")
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), secretKey)
+				require.Eventually(t, func() bool {
+					mu.Lock()
+					defer mu.Unlock()
+					return slices.Contains(appHostPaths, "/flags/definitions")
+				}, 5*time.Second, 10*time.Millisecond)
+				require.NoError(t, client.Close())
+
+				mu.Lock()
+				defer mu.Unlock()
+				require.Empty(t, leaked)
+			})
+		}
+	}
+}
+
 var _ Message = (*testErrorMessage)(nil)
 
 // Instances of this type are used to force message validation errors in unit

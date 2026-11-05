@@ -227,6 +227,10 @@ type client struct {
 	// HTTP transport provided in the configuration.
 	http http.Client
 
+	// secretKeyHTTP sends the requests that carry the secret key. See
+	// secretKeyHTTPClient.
+	secretKeyHTTP http.Client
+
 	// A background poller for fetching feature flags
 	featureFlagsPoller *FeatureFlagsPoller
 
@@ -309,6 +313,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		http:                            makeHttpClient(config.Transport, config.BatchUploadTimeout),
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
+	c.secretKeyHTTP = secretKeyHTTPClient(config, c.http)
 	c.emails = newEmailSender(config, c.http.Transport)
 
 	if config.CaptureMode == CaptureModeAnalyticsV1 {
@@ -329,7 +334,7 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			secretKey,
 			c.Logger,
 			c.Config.secretKeyHost(),
-			c.http,
+			c.secretKeyHTTP,
 			c.DefaultFeatureFlagsPollingInterval,
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
@@ -2011,7 +2016,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "posthog-go/"+Version)
 
-	res, err := c.http.Do(req)
+	res, err := c.secretKeyHTTP.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("sending request: %v", err)
 	}
