@@ -231,9 +231,15 @@ type Config struct {
 	// PostHog Cloud Endpoint maps to its region's app host, us.posthog.com or
 	// eu.posthog.com. Any other Endpoint may be a reverse proxy for ingestion,
 	// so email requests never go there: without AppHost, they fail with the
-	// code missing_app_host. SecretKey also turns on local flag evaluation,
-	// which fetches flag definitions from Endpoint with it.
+	// code missing_app_host. It must use https unless AllowInsecureAppHost is
+	// set. SecretKey also turns on local flag evaluation, which fetches flag
+	// definitions from Endpoint with it.
 	AppHost string
+
+	// AllowInsecureAppHost lets Client.Emails send to an http AppHost, such as
+	// http://localhost:8010 during local development. Email requests carry
+	// SecretKey and the email itself, so over http both travel unencrypted.
+	AllowInsecureAppHost bool
 
 	// EmailRequestTimeout is the timeout of each Client.Emails request. If
 	// zero, it defaults to DefaultEmailRequestTimeout.
@@ -427,6 +433,12 @@ func (c *Config) validateEmailOptions() error {
 		if u, err := url.Parse(c.AppHost); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return ConfigError{
 				Reason: "app host must be an http or https URL",
+				Field:  "AppHost",
+				Value:  c.AppHost,
+			}
+		} else if u.Scheme == "http" && !c.AllowInsecureAppHost {
+			return ConfigError{
+				Reason: "app host must use https, or set AllowInsecureAppHost for local development",
 				Field:  "AppHost",
 				Value:  c.AppHost,
 			}
