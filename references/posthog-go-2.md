@@ -20,6 +20,9 @@ tableOfContents:
   - value: "Alias"
     url: alias
     depth: 0
+  - value: "Capture AI"
+    url: capture-ai
+    depth: 0
   - value: "Capture exception"
     url: capture-exception
     depth: 0
@@ -609,6 +612,30 @@ func (msg Alias) Validate() error
 
 Validate checks that the alias message has both DistinctId and Alias set.
 
+## Capture AI
+
+### `Client.EnqueueAI`
+
+```go
+EnqueueAI(Message) error
+```
+
+EnqueueAI queues a message for PostHog's dedicated AI capture endpoint instead of the analytics one. Use it for LLM observability events ($ai\_generation, $ai\_span, $ai\_trace and the rest).
+
+The two lanes are independent: the AI lane has its own queue, worker and retry state, so a multi-megabyte AI event cannot delay analytics events, and it is started on first use so clients that never call this pay nothing for it.
+
+EnqueueAI performs no routing check of its own. The server decides whether an event belongs on this lane and reports the verdict per event, so a misrouted event comes back as a terminal drop through Callback.Failure rather than being rejected locally. Enqueue likewise never reroutes AI-named events to this lane.
+
+It returns the same errors as Enqueue.
+
+### `posthog.EnqueueAIWithContext`
+
+```go
+func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error
+```
+
+EnqueueAIWithContext queues a message for the dedicated AI capture endpoint and applies any PostHog request context attached to ctx. It is EnqueueWithContext for the AI lane, and takes the full Client because only a real client has an AI lane -- an AI event must never silently fall back to the analytics endpoint.
+
 ## Capture exception
 
 ### `Exception`
@@ -928,20 +955,6 @@ The SDK passes an isolated copy of SDK-owned mutable fields where practical: Pro
 
 ## SDK utils
 
-### `Client.EnqueueAI`
-
-```go
-EnqueueAI(Message) error
-```
-
-EnqueueAI queues a message for PostHog's dedicated AI capture endpoint instead of the analytics one. Use it for LLM observability events ($ai\_generation, $ai\_span, $ai\_trace and the rest).
-
-The two lanes are independent: the AI lane has its own queue, worker and retry state, so a multi-megabyte AI event cannot delay analytics events, and it is started on first use so clients that never call this pay nothing for it.
-
-EnqueueAI performs no routing check of its own. The server decides whether an event belongs on this lane and reports the verdict per event, so a misrouted event comes back as a terminal drop through Callback.Failure rather than being rejected locally. Enqueue likewise never reroutes AI-named events to this lane.
-
-It returns the same errors as Enqueue.
-
 ### `Client.GetRemoteConfigPayload`
 
 ```go
@@ -949,14 +962,6 @@ GetRemoteConfigPayload(string) (string, error)
 ```
 
 GetRemoteConfigPayload returns the decrypted payload for a remote config flag key. It requires Config.SecretKey and returns ErrNoSecretKey when missing.
-
-### `posthog.EnqueueAIWithContext`
-
-```go
-func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error
-```
-
-EnqueueAIWithContext queues a message for the dedicated AI capture endpoint and applies any PostHog request context attached to ctx. It is EnqueueWithContext for the AI lane, and takes the full Client because only a real client has an AI lane -- an AI event must never silently fall back to the analytics endpoint.
 
 ### `posthog.NewRequestContextMiddleware`
 
