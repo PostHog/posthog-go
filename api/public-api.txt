@@ -96,6 +96,7 @@ FUNCTIONS
 
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error
 
+
 func NewRequestContextMiddleware(next http.Handler, opts ...RequestContextOption) http.Handler
 
 
@@ -131,6 +132,7 @@ type Alias struct {
 	DisableGeoIP bool
 	IsServer bool
 }
+
 
 func (msg Alias) APIfy() APIMessage
 
@@ -177,6 +179,7 @@ func (b *Backoff) Sleep(attempt int)
 type BeforeSendFunc func(Message) Message
 
 
+
 type Callback interface {
 
 	Success(APIMessage)
@@ -200,6 +203,7 @@ type Capture struct {
 	Library string
 
 }
+
 
 func (msg Capture) APIfy() APIMessage
 
@@ -277,7 +281,9 @@ type Client interface {
 func New(apiKey string) Client
 
 
+
 func NewWithConfig(apiKey string, config Config) (cli Client, err error)
+
 
 
 type CommonResponseFields struct {
@@ -358,6 +364,7 @@ type Config struct {
 	CaptureMode CaptureMode
 
 }
+
 
 
 func (c Config) GetDisableGeoIP() bool
@@ -442,6 +449,7 @@ type EvaluateFlagsPayload struct {
 	FlagKeys []string
 }
 
+
 type Exception struct {
 	Type string
 	Uuid string
@@ -457,6 +465,7 @@ type Exception struct {
 	ExceptionList []ExceptionItem
 	ExceptionFingerprint *string
 }
+
 
 func NewDefaultException(
 	timestamp time.Time,
@@ -537,6 +546,7 @@ type FeatureFlagEvaluations struct {
 
 
 func EvaluateFlagsWithContext(ctx context.Context, client Client, payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
+
 
 func (e *FeatureFlagEvaluations) GetFlag(key string) interface{}
 
@@ -731,6 +741,7 @@ type GroupIdentify struct {
 	IsServer bool
 }
 
+
 func (msg GroupIdentify) APIfy() APIMessage
 
 func (msg GroupIdentify) Validate() error
@@ -767,6 +778,7 @@ type Identify struct {
 	DisableGeoIP bool
 	IsServer bool
 }
+
 
 func (msg Identify) APIfy() APIMessage
 
@@ -895,6 +907,7 @@ type SlogCaptureHandler struct {
 }
 
 func NewSlogCaptureHandler(next slog.Handler, client EnqueueClient, opts ...SlogOption) *SlogCaptureHandler
+
 
 
 
