@@ -37,8 +37,6 @@ type Callback interface {
 // reference values stored inside Properties or Groups (for example, pointers or
 // custom mutable structs held as interface{} values) are not deep-cloned and can
 // still share state with the caller.
-//
-// posthog-capability: before-send-hook
 type BeforeSendFunc func(Message) Message
 
 // Message represents a PostHog object that can be queued with Client.Enqueue.

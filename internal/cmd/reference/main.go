@@ -1,15 +1,16 @@
 // Command reference writes the Markdown SDK reference to references/.
 //
 // go/doc reads each exported symbol and its doc comment, and go/doc/comment renders
-// the comment as Markdown. This command only groups symbols by the
-// "posthog-capability: <slug>" line in their doc comment, orders them like the
-// PostHog/sdk-specs README, and writes front matter.
+// the comment as Markdown. This command only groups symbols by capability, using the
+// labels in docs/capabilities.json, orders them like the PostHog/sdk-specs README,
+// and writes front matter.
 //
 //	go run ./internal/cmd/reference --sdk-specs ../sdk-specs [--major 2]
 package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -28,7 +29,7 @@ import (
 	"unicode"
 )
 
-const name, id, tagPrefix = "PostHog Go SDK", "posthog-go", "posthog-capability:"
+const name, id = "PostHog Go SDK", "posthog-go"
 
 var (
 	first   = []string{"setup", "capture", "identify"}
@@ -36,11 +37,17 @@ var (
 	fset    = token.NewFileSet()
 	notes   []*ast.CommentGroup
 	pkg     *doc.Package
+	mapped  = map[string]label{} // entry label to capability slug, "" for SDK utils
 )
 
 type entry struct {
-	title, code, doc, tag string
-	children              []entry
+	title, code, doc string
+	children         []entry
+}
+
+type label struct {
+	slug string
+	next bool // from "next": the label may exist only on the next major
 }
 
 func main() {
@@ -56,6 +63,9 @@ func main() {
 			files, notes = append(files, f), append(notes, f.Comments...)
 		}
 	}
+	var labels map[string]any
+	check(json.Unmarshal([]byte(read("docs/capabilities.json")), &labels))
+	load(labels, false)
 	var err error
 	pkg, err = doc.NewFromFiles(fset, files, "github.com/posthog/posthog-go")
 	check(err)
@@ -63,7 +73,7 @@ func main() {
 	if *major == 0 {
 		*major = declared
 	}
-	body := append([]string{"## Getting started", nest(read("docs/getting-started.md"))}, reference(capabilities(*specs))...)
+	body := append([]string{"## Getting started", nest(read("docs/getting-started.md"))}, reference(capabilities(*specs), *major <= declared)...)
 	title := fmt.Sprintf("%s %d.x", name, *major)
 	if *major > declared {
 		title += " (experimental)"
@@ -78,6 +88,22 @@ func main() {
 			guides[i] = strings.TrimSpace(read(g))
 		}
 		write(id+"-migration.md", "---\ntitle: \""+name+" migration guides\"\nsidebar: Docs\nshowTitle: true\n---", guides)
+	}
+}
+
+// load reads docs/capabilities.json: slugs by label, a "utils" list, and a "next" object of the same shape.
+func load(labels map[string]any, next bool) {
+	for k, v := range labels {
+		switch v := v.(type) {
+		case map[string]any:
+			load(v, true)
+		case []any:
+			for _, l := range v {
+				mapped[l.(string)] = label{"", next}
+			}
+		default:
+			mapped[k] = label{v.(string), next}
+		}
 	}
 }
 
@@ -102,7 +128,8 @@ func capabilities(checkout string) (caps [][2]string) {
 	return caps
 }
 
-func reference(caps [][2]string) []string {
+// reference lists every symbol. On a next-major run, current is false and labels that no longer exist are skipped.
+func reference(caps [][2]string, current bool) []string {
 	var utils, types, own []entry
 	embedded := map[string]bool{}
 	for _, t := range pkg.Types {
@@ -118,14 +145,16 @@ func reference(caps [][2]string) []string {
 	}
 	utils = append(utils, funcs(pkg.Funcs, "posthog.")...)
 	types = slices.DeleteFunc(types, func(e entry) bool { return embedded[e.title] })
-	// A tagged symbol moves to its capability, from wherever go/doc listed it.
-	tagged := map[string][]entry{}
+	// A mapped symbol moves to its capability, from wherever go/doc listed it.
+	tagged, found := map[string][]entry{}, map[string]bool{}
 	untagged := func(list []entry) []entry {
 		return slices.DeleteFunc(list, func(e entry) bool {
-			if e.tag != "" {
-				tagged[e.tag] = append(tagged[e.tag], e)
+			found[e.title] = true
+			slug := mapped[e.title].slug
+			if slug != "" {
+				tagged[slug] = append(tagged[slug], e)
 			}
-			return e.tag != ""
+			return slug != ""
 		})
 	}
 	for _, list := range []*[]entry{&utils, &types, &own} {
@@ -134,6 +163,16 @@ func reference(caps [][2]string) []string {
 		}
 		*list = untagged(*list)
 	}
+	for l, m := range mapped {
+		if !found[l] && !m.next && current {
+			log.Fatalf("docs/capabilities.json: %s names no symbol", l)
+		}
+	}
+	for _, e := range utils {
+		if _, ok := mapped[e.title]; !ok {
+			log.Fatalf("docs/capabilities.json: map %s to a capability or list it under utils", e.title)
+		}
+	}
 	var out []string
 	for _, c := range caps {
 		if list := tagged[c[0]]; list != nil {
@@ -141,8 +180,8 @@ func reference(caps [][2]string) []string {
 			delete(tagged, c[0])
 		}
 	}
-	for tag := range tagged {
-		log.Fatalf("unknown capability tag %q", tag)
+	for slug, list := range tagged {
+		log.Fatalf("docs/capabilities.json: %s maps to %q, which is not an sdk-specs capability", list[0].title, slug)
 	}
 	out = append(append(out, "## SDK utils"), render(utils, 3)...)
 	for _, v := range append(pkg.Consts, pkg.Vars...) {
@@ -165,26 +204,23 @@ func methods(t *doc.Type, embedded map[string]bool) (out []entry) {
 				}
 			}
 		} else if len(field.Names) > 0 {
-			text, tag := untag(field.Doc.Text())
 			sig := field.Names[0].Name + strings.TrimPrefix(source(field.Type), "func")
-			out = append(out, entry{t.Name + "." + field.Names[0].Name, code(sig), markdown(text), tag, nil})
+			out = append(out, entry{t.Name + "." + field.Names[0].Name, code(sig), markdown(field.Doc.Text()), nil})
 		}
 	}
 	return out
 }
 
 func typeEntry(t *doc.Type) entry {
-	text, tag := untag(t.Doc)
 	children := append(funcs(t.Funcs, "posthog."), funcs(t.Methods, t.Name+".")...)
-	return entry{t.Name, block(t.Decl), markdown(text), tag, children}
+	return entry{t.Name, block(t.Decl), markdown(t.Doc), children}
 }
 
 func funcs(list []*doc.Func, prefix string) (out []entry) {
 	for _, f := range list {
-		text, tag := untag(f.Doc)
 		decl := *f.Decl
 		decl.Doc, decl.Body = nil, nil
-		out = append(out, entry{prefix + f.Name, code(source(&decl)), markdown(text), tag, nil})
+		out = append(out, entry{prefix + f.Name, code(source(&decl)), markdown(f.Doc), nil})
 	}
 	return out
 }
@@ -195,20 +231,6 @@ func render(list []entry, level int) (out []string) {
 		out = append(append(out, strings.Repeat("#", level)+" `"+e.title+"`", e.code, e.doc), render(e.children, level+1)...)
 	}
 	return out
-}
-
-// untag drops the capability line from a doc comment and returns its slug.
-func untag(text string) (string, string) {
-	var keep []string
-	tag := ""
-	for _, line := range strings.Split(text, "\n") {
-		if slug, ok := strings.CutPrefix(strings.TrimSpace(line), tagPrefix); ok {
-			tag = strings.TrimSpace(slug)
-		} else {
-			keep = append(keep, line)
-		}
-	}
-	return strings.TrimSpace(strings.Join(keep, "\n")), tag
 }
 
 // markdown renders a doc comment. The site reads Markdown as MDX, so prose escapes < and braces.

@@ -64,8 +64,6 @@ const (
 //
 // Each exported field's zero value is either meaningful or replaced by the
 // default documented on that field.
-//
-// posthog-capability: setup
 type Config struct {
 
 	// Endpoint is the PostHog API host used for event ingestion and feature flag requests.

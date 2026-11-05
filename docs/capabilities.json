@@ -1,0 +1,41 @@
+{
+  "Alias": "alias",
+  "BeforeSendFunc": "before-send-hook",
+  "Capture": "capture",
+  "Client.Close": "shutdown",
+  "Client.CloseWithContext": "shutdown",
+  "Client.EvaluateFlags": "evaluate-flags",
+  "Client.Flush": "flush",
+  "Client.FlushWithContext": "flush",
+  "Client.GetAllFlags": "get-feature-flags",
+  "Client.GetFeatureFlag": "get-feature-flag",
+  "Client.GetFeatureFlagPayload": "get-feature-flag-payload",
+  "Client.GetFeatureFlagResult": "get-feature-flag-result",
+  "Client.IsFeatureEnabled": "is-feature-enabled",
+  "Client.ReloadFeatureFlags": "reload-feature-flags",
+  "Config": "setup",
+  "EnqueueClient.Enqueue": "capture",
+  "EvaluateFlagsPayload": "evaluate-flags",
+  "Exception": "capture-exception",
+  "GroupIdentify": "group-identify",
+  "Identify": "identify",
+  "next": {
+    "utils": [
+      "Client.EnqueueAI",
+      "posthog.EnqueueAIWithContext"
+    ]
+  },
+  "posthog.EnqueueWithContext": "capture",
+  "posthog.EvaluateFlagsWithContext": "evaluate-flags",
+  "posthog.New": "setup",
+  "posthog.NewSlogCaptureHandler": "capture-exception",
+  "posthog.NewWithConfig": "setup",
+  "utils": [
+    "Client.GetRemoteConfigPayload",
+    "posthog.NewRequestContextMiddleware",
+    "posthog.Ptr",
+    "posthog.SimpleInAppDecider",
+    "posthog.WithFreshRequestContext",
+    "posthog.WithRequestContext"
+  ]
+}

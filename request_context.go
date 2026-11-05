@@ -401,8 +401,6 @@ func remoteIP(r *http.Request) string {
 
 // EnqueueWithContext queues a message and applies any PostHog request context attached to ctx.
 // Use this from HTTP handlers with r.Context() when NewRequestContextMiddleware is installed.
-//
-// posthog-capability: capture
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error {
 	return enqueueWithContext(ctx, client, msg)
 }
@@ -410,8 +408,6 @@ func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) 
 // EvaluateFlagsWithContext evaluates feature flags and uses the request-scoped distinct ID attached
 // to ctx when payload.DistinctId is empty. It does not generate personless IDs: feature flag
 // evaluation requires a stable distinct ID and returns ErrNoDistinctID if neither payload nor ctx has one.
-//
-// posthog-capability: evaluate-flags
 func EvaluateFlagsWithContext(ctx context.Context, client Client, payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
 	if client == nil {
 		return noopFeatureFlagEvaluations, fmt.Errorf("posthog: nil client")

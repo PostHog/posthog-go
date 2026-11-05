@@ -82,8 +82,6 @@ var _ Message = (*Capture)(nil)
 // Enqueue validates Event and DistinctId (or obtains DistinctId from request context),
 // fills Type, Uuid, and Timestamp, merges Config.DefaultEventProperties, and queues
 // the event for a future batch upload.
-//
-// posthog-capability: capture
 type Capture struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: PostHog ignores the top-level type field on capture events. Use Event for
