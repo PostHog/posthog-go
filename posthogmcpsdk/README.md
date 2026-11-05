@@ -133,7 +133,7 @@ applies to `$mcp_tool_call` only.
 ## The llm_model argument
 
 MCP has no standard way for a client to say which model is calling, so the
-middleware also adds a required `llm_model` string, asking the agent for its
+middleware also adds an optional `llm_model` string, asking the agent for its
 exact model identifier or `"unknown"`. It is handled like `context`: removed
 before the handler and validation, kept by tools that declare their own, and
 left off `$mcp_parameters`. A model named in the client's `_meta` wins over it.

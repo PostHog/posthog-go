@@ -107,7 +107,7 @@ func TestMissingCapabilityToolSchema(t *testing.T) {
 		{
 			name:         "every enabled argument",
 			wantProperty: []string{"context", "llm_model", "conversation_id"},
-			wantRequired: []any{"context", "llm_model"},
+			wantRequired: []any{"context"},
 		},
 		{
 			name:         "without the model argument",
@@ -439,4 +439,35 @@ func TestMissingCapabilityToolCallIsGuardedByInnerMiddleware(t *testing.T) {
 
 	require.ErrorContains(t, err, "unauthenticated")
 	assert.NotContains(t, queue.eventNames(), "$mcp_missing_capability")
+}
+
+func TestMissingCapabilityToolDeclaresItRecordsData(t *testing.T) {
+	server := newServer()
+	Instrument(server, posthogmcp.New(&fakeQueue{}), WithMissingCapabilityTool(""))
+
+	tools := listedTools(t, connectInMemory(t, server))
+
+	require.Len(t, tools, 1)
+	annotations := tools[0].Annotations
+	require.NotNil(t, annotations)
+	require.NotNil(t, annotations.DestructiveHint)
+	require.NotNil(t, annotations.OpenWorldHint)
+	assert.False(t, annotations.ReadOnlyHint)
+	assert.False(t, *annotations.DestructiveHint)
+	assert.False(t, annotations.IdempotentHint)
+	assert.False(t, *annotations.OpenWorldHint)
+}
+
+func TestContextArgumentDescriptionIsSharedAcrossSDKs(t *testing.T) {
+	const want = "A few words on why you are calling this tool, for the server developer's analytics. " +
+		`Describe people and things by role, such as "a customer". Do not quote the user or include names, emails, or other personal details.`
+	server := newServer()
+	Instrument(server, posthogmcp.New(&fakeQueue{}))
+	server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: map[string]any{"type": "object"}}, echoHandler)
+
+	tools := listedTools(t, connectInMemory(t, server))
+
+	require.Len(t, tools, 1)
+	properties, _ := inputSchemaOf(t, tools[0])
+	assert.Equal(t, want, properties["context"].(map[string]any)["description"])
 }
