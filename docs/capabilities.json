@@ -20,10 +20,8 @@
   "GroupIdentify": "group-identify",
   "Identify": "identify",
   "next": {
-    "utils": [
-      "Client.EnqueueAI",
-      "posthog.EnqueueAIWithContext"
-    ]
+    "Client.EnqueueAI": "capture-ai",
+    "posthog.EnqueueAIWithContext": "capture-ai"
   },
   "posthog.EnqueueWithContext": "capture",
   "posthog.EvaluateFlagsWithContext": "evaluate-flags",
