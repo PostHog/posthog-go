@@ -94,14 +94,19 @@ func withArguments(inputSchema json.RawMessage, arguments []analyticsArgument) (
 }
 
 // extensibleSchema decodes a JSON schema whose properties can be extended
-// safely, and its properties: an object schema, or one without a type, with
-// no $ref, allOf, anyOf, or oneOf at its root, whose properties, if any, are
-// an object.
+// safely, and its properties: an object schema, or one without a type, that
+// allows other properties, with no $ref, allOf, anyOf, or oneOf at its root,
+// whose properties, if any, are an object.
 func extensibleSchema(raw json.RawMessage) (schema, properties map[string]any, ok bool) {
 	if json.Unmarshal(raw, &schema) != nil || schema == nil {
 		return nil, nil, false
 	}
 	if kind := schema["type"]; kind != nil && kind != "object" {
+		return nil, nil, false
+	}
+	// mcp-go's WithInputSchemaValidation checks a call against the registered
+	// schema before any middleware runs, so it would reject the added arguments.
+	if schema["additionalProperties"] == false {
 		return nil, nil, false
 	}
 	for _, key := range []string{"$ref", "allOf", "anyOf", "oneOf"} {

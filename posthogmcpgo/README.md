@@ -67,11 +67,11 @@ The argument is removed before the tool's handler sees the call, from both
 argument keep it, and its value is still captured as the intent. Schemas
 built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not changed.
 
-mcp-go runs `WithInputSchemaValidation` before any tool handler middleware,
-against the registered schema. With validation on, a tool whose schema
-rejects unknown properties (`additionalProperties: false`, or
-`WithStrictInputSchemaDefault`) rejects calls that carry `context`. Turn the
-argument off with `WithContextParameter(false)` on such servers.
+Schemas that reject unknown properties (`additionalProperties: false`, which
+`WithStrictInputSchemaDefault` sets on every tool) are not changed either, so
+calls to those tools carry no intent. mcp-go's `WithInputSchemaValidation`
+checks each call against the registered schema before any tool handler
+middleware runs, so it would reject the added arguments there.
 
 ## The llm_model argument
 

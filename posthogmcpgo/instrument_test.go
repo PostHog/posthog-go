@@ -268,10 +268,10 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			wantRequired:   []string{"city", "context", "llm_model"},
 		},
 		{
-			name:           "added to a raw schema that disallows other properties",
+			name:           "a schema that disallows other properties is left alone",
 			tool:           mcp.NewToolWithRawSchema("weather", "Get current weather", json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}`)),
-			wantProperties: []string{"city", "context", "llm_model"},
-			wantRequired:   []string{"city", "context", "llm_model"},
+			wantProperties: []string{"city"},
+			wantRequired:   []string{"city"},
 		},
 		{
 			name:           "a tool's own context is left as declared",
@@ -309,6 +309,33 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			assert.ElementsMatch(t, test.wantRequired, schema.Required)
 		})
 	}
+}
+
+func TestInstrumentKeepsStrictValidatingServersWorking(t *testing.T) {
+	queue := &fakeQueue{}
+	handler := &weatherHandler{}
+	s := server.NewMCPServer("weather-server", "1.2.3",
+		server.WithToolCapabilities(true),
+		server.WithInputSchemaValidation(),
+		server.WithStrictInputSchemaDefault(),
+		Instrument(posthogmcp.New(queue)),
+	)
+	s.AddTool(weatherTool(), handler.handle)
+	c := connectInProcess(t, s)
+
+	listed, err := c.ListTools(t.Context(), mcp.ListToolsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listed.Tools, 1)
+	assert.NotContains(t, jsonString(t, listed.Tools[0]), `"context"`)
+
+	result, err := c.CallTool(t.Context(), mcp.CallToolRequest{Params: mcp.CallToolParams{
+		Name:      "weather",
+		Arguments: map[string]any{"city": "Paris"},
+	}})
+	require.NoError(t, err)
+	assert.False(t, result.IsError, "the call passes the server's own validation")
+	assert.Len(t, handler.received, 1)
+	assert.Len(t, queue.toolCalls(), 1)
 }
 
 func keys(m map[string]any) []string {

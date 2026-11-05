@@ -125,7 +125,7 @@ jobs:
         env:
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
         run: |
-          for MODULE in otel posthogmcpsdk; do
+          for MODULE in otel posthogmcpsdk posthogmcpgo; do
             (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go@v${NEW_VERSION}")
           done
 
@@ -168,7 +168,7 @@ jobs:
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          for MODULE in otel posthogmcpsdk; do
+          for MODULE in otel posthogmcpsdk posthogmcpgo; do
             TAG="${MODULE}/v${NEW_VERSION}"
             EXISTING_SHA=$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)
             if [ -n "$EXISTING_SHA" ]; then
