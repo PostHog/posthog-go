@@ -38,17 +38,17 @@ func TestMCPEventsCarryMCPLibrary(t *testing.T) {
 		wantLib     any
 		wantVersion any
 	}{
-		"no caller properties":            {wantLib: library, wantVersion: posthog.Version},
-		"caller $lib alone":               {properties: posthog.Properties{"$lib": "caller-lib"}, wantLib: "caller-lib", wantVersion: absent},
-		"caller pair":                     {properties: posthog.Properties{"$lib": "caller-lib", "$lib_version": "9.9.9"}, wantLib: "caller-lib", wantVersion: "9.9.9"},
-		"caller mcp $lib alone":           {properties: posthog.Properties{"$lib": library}, wantLib: library, wantVersion: posthog.Version},
-		"caller lone $lib_version":        {properties: posthog.Properties{"$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
-		"caller nil $lib":                 {properties: posthog.Properties{"$lib": nil, "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
-		"caller empty $lib":               {properties: posthog.Properties{"$lib": "", "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
-		"caller non-string $lib":          {properties: posthog.Properties{"$lib": 5, "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
-		"request context $lib":            {context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, wantLib: "context-lib", wantVersion: "8.8.8"},
-		"caller beats context":            {properties: posthog.Properties{"$lib": "caller-lib"}, context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, wantLib: "caller-lib", wantVersion: absent},
-		"unset caller $lib yields to ctx": {properties: posthog.Properties{"$lib": nil}, context: posthog.Properties{"$lib": "context-lib"}, wantLib: "context-lib", wantVersion: absent},
+		"no caller properties":          {wantLib: library, wantVersion: posthog.Version},
+		"caller $lib alone":             {properties: posthog.Properties{"$lib": "caller-lib"}, wantLib: "caller-lib", wantVersion: absent},
+		"caller pair":                   {properties: posthog.Properties{"$lib": "caller-lib", "$lib_version": "9.9.9"}, wantLib: "caller-lib", wantVersion: "9.9.9"},
+		"caller mcp $lib alone":         {properties: posthog.Properties{"$lib": library}, wantLib: library, wantVersion: posthog.Version},
+		"caller lone $lib_version":      {properties: posthog.Properties{"$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
+		"caller nil $lib":               {properties: posthog.Properties{"$lib": nil, "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
+		"caller empty $lib":             {properties: posthog.Properties{"$lib": "", "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
+		"caller non-string $lib":        {properties: posthog.Properties{"$lib": 5, "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
+		"request context $lib":          {context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, wantLib: "context-lib", wantVersion: "8.8.8"},
+		"caller $lib beats context":     {properties: posthog.Properties{"$lib": "caller-lib"}, context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, wantLib: "caller-lib", wantVersion: "8.8.8"},
+		"caller nil $lib beats context": {properties: posthog.Properties{"$lib": nil}, context: posthog.Properties{"$lib": "context-lib"}, wantLib: library, wantVersion: posthog.Version},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()

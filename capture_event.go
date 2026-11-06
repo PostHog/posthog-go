@@ -275,9 +275,9 @@ func fillSDKProperties(props Properties, isServer, disableGeoIP bool) Properties
 	if disableGeoIP {
 		enrichment[propertyGeoipDisable] = true
 	}
-	// The identity layer also makes filled a new map, so fillSDKLib never
-	// writes the caller's.
-	filled := fillProperties(props, getSystemContext().ToProperties(), sdkIdentityProperties(), enrichment)
+	// System context is never empty, so filled is a new map and fillSDKLib
+	// never writes the caller's.
+	filled := fillProperties(props, getSystemContext().ToProperties(), enrichment)
 	fillSDKLib(filled)
 	return filled
 }

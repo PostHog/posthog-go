@@ -109,11 +109,7 @@ func withRequestIdentity(call ToolCall, requestContext posthog.RequestContext) T
 func withRequestContext(call ToolCall, requestContext posthog.RequestContext) ToolCall {
 	call = withRequestIdentity(call, requestContext)
 	if len(requestContext.Properties) > 0 {
-		properties := posthog.NewProperties().Merge(requestContext.Properties).Merge(call.Properties)
-		if !copyLibPair(properties, call.Properties) {
-			copyLibPair(properties, requestContext.Properties)
-		}
-		call.Properties = properties
+		call.Properties = posthog.NewProperties().Merge(requestContext.Properties).Merge(call.Properties)
 	}
 	if len(requestContext.Options) > 0 {
 		options := make(posthog.Options, len(requestContext.Options)+len(call.Options))

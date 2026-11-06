@@ -11,7 +11,8 @@
 // exceeding 1 MiB after media redaction is replaced with an omission marker.
 //
 // MCP events carry $lib posthog-go-mcp and $lib_version set to the SDK
-// version. A non-empty $lib in ToolCall.Properties, the EventContext's
-// Properties or the request context's properties wins, and is sent with the
-// $lib_version set next to it, if any. BeforeSend can change either.
+// version. ToolCall.Properties, the EventContext's Properties and the request
+// context's properties can set either one, key by key like other properties,
+// so set both together. A $lib that is not a non-empty string gets the MCP
+// pair. BeforeSend can change either.
 package posthogmcp

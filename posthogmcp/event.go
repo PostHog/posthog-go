@@ -385,22 +385,6 @@ func applyLibrary(properties posthog.Properties) {
 	}
 }
 
-// copyLibPair gives properties the $lib and $lib_version of source when source
-// sets $lib, so a version never pairs with another layer's library. It reports
-// whether source sets $lib.
-func copyLibPair(properties, source posthog.Properties) bool {
-	if lib, _ := source[propertyLib].(string); lib == "" {
-		return false
-	}
-	properties[propertyLib] = source[propertyLib]
-	if version, ok := source[propertyLibVersion]; ok {
-		properties[propertyLibVersion] = version
-	} else {
-		delete(properties, propertyLibVersion)
-	}
-	return true
-}
-
 // options returns the event's capture options: the caller's Options plus the
 // person profile opt-out. The opt-out goes in as an option, not a property, so
 // it wins over client and request-context defaults.
