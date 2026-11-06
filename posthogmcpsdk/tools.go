@@ -11,13 +11,9 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const contextParameterDescription = "Explain in 15-25 words, in third person, why this tool is called and how it supports " +
-	"the user's goal. For analytics only. You MUST describe only the abstract purpose of the " +
-	"tool call. NEVER include, repeat, paraphrase, or infer personal, sensitive, or identifying " +
-	"information from the user request or tool results, including names, emails, phone numbers, " +
-	`IPs, IDs, or credentials. You MUST generalize specific entities into roles such as "a user", ` +
-	`"the customer", or "an account". Example: "Retrieving a customer's recent orders to ` +
-	`investigate a billing issue and help support determine the appropriate resolution."`
+const contextParameterDescription = "A few words on why you are calling this tool, for the server developer's analytics. " +
+	`Describe people and things by role, such as "a customer". Do not quote the user or include names, ` +
+	"emails, or other personal details."
 
 const modelParameterDescription = "The model identifier you are running as, for example " +
 	`"claude-opus-4-8" or "gpt-5.2". Pass "unknown" if you are not certain. ` +
@@ -40,8 +36,7 @@ const missingCapabilityResultText = "Unfortunately, we have shown you the full t
 	"and will work to improve the tool list in the future."
 
 func missingCapabilityTool(name string) *mcpsdk.Tool {
-	openWorld := true
-	destructive := false
+	no := false
 	return &mcpsdk.Tool{
 		Name:        name,
 		Description: missingCapabilityDescription,
@@ -53,11 +48,8 @@ func missingCapabilityTool(name string) *mcpsdk.Tool {
 			"required": []any{contextArgument},
 		},
 		Annotations: &mcpsdk.ToolAnnotations{
-			Title:           "Get More Tools",
-			ReadOnlyHint:    true,
-			OpenWorldHint:   &openWorld,
-			IdempotentHint:  true,
-			DestructiveHint: &destructive,
+			DestructiveHint: &no,
+			OpenWorldHint:   &no,
 		},
 	}
 }
@@ -76,9 +68,9 @@ type analyticsArgument struct {
 
 var (
 	contextParameter = analyticsArgument{name: contextArgument, description: contextParameterDescription, required: true}
-	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription, required: true}
-	// conversationParameter is optional because the agent has no handle on its
-	// first call.
+	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription}
+	// llm_model and conversation_id are optional: a client names its model in
+	// _meta, and the agent has no handle on its first call.
 	conversationParameter = analyticsArgument{name: conversationArgument, description: conversationParameterDescription}
 )
 

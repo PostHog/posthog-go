@@ -175,13 +175,13 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			name:           "added to a closed schema",
 			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []any{"city"}, "additionalProperties": false},
 			wantProperties: []string{"city", "context", "llm_model", "conversation_id"},
-			wantRequired:   []string{"city", "context", "llm_model"},
+			wantRequired:   []string{"city", "context"},
 		},
 		{
 			name:           "added to an empty schema",
 			inputSchema:    map[string]any{"type": "object"},
 			wantProperties: []string{"context", "llm_model", "conversation_id"},
-			wantRequired:   []string{"context", "llm_model"},
+			wantRequired:   []string{"context"},
 		},
 		{
 			name:           "a tool's own arguments are kept",
@@ -197,7 +197,6 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			opts:           []Option{WithContextParameter(false)},
 			inputSchema:    map[string]any{"type": "object"},
 			wantProperties: []string{"llm_model", "conversation_id"},
-			wantRequired:   []string{"llm_model"},
 		},
 		{
 			name:           "model capture disabled",
@@ -211,7 +210,7 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			opts:           []Option{WithConversationID(false)},
 			inputSchema:    map[string]any{"type": "object"},
 			wantProperties: []string{"context", "llm_model"},
-			wantRequired:   []string{"context", "llm_model"},
+			wantRequired:   []string{"context"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
