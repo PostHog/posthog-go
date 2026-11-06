@@ -1,0 +1,3716 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "agentgateway"
+            }
+          },
+          {
+            "key": "host.name",
+            "value": {
+              "stringValue": "default.default.svc.cluster.local"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "rust"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "0.33.0"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "1.6.0"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "agentgateway"
+          },
+          "spans": [
+            {
+              "traceId": "7Kkalm8CFTTXUayR6XG4Sw==",
+              "spanId": "Wc59pTlO/UU=",
+              "flags": 257,
+              "name": "initialize",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988330755501000",
+              "endTimeUnixNano": "1793988330802042000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "eca91a966f021534d751ac91e971b84b"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "59ce7da5394efd45"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "initialize"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "e498d42f-6a88-4182-af8f-e10014b6c9bd"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "46ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "7Kkalm8CFTTXUayR6XG4Sw==",
+              "spanId": "SsAN6TCxl5k=",
+              "parentSpanId": "Wc59pTlO/UU=",
+              "flags": 257,
+              "name": "initialize billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330785419000",
+              "endTimeUnixNano": "1793988330785764000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "initialize"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "7Kkalm8CFTTXUayR6XG4Sw==",
+              "spanId": "3Xn6pUAFO18=",
+              "parentSpanId": "Wc59pTlO/UU=",
+              "flags": 257,
+              "name": "initialize alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330783396000",
+              "endTimeUnixNano": "1793988330799301000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "initialize"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "7Kkalm8CFTTXUayR6XG4Sw==",
+              "spanId": "YHCmTH6YznM=",
+              "parentSpanId": "Wc59pTlO/UU=",
+              "flags": 257,
+              "name": "initialize beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330785374000",
+              "endTimeUnixNano": "1793988330799415000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "initialize"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "86BbyrA1pAsaZyDm64SSWg==",
+              "spanId": "FeMzR3luoKU=",
+              "flags": 257,
+              "name": "notifications/initialized",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988330835130000",
+              "endTimeUnixNano": "1793988330836449000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "202"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "f3a05bcab035a40b1a6720e6eb84925a"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "15e33347796ea0a5"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "notifications/initialized"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "1ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "86BbyrA1pAsaZyDm64SSWg==",
+              "spanId": "2hm5gkboFW4=",
+              "parentSpanId": "FeMzR3luoKU=",
+              "flags": 257,
+              "name": "notifications/initialized beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330836068000",
+              "endTimeUnixNano": "1793988330836376000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "notifications/initialized"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "86BbyrA1pAsaZyDm64SSWg==",
+              "spanId": "1FFy4bmE6dg=",
+              "parentSpanId": "FeMzR3luoKU=",
+              "flags": 257,
+              "name": "notifications/initialized alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330835929000",
+              "endTimeUnixNano": "1793988330836410000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "notifications/initialized"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "YrAWtWpeEulUtaJ1wm0CIA==",
+              "spanId": "eo1M4nAAU1o=",
+              "flags": 257,
+              "name": "tools/list",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988330858719000",
+              "endTimeUnixNano": "1793988330864100000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "62b016b56a5e12e954b5a275c26d0220"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "7a8d4ce27000535a"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "5ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "YrAWtWpeEulUtaJ1wm0CIA==",
+              "spanId": "clDcc4ffujM=",
+              "parentSpanId": "eo1M4nAAU1o=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330860293000",
+              "endTimeUnixNano": "1793988330860989000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "YrAWtWpeEulUtaJ1wm0CIA==",
+              "spanId": "z4SLMtvDH6w=",
+              "parentSpanId": "eo1M4nAAU1o=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330860143000",
+              "endTimeUnixNano": "1793988330863663000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "YrAWtWpeEulUtaJ1wm0CIA==",
+              "spanId": "mSdfTDjOlWg=",
+              "parentSpanId": "eo1M4nAAU1o=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330860264000",
+              "endTimeUnixNano": "1793988330863808000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "DCRLp3NhGK0J9ZF1nWDGvw==",
+              "spanId": "Cz9na66Fnms=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988330895100000",
+              "endTimeUnixNano": "1793988330901477000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "0c244ba7736118ad09f591759d60c6bf"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "0b3f676bae859e6b"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "search_docs"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "6ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "posthog.mcp.tool_is_error",
+                  "value": {
+                    "stringValue": "false"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "DCRLp3NhGK0J9ZF1nWDGvw==",
+              "spanId": "EnPQgP+fjis=",
+              "parentSpanId": "Cz9na66Fnms=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330897764000",
+              "endTimeUnixNano": "1793988330897770000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "DCRLp3NhGK0J9ZF1nWDGvw==",
+              "spanId": "nLMOPUzt9FE=",
+              "parentSpanId": "Cz9na66Fnms=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330897650000",
+              "endTimeUnixNano": "1793988330898483000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "DCRLp3NhGK0J9ZF1nWDGvw==",
+              "spanId": "zwf6FT5+uVI=",
+              "parentSpanId": "Cz9na66Fnms=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330897745000",
+              "endTimeUnixNano": "1793988330898776000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "DCRLp3NhGK0J9ZF1nWDGvw==",
+              "spanId": "NHsG6dtxf7k=",
+              "parentSpanId": "Cz9na66Fnms=",
+              "flags": 257,
+              "name": "tools/call alpha_search_docs",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330899850000",
+              "endTimeUnixNano": "1793988330901356000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "search_docs"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "8GBMl9nDtUFf4SWZqTBnag==",
+              "spanId": "NJz2IQum89Y=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988330933103000",
+              "endTimeUnixNano": "1793988330934843000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "f0604c97d9c3b5415fe12599a930676a"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "349cf6210ba6f3d6"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "lookup_order"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "1ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "posthog.mcp.tool_is_error",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "8GBMl9nDtUFf4SWZqTBnag==",
+              "spanId": "r5awFJagzw0=",
+              "parentSpanId": "NJz2IQum89Y=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330933637000",
+              "endTimeUnixNano": "1793988330933643000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "8GBMl9nDtUFf4SWZqTBnag==",
+              "spanId": "uGx5euU0hc0=",
+              "parentSpanId": "NJz2IQum89Y=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330933610000",
+              "endTimeUnixNano": "1793988330934291000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "8GBMl9nDtUFf4SWZqTBnag==",
+              "spanId": "fBB+e/4WKcw=",
+              "parentSpanId": "NJz2IQum89Y=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330933549000",
+              "endTimeUnixNano": "1793988330934333000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "8GBMl9nDtUFf4SWZqTBnag==",
+              "spanId": "60AEeOQDJ3c=",
+              "parentSpanId": "NJz2IQum89Y=",
+              "flags": 257,
+              "name": "tools/call alpha_lookup_order",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330934359000",
+              "endTimeUnixNano": "1793988330934792000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "lookup_order"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "CSikriXSYC9sy1EW+/Ox5Q==",
+              "spanId": "KlJBojl/HL0=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988330967694000",
+              "endTimeUnixNano": "1793988330969012000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "0928a4ae25d2602f6ccb5116fbf3b1e5"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "2a5241a2397f1cbd"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "update_order"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "mcp.error.code",
+                  "value": {
+                    "intValue": "-32602"
+                  }
+                },
+                {
+                  "key": "mcp.error.message",
+                  "value": {
+                    "stringValue": "invalid params: order_id is required"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "1ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "CSikriXSYC9sy1EW+/Ox5Q==",
+              "spanId": "X11An/8bcIQ=",
+              "parentSpanId": "KlJBojl/HL0=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330968113000",
+              "endTimeUnixNano": "1793988330968120000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "CSikriXSYC9sy1EW+/Ox5Q==",
+              "spanId": "ULz5yDlbabo=",
+              "parentSpanId": "KlJBojl/HL0=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330968082000",
+              "endTimeUnixNano": "1793988330968463000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "CSikriXSYC9sy1EW+/Ox5Q==",
+              "spanId": "Lz51uqNbUSo=",
+              "parentSpanId": "KlJBojl/HL0=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330968008000",
+              "endTimeUnixNano": "1793988330968524000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "CSikriXSYC9sy1EW+/Ox5Q==",
+              "spanId": "rbSpizEvmcM=",
+              "parentSpanId": "KlJBojl/HL0=",
+              "flags": 257,
+              "name": "tools/call alpha_update_order",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330968542000",
+              "endTimeUnixNano": "1793988330968945000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "update_order"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "fNnw0zkOPZyArAxVlNuVfA==",
+              "spanId": "rtHZ/kBgZZM=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988330991069000",
+              "endTimeUnixNano": "1793988330992706000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "502"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "7cd9f0d3390e3d9c80ac0c5594db957c"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "aed1d9fe40606593"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "crash_order"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "reason",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "1ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                }
+              ],
+              "status": {
+                "message": "mcp: upstream error: 502 Bad Gateway",
+                "code": "STATUS_CODE_ERROR"
+              }
+            },
+            {
+              "traceId": "fNnw0zkOPZyArAxVlNuVfA==",
+              "spanId": "BpCuK88gMNU=",
+              "parentSpanId": "rtHZ/kBgZZM=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330991390000",
+              "endTimeUnixNano": "1793988330991396000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "fNnw0zkOPZyArAxVlNuVfA==",
+              "spanId": "00+AVuC3PME=",
+              "parentSpanId": "rtHZ/kBgZZM=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330991369000",
+              "endTimeUnixNano": "1793988330991903000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "fNnw0zkOPZyArAxVlNuVfA==",
+              "spanId": "MO9oCLGyuIE=",
+              "parentSpanId": "rtHZ/kBgZZM=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330991318000",
+              "endTimeUnixNano": "1793988330991974000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "fNnw0zkOPZyArAxVlNuVfA==",
+              "spanId": "9W0aegXRgkE=",
+              "parentSpanId": "rtHZ/kBgZZM=",
+              "flags": 257,
+              "name": "tools/call alpha_crash_order",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988330991994000",
+              "endTimeUnixNano": "1793988330992303000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "crash_order"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                }
+              ],
+              "status": {
+                "message": "http upstream error: http request failed with code: 502 Bad Gateway",
+                "code": "STATUS_CODE_ERROR"
+              }
+            },
+            {
+              "traceId": "pJwlBwTInmY978SZSOzbnA==",
+              "spanId": "engecWMPlZ0=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988331031869000",
+              "endTimeUnixNano": "1793988331033433000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "a49c250704c89e663defc49948ecdb9c"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "7a781e71630f959d"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "beta_ping"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "1ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "posthog.mcp.tool_is_error",
+                  "value": {
+                    "stringValue": "false"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "pJwlBwTInmY978SZSOzbnA==",
+              "spanId": "22Ll/sVcGh0=",
+              "parentSpanId": "engecWMPlZ0=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331032165000",
+              "endTimeUnixNano": "1793988331032171000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "pJwlBwTInmY978SZSOzbnA==",
+              "spanId": "cC4rWvIRWXY=",
+              "parentSpanId": "engecWMPlZ0=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331032139000",
+              "endTimeUnixNano": "1793988331032877000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "pJwlBwTInmY978SZSOzbnA==",
+              "spanId": "1woxvYUFwIs=",
+              "parentSpanId": "engecWMPlZ0=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331032095000",
+              "endTimeUnixNano": "1793988331032913000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "pJwlBwTInmY978SZSOzbnA==",
+              "spanId": "78ZITmwjr7w=",
+              "parentSpanId": "engecWMPlZ0=",
+              "flags": 257,
+              "name": "tools/call beta_beta_ping",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331032937000",
+              "endTimeUnixNano": "1793988331033386000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "beta_ping"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "UOUXf/enaJXHajXxgSfOPQ==",
+              "spanId": "Qxd5ZwjkIGg=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988331056818000",
+              "endTimeUnixNano": "1793988331059357000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "50e5177ff7a76895c76a35f18127ce3d"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "4317796708e42068"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "get_invoice"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "2ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "posthog.mcp.tool_is_error",
+                  "value": {
+                    "stringValue": "false"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "UOUXf/enaJXHajXxgSfOPQ==",
+              "spanId": "VO55jdbnO3w=",
+              "parentSpanId": "Qxd5ZwjkIGg=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331057245000",
+              "endTimeUnixNano": "1793988331057250000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "UOUXf/enaJXHajXxgSfOPQ==",
+              "spanId": "kGv0uCBQSGI=",
+              "parentSpanId": "Qxd5ZwjkIGg=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331057226000",
+              "endTimeUnixNano": "1793988331057541000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "UOUXf/enaJXHajXxgSfOPQ==",
+              "spanId": "IHtLaYGuK3k=",
+              "parentSpanId": "Qxd5ZwjkIGg=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331057178000",
+              "endTimeUnixNano": "1793988331057575000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "UOUXf/enaJXHajXxgSfOPQ==",
+              "spanId": "TufGR8eNZuo=",
+              "parentSpanId": "Qxd5ZwjkIGg=",
+              "flags": 257,
+              "name": "tools/call billing_get_invoice",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331057590000",
+              "endTimeUnixNano": "1793988331059308000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "get_invoice"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "q1dv7tln1M1AgTBLlNboVA==",
+              "spanId": "NqFIqNgP54I=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988331086273000",
+              "endTimeUnixNano": "1793988331087418000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "ab576feed967d4cd4081304b94d6e854"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "36a148a8d80fe782"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "get_invoice"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "1ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "posthog.mcp.tool_is_error",
+                  "value": {
+                    "stringValue": "false"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "q1dv7tln1M1AgTBLlNboVA==",
+              "spanId": "nl378CYLG0I=",
+              "parentSpanId": "NqFIqNgP54I=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331086635000",
+              "endTimeUnixNano": "1793988331086640000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "q1dv7tln1M1AgTBLlNboVA==",
+              "spanId": "OB0X2sAEso8=",
+              "parentSpanId": "NqFIqNgP54I=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331086573000",
+              "endTimeUnixNano": "1793988331086973000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "q1dv7tln1M1AgTBLlNboVA==",
+              "spanId": "RCHmsVGOOSQ=",
+              "parentSpanId": "NqFIqNgP54I=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331086617000",
+              "endTimeUnixNano": "1793988331087015000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "q1dv7tln1M1AgTBLlNboVA==",
+              "spanId": "usHL4zzRT9U=",
+              "parentSpanId": "NqFIqNgP54I=",
+              "flags": 257,
+              "name": "tools/call billing_get_invoice",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331087031000",
+              "endTimeUnixNano": "1793988331087380000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "get_invoice"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "9yIthhKM1F9l6iz/ezbKOA==",
+              "spanId": "h13z2XYYces=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988331121091000",
+              "endTimeUnixNano": "1793988331122871000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "500"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "f7222d86128cd45f65ea2cff7b36ca38"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "875df3d9761871eb"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.resource.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "create_ticket"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "reason",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "1ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                }
+              ],
+              "status": {
+                "message": "mcp: failed to send message: openapi upstream error: Upstream API call for tool 'create_ticket' failed with status 500 Internal Server Error: {\"message\":\"ticket service down\"}\n",
+                "code": "STATUS_CODE_ERROR"
+              }
+            },
+            {
+              "traceId": "9yIthhKM1F9l6iz/ezbKOA==",
+              "spanId": "txX7vw6A2VQ=",
+              "parentSpanId": "h13z2XYYces=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331121752000",
+              "endTimeUnixNano": "1793988331121759000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "9yIthhKM1F9l6iz/ezbKOA==",
+              "spanId": "TSrtCJT1UuY=",
+              "parentSpanId": "h13z2XYYces=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331121579000",
+              "endTimeUnixNano": "1793988331122088000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "9yIthhKM1F9l6iz/ezbKOA==",
+              "spanId": "mrEBkCCCMSo=",
+              "parentSpanId": "h13z2XYYces=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331121634000",
+              "endTimeUnixNano": "1793988331122124000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "9yIthhKM1F9l6iz/ezbKOA==",
+              "spanId": "Fr47Y8cevVo=",
+              "parentSpanId": "h13z2XYYces=",
+              "flags": 257,
+              "name": "tools/call billing_create_ticket",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331122150000",
+              "endTimeUnixNano": "1793988331122805000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "create_ticket"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                }
+              ],
+              "status": {
+                "message": "openapi upstream error: Upstream API call for tool 'create_ticket' failed with status 500 Internal Server Error: {\"message\":\"ticket service down\"}\n",
+                "code": "STATUS_CODE_ERROR"
+              }
+            },
+            {
+              "traceId": "BHwUuXDQ9rKiuog77HzUMA==",
+              "spanId": "iZRsLZ1Oj3U=",
+              "flags": 257,
+              "name": "tools/call",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988331148709000",
+              "endTimeUnixNano": "1793988331149573000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "500"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "047c14b970d0f6b2a2ba883bec7cd430"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "89946c2d9d4e8f75"
+                  }
+                },
+                {
+                  "key": "jwt.sub",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "mcp"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/call"
+                  }
+                },
+                {
+                  "key": "mcp.session.id",
+                  "value": {
+                    "stringValue": "eyJ0IjoibWNwIiwicyI6W3sidCI6ImFscGhhIiwicyI6InN0dWItYWxwaGEtc2Vzc2lvbiJ9LHsidCI6ImJldGEiLCJzIjoic3R1Yi1iZXRhLXNlc3Npb24ifSx7InQiOiJiaWxsaW5nIn1dLCJyIjoiZTc2ZjJjY2UtMDQxNS00ZDZiLTlkMDgtZWI4NWFmYTFhMTgzIn0"
+                  }
+                },
+                {
+                  "key": "reason",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "0ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "posthog.distinct_id",
+                  "value": {
+                    "stringValue": "user_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.groups.organization",
+                  "value": {
+                    "stringValue": "org_fixture_1"
+                  }
+                },
+                {
+                  "key": "posthog.set.email",
+                  "value": {
+                    "stringValue": "fixture@example.com"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "MCP"
+                  }
+                }
+              ],
+              "status": {
+                "message": "mcp: failed to send message: invalid request: unknown tool no_such_tool",
+                "code": "STATUS_CODE_ERROR"
+              }
+            },
+            {
+              "traceId": "BHwUuXDQ9rKiuog77HzUMA==",
+              "spanId": "P9uUJfE7k/g=",
+              "parentSpanId": "iZRsLZ1Oj3U=",
+              "flags": 257,
+              "name": "tools/list billing",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331149129000",
+              "endTimeUnixNano": "1793988331149135000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "billing"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "BHwUuXDQ9rKiuog77HzUMA==",
+              "spanId": "uEOCem0Ax7c=",
+              "parentSpanId": "iZRsLZ1Oj3U=",
+              "flags": 257,
+              "name": "tools/list alpha",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331149065000",
+              "endTimeUnixNano": "1793988331149502000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "BHwUuXDQ9rKiuog77HzUMA==",
+              "spanId": "lDjuJqKtuFo=",
+              "parentSpanId": "iZRsLZ1Oj3U=",
+              "flags": 257,
+              "name": "tools/list beta",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1793988331149111000",
+              "endTimeUnixNano": "1793988331149536000",
+              "attributes": [
+                {
+                  "key": "agentgateway.outbound.kind",
+                  "value": {
+                    "stringValue": "Primary"
+                  }
+                },
+                {
+                  "key": "agentgateway.outbound.subtype",
+                  "value": {
+                    "stringValue": "Mcp"
+                  }
+                },
+                {
+                  "key": "mcp.target",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "mcp.method.name",
+                  "value": {
+                    "stringValue": "tools/list"
+                  }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "TXNNo9h2T6a2QdIR5GoFIA==",
+              "spanId": "arnH/XDdaVs=",
+              "flags": 257,
+              "name": "POST /*",
+              "kind": "SPAN_KIND_SERVER",
+              "startTimeUnixNano": "1793988331215573000",
+              "endTimeUnixNano": "1793988331215697000",
+              "attributes": [
+                {
+                  "key": "gateway",
+                  "value": {
+                    "stringValue": "default/default"
+                  }
+                },
+                {
+                  "key": "listener",
+                  "value": {
+                    "stringValue": "listener0"
+                  }
+                },
+                {
+                  "key": "route",
+                  "value": {
+                    "stringValue": "default/route0"
+                  }
+                },
+                {
+                  "key": "client.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/mcp"
+                  }
+                },
+                {
+                  "key": "network.protocol.version",
+                  "value": {
+                    "stringValue": "1.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "401"
+                  }
+                },
+                {
+                  "key": "trace.id",
+                  "value": {
+                    "stringValue": "4d734da3d8764fa6b641d211e46a0520"
+                  }
+                },
+                {
+                  "key": "span.id",
+                  "value": {
+                    "stringValue": "6ab9c7fd70dd695b"
+                  }
+                },
+                {
+                  "key": "protocol",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "reason",
+                  "value": {
+                    "stringValue": "JwtAuth"
+                  }
+                },
+                {
+                  "key": "duration",
+                  "value": {
+                    "stringValue": "0ms"
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "3000"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "JwtAuth"
+                  }
+                }
+              ],
+              "status": {
+                "message": "authentication failure: no bearer token found",
+                "code": "STATUS_CODE_ERROR"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

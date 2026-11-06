@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+frontendPolicies:
+  tracing:
+    host: 127.0.0.1:4318
+    protocol: http
+    randomSampling: "true"
+    attributes:
+      posthog.distinct_id: 'jwt.sub'
+      posthog.groups.organization: 'jwt.org_id'
+      posthog.set.email: 'jwt.email'
+      posthog.mcp.tool_is_error: 'mcp.tool.result.isError'
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - policies:
+        jwtAuth:
+          mode: strict
+          issuer: fixture.example.com
+          audiences: [mcp.example.com]
+          jwks:
+            file: ${WORK}/jwks.json
+      backends:
+      - mcp:
+          prefixMode: never
+          targets:
+          - name: alpha
+            mcp:
+              host: http://127.0.0.1:3101/mcp
+          - name: beta
+            mcp:
+              host: http://127.0.0.1:3102/mcp
+          - name: billing
+            openapi:
+              host: 127.0.0.1:3201
+              schema:
+                file: ${RECORD_DIR}/openapi.json

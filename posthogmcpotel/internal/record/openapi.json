@@ -1,0 +1,23 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "billing", "version": "1.0.0"},
+  "servers": [{"url": "http://127.0.0.1:3201"}],
+  "paths": {
+    "/invoices/{id}": {
+      "get": {
+        "operationId": "get_invoice",
+        "summary": "Get an invoice",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "ok"}}
+      }
+    },
+    "/tickets": {
+      "post": {
+        "operationId": "create_ticket",
+        "summary": "Create a ticket",
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object"}}}},
+        "responses": {"200": {"description": "ok"}}
+      }
+    }
+  }
+}
