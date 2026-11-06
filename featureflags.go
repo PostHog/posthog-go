@@ -319,6 +319,8 @@ type unresolvableFlagFingerprint struct {
 type FeatureFlag struct {
 	// Key is the feature flag key.
 	Key string `json:"key"`
+	// EvaluationRuntime is the flag's configured runtime, or nil when unknown.
+	EvaluationRuntime *string `json:"evaluation_runtime"`
 	// RolloutPercentage is the top-level rollout percentage, when configured.
 	RolloutPercentage *float64 `json:"rollout_percentage"`
 	// Active reports whether the flag is active.
@@ -1041,10 +1043,13 @@ func (poller *FeatureFlagsPoller) warnAboutUnresolvableFlags(state *flagsState) 
 	poller.warnedUnresolvableMu.Lock()
 	defer poller.warnedUnresolvableMu.Unlock()
 	// Rebuilt from the current definitions, so a flag that is deleted or becomes
-	// resolvable is forgotten and warns again if it later returns.
+	// resolvable or client-only is forgotten and warns again if it later returns.
 	warned := make(map[string]unresolvableFlagFingerprint)
 	var experienceContinuityKeys, unsupportedDefinitionKeys []string
 	for _, flag := range state.featureFlags {
+		if flag.EvaluationRuntime != nil && *flag.EvaluationRuntime == "client" {
+			continue
+		}
 		reason := definitionUnresolvedReason(flag, state.flagsByKey, state.cohorts, state.propertyMatchingVersion)
 		if reason == "" {
 			continue
