@@ -604,6 +604,7 @@ type ExceptionStacktrace struct {
 
 type FeatureFlag struct {
 	Key string `json:"key"`
+	EvaluationRuntime *string `json:"evaluation_runtime"`
 	RolloutPercentage *float64 `json:"rollout_percentage"`
 	Active bool `json:"active"`
 	Filters Filter `json:"filters"`
