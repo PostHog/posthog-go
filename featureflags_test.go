@@ -5,7 +5,9 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -360,12 +362,8 @@ func definitionsSequenceServer(t *testing.T, bodies ...string) (*httptest.Server
 		if index >= len(bodies) {
 			index = len(bodies) - 1
 		}
-		if bodies[index] == "304" {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		if bodies[index] == "402" {
-			w.WriteHeader(http.StatusPaymentRequired)
+		if status, err := strconv.Atoi(bodies[index]); err == nil {
+			w.WriteHeader(status)
 			return
 		}
 		w.Header().Set("ETag", fmt.Sprintf(`"etag-%d"`, index))
@@ -373,6 +371,109 @@ func definitionsSequenceServer(t *testing.T, bodies ...string) (*httptest.Server
 	}))
 	t.Cleanup(server.Close)
 	return server, &remoteRequests
+}
+
+type levelLogger struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *levelLogger) Debugf(format string, args ...interface{}) {
+	l.record("DEBUG " + fmt.Sprintf(format, args...))
+}
+func (l *levelLogger) Logf(string, ...interface{}) {}
+func (l *levelLogger) Warnf(format string, args ...interface{}) {
+	l.record("WARN " + fmt.Sprintf(format, args...))
+}
+func (l *levelLogger) Errorf(format string, args ...interface{}) {
+	l.record("ERROR " + fmt.Sprintf(format, args...))
+}
+
+func (l *levelLogger) record(line string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, line)
+}
+
+func (l *levelLogger) matching(prefix, text string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var matches []string
+	for _, line := range l.lines {
+		if strings.HasPrefix(line, prefix) && strings.Contains(line, text) {
+			matches = append(matches, line)
+		}
+	}
+	return matches
+}
+
+func TestRejectedSecretKeyWarnsOnceAcrossPolls(t *testing.T) {
+	for _, status := range []string{"401", "403"} {
+		t.Run(status, func(t *testing.T) {
+			server, _ := definitionsSequenceServer(t, status)
+			poller := newTestPoller(t, server.URL)
+			logger := &levelLogger{}
+			poller.Logger = logger
+
+			for i := 0; i < 5; i++ {
+				poller.fetchNewFeatureFlags()
+			}
+
+			warnings := logger.matching("WARN ", "")
+			require.Len(t, warnings, 1, warnings)
+			require.Contains(t, warnings[0], "Feature flags: Read")
+			require.Empty(t, logger.matching("ERROR ", ""))
+			require.Len(t, logger.matching("DEBUG ", "rejected again"), 4)
+		})
+	}
+}
+
+func TestRejectedSecretKeyWarnsAgainAfterDefinitionsLoad(t *testing.T) {
+	tests := []struct {
+		name   string
+		bodies []string
+	}{
+		{name: "200", bodies: []string{"401", "401", localDefinitions(), "401", "401"}},
+		{name: "304", bodies: []string{localDefinitions(), "401", "304", "401", "401"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, _ := definitionsSequenceServer(t, tt.bodies...)
+			poller := newTestPoller(t, server.URL)
+			logger := &levelLogger{}
+			poller.Logger = logger
+
+			for i := 0; i < 5; i++ {
+				poller.fetchNewFeatureFlags()
+			}
+
+			require.Len(t, logger.matching("WARN ", "Feature flags: Read"), 2, logger.matching("", ""))
+		})
+	}
+}
+
+func TestRejectedSecretKeyStaysQuietAfterSharedCacheLoad(t *testing.T) {
+	server, _ := definitionsSequenceServer(t, "401")
+	provider := &fakeFlagDefinitionCache{shouldFetch: true}
+	poller := newCachingTestPoller(t, server.URL, provider)
+	logger := &levelLogger{}
+	poller.Logger = logger
+
+	poller.fetchNewFeatureFlags()
+	provider.mu.Lock()
+	provider.shouldFetch = false
+	provider.cached = json.RawMessage(localDefinitions())
+	provider.mu.Unlock()
+	poller.fetchNewFeatureFlags()
+	provider.mu.Lock()
+	provider.shouldFetch = true
+	provider.mu.Unlock()
+	poller.fetchNewFeatureFlags()
+
+	_, cacheLoads, _, _ := provider.calls()
+	require.Equal(t, 1, cacheLoads)
+	require.Len(t, logger.matching("WARN ", "Feature flags: Read"), 1, logger.matching("", ""))
+	require.Len(t, logger.matching("DEBUG ", "rejected again"), 1)
 }
 
 func countUnresolvableWarnings(logger *captureLogger, key string, reason UnresolvedFlagReason) int {
