@@ -451,9 +451,25 @@ func TestMissingCapabilityToolDeclaresItRecordsData(t *testing.T) {
 	require.Len(t, tools, 1)
 	wire, err := json.Marshal(tools[0].Annotations)
 	require.NoError(t, err)
-	// go-sdk drops a false readOnlyHint and idempotentHint from the wire, and MCP
-	// reads an absent hint as false, so a client sees all four as false.
-	assert.JSONEq(t, `{"destructiveHint":false,"openWorldHint":false}`, string(wire))
+	var hints map[string]any
+	require.NoError(t, json.Unmarshal(wire, &hints))
+	// go-sdk before v1.8 drops a false readOnlyHint and idempotentHint from the
+	// wire, and MCP reads an absent hint as false, so a client sees all four as
+	// false either way.
+	assert.Subset(t, []string{"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"}, keys(hints))
+	assert.Contains(t, hints, "destructiveHint")
+	assert.Contains(t, hints, "openWorldHint")
+	for hint, value := range hints {
+		assert.Equal(t, false, value, hint)
+	}
+}
+
+func keys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestContextArgumentDescriptionIsSharedAcrossSDKs(t *testing.T) {
