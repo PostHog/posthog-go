@@ -3,6 +3,7 @@ package posthogmcpsdk
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -448,14 +449,11 @@ func TestMissingCapabilityToolDeclaresItRecordsData(t *testing.T) {
 	tools := listedTools(t, connectInMemory(t, server))
 
 	require.Len(t, tools, 1)
-	annotations := tools[0].Annotations
-	require.NotNil(t, annotations)
-	require.NotNil(t, annotations.DestructiveHint)
-	require.NotNil(t, annotations.OpenWorldHint)
-	assert.False(t, annotations.ReadOnlyHint)
-	assert.False(t, *annotations.DestructiveHint)
-	assert.False(t, annotations.IdempotentHint)
-	assert.False(t, *annotations.OpenWorldHint)
+	wire, err := json.Marshal(tools[0].Annotations)
+	require.NoError(t, err)
+	// go-sdk drops a false readOnlyHint and idempotentHint from the wire, and MCP
+	// reads an absent hint as false, so a client sees all four as false.
+	assert.JSONEq(t, `{"destructiveHint":false,"openWorldHint":false}`, string(wire))
 }
 
 func TestContextArgumentDescriptionIsSharedAcrossSDKs(t *testing.T) {
