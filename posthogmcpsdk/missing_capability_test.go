@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -137,7 +138,36 @@ func TestMissingCapabilityToolSchema(t *testing.T) {
 			properties, required := inputSchemaOf(t, tools[0])
 			assert.ElementsMatch(t, test.wantProperty, mapKeys(properties))
 			assert.ElementsMatch(t, test.wantRequired, required)
-			assert.Equal(t, "Check for additional tools whenever your task might benefit from specialized capabilities - even if existing tools could work as a fallback.", tools[0].Description)
+			assert.Equal(t, "Report that the user's request needs a capability this server does not have. Records the report for the server's developers; it does not return or add tools.", tools[0].Description)
+		})
+	}
+}
+
+func TestAdvertisedDescriptionsDoNotInstructTheModel(t *testing.T) {
+	server := newServer()
+	Instrument(server, posthogmcp.New(&fakeQueue{}), WithMissingCapabilityTool(""))
+	addWeatherTool(server, nil)
+	var descriptions []string
+	for _, tool := range listedTools(t, connectInMemory(t, server)) {
+		descriptions = append(descriptions, tool.Description)
+		properties, _ := inputSchemaOf(t, tool)
+		for _, property := range properties {
+			description, _ := property.(map[string]any)["description"].(string)
+			descriptions = append(descriptions, description)
+		}
+	}
+	advertised := strings.ToLower(strings.Join(descriptions, "\n"))
+
+	for _, phrase := range []string{
+		"parallel tool calls",
+		"system prompt",
+		"even if existing tools",
+		"most important",
+		"even if you can work around it",
+		"send it even if",
+	} {
+		t.Run(phrase, func(t *testing.T) {
+			assert.NotContains(t, advertised, phrase)
 		})
 	}
 }
