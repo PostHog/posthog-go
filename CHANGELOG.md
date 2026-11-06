@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.41.1
+
+### Patch Changes
+
+- 17365fe: Suppress local-evaluation definition warnings for client-only flags, including definitions loaded from a shared cache, without changing their evaluation behavior.
+
 ## 1.41.0
 
 ### Minor Changes
