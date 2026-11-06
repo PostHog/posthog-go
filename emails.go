@@ -113,6 +113,17 @@ type CodeEmail struct {
 	// Without it, PostHog sends from the project's default sender.
 	From    string
 	ReplyTo []string
+	// Cc are bare addresses, such as "finance@example.com", that get a copy
+	// the other recipients see. At most 10.
+	Cc []string
+	// Bcc are bare addresses that get a copy the other recipients never see.
+	// At most 10.
+	Bcc []string
+	// Attachments are files sent with the email, at most 10 and 512 KB in
+	// total. PostHog refuses file types that mailbox providers block, such as
+	// .exe. PostHog can't fetch a file from a path or URL: read the file and
+	// pass its bytes.
+	Attachments []EmailAttachment
 	// CaptureEngagement says whether PostHog captures the email's engagement
 	// events, such as opens and clicks, as events of the recipient. Nil means
 	// true. A project whose admin turned engagement capture off captures
@@ -128,6 +139,21 @@ type CodeEmail struct {
 	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
 	// Ptr(0) turns retries off.
 	MaxRetries *int
+}
+
+// EmailAttachment is a file sent with a CodeEmail.
+type EmailAttachment struct {
+	// Filename is the name the recipient sees, such as "invoice.pdf", with no
+	// path.
+	Filename string `json:"filename"`
+	// Content is the file's bytes. The client sends them Base64 encoded.
+	Content []byte `json:"content"`
+	// ContentType is a MIME type, such as "application/pdf". Without it, the
+	// type follows from Filename.
+	ContentType string `json:"content_type,omitempty"`
+	// ContentID shows the file inline: the HTML references it as
+	// <img src="cid:logo"> when ContentID is "logo".
+	ContentID string `json:"content_id,omitempty"`
 }
 
 // SendEmailResult is an email that PostHog queued.
@@ -180,15 +206,18 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string   `json:"to"`
-	TemplateKey       string   `json:"template_key"`
-	Subject           string   `json:"subject"`
-	HTML              string   `json:"html,omitempty"`
-	Text              string   `json:"text,omitempty"`
-	From              string   `json:"from,omitempty"`
-	ReplyTo           []string `json:"reply_to,omitempty"`
-	CaptureEngagement bool     `json:"capture_engagement"`
-	DistinctID        string   `json:"distinct_id,omitempty"`
+	To                string            `json:"to"`
+	TemplateKey       string            `json:"template_key"`
+	Subject           string            `json:"subject"`
+	HTML              string            `json:"html,omitempty"`
+	Text              string            `json:"text,omitempty"`
+	From              string            `json:"from,omitempty"`
+	ReplyTo           []string          `json:"reply_to,omitempty"`
+	Cc                []string          `json:"cc,omitempty"`
+	Bcc               []string          `json:"bcc,omitempty"`
+	Attachments       []EmailAttachment `json:"attachments,omitempty"`
+	CaptureEngagement bool              `json:"capture_engagement"`
+	DistinctID        string            `json:"distinct_id,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -227,10 +256,22 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	if e.HTML == "" && e.Text == "" {
 		return emailSend{}, invalidEmail("invalid_form", "HTML", "A CodeEmail needs HTML, Text or both.")
 	}
-	for _, address := range e.ReplyTo {
-		if strings.TrimSpace(address) == "" {
-			return emailSend{}, invalidEmail("invalid_reply_to", "ReplyTo", "ReplyTo must not hold a blank address.")
+	for _, list := range []struct {
+		field, code string
+		addresses   []string
+	}{
+		{"ReplyTo", "invalid_reply_to", e.ReplyTo},
+		{"Cc", "invalid_cc", e.Cc},
+		{"Bcc", "invalid_bcc", e.Bcc},
+	} {
+		for _, address := range list.addresses {
+			if strings.TrimSpace(address) == "" {
+				return emailSend{}, invalidEmail(list.code, list.field, list.field+" must not hold a blank address.")
+			}
 		}
+	}
+	if err := checkAttachments(e.Attachments); err != nil {
+		return emailSend{}, err
 	}
 	body, err := encodeEmailBody(codeEmailBody{
 		To:                e.To,
@@ -240,6 +281,9 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		Text:              e.Text,
 		From:              e.From,
 		ReplyTo:           e.ReplyTo,
+		Cc:                e.Cc,
+		Bcc:               e.Bcc,
+		Attachments:       e.Attachments,
 		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
 	})
@@ -247,6 +291,19 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)
 	}
 	return newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
+}
+
+func checkAttachments(attachments []EmailAttachment) *EmailError {
+	for i, attachment := range attachments {
+		field := "Attachments[" + strconv.Itoa(i) + "]"
+		if strings.TrimSpace(attachment.Filename) == "" {
+			return invalidEmail("invalid_attachment", field+".Filename", "An attachment needs a Filename, such as \"invoice.pdf\".")
+		}
+		if len(attachment.Content) == 0 {
+			return invalidEmail("invalid_attachment", field+".Content", "An attachment needs Content, the file's bytes.")
+		}
+	}
+	return nil
 }
 
 func checkRecipient(to string) *EmailError {
