@@ -37,9 +37,12 @@ const (
 	propertySet                 = "$set"
 	propertyProcessProfile      = "$process_person_profile"
 	optionProcessProfile        = "process_person_profile"
+	propertyLib                 = "$lib"
+	propertyLibVersion          = "$lib_version"
 
 	analyticsSource = "posthog_mcp_analytics"
 	exceptionSource = "mcp.tool_call"
+	library         = "posthog-go-mcp"
 )
 
 const (

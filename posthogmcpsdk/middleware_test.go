@@ -143,8 +143,11 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	received.Meta = nil // go-sdk v1.8+ stamps serverInfo on the way out, after the middleware
 	assert.JSONEq(t, jsonString(t, &received), jsonString(t, properties["$mcp_response"]))
 	delete(properties, "$mcp_response")
+	assert.Equal(t, posthog.Version, properties["$lib_version"])
+	delete(properties, "$lib_version")
 	assert.JSONEq(t, `{
 		"$groups": {"company": "acme"},
+		"$lib": "posthog-go-mcp",
 		"$mcp_client_name": "test-client",
 		"$mcp_client_version": "2.0.0",
 		"$mcp_intent": "Checking the weather before a trip",

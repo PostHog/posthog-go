@@ -157,13 +157,12 @@ type CaptureInApi struct {
 	Type string `json:"-"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the legacy top-level SDK name retained for callbacks.
-	// Deprecated: PostHog reads SDK identity from the PostHog-Sdk-Info header, so
-	// this top-level field is no longer serialized.
+	// Library is the $lib the event is stored with, for callbacks. It is not
+	// serialized: the wire carries $lib in Properties.
 	Library string `json:"-"`
-	// LibraryVersion is the legacy top-level SDK version retained for callbacks.
-	// Deprecated: PostHog reads the SDK version from the PostHog-Sdk-Info header,
-	// so this top-level field is no longer serialized.
+	// LibraryVersion is the $lib_version the event is stored with, for
+	// callbacks. It is not serialized: the wire carries $lib_version in
+	// Properties.
 	LibraryVersion string `json:"-"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
@@ -193,7 +192,8 @@ type CaptureInApi struct {
 // $is_server is kept so server-event classification still works. System
 // context ($os, $os_version, $os_distro, $go_version) is kept because those
 // are cheap, low-cardinality dimensions for platform/runtime breakdowns on
-// flag-call debugging.
+// flag-call debugging. $lib and $lib_version are the SDK identity every
+// event carries.
 var minimalFlagCalledEventAllowlist = []string{
 	"$feature_flag",
 	"$feature_flag_response",
@@ -224,6 +224,8 @@ var minimalFlagCalledEventAllowlist = []string{
 	"$os_version",
 	"$os_distro",
 	"$go_version",
+	propertyLib,
+	propertyLibVersion,
 }
 
 // minimalFlagCalledEventProperties builds a fresh property set containing only
@@ -248,12 +250,9 @@ func shouldMinimizeFlagCalledEvent(minimalFlagCalledEvents bool, hasExperiment *
 
 // APIfy converts a Capture message into the PostHog batch API representation.
 func (msg Capture) APIfy() APIMessage {
-	libraryVersion := getVersion()
-
 	myProperties := Properties{}.
-		Merge(msg.Properties).
-		Set("$lib", SDKName).
-		Set("$lib_version", libraryVersion)
+		Merge(msg.Properties)
+	library, libraryVersion := fillSDKLib(myProperties)
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
@@ -266,7 +265,7 @@ func (msg Capture) APIfy() APIMessage {
 	apified := CaptureInApi{
 		Type:             msg.Type,
 		Uuid:             msg.Uuid,
-		Library:          SDKName,
+		Library:          library,
 		LibraryVersion:   libraryVersion,
 		Timestamp:        msg.Timestamp.UTC(),
 		DistinctId:       msg.DistinctId,

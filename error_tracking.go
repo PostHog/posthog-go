@@ -238,7 +238,7 @@ func (msg ExceptionItem) Validate() error {
 
 // APIfy converts an Exception message into the PostHog batch API representation.
 func (msg Exception) APIfy() APIMessage {
-	libVersion := getVersion()
+	library, libVersion := libIdentity(msg.Properties)
 
 	var isServer *bool
 	if msg.IsServer {
@@ -249,12 +249,12 @@ func (msg Exception) APIfy() APIMessage {
 		Type:           msg.Type, // set to "exception" by Enqueue switch
 		Uuid:           msg.Uuid,
 		Event:          "$exception",
-		Library:        SDKName,
+		Library:        library,
 		LibraryVersion: libVersion,
 		Timestamp:      msg.Timestamp.UTC(),
 		Properties: ExceptionInApiProperties{
 			sysContext:           getSystemContext(),
-			Lib:                  SDKName,
+			Lib:                  library,
 			LibVersion:           libVersion,
 			IsServer:             isServer,
 			DistinctId:           msg.DistinctId,

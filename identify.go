@@ -78,9 +78,7 @@ type IdentifyInApi struct {
 
 // APIfy converts an Identify message into the PostHog batch API representation.
 func (msg Identify) APIfy() APIMessage {
-	myProperties := Properties{}.
-		Set("$lib", SDKName).
-		Set("$lib_version", getVersion())
+	myProperties := Properties{}
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
@@ -92,13 +90,14 @@ func (msg Identify) APIfy() APIMessage {
 
 	myProperties.
 		mergeDefaults(msg.EventProperties)
+	library, libraryVersion := fillSDKLib(myProperties)
 
 	apified := IdentifyInApi{
 		Type:           msg.Type,
 		Uuid:           msg.Uuid,
 		Event:          "$identify",
-		Library:        SDKName,
-		LibraryVersion: getVersion(),
+		Library:        library,
+		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp.UTC(),
 		DistinctId:     msg.DistinctId,
 

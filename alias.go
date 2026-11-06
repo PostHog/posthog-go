@@ -91,7 +91,7 @@ type AliasInApi struct {
 
 // APIfy converts an Alias message into the PostHog batch API representation.
 func (msg Alias) APIfy() APIMessage {
-	libraryVersion := getVersion()
+	library, libraryVersion := libIdentity(msg.EventProperties)
 
 	var isServer *bool
 	if msg.IsServer {
@@ -102,14 +102,14 @@ func (msg Alias) APIfy() APIMessage {
 		Type:           msg.Type,
 		Uuid:           msg.Uuid,
 		Event:          "$create_alias",
-		Library:        SDKName,
+		Library:        library,
 		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp.UTC(),
 		Properties: AliasInApiProperties{
 			sysContext:   getSystemContext(),
 			DistinctId:   msg.DistinctId,
 			Alias:        msg.Alias,
-			Lib:          SDKName,
+			Lib:          library,
 			LibVersion:   libraryVersion,
 			IsServer:     isServer,
 			DisableGeoIP: msg.DisableGeoIP,

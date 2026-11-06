@@ -356,6 +356,7 @@ func setStringProperty(properties posthog.Properties, key, value string) {
 }
 
 func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, includeSet bool) {
+	applyLibrary(properties)
 	if len(p.groups) > 0 {
 		properties[propertyGroups] = p.groups
 	}
@@ -364,6 +365,40 @@ func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, 
 			properties[propertySet] = p.setProperties
 		}
 	}
+}
+
+// applyLibrary labels the event with this package's $lib and $lib_version when
+// the caller's properties set no $lib, replacing a lone $lib_version. A set
+// $lib is a non-empty string, as in the core SDK. A caller's $lib wins with its
+// own $lib_version, and gets this package's version only when it names this
+// package and has none.
+func applyLibrary(properties posthog.Properties) {
+	lib, _ := properties[propertyLib].(string)
+	switch {
+	case lib == "":
+		properties[propertyLib] = library
+		properties[propertyLibVersion] = posthog.Version
+	case lib == library:
+		if version, _ := properties[propertyLibVersion].(string); version == "" {
+			properties[propertyLibVersion] = posthog.Version
+		}
+	}
+}
+
+// copyLibPair gives properties the $lib and $lib_version of source when source
+// sets $lib, so a version never pairs with another layer's library. It reports
+// whether source sets $lib.
+func copyLibPair(properties, source posthog.Properties) bool {
+	if lib, _ := source[propertyLib].(string); lib == "" {
+		return false
+	}
+	properties[propertyLib] = source[propertyLib]
+	if version, ok := source[propertyLibVersion]; ok {
+		properties[propertyLibVersion] = version
+	} else {
+		delete(properties, propertyLibVersion)
+	}
+	return true
 }
 
 // options returns the event's capture options: the caller's Options plus the

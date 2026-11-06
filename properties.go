@@ -81,8 +81,9 @@ var nestedFillProperties = map[string]struct{}{
 // fillProperties returns a copy of props with each key from layers added when
 // props and the earlier layers do not contain it. A key with a nil value counts
 // as set. For the nestedFillProperties keys, when both values are maps, a layer
-// adds only the inner keys that are still missing. props is returned unchanged
-// when no layer has a key.
+// adds only the inner keys that are still missing. $lib and $lib_version fill
+// as a pair, see fillLibPair. props is returned unchanged when no layer has a
+// key.
 func fillProperties(props Properties, layers ...Properties) Properties {
 	size := len(props)
 	for _, layer := range layers {
@@ -97,6 +98,9 @@ func fillProperties(props Properties, layers ...Properties) Properties {
 	}
 	for _, layer := range layers {
 		for k, v := range layer {
+			if k == propertyLib || k == propertyLibVersion {
+				continue
+			}
 			current, exists := filled[k]
 			if !exists {
 				filled[k] = v
@@ -110,7 +114,31 @@ func fillProperties(props Properties, layers ...Properties) Properties {
 			}
 		}
 	}
+	fillLibPair(filled, props, layers)
 	return filled
+}
+
+// fillLibPair gives filled the $lib and $lib_version of the first of props and
+// layers whose $lib is set, so a version never pairs with another layer's
+// library. Neither key is filled when none sets $lib, which leaves a lone
+// $lib_version or an unset $lib for the SDK's own pair to replace.
+func fillLibPair(filled, props Properties, layers []Properties) {
+	if _, set := libString(props[propertyLib]); set {
+		return
+	}
+	for _, layer := range layers {
+		lib := layer[propertyLib]
+		if _, set := libString(lib); !set {
+			continue
+		}
+		filled[propertyLib] = lib
+		if version, ok := layer[propertyLibVersion]; ok {
+			filled[propertyLibVersion] = version
+		} else {
+			delete(filled, propertyLibVersion)
+		}
+		return
+	}
 }
 
 // mergeNestedMaps returns a new map with the keys of base and then the keys of

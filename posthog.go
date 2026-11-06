@@ -25,6 +25,8 @@ const (
 
 	propertyGeoipDisable = "$geoip_disable"
 	propertyIsServer     = "$is_server"
+	propertyLib          = "$lib"
+	propertyLibVersion   = "$lib_version"
 
 	// DefaultIdleConns is the default max idle connections for the HTTP client.
 	DefaultIdleConns = 100
