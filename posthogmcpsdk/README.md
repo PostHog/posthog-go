@@ -23,8 +23,11 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   `{"request": {"method": "tools/call", "params": {"name": ..., "arguments": ...}}}`,
   and the result as `$mcp_response`. Credentials and binary content are
   redacted. Turn either off with `WithCaptureParameters(false)` or
-  `WithCaptureResponses(false)`. The error text of a failed call is captured
-  either way.
+  `WithCaptureResponses(false)`. Neither covers the error text of a failed
+  call, which tool errors often build from the arguments. To keep it out too,
+  create the recorder with `posthogmcp.New(client,
+  posthogmcp.WithCaptureErrorMessages(false))`: failures are still recorded,
+  with their error type, as `Tool <name> returned an error`.
 - The session as `$session_id`, always set. A conversation handle, described
   below, comes first. Next, a transport session ID (streamable HTTP) becomes
   `ses_` plus a hash every PostHog MCP SDK computes the same way, so one

@@ -72,7 +72,8 @@ func WithCaptureParameters(enabled bool) Option {
 // WithCaptureResponses controls capture of tool results as $mcp_response. It
 // is enabled by default. Disabling it does not cover failures: the text of an
 // IsError result is still sent as $mcp_error_message and in a $exception
-// event.
+// event, unless the recorder is created with
+// posthogmcp.WithCaptureErrorMessages(false).
 func WithCaptureResponses(enabled bool) Option {
 	return func(cfg *config) { cfg.captureResponses = enabled }
 }
