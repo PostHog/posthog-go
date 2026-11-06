@@ -28,6 +28,8 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   create the recorder with `posthogmcp.New(client,
   posthogmcp.WithCaptureErrorMessages(false))`: failures are still recorded,
   with their error type, as `Tool <name> returned an error`.
+  The text of an `IsError` result, including the ones go-sdk builds from a typed handler's error or a failed validation, is also part of `$mcp_response`, so
+  turn responses off as well.
 - The session as `$session_id`, always set. A conversation handle, described
   below, comes first. Next, a transport session ID (streamable HTTP) becomes
   `ses_` plus a hash every PostHog MCP SDK computes the same way, so one
