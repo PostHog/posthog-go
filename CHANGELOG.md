@@ -1,5 +1,15 @@
 ## Unreleased
 
+## 1.42.0
+
+### Minor Changes
+
+- 761d995: Add `posthogmcp.WithCaptureErrorMessages(false)`, which keeps a failed MCP tool call's error text out of `$mcp_error_message` and the `$exception` event. Tool errors often repeat their arguments, and only credentials are redacted from them. The failure is still recorded with its error type, and both carry `Tool <name> returned an error` instead. It applies to the manual API and to the `posthogmcpsdk` and `posthogmcpgo` adapters. An `IsError` result's content is still part of `$mcp_response`, so turn response capture off too to keep failure text out entirely.
+
+### Patch Changes
+
+- a528b3f: Aligned `posthogmcpsdk` with the sdk-specs MCP spec. The `get_more_tools` virtual tool now advertises `readOnlyHint`, `idempotentHint`, `destructiveHint` and `openWorldHint` as `false`, since it records data, and no longer sets a title. The injected `context` argument has a shorter description that asks for a few words on why the tool is called, described by role. The injected `llm_model` argument is no longer listed as required. This changes your published tool definitions; if your server is listed in the ChatGPT or Claude directories, those platforms may re-review the updated tools.
+
 ## 1.41.1
 
 ### Patch Changes
