@@ -54,8 +54,13 @@ arguments. Middleware given after it sees them removed.
   `{"request": {"method": "tools/call", "params": {"name": ..., "arguments": ...}}}`,
   and the result as `$mcp_response`. Credentials and binary content are
   redacted. Turn either off with `WithCaptureParameters(false)` or
-  `WithCaptureResponses(false)`. The error text of a failed call is captured
-  either way.
+  `WithCaptureResponses(false)`. Neither covers the error text of a failed
+  call, which tool errors often build from the arguments. To keep it out too,
+  create the recorder with `posthogmcp.New(client,
+  posthogmcp.WithCaptureErrorMessages(false))`: failures are still recorded,
+  with their error type, as `Tool <name> returned an error`.
+  The text of an `IsError` result, including the ones mcp-go sends when schema validation fails, is also part of `$mcp_response`, so
+  turn responses off as well.
 - The session as `$session_id`, always set. On stateful streamable HTTP, the
   `Mcp-Session-Id` becomes `ses_` plus a hash every PostHog MCP SDK computes
   the same way, so replicas and SDKs in other languages agree. On stateless

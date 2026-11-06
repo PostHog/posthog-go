@@ -1154,6 +1154,8 @@ const (
 )
 type Option func(*config)
 
+func WithCaptureErrorMessages(enabled bool) Option
+
 func WithExceptionAutocapture(enabled bool) Option
 
 type ToolCall struct {
