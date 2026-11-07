@@ -384,8 +384,8 @@ reported `1.0.0` from any test binary, including your application's own.
 before `BeforeSend`, only for keys that the event and the request context left
 unset. A key set to `nil` counts as set, so it keeps the default out.
 `RequestContext.Properties` fill in the same way and win over the defaults. In
-1.x the default value overwrote the event's value, except for an event's
-`$process_person_profile: false`.
+1.x the default value overwrote the event's value, except when the event
+turned person processing off.
 
 `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. When the
 event and a default both set one of them to a map, the default adds only the
