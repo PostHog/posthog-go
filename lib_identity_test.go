@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -253,6 +257,66 @@ func TestMinimalFlagCalledEventKeepsLibOnWire(t *testing.T) {
 	require.Equal(t, SDKName, ev.Properties[propertyLib])
 	require.Equal(t, getVersion(), ev.Properties[propertyLibVersion])
 	require.NotContains(t, ev.Properties, "custom")
+}
+
+func TestFeatureFlagCalledEventLibLayers(t *testing.T) {
+	pair := func(lib, version interface{}) Properties {
+		return NewProperties().Set(propertyLib, lib).Set(propertyLibVersion, version)
+	}
+	cases := []struct {
+		name     string
+		context  Properties
+		defaults Properties
+		wire     libPair
+	}{
+		{name: "no layer sets $lib", wire: libPair{SDKName, getVersion()}},
+		{name: "request context beats defaults", context: pair("ctx-lib", "ctx-v"), defaults: pair("default-lib", "default-v"), wire: libPair{"ctx-lib", "ctx-v"}},
+		{name: "defaults beat the sdk", defaults: pair("default-lib", "default-v"), wire: libPair{"default-lib", "default-v"}},
+		{name: "lone default $lib_version is replaced", defaults: NewProperties().Set(propertyLibVersion, "default-v"), wire: libPair{SDKName, getVersion()}},
+	}
+	for _, minimal := range []bool{true, false} {
+		for _, tc := range cases {
+			minimal, tc := minimal, tc
+			t.Run(fmt.Sprintf("minimal=%t/%s", minimal, tc.name), func(t *testing.T) {
+				t.Parallel()
+				body := make(chan []byte, 1)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasPrefix(r.URL.Path, capturePath) {
+						_, _ = w.Write([]byte(minimalEventsFlagsResponse(minimal)))
+						return
+					}
+					data, _ := io.ReadAll(r.Body)
+					writeCaptureOK(w, data)
+					select {
+					case body <- data:
+					default:
+					}
+				}))
+				defer server.Close()
+				c, err := NewWithConfig("test-api-key", Config{
+					Endpoint:               server.URL,
+					BatchSize:              1,
+					DefaultEventProperties: NewProperties().Merge(tc.defaults).Set("app_version", "1.2.3"),
+				})
+				require.NoError(t, err)
+				defer c.Close()
+
+				ctx := context.Background()
+				if tc.context != nil {
+					ctx = WithFreshRequestContext(ctx, RequestContext{Properties: tc.context})
+				}
+				snapshot, err := EvaluateFlagsWithContext(ctx, c, EvaluateFlagsPayload{DistinctId: "user-1"})
+				require.NoError(t, err)
+				snapshot.IsEnabled("plain-flag")
+
+				event := readSingleBatchEvent(t, body)
+				require.Equal(t, "$feature_flag_called", event["event"])
+				props := requireProperties(t, event)
+				require.Equal(t, !minimal, props["app_version"] != nil, "a minimal event drops other default properties")
+				requireLibPair(t, tc.wire, props, "wire")
+			})
+		}
+	}
 }
 
 func TestSDKIdentityPropertiesIsNotWritten(t *testing.T) {

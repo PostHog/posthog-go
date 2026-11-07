@@ -33,6 +33,8 @@ func messageProperties(t *testing.T, message posthog.Message) posthog.Properties
 func TestMCPEventsCarryMCPLibrary(t *testing.T) {
 	// absent marks a $lib_version that must not be set.
 	const absent = "<absent>"
+	type namedLib string
+	pointerLib := "pointer-lib"
 	for name, test := range map[string]struct {
 		properties  posthog.Properties
 		context     posthog.Properties
@@ -47,6 +49,9 @@ func TestMCPEventsCarryMCPLibrary(t *testing.T) {
 		"caller nil $lib":               {properties: posthog.Properties{"$lib": nil, "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
 		"caller empty $lib":             {properties: posthog.Properties{"$lib": "", "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
 		"caller non-string $lib":        {properties: posthog.Properties{"$lib": 5, "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
+		"caller named string $lib":      {properties: posthog.Properties{"$lib": namedLib("named-lib")}, wantLib: "named-lib", wantVersion: absent},
+		"caller *string $lib":           {properties: posthog.Properties{"$lib": &pointerLib, "$lib_version": "9.9.9"}, wantLib: "pointer-lib", wantVersion: "9.9.9"},
+		"caller json.Number $lib":       {properties: posthog.Properties{"$lib": json.Number("5"), "$lib_version": "9.9.9"}, wantLib: library, wantVersion: posthog.Version},
 		"request context $lib":          {context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, wantLib: "context-lib", wantVersion: "8.8.8"},
 		"caller $lib beats context":     {properties: posthog.Properties{"$lib": "caller-lib"}, context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, wantLib: "caller-lib", wantVersion: "8.8.8"},
 		"caller nil $lib beats context": {properties: posthog.Properties{"$lib": nil}, context: posthog.Properties{"$lib": "context-lib"}, wantLib: library, wantVersion: posthog.Version},
@@ -109,14 +114,25 @@ func TestOversizedMCPEventsKeepTheCallerLibrary(t *testing.T) {
 }
 
 func TestMCPLibraryOnWireAndBeforeSend(t *testing.T) {
+	type libPair struct{ lib, version any }
+	mcp := libPair{library, posthog.Version}
 	for name, test := range map[string]struct {
-		hook        func(posthog.Properties)
-		wantLib     any
-		wantVersion any
+		properties posthog.Properties
+		context    posthog.Properties
+		hook       func(posthog.Properties)
+		// seen is what BeforeSend saw; it defaults to the MCP pair.
+		seen libPair
+		// wire is the pair on the wire; a nil lib means neither key is sent.
+		wire libPair
 	}{
-		"unchanged": {wantLib: library, wantVersion: posthog.Version},
-		"changed":   {hook: func(p posthog.Properties) { p.Set("$lib", "hook-lib").Set("$lib_version", "hook-v") }, wantLib: "hook-lib", wantVersion: "hook-v"},
-		"removed":   {hook: func(p posthog.Properties) { delete(p, "$lib"); delete(p, "$lib_version") }},
+		"unchanged":                         {wire: mcp},
+		"changed":                           {hook: func(p posthog.Properties) { p.Set("$lib", "hook-lib").Set("$lib_version", "hook-v") }, wire: libPair{"hook-lib", "hook-v"}},
+		"removed":                           {hook: func(p posthog.Properties) { delete(p, "$lib"); delete(p, "$lib_version") }},
+		"caller pair":                       {properties: posthog.Properties{"$lib": "caller-lib", "$lib_version": "9.9.9"}, seen: libPair{"caller-lib", "9.9.9"}, wire: libPair{"caller-lib", "9.9.9"}},
+		"request context pair":              {context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, seen: libPair{"context-lib", "8.8.8"}, wire: libPair{"context-lib", "8.8.8"}},
+		"caller $lib takes context version": {properties: posthog.Properties{"$lib": "caller-lib"}, context: posthog.Properties{"$lib": "context-lib", "$lib_version": "8.8.8"}, seen: libPair{"caller-lib", "8.8.8"}, wire: libPair{"caller-lib", "8.8.8"}},
+		"caller nil $lib beats context":     {properties: posthog.Properties{"$lib": nil}, context: posthog.Properties{"$lib": "context-lib"}, wire: mcp},
+		"caller lone $lib_version":          {properties: posthog.Properties{"$lib_version": "9.9.9"}, wire: mcp},
 	} {
 		t.Run(name, func(t *testing.T) {
 			payloads := make(chan []byte, 1)
@@ -156,7 +172,11 @@ func TestMCPLibraryOnWireAndBeforeSend(t *testing.T) {
 			require.NoError(t, err)
 			defer client.Close()
 
-			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", DistinctID: "user_1"}))
+			ctx := context.Background()
+			if test.context != nil {
+				ctx = posthog.WithRequestContext(ctx, posthog.RequestContext{Properties: test.context})
+			}
+			require.NoError(t, New(client).CaptureToolCall(ctx, ToolCall{ToolName: "query", DistinctID: "user_1", Properties: test.properties}))
 
 			var body []byte
 			select {
@@ -172,16 +192,18 @@ func TestMCPLibraryOnWireAndBeforeSend(t *testing.T) {
 			require.NoError(t, json.Unmarshal(body, &payload))
 			require.Len(t, payload.Batch, 1)
 
-			assert.Equal(t, library, seenLib, "the MCP label beats DefaultEventProperties")
-			assert.Equal(t, posthog.Version, seenVersion, "the MCP label is a pair")
+			wantSeen := test.seen
+			if wantSeen == (libPair{}) {
+				wantSeen = mcp
+			}
+			assert.Equal(t, wantSeen, libPair{seenLib, seenVersion}, "BeforeSend saw; DefaultEventProperties never win")
 			properties := payload.Batch[0].Properties
-			if test.wantLib == nil {
+			if test.wire.lib == nil {
 				assert.NotContains(t, properties, "$lib")
 				assert.NotContains(t, properties, "$lib_version")
 				return
 			}
-			assert.Equal(t, test.wantLib, properties["$lib"])
-			assert.Equal(t, test.wantVersion, properties["$lib_version"])
+			assert.Equal(t, test.wire, libPair{properties["$lib"], properties["$lib_version"]}, "wire")
 		})
 	}
 }
