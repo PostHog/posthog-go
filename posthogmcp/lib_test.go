@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,33 @@ func TestMCPEventsCarryMCPLibrary(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOversizedMCPEventsKeepTheCallerLibrary(t *testing.T) {
+	large := strings.Repeat("x:", 15_000)
+	properties := posthog.Properties{
+		"$lib": "caller-lib", "$lib_version": "9.9.9",
+		"a": large, "b": large, "c": large, "d": large,
+	}
+	client := &fakeEnqueueClient{}
+	analytics := New(client)
+	require.NoError(t, analytics.CaptureToolCall(context.Background(), ToolCall{
+		ToolName:   "query",
+		DistinctID: "user_1",
+		Error:      errors.New("boom"),
+		Properties: properties,
+	}))
+	require.NoError(t, analytics.CaptureUnknownTool(context.Background(), UnknownTool{
+		EventContext: EventContext{DistinctID: "user_1", Properties: properties},
+		ToolName:     "missing",
+	}))
+	require.Len(t, client.messages, 3, "tool call, exception, optional event")
+	for _, message := range client.messages {
+		got := messageProperties(t, message)
+		assert.NotContains(t, got, "a", "%T dropped its custom properties", message)
+		assert.Equal(t, "caller-lib", got["$lib"], "%T $lib", message)
+		assert.Equal(t, "9.9.9", got["$lib_version"], "%T $lib_version", message)
 	}
 }
 

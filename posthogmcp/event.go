@@ -420,6 +420,25 @@ func isNilOption(v interface{}) bool {
 	return false
 }
 
+// customOrLibrary returns the caller's custom properties, or only their $lib
+// and $lib_version when the event drops custom properties to fit, so a
+// smaller event keeps the caller's label.
+func (p preparedToolCall) customOrLibrary(includeCustom bool) posthog.Properties {
+	if includeCustom {
+		return p.custom
+	}
+	var lib posthog.Properties
+	for _, key := range []string{propertyLib, propertyLibVersion} {
+		if value, ok := p.custom[key]; ok {
+			if lib == nil {
+				lib = posthog.Properties{}
+			}
+			lib[key] = value
+		}
+	}
+	return lib
+}
+
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {
 	result := make(posthog.Properties, len(base)+len(custom))
 	for key, value := range base {
