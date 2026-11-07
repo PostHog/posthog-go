@@ -367,7 +367,9 @@ header, `posthog-go/<version>`. In 1.x the default `/batch/` path overwrote a
 `Capture{..., Library: "my-lib"}` becomes
 `Capture{..., Properties: posthog.NewProperties().Set("$lib", "my-lib").Set("$lib_version", "1.2.3")}`.
 `posthogmcp` events report `posthog-go-mcp` with the SDK version, unless you
-set `$lib` in the tool call's properties.
+set `$lib` in the `ToolCall` or `EventContext` properties or the request
+context. `DefaultEventProperties` can't change it, because `posthogmcp` sets
+its pair before the defaults fill.
 
 `$lib_version` now reports the SDK version from a Go test binary too. 1.x
 reported `1.0.0` from any test binary, including your application's own.
@@ -408,8 +410,10 @@ The values the SDK adds are defaults too. The SDK fills them before
 - `$is_server`, from `Config.IsServer`
 - `$geoip_disable`, from `Config.DisableGeoIP`
 - `$os`, `$os_version`, `$os_distro` and `$go_version`
-- `$lib` and `$lib_version`, `posthog-go` and the SDK version, as a pair (see
-  [Event properties](#event-properties))
+- `$lib` and `$lib_version`, `posthog-go` and the SDK version, as a pair. They
+  follow their own rule (see [Event properties](#event-properties)): a `nil`,
+  empty or non-string `$lib` counts as unset, and a `$lib_version` set without
+  a `$lib` is replaced
 - `$feature/<key>` and `$active_feature_flags`, from a `Flags` snapshot or
   `SendFeatureFlags`
 
