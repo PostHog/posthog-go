@@ -64,7 +64,7 @@ exports nothing. They still return an error for an invalid `WithHost`.
 
 ## Config
 
-`Config.CaptureMode` is gone. If you opted into v1, delete the field — it is
+`Config.CaptureMode` is gone. If you opted into v1, delete the field. It is
 now the only behavior:
 
 ```go
@@ -84,7 +84,7 @@ The `CaptureMode` type and the `CaptureModeLegacy` / `CaptureModeAnalyticsV1`
 constants are removed with it.
 
 `Client` gained `EnqueueAI`. This only affects code that *implements* the
-interface — a hand-written test mock needs the new method. Callers are
+interface: a hand-written test mock needs the new method. Callers are
 unaffected.
 
 `Alias` gained the `EventProperties` and `Options` maps, and `Backoff` gained
@@ -508,19 +508,17 @@ event if a known key has a value it cannot read. That drop reaches
 `invalid_options`. A `BeforeSend` hook can read and change `Options` like
 `Properties`, and `Options` is never nil inside the hook.
 
-The legacy option properties, the `$`-prefixed properties legacy capture reads
-as settings, still work. The SDK removes each one from `properties` and moves
-it into its option:
+Each option replaces a legacy option property:
 
-| Legacy option property | Option |
+| Option | Replaces |
 | --- | --- |
-| `$process_person_profile` | `process_person_profile` |
-| `$cookieless_mode` | `cookieless_mode` |
-| `$ignore_sent_at` | `disable_skew_correction` |
-| `$product_tour_id` | `product_tour_id` |
+| `process_person_profile` | `$process_person_profile` |
+| `cookieless_mode` | `$cookieless_mode` |
+| `disable_skew_correction` | `$ignore_sent_at` |
+| `product_tour_id` | `$product_tour_id` |
 
-When both are set, the option wins. An option set to `nil` counts as not
-set, so the legacy property applies.
+Legacy option properties still work, but an option overrides its legacy
+property. Use options.
 
 Options can also be set for every event and for a request:
 
@@ -531,14 +529,12 @@ Options can also be set for every event and for a request:
   `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
-These layers now reach `Identify`, `Alias` and `GroupIdentify` events, and so
-does a `$process_person_profile` property in `DefaultEventProperties` or
-`RequestContext.Properties`. In 1.x none of them did. PostHog drops an
-`$identify`, `$create_alias` or `$groupidentify` event that has person
-processing off, with an ingestion warning. `Callback` does not report the
-drop, because capture accepts the event. So do not turn person processing off
-in `DefaultEventOptions`, `DefaultEventProperties` or a request context. Set
-it on each message that needs it instead.
+These layers reach `Identify`, `Alias` and `GroupIdentify` events too. PostHog
+drops an `$identify`, `$create_alias` or `$groupidentify` event that has
+person processing off, with an ingestion warning. `Callback` does not report
+the drop, because capture accepts the event. So do not turn person processing
+off in `DefaultEventOptions` or a request context's `Options`. Set it on each
+message that needs it instead.
 
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
 option that is still missing or `nil`, from these layers in order:
@@ -546,37 +542,26 @@ option that is still missing or `nil`, from these layers in order:
 personless default (below). So a `nil` event option still gets the default.
 `BeforeSend` sees the filled options and can change or remove them. To turn a
 default off for one event, set the option to `false` on the event or in
-`BeforeSend`. To change an option in `BeforeSend`, set it in `Options`: a
-legacy property that the hook adds does not replace an option that is already
-set.
+`BeforeSend`. To change an option in `BeforeSend`, set it in `Options`.
 
 Review your `BeforeSend` hooks for the new message shape. A hook that returns
 a new message must copy `Options`, or the event is sent without them. That
 includes the personless default below, so PostHog would create a person for
 the generated ID.
 
-An option at any layer wins over the matching legacy property at any layer.
-For example, `DefaultEventOptions` with `cookieless_mode: true` wins over an
-event's `$cookieless_mode: false`, and the SDK still removes
-`$cookieless_mode` from the properties. When you move a default to options,
-move the per-event overrides of that key to options too.
-
 When a `Capture` or `Exception` with a request context has no distinct ID, the
-SDK generates
-one and sets the option `process_person_profile: false`, so it does not create
-a person for every generated ID. A default, request-context or event option
-can turn processing back on; a legacy `$process_person_profile` property
-cannot. `posthogmcp` sets the same option on events without an identity, and
-on events whose properties set `$process_person_profile: false`. This covers
-tool calls and the `$mcp_unknown_tool`, `$mcp_input_required` and
-`$mcp_missing_capability` events.
+SDK generates one and sets the option `process_person_profile: false`, so it
+does not create a person for every generated ID. A default, request-context or
+event option can turn processing back on. `posthogmcp` sets the same option on
+events without an identity. This covers tool calls and the
+`$mcp_unknown_tool`, `$mcp_input_required` and `$mcp_missing_capability`
+events.
 
 `posthogmcp.ToolCall` has a new `Options` field, and tool calls also take
 `RequestContext.Options`. The call's options override the request context's.
 The other MCP events take the same layers through `EventContext.Options`.
 A call without an identity always gets `process_person_profile: false`, whatever
-its options say. With an identity, a `process_person_profile` option overrides
-a `$process_person_profile: false` property.
+its options say.
 
 `posthogmcp` events take `RequestContext.Properties` under the call's
 properties with any client, as in 1.x, and `RequestContext.Options` under the
@@ -585,22 +570,24 @@ call's options in the same way. The call's values win, and the context's values 
 the reserved keys, such as `$mcp_*`, `$set` and `$session_id`, from the
 context properties and sanitizes their values first.
 
-Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
+Compared with 1.x, which sent these settings as properties to the `/batch/`
+endpoint:
 
-- PostHog now reads common forms of the value, so
-  `"$process_person_profile": "false"` turns person processing off. 1.x
-  ignored that string.
-- A value PostHog cannot read, such as `"$process_person_profile": "maybe"`,
+- PostHog now reads common forms of an option's value, so
+  `posthog.NewOptions().Set("process_person_profile", "false")` turns person
+  processing off. 1.x ignored the string `"false"` for this setting.
+- A value PostHog cannot read, such as `"maybe"` for `process_person_profile`,
   now drops the event as `invalid_options`. 1.x kept the event and ignored the
-  value, except for `$cookieless_mode`, where any non-boolean value failed the
+  value, except for cookieless mode, where any non-boolean value failed the
   whole batch.
 
 If you used `CaptureModeAnalyticsV1`, note that the SDK no longer converts
-these values or silently removes the ones it cannot read. PostHog validates
+option values or silently removes the ones it cannot read. PostHog validates
 them as described above.
 
-Minimal `$feature_flag_called` events now keep the legacy option properties,
-so they get those options. 1.x removed them from these events.
+Minimal `$feature_flag_called` events keep their options, because the trim
+removes only properties. In 1.x the trim removed these settings, except person
+processing.
 
 ## New: AI events
 

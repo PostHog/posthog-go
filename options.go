@@ -11,7 +11,7 @@ package posthog
 // known key has a value it cannot read. That drop reaches Callback.Failure as a
 // *CaptureEventError whose Details is "invalid_options".
 //
-// The options PostHog reads today:
+// The options PostHog reads:
 //
 //	process_person_profile   boolean
 //	cookieless_mode          boolean
@@ -19,9 +19,8 @@ package posthog
 //	product_tour_id          string
 //
 // The legacy properties $process_person_profile, $cookieless_mode,
-// $ignore_sent_at and $product_tour_id still work. The SDK removes each one from
-// properties and uses its value only when the matching option is missing or nil,
-// so an option always wins.
+// $ignore_sent_at and $product_tour_id still work, but an option overrides its
+// legacy property. Use options.
 //
 //	posthog.Capture{
 //		DistinctId: "0123456789",
