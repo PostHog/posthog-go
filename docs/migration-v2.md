@@ -51,6 +51,8 @@ configuration. An empty project API key still gives a disabled client and a
 nil error, as in 1.x, and a personal (`phx_...`) key now does too. Both log an
 error. A disabled client
 sends nothing, and its methods return default values and `ErrSDKDisabled`.
+Its text is now `posthog SDK is disabled`, so code that compares error strings
+should use `errors.Is(err, posthog.ErrSDKDisabled)` instead.
 Set `Config.Disabled` to build one on purpose, for example in tests.
 
 Integrations follow the same rule. `posthogmcpsdk.NewMiddleware` and
@@ -110,8 +112,7 @@ Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
 
 `Validate` now rejects a negative `BatchUploadTimeout`,
 `CaptureAIBatchUploadTimeout`, `MaxRetryBackoff`, `MaxEventBytes`,
-`MaxBatchBytes`, `MaxQueueSize` or `CaptureAIMaxQueueSize`. Only zero selects
-the default.
+`MaxBatchBytes` or `CaptureAIMaxQueueSize`. Only zero selects the default.
 
 ## Groups
 
@@ -129,7 +130,7 @@ groups := posthog.NewGroups().Set("company", companyID) // companyID is an int64
 groups := posthog.NewGroups().Set("company", strconv.FormatInt(companyID, 10))
 ```
 
-v1 bucketed a numeric group key for feature flags by its decimal form, so a key
+1.x bucketed a numeric group key for feature flags by its decimal form, so a key
 converted this way keeps every group in the same rollout bucket and variant.
 
 ## Behavior changes
@@ -142,10 +143,12 @@ unchanged.
 Events are sent to `POST /i/v1/analytics/events` instead of `POST /batch/`.
 
 Check anything that pins the old path: reverse proxies, API gateways, egress
-allowlists, WAF rules, and self-hosted deployments. **The v1 route is only
-served where the deployment enables it**, so confirm your PostHog instance
-serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
-`eu.i.posthog.com`) does.
+allowlists, WAF rules, and self-hosted deployments. **The v1 routes are only
+served where the deployment enables them**, so confirm your PostHog instance
+serves both `/i/v1/analytics/events` and `/i/v1/ai/events` before upgrading.
+On self-hosted PostHog, a separate capture service serves the AI route, so
+check it too if you use `EnqueueAI`. PostHog Cloud (`us.i.posthog.com`,
+`eu.i.posthog.com`) serves both.
 
 If you send events through your own reverse proxy, update it before you
 upgrade:
@@ -224,7 +227,7 @@ The old endpoint accepted or rejected a whole batch. v1 returns a result for
 each event, and the client only re-sends the events the backend asks it to
 retry.
 
-Three consequences for `Callback`:
+What this means for `Callback`:
 
 - `Failure` can fire on an HTTP **200**, for an individual event the backend
   dropped while accepting the rest of the batch.
@@ -366,6 +369,9 @@ header, `posthog-go/<version>`. In 1.x the default `/batch/` path overwrote a
 `$lib` in the event's properties instead. For example,
 `Capture{..., Library: "my-lib"}` becomes
 `Capture{..., Properties: posthog.NewProperties().Set("$lib", "my-lib").Set("$lib_version", "1.2.3")}`.
+In 1.x, `Library` still sent the posthog-go version as `$lib_version`. A
+`$lib` set alone now sends no `$lib_version`, so set `$lib_version` yourself
+to keep a version on those events.
 `posthogmcp` events report `posthog-go-mcp` with the SDK version, unless you
 set `$lib` in the `ToolCall` or `EventContext` properties or the request
 context. `DefaultEventProperties` can't change it, because `posthogmcp` sets
@@ -610,8 +616,10 @@ client.EnqueueAI(posthog.Capture{
 ```
 
 It runs on its own queue, batching and retry state, started on first use.
-Routing is by method: `Enqueue` never reroutes an `$ai_`-prefixed event, so
-existing code keeps sending those as ordinary analytics events. `EnqueueAI`
+Routing is by method: `Enqueue` never reroutes an `$ai_`-prefixed event.
+Send `$ai_` events with `EnqueueAI` or `EnqueueAIWithContext`. PostHog
+accepts `$ai_` events on the analytics endpoint for now, but this is
+temporary. `EnqueueAI`
 accepts every message type and does no routing check of its own: capture
 decides, and returns a per-event drop for an event the AI endpoint does not
 take. `Flush` and `FlushWithContext` also wait for the AI lane once
