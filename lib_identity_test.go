@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -111,6 +112,12 @@ func requireLibPair(t *testing.T, want libPair, props map[string]interface{}, ms
 
 type namedLib string
 
+var (
+	ptrLib     = "ptr-lib"
+	ptrVersion = "ptr-v"
+	emptyLib   = ""
+)
+
 func TestSDKIdentityLayers(t *testing.T) {
 	exceptionList := []ExceptionItem{{Type: "t", Value: "v"}}
 	messages := []Message{
@@ -162,6 +169,11 @@ func TestSDKIdentityLayers(t *testing.T) {
 		{name: "non-string $lib is replaced", event: pair(5, "event-v"), wire: sdk},
 		{name: "nil $lib blocks a lower layer's $lib", event: NewProperties().Set(propertyLib, nil), context: pair("ctx-lib", "ctx-v"), wire: sdk},
 		{name: "named string $lib is set", event: NewProperties().Set(propertyLib, namedLib("named-lib")), seen: libPair{namedLib("named-lib"), absent}, wire: libPair{"named-lib", absent}, callback: [2]string{"named-lib", ""}},
+		{name: "*string $lib is set", event: pair(&ptrLib, &ptrVersion), seen: libPair{&ptrLib, &ptrVersion}, wire: libPair{"ptr-lib", "ptr-v"}},
+		{name: "nil *string $lib is replaced", event: pair((*string)(nil), "event-v"), wire: sdk},
+		{name: "*string empty $lib is replaced", event: pair(&emptyLib, "event-v"), wire: sdk},
+		{name: "json.Number $lib is replaced", event: pair(json.Number("5"), "event-v"), wire: sdk},
+		{name: "sdk $lib with a json.Number version gets the sdk version", event: pair(SDKName, json.Number("5")), wire: sdk},
 		{name: "hook changes both", hook: func(p Properties) { p.Set(propertyLib, "hook-lib").Set(propertyLibVersion, "hook-v") }, seen: sdk, wire: libPair{"hook-lib", "hook-v"}},
 		{name: "hook sets $lib alone", hook: func(p Properties) { p.Set(propertyLib, "hook-lib"); delete(p, propertyLibVersion) }, seen: sdk, wire: libPair{"hook-lib", absent}},
 		{name: "hook removes both", hook: func(p Properties) { delete(p, propertyLib); delete(p, propertyLibVersion) }, seen: sdk, wire: libPair{absent, absent}, callback: [2]string{SDKName, getVersion()}},

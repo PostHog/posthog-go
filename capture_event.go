@@ -301,8 +301,9 @@ func sdkIdentityProperties() Properties {
 }
 
 // libString returns v as a string and reports whether it sets $lib or
-// $lib_version: only a non-empty string does, including a named string type.
-// A missing, nil, empty or non-string value counts as unset.
+// $lib_version: only a value that serializes to a non-empty JSON string does,
+// because that is what PostHog sees. A named string type or a *string counts;
+// a json.Number does not. A missing, nil, empty or non-string value is unset.
 func libString(v interface{}) (string, bool) {
 	if s, ok := v.(string); ok {
 		return s, s != ""
@@ -310,10 +311,15 @@ func libString(v interface{}) (string, bool) {
 	if v == nil {
 		return "", false
 	}
-	if rv := reflect.ValueOf(v); rv.Kind() == reflect.String {
-		return rv.String(), rv.Len() > 0
+	b, err := json.Marshal(v)
+	if err != nil || len(b) == 0 || b[0] != '"' {
+		return "", false
 	}
-	return "", false
+	var s string
+	if json.Unmarshal(b, &s) != nil {
+		return "", false
+	}
+	return s, s != ""
 }
 
 // libIdentity returns the $lib and $lib_version PostHog stores for an event
