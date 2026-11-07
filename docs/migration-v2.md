@@ -346,16 +346,30 @@ value as a property.
 
 ### Event properties
 
-`$lib` and `$lib_version` are no longer sent in properties. SDK identity
-travels in the `PostHog-Sdk-Info` header, which is always
-`posthog-go/<version>`, and the backend sets both properties from it. If you
-set them explicitly, the SDK removes them before it sends the event, so stored
-events always report `posthog-go`. `BeforeSend` still sees the value you set.
+Every event carries `$lib` and `$lib_version` in its properties. By default
+they are `posthog-go` and the SDK version. PostHog stores the values the event
+is sent with.
 
-`Capture.Library` and `Exception.Library` (added in 1.33) are removed. One
-request carries one header, so a per-event library name cannot reach the
-backend. `posthogmcp` events now report `posthog-go`, like every other event.
-Delete the field.
+You can set them in the event, the request context or
+`DefaultEventProperties`. Like any other property, each one comes from the most
+specific place that sets it, so set both in the same place. If no `$lib` is set
+to a non-empty string, the SDK sets both and replaces a `$lib_version` set on
+its own. If `$lib` is `posthog-go` with no version, the SDK adds its version.
+It doesn't add its version to any other `$lib`. `BeforeSend` sees both and can
+change or remove them.
+
+If an event has no `$lib`, PostHog sets both from the `PostHog-Sdk-Info`
+header, `posthog-go/<version>`. In 1.x the default `/batch/` path overwrote a
+`$lib` you set.
+
+`Capture.Library` and `Exception.Library` (added in 1.30.0) are removed. Set
+`$lib` in the event's properties instead. For example,
+`Capture{..., Library: "my-lib"}` becomes
+`Capture{..., Properties: posthog.NewProperties().Set("$lib", "my-lib").Set("$lib_version", "1.2.3")}`.
+`posthogmcp` events report `posthog-go-mcp` with the SDK version, unless you
+set `$lib` in the `ToolCall` or `EventContext` properties or the request
+context. `DefaultEventProperties` can't change it, because `posthogmcp` sets
+its pair before the defaults fill.
 
 `$lib_version` now reports the SDK version from a Go test binary too. 1.x
 reported `1.0.0` from any test binary, including your application's own.
@@ -396,6 +410,10 @@ The values the SDK adds are defaults too. The SDK fills them before
 - `$is_server`, from `Config.IsServer`
 - `$geoip_disable`, from `Config.DisableGeoIP`
 - `$os`, `$os_version`, `$os_distro` and `$go_version`
+- `$lib` and `$lib_version`, `posthog-go` and the SDK version, as a pair. They
+  follow their own rule (see [Event properties](#event-properties)): a `nil`,
+  empty or non-string `$lib` counts as unset, and a `$lib_version` set without
+  a `$lib` is replaced
 - `$feature/<key>` and `$active_feature_flags`, from a `Flags` snapshot or
   `SendFeatureFlags`
 
@@ -405,7 +423,7 @@ All of them fill last, under the event, the request context and
 own `Properties` wins over both.
 
 In 1.x the SDK overwrote the values you set for `$is_server`,
-`$geoip_disable` and the system properties. So a
+`$geoip_disable`, `$lib`, `$lib_version` and the system properties. So a
 `DefaultEventProperties` value of `$geoip_disable: false` now turns GeoIP
 lookup back on for events, even when `Config.DisableGeoIP` is on. Feature flag
 requests still follow `Config.DisableGeoIP`. The `IsServer` and `DisableGeoIP`

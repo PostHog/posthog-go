@@ -13,7 +13,9 @@
         "$os_version": "event-os-version",
         "collision": "event-value",
         "default_only": "default-value",
-        "event_only": "event-value"
+        "event_only": "event-value",
+        "$lib": "event-lib",
+        "$lib_version": "event-version"
       },
       "timestamp": "2009-11-10T23:00:00.000Z",
       "uuid": "00000000-0000-0000-0000-000000000013",

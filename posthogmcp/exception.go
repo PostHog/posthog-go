@@ -53,11 +53,7 @@ func (p preparedToolCall) buildCapture() (posthog.Capture, error) {
 }
 
 func (p preparedToolCall) captureAt(base posthog.Properties, stage captureStage) posthog.Capture {
-	var custom posthog.Properties
-	if stage.custom {
-		custom = p.custom
-	}
-	properties := mergeProperties(base, custom)
+	properties := mergeProperties(base, p.customOrLibrary(stage.custom))
 	limitProperty(properties, propertyResponse, stage.response, stage.depth)
 	limitProperty(properties, propertyParameters, stage.parameters, stage.depth)
 	applyIdentityProperties(properties, p, stage.set)
@@ -110,11 +106,7 @@ func (p preparedToolCall) buildException() (posthog.Exception, error) {
 	setStringProperty(base, propertyProtocolVersion, truncateUTF8(p.call.ProtocolVersion, maxMetadataBytes))
 
 	build := func(includeCustom bool) posthog.Exception {
-		var custom posthog.Properties
-		if includeCustom {
-			custom = p.custom
-		}
-		properties := mergeProperties(base, custom)
+		properties := mergeProperties(base, p.customOrLibrary(includeCustom))
 		applyIdentityProperties(properties, p, false)
 		return posthog.Exception{
 			DistinctId: p.distinctID,

@@ -171,10 +171,10 @@ func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build fu
 func (p preparedToolCall) buildOptionalEvent(event string, specific posthog.Properties) (posthog.Capture, error) {
 	p.setIdentityProperties(specific)
 	for _, attempt := range []struct {
-		custom     posthog.Properties
-		includeSet bool
-	}{{p.custom, true}, {nil, true}, {nil, false}} {
-		properties := mergeProperties(specific, attempt.custom)
+		includeCustom bool
+		includeSet    bool
+	}{{true, true}, {false, true}, {false, false}} {
+		properties := mergeProperties(specific, p.customOrLibrary(attempt.includeCustom))
 		applyIdentityProperties(properties, p, attempt.includeSet)
 		capture := posthog.Capture{
 			DistinctId: p.distinctID,

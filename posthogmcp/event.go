@@ -356,12 +356,31 @@ func setStringProperty(properties posthog.Properties, key, value string) {
 }
 
 func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, includeSet bool) {
+	applyLibrary(properties)
 	if len(p.groups) > 0 {
 		properties[propertyGroups] = p.groups
 	}
 	if p.explicitID {
 		if includeSet && len(p.setProperties) > 0 {
 			properties[propertySet] = p.setProperties
+		}
+	}
+}
+
+// applyLibrary labels the event with this package's $lib and $lib_version when
+// the caller's properties set no $lib, replacing a lone $lib_version. A set
+// $lib is a non-empty string, as in the core SDK. A caller's $lib wins with its
+// own $lib_version, and gets this package's version only when it names this
+// package and has none.
+func applyLibrary(properties posthog.Properties) {
+	lib, _ := properties[propertyLib].(string)
+	switch {
+	case lib == "":
+		properties[propertyLib] = library
+		properties[propertyLibVersion] = posthog.Version
+	case lib == library:
+		if version, _ := properties[propertyLibVersion].(string); version == "" {
+			properties[propertyLibVersion] = posthog.Version
 		}
 	}
 }
@@ -399,6 +418,25 @@ func isNilOption(v interface{}) bool {
 		return rv.IsNil()
 	}
 	return false
+}
+
+// customOrLibrary returns the caller's custom properties, or only their $lib
+// and $lib_version when the event drops custom properties to fit, so a
+// smaller event keeps the caller's label.
+func (p preparedToolCall) customOrLibrary(includeCustom bool) posthog.Properties {
+	if includeCustom {
+		return p.custom
+	}
+	var lib posthog.Properties
+	for _, key := range []string{propertyLib, propertyLibVersion} {
+		if value, ok := p.custom[key]; ok {
+			if lib == nil {
+				lib = posthog.Properties{}
+			}
+			lib[key] = value
+		}
+	}
+	return lib
 }
 
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {

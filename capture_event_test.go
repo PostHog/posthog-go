@@ -73,8 +73,7 @@ func TestEventNamesAndDistinctId(t *testing.T) {
 	}
 }
 
-func TestDropsLibFromProperties(t *testing.T) {
-	// Decision B: SDK identity rides the PostHog-Sdk-Info header, never properties.
+func TestBuildEventKeepsCallerLib(t *testing.T) {
 	callerLib := func() Properties {
 		return NewProperties().Set("$lib", "custom-lib").Set("$lib_version", "9.9.9")
 	}
@@ -89,11 +88,11 @@ func TestDropsLibFromProperties(t *testing.T) {
 		t.Run(fmt.Sprintf("%T", m), func(t *testing.T) {
 			ev := marshalEvent(t, m)
 			props := wireProps(t, ev)
-			if _, ok := props["$lib"]; ok {
-				t.Errorf("$lib must not be in properties")
+			if props["$lib"] != "custom-lib" {
+				t.Errorf("$lib = %v, want custom-lib", props["$lib"])
 			}
-			if _, ok := props["$lib_version"]; ok {
-				t.Errorf("$lib_version must not be in properties")
+			if props["$lib_version"] != "9.9.9" {
+				t.Errorf("$lib_version = %v, want 9.9.9", props["$lib_version"])
 			}
 		})
 	}

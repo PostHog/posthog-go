@@ -459,7 +459,7 @@ func TestMinimalFlagCalledEvent_WireShape(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"$feature_flag", "$feature_flag_has_experiment", "$feature_flag_response", "$is_server", "locally_evaluated"}
+	want := []string{"$feature_flag", "$feature_flag_has_experiment", "$feature_flag_response", "$is_server", "$lib", "$lib_version", "locally_evaluated"}
 	for k := range getSystemContext().ToProperties() {
 		want = append(want, k)
 	}
@@ -509,6 +509,7 @@ func TestMinimalFlagCalledEventProperties_KeepsExactlyAllowlist(t *testing.T) {
 		"locally_evaluated", "$groups", propertyProcessPersonProfile,
 		propertyCookielessMode, propertyIgnoreSentAt, propertyProductTourId, propertyGeoipDisable,
 		propertyIsServer, propertySessionID, propertyWindowID, "$device_id",
+		propertyLib, propertyLibVersion,
 	}
 	props := NewProperties()
 	for _, key := range want {
