@@ -57,9 +57,9 @@ type AliasInApiProperties struct {
 	DistinctId string `json:"distinct_id"`
 	// Alias is the alternate distinct ID being linked to DistinctId.
 	Alias string `json:"alias"`
-	// Lib is the SDK name sent as $lib.
+	// Lib is the $lib the event is stored with.
 	Lib string `json:"$lib"`
-	// LibVersion is the SDK version sent as $lib_version.
+	// LibVersion is the $lib_version the event is stored with.
 	LibVersion string `json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
 	// Omitted entirely when nil (Config.IsServer resolved to false).
@@ -75,9 +75,9 @@ type AliasInApi struct {
 	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library string `json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
