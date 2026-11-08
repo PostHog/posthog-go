@@ -557,11 +557,13 @@ events without an identity. This covers tool calls and the
 `$mcp_unknown_tool`, `$mcp_input_required` and `$mcp_missing_capability`
 events.
 
-`posthogmcp.ToolCall` has a new `Options` field, and tool calls also take
+`posthogmcp.ToolCall` has a new `EventOptions` field, and tool calls also take
 `RequestContext.Options`. The call's options override the request context's.
-The other MCP events take the same layers through `EventContext.Options`.
-A call without an identity always gets `process_person_profile: false`, whatever
-its options say.
+The other MCP events take the same layers through `EventContext.EventOptions`.
+
+`posthogmcp` sets `process_person_profile: false` on a call without an
+identity, whatever its options say. `BeforeSend` runs after that and can still
+change it, and PostHog receives what the hook returns.
 
 `posthogmcp` events take `RequestContext.Properties` under the call's
 properties with any client, as in 1.x, and `RequestContext.Options` under the

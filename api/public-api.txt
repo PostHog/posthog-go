@@ -1073,7 +1073,7 @@ type EventContext struct {
 	VendorClient    string
 
 	Properties posthog.Properties
-	Options posthog.Options
+	EventOptions posthog.Options
 	Timestamp time.Time
 }
 
@@ -1142,7 +1142,7 @@ type ToolCall struct {
 	ErrorType string
 
 	Properties posthog.Properties
-	Options posthog.Options
+	EventOptions posthog.Options
 	Timestamp time.Time
 }
 

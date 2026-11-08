@@ -111,11 +111,13 @@ type ToolCall struct {
 	ErrorType string
 
 	// Properties adds custom event metadata. $mcp_* and identity control keys
-	// are reserved; use the corresponding ToolCall fields instead.
+	// are reserved; use the corresponding ToolCall fields instead, and
+	// EventOptions for person processing.
 	Properties posthog.Properties
-	// Options sets capture options on both events. Without a DistinctID,
-	// process_person_profile is always false.
-	Options posthog.Options
+	// EventOptions sets capture options, such as process_person_profile, on
+	// both events, over the RequestContext's. Without a DistinctID,
+	// process_person_profile is set to false, though BeforeSend can change it.
+	EventOptions posthog.Options
 	// Timestamp is the time of the event. When zero, the PostHog client stamps
 	// the time it enqueues the event.
 	Timestamp time.Time
