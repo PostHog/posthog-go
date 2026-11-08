@@ -165,7 +165,10 @@ func TestInstrumentInputRequiredRounds(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			queue := &fakeQueue{}
 			server := newServer()
-			Instrument(server, posthogmcp.New(queue), WithServerInfo("test-server", "1.0.0"))
+			Instrument(server, posthogmcp.New(queue), WithServerInfo("test-server", "1.0.0"),
+				WithEventOptions(func(context.Context, *mcpsdk.CallToolRequest, *mcpsdk.CallToolResult, error) (posthog.Options, error) {
+					return posthog.Options{"cookieless_mode": true}, nil
+				}))
 			addAskingTool(t, server, test.requests)
 			test.client.manualRetry = len(test.requests) == 0
 
@@ -174,7 +177,13 @@ func TestInstrumentInputRequiredRounds(t *testing.T) {
 			assert.Equal(t, len(test.requests) == 0, awaitsInput(result), "the client received the round")
 
 			assert.Equal(t, test.wantEvents, queue.eventNames())
+			for _, call := range queue.toolCalls() {
+				assert.Equal(t, true, call.Options["cookieless_mode"])
+			}
 			rounds := queue.captures("$mcp_input_required")
+			for _, round := range rounds {
+				assert.Equal(t, posthog.Options{"process_person_profile": false}, round.Options, "event options are for tool calls only")
+			}
 			if test.wantMethods == nil {
 				return
 			}

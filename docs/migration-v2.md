@@ -560,6 +560,17 @@ events.
 `posthogmcp.ToolCall` has a new `EventOptions` field, and tool calls also take
 `RequestContext.Options`. The call's options override the request context's.
 The other MCP events take the same layers through `EventContext.EventOptions`.
+With `posthogmcpsdk`, `WithEventOptions` sets a tool call's `EventOptions`:
+
+```go
+posthogmcpsdk.Instrument(server, analytics,
+    posthogmcpsdk.WithEventOptions(func(
+        context.Context, *mcp.CallToolRequest, *mcp.CallToolResult, error,
+    ) (posthog.Options, error) {
+        return posthog.NewOptions().Set("process_person_profile", false), nil
+    }),
+)
+```
 
 `posthogmcp` sets `process_person_profile: false` on a call without an
 identity, whatever its options say. `BeforeSend` runs after that and can still
