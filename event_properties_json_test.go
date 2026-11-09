@@ -294,3 +294,25 @@ func TestPrepareCapturePreservesAddressableMarshalers(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareNonCaptureFloat32NaNKeepsTheEvent(t *testing.T) {
+	score := float32(math.NaN())
+	messages := []Message{
+		Identify{DistinctId: "user-1", Properties: Properties{"email": "a@b.c", "score": score}},
+		GroupIdentify{Type: "org", Key: "acme", Properties: Properties{"email": "a@b.c", "score": score}},
+		Exception{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"email": "a@b.c", "score": score},
+		},
+	}
+	for _, msg := range messages {
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			data, _, err := prepareForSend(msg)
+			require.NoError(t, err)
+			require.True(t, json.Valid(data), "encoder returned nil error but invalid JSON: %s", data)
+			require.Contains(t, string(data), "a@b.c")
+			require.Contains(t, string(data), `"score":null`)
+		})
+	}
+}

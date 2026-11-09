@@ -45,6 +45,45 @@ type jsonPropertyVisit struct {
 	length  int
 }
 
+// normalizeLegacyMessage nulls NaN and Inf in the property bags the legacy
+// batch encoder sends. Capture already did this. Identify, group identify,
+// and exception custom properties go through the same rules so one bad
+// number does not drop the rest of the event.
+func normalizeLegacyMessage(apiMsg APIMessage) (APIMessage, error) {
+	switch msg := apiMsg.(type) {
+	case CaptureInApi:
+		properties, err := normalizeEventProperties(msg.Properties)
+		if err != nil {
+			return nil, err
+		}
+		msg.Properties = properties
+		return msg, nil
+	case IdentifyInApi:
+		set, err := normalizeEventProperties(msg.Set)
+		if err != nil {
+			return nil, err
+		}
+		msg.Set = set
+		return msg, nil
+	case GroupIdentifyInApi:
+		properties, err := normalizeEventProperties(msg.Properties)
+		if err != nil {
+			return nil, err
+		}
+		msg.Properties = properties
+		return msg, nil
+	case ExceptionInApi:
+		custom, err := normalizeEventProperties(msg.Properties.Custom)
+		if err != nil {
+			return nil, err
+		}
+		msg.Properties.Custom = custom
+		return msg, nil
+	default:
+		return apiMsg, nil
+	}
+}
+
 func normalizeEventProperties(properties Properties) (Properties, error) {
 	if properties == nil {
 		return nil, nil
