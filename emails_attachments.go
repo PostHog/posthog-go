@@ -158,15 +158,29 @@ func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files [
 	header.Set("Content-Type", "application/json")
 	reply, emailErr := s.request(ctx, maxRetries, http.MethodPost, s.appHost+emailUploadsPath, header, body)
 	if emailErr != nil {
-		// A 404 comes from a PostHog without the upload route or a project that
-		// can't send email from code. The client can't tell which, so it
-		// reports PostHog's answer on the attachments as it is.
-		if emailErr.StatusCode == http.StatusNotFound && emailErr.Field == "" {
-			emailErr.Field = "Attachments"
-		}
+		emailErr.Field = attachmentsField(emailErr)
 		return nil, emailErr
 	}
 	return reply.uploadTargets(files, time.Now())
+}
+
+// attachmentsField names the field of an upload route refusal as the caller
+// knows it: the caller never sent "files", only Attachments. A 404 comes from a
+// PostHog without the upload route or a project that can't send email from
+// code; the client can't tell which, so it keeps PostHog's answer and names
+// the attachments.
+func attachmentsField(err *EmailError) string {
+	switch {
+	case err.Field == "files" || (err.Field == "" && err.StatusCode == http.StatusNotFound):
+		return "Attachments"
+	case strings.HasPrefix(err.Field, "files__"):
+		index, _, _ := strings.Cut(strings.TrimPrefix(err.Field, "files__"), "__")
+		if _, convErr := strconv.Atoi(index); convErr == nil {
+			return "Attachments[" + index + "]"
+		}
+		return "Attachments"
+	}
+	return err.Field
 }
 
 // uploadTargets reads PostHog's answer to the upload request. A URL expires
@@ -263,9 +277,13 @@ func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	}
 	err := newEmailError("attachment_upload_failed", message+". No email was sent.", nil)
 	err.StatusCode = status
-	err.storageAsksToRetry = status >= http.StatusInternalServerError || status == http.StatusTooManyRequests || refusal.Code == "RequestTimeout"
-	if status >= http.StatusInternalServerError {
+	switch {
+	case status == http.StatusTooManyRequests:
+		err.Name = EmailErrorRateLimitExceeded
+		err.storageAsksToRetry = true
+	case status >= http.StatusInternalServerError || refusal.Code == "RequestTimeout":
 		err.Name = EmailErrorServiceUnavailable
+		err.storageAsksToRetry = true
 	}
 	return err
 }

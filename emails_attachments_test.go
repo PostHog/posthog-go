@@ -168,21 +168,6 @@ func TestEmailsSendStopsWhenAnUploadFails(t *testing.T) {
 	require.Len(t, server.received(), 1, "no email is sent without its files")
 }
 
-func TestEmailsSendRetriesAnUploadTheStorageCouldNotTake(t *testing.T) {
-	invoice := []byte("%PDF-1.7 invoice")
-	bucket := newBucketServer(t, stubReply{status: http.StatusServiceUnavailable, body: `<Error><Code>SlowDown</Code></Error>`})
-	server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)), accepted("msg_1"))
-	client := newEmailClient(t, server)
-
-	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
-
-	require.NoError(t, err)
-	puts := bucket.received()
-	require.Len(t, puts, 2)
-	require.Equal(t, string(invoice), puts[1].Raw, "the retry uploads the same bytes")
-	require.Len(t, server.received(), 2)
-}
-
 func TestEmailsSendUploadErrorNeverHoldsTheSignedURL(t *testing.T) {
 	invoice := []byte("%PDF-1.7 invoice")
 	bucket := newBucketServer(t)
@@ -253,6 +238,7 @@ func TestEmailsSendStopsWhenPostHogRefusesTheUploads(t *testing.T) {
 	require.Equal(t, "field_not_accepted", emailErr.Code)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
 	require.Equal(t, "Sending files isn't available to this project yet.", emailErr.Why)
+	require.Equal(t, "Attachments", emailErr.Field, "the caller never sent files, so the field is named as they know it")
 	require.Len(t, server.received(), 1)
 	require.Empty(t, bucket.received())
 }
@@ -275,6 +261,20 @@ func TestEmailsSendReportsAMissingUploadRouteAsPostHogAnswered(t *testing.T) {
 	require.Equal(t, "Endpoint not found.", emailErr.Message)
 	require.Len(t, server.received(), 1, "nothing is sent")
 	require.Empty(t, bucket.received())
+}
+
+func TestEmailsSendNamesTheAttachmentPostHogRefusedToTake(t *testing.T) {
+	server := newEmailServer(t, stubReply{status: http.StatusBadRequest, body: `{"type":"invalid_request","code":"message_too_large","detail":"Too large.","attr":"files__1__size"}`})
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(
+		EmailAttachment{Filename: "logo.png", Content: []byte("png")},
+		EmailAttachment{Filename: "invoice.pdf", Content: []byte("%PDF")},
+	))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "message_too_large", emailErr.Code)
+	require.Equal(t, "Attachments[1]", emailErr.Field)
 }
 
 func TestEmailsSendStopsOnAnUploadAnswerItCannotUse(t *testing.T) {
@@ -422,31 +422,58 @@ func TestEmailsSendUploadsAFileAttachedTwiceOnce(t *testing.T) {
 }
 
 func TestEmailsSendRetriesWhatFileStorageAsksToRetry(t *testing.T) {
-	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusTooManyRequests} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
+	for name, refusal := range map[string]stubReply{
+		"500":            {status: http.StatusInternalServerError, body: `<Error><Code>InternalError</Code></Error>`},
+		"502":            {status: http.StatusBadGateway},
+		"503":            {status: http.StatusServiceUnavailable, body: `<Error><Code>SlowDown</Code></Error>`},
+		"504":            {status: http.StatusGatewayTimeout},
+		"429":            {status: http.StatusTooManyRequests},
+		"RequestTimeout": {status: http.StatusBadRequest, body: `<Error><Code>RequestTimeout</Code><Message>Your socket connection to the server was not read from or written to within the timeout period.</Message></Error>`},
+	} {
+		t.Run(name, func(t *testing.T) {
 			invoice := []byte("%PDF-1.7 invoice")
-			bucket := newBucketServer(t, stubReply{status: status, body: `<Error><Code>InternalError</Code></Error>`})
+			bucket := newBucketServer(t, refusal)
 			server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)), accepted("msg_1"))
 			client := newEmailClient(t, server)
 
 			_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
 
 			require.NoError(t, err)
-			require.Len(t, bucket.received(), 2)
+			puts := bucket.received()
+			require.Len(t, puts, 2)
+			require.Equal(t, string(invoice), puts[1].Raw, "the retry uploads the same bytes")
+			require.Len(t, server.received(), 2)
 		})
 	}
 }
 
-func TestEmailsSendRetriesAnUploadStorageTimedOut(t *testing.T) {
-	invoice := []byte("%PDF-1.7 invoice")
-	bucket := newBucketServer(t, stubReply{status: http.StatusBadRequest, body: `<Error><Code>RequestTimeout</Code><Message>Your socket connection to the server was not read from or written to within the timeout period.</Message></Error>`})
-	server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)), accepted("msg_1"))
-	client := newEmailClient(t, server)
+func TestEmailsSendNamesAStorageRefusalByWhatItAsks(t *testing.T) {
+	for name, tt := range map[string]struct {
+		refusal stubReply
+		want    EmailErrorName
+	}{
+		"throttled":    {stubReply{status: http.StatusTooManyRequests, body: `<Error><Code>SlowDown</Code></Error>`}, EmailErrorRateLimitExceeded},
+		"timed out":    {stubReply{status: http.StatusBadRequest, body: `<Error><Code>RequestTimeout</Code></Error>`}, EmailErrorServiceUnavailable},
+		"unavailable":  {stubReply{status: http.StatusServiceUnavailable, body: `<Error><Code>SlowDown</Code></Error>`}, EmailErrorServiceUnavailable},
+		"wrong digest": {stubReply{status: http.StatusBadRequest, body: `<Error><Code>BadDigest</Code></Error>`}, EmailErrorApplication},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invoice := []byte("%PDF-1.7 invoice")
+			bucket := newBucketServer(t, tt.refusal)
+			server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)))
+			client := newEmailClient(t, server)
 
-	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Attached</p>",
+				Attachments: []EmailAttachment{{Filename: "invoice.pdf", Content: invoice}},
+				MaxRetries:  Ptr(0),
+			})
 
-	require.NoError(t, err)
-	require.Len(t, bucket.received(), 2)
+			emailErr := requireEmailError(t, err)
+			require.Equal(t, "attachment_upload_failed", emailErr.Code)
+			require.Equal(t, tt.want, emailErr.Name)
+		})
+	}
 }
 
 func TestEmailsSendWaitsAsLongAsFileStorageAsks(t *testing.T) {
