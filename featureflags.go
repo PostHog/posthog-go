@@ -1910,7 +1910,8 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 					return conditionNoMatch, err
 				}
 			}
-			if !isMatch {
+			// Negation inverts a decided match. An error above never reaches this.
+			if isMatch == prop.Negation {
 				return conditionNoMatch, nil
 			}
 		}
