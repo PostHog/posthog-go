@@ -73,6 +73,12 @@ tableOfContents:
 ## Getting started
 
 
+The Go SDK runs on your server, on Go 1.21 or later.
+
+To send your first event, create a client with your project token and host from your [project settings](https://app.posthog.com/project/settings), then call `Enqueue` with a `Capture`.
+
+The client queues events and sends them in batches, so call `Close` before your program exits, or the last events are lost.
+
 Install the module (Go 1.21 or later):
 
 ```bash
