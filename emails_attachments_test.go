@@ -303,6 +303,7 @@ func TestEmailsSendRetriesAnUploadWhoseAnswerBrokeOff(t *testing.T) {
 			w.Header().Set("Content-Length", "100")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("<Error>"))
+			w.(http.Flusher).Flush()
 			panic(http.ErrAbortHandler)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -317,6 +318,38 @@ func TestEmailsSendRetriesAnUploadWhoseAnswerBrokeOff(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{string(invoice), string(invoice)}, uploads)
 	require.Len(t, server.received(), 2)
+}
+
+func TestEmailsSendKeepsStoragesWaitWhenItsAnswerBrokeOff(t *testing.T) {
+	invoice := []byte("%PDF-1.7 invoice")
+	var mu sync.Mutex
+	puts := 0
+	bucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		mu.Lock()
+		puts++
+		mu.Unlock()
+		w.Header().Set("Retry-After", "120")
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("<Error>"))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(bucket.Close)
+	slot := uploadSlot{"sha256": sha256Hex(invoice), "status": "upload", "url": bucket.URL + "/team/2/file", "method": "PUT", "headers": map[string]string{}}
+	server := newEmailServer(t, uploadsAnswer(slot))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "network_error", emailErr.Code)
+	require.Equal(t, 2*time.Minute, emailErr.RetryAfter)
+	mu.Lock()
+	require.Equal(t, 1, puts, "a wait longer than the client retries goes back to the caller")
+	mu.Unlock()
+	require.Len(t, server.received(), 1)
 }
 
 func TestEmailsSendAsksAgainForAnUploadURLThatExpired(t *testing.T) {
