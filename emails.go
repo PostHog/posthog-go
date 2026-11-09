@@ -27,6 +27,10 @@ const (
 	emailStatusNotRead = "no email status was read"
 )
 
+// EmailCategoryTransactional is the built-in CodeEmail.Category. A CodeEmail
+// without a Category is transactional too.
+const EmailCategoryTransactional = "transactional"
+
 var (
 	idempotencyKeyPattern = regexp.MustCompile(`^[\x21-\x7e]{1,255}$`)
 	templateKeyPattern    = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,400}$`)
@@ -39,8 +43,9 @@ var (
 	}
 )
 
-// Emails sends transactional email, such as a password reset or a receipt, to
-// one recipient per call, and reads the status of an email it sent.
+// Emails sends transactional email, such as a password reset or a receipt,
+// and marketing email in one of the project's message categories, to one
+// recipient per call, and reads the status of an email it sent.
 //
 // It needs Config.SecretKey, a project secret API key (phs_...) with the
 // transactional_email:write scope, the "Send transactional email" preset in
@@ -118,6 +123,13 @@ type CodeEmail struct {
 	// true. A project whose admin turned engagement capture off captures
 	// nothing, whatever the send asks.
 	CaptureEngagement *bool
+	// Category is EmailCategoryTransactional or the key of one of the
+	// project's marketing message categories, such as "product-updates".
+	// Without it, PostHog sends transactional email. A marketing send honors
+	// the recipient's opt-outs, and its HTML, or its Text when it has no HTML,
+	// needs the {{ unsubscribe_url }} placeholder, which PostHog fills with the
+	// recipient's preferences link.
+	Category string
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
 	// ID is the email address.
@@ -160,8 +172,8 @@ type EmailStatus struct {
 	CreatedAt time.Time
 	// StatusAt is when the email reached its current status.
 	StatusAt time.Time
-	// Reason says why a failed email was not sent, such as "provider_error" or
-	// "recipient_suppressed", or gives the bounce type of a bounced email:
+	// Reason says why a failed email was not sent, such as "provider_error",
+	// "recipient_suppressed" or "recipient_opted_out", or gives the bounce type of a bounced email:
 	// "hard", "soft" or "unknown". It is empty otherwise.
 	Reason string
 }
@@ -189,6 +201,7 @@ type codeEmailBody struct {
 	ReplyTo           []string `json:"reply_to,omitempty"`
 	CaptureEngagement bool     `json:"capture_engagement"`
 	DistinctID        string   `json:"distinct_id,omitempty"`
+	Category          string   `json:"category,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -242,6 +255,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		ReplyTo:           e.ReplyTo,
 		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
+		Category:          e.Category,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)

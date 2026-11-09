@@ -166,6 +166,7 @@ func TestEmailsSendCode(t *testing.T) {
 		From:        "Acme <security@example.com>",
 		ReplyTo:     []string{"support@example.com"},
 		DistinctID:  "user_123",
+		Category:    EmailCategoryTransactional,
 	})
 
 	require.NoError(t, err)
@@ -179,6 +180,7 @@ func TestEmailsSendCode(t *testing.T) {
 		"reply_to":           []interface{}{"support@example.com"},
 		"capture_engagement": true,
 		"distinct_id":        "user_123",
+		"category":           "transactional",
 	}, server.received()[0].Body)
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
 }
@@ -613,6 +615,10 @@ func TestEmailsErrorNames(t *testing.T) {
 		{http.StatusConflict, "idempotency_key_in_flight", EmailErrorConcurrentIdempotentRequests},
 		{http.StatusUnprocessableEntity, "idempotency_key_reused", EmailErrorInvalidIdempotentRequest},
 		{http.StatusUnprocessableEntity, "recipient_suppressed", EmailErrorValidation},
+		{http.StatusUnprocessableEntity, "recipient_opted_out", EmailErrorValidation},
+		{http.StatusBadRequest, "unknown_category", EmailErrorValidation},
+		{http.StatusBadRequest, "category_mismatch", EmailErrorValidation},
+		{http.StatusBadRequest, "unsubscribe_link_required", EmailErrorValidation},
 		{http.StatusTooManyRequests, "quota_limited", EmailErrorMonthlyQuotaExceeded},
 		{http.StatusTooManyRequests, "throttled", EmailErrorRateLimitExceeded},
 		{http.StatusServiceUnavailable, "delivery_unavailable", EmailErrorServiceUnavailable},

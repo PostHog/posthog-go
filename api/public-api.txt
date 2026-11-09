@@ -71,6 +71,8 @@ const (
 	HeaderPostHogDistinctID = "X-PostHog-Distinct-Id"
 	HeaderPostHogSessionID = "X-PostHog-Session-Id"
 )
+const EmailCategoryTransactional = "transactional"
+
 const Version = "<version>"
 
 
@@ -295,6 +297,7 @@ type CodeEmail struct {
 	From    string
 	ReplyTo []string
 	CaptureEngagement *bool
+	Category string
 	DistinctID string
 	IdempotencyKey string
 	MaxRetries *int
