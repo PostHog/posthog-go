@@ -184,25 +184,42 @@ func TestEmailsSendCode(t *testing.T) {
 }
 
 func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
-	server := newEmailServer(t, accepted("msg_1"))
-	client := newEmailClient(t, server)
+	for _, tc := range []struct {
+		name                string
+		trackOpensAndClicks *bool
+		extra               map[string]interface{}
+	}{
+		{name: "tracking unset", extra: map[string]interface{}{}},
+		{name: "tracking off", trackOpensAndClicks: Ptr(false), extra: map[string]interface{}{"track_opens_and_clicks": false}},
+		{name: "tracking on", trackOpensAndClicks: Ptr(true), extra: map[string]interface{}{"track_opens_and_clicks": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
 
-	_, err := client.Emails().Send(context.Background(), CodeEmail{
-		To:                "user@example.com",
-		TemplateKey:       "digest",
-		Subject:           "Your digest",
-		Text:              "Plain text only",
-		CaptureEngagement: Ptr(false),
-	})
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:                  "user@example.com",
+				TemplateKey:         "digest",
+				Subject:             "Your digest",
+				Text:                "Plain text only",
+				CaptureEngagement:   Ptr(false),
+				TrackOpensAndClicks: tc.trackOpensAndClicks,
+			})
 
-	require.NoError(t, err)
-	require.Equal(t, map[string]interface{}{
-		"to":                 "user@example.com",
-		"template_key":       "digest",
-		"subject":            "Your digest",
-		"text":               "Plain text only",
-		"capture_engagement": false,
-	}, server.received()[0].Body)
+			require.NoError(t, err)
+			want := map[string]interface{}{
+				"to":                 "user@example.com",
+				"template_key":       "digest",
+				"subject":            "Your digest",
+				"text":               "Plain text only",
+				"capture_engagement": false,
+			}
+			for key, value := range tc.extra {
+				want[key] = value
+			}
+			require.Equal(t, want, server.received()[0].Body)
+		})
+	}
 }
 
 func TestEmailsSendHeaders(t *testing.T) {

@@ -118,6 +118,13 @@ type CodeEmail struct {
 	// true. A project whose admin turned engagement capture off captures
 	// nothing, whatever the send asks.
 	CaptureEngagement *bool
+	// TrackOpensAndClicks says whether the email carries PostHog's open and
+	// click tracking. Nil means true, and the request leaves the field out.
+	// With Ptr(false), PostHog sends the email without its open pixel or click
+	// tracking, so it can't count the email's opens and clicks. It is
+	// independent of CaptureEngagement, which decides whether engagement events
+	// are captured on the recipient's person.
+	TrackOpensAndClicks *bool
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
 	// ID is the email address.
@@ -188,7 +195,10 @@ type codeEmailBody struct {
 	From              string   `json:"from,omitempty"`
 	ReplyTo           []string `json:"reply_to,omitempty"`
 	CaptureEngagement bool     `json:"capture_engagement"`
-	DistinctID        string   `json:"distinct_id,omitempty"`
+	// A pointer, so an unset field stays out of the body and a send still works
+	// against a PostHog API that predates it.
+	TrackOpensAndClicks *bool  `json:"track_opens_and_clicks,omitempty"`
+	DistinctID          string `json:"distinct_id,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -233,15 +243,16 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		}
 	}
 	body, err := encodeEmailBody(codeEmailBody{
-		To:                e.To,
-		TemplateKey:       e.TemplateKey,
-		Subject:           e.Subject,
-		HTML:              e.HTML,
-		Text:              e.Text,
-		From:              e.From,
-		ReplyTo:           e.ReplyTo,
-		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
-		DistinctID:        e.DistinctID,
+		To:                  e.To,
+		TemplateKey:         e.TemplateKey,
+		Subject:             e.Subject,
+		HTML:                e.HTML,
+		Text:                e.Text,
+		From:                e.From,
+		ReplyTo:             e.ReplyTo,
+		CaptureEngagement:   e.CaptureEngagement == nil || *e.CaptureEngagement,
+		TrackOpensAndClicks: e.TrackOpensAndClicks,
+		DistinctID:          e.DistinctID,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)

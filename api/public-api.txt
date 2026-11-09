@@ -295,6 +295,7 @@ type CodeEmail struct {
 	From    string
 	ReplyTo []string
 	CaptureEngagement *bool
+	TrackOpensAndClicks *bool
 	DistinctID string
 	IdempotencyKey string
 	MaxRetries *int
