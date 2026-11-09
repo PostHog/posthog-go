@@ -855,7 +855,13 @@ func (c *client) ReloadFeatureFlags() error {
 		c.warnPersonalAPIKeyMissing("ReloadFeatureFlags")
 		return ErrNoSecretKey
 	}
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	c.featureFlagsPoller.ForceReload()
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	return nil
 }
 
