@@ -385,12 +385,12 @@ func applyLibrary(properties posthog.Properties) {
 	}
 }
 
-// options returns the event's capture options: the caller's Options plus the
-// person profile opt-out. The opt-out goes in as an option, not a property, so
-// it wins over client and request-context defaults.
+// options returns the event's capture options: the caller's EventOptions plus
+// the person profile opt-out. The opt-out goes in as an option, not a
+// property, so it wins over client and request-context defaults.
 func (p preparedToolCall) options() posthog.Options {
-	options := make(posthog.Options, len(p.call.Options)+1)
-	for name, value := range p.call.Options {
+	options := make(posthog.Options, len(p.call.EventOptions)+1)
+	for name, value := range p.call.EventOptions {
 		options[name] = value
 	}
 	switch {

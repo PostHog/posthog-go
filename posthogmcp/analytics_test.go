@@ -204,12 +204,12 @@ func TestCaptureToolCallPersonProfileSerializedPayloads(t *testing.T) {
 			}
 			client := &fakeEnqueueClient{}
 			require.NoError(t, New(client).CaptureToolCall(ctx, ToolCall{
-				ToolName:   "query",
-				DistinctID: test.distinctID,
-				IsError:    true,
-				Error:      errors.New("request failed"),
-				Properties: posthog.Properties{propertyProcessProfile: test.flag},
-				Options:    options,
+				ToolName:     "query",
+				DistinctID:   test.distinctID,
+				IsError:      true,
+				Error:        errors.New("request failed"),
+				Properties:   posthog.Properties{propertyProcessProfile: test.flag},
+				EventOptions: options,
 			}))
 			require.Len(t, client.messages, 2)
 
@@ -570,7 +570,7 @@ func TestOptionalEventNilOptionKeepsRequestContextOption(t *testing.T) {
 	})
 	client := &fakeEnqueueClient{}
 	require.NoError(t, New(client).CaptureUnknownTool(ctx, UnknownTool{
-		EventContext: EventContext{DistinctID: "user_1", Options: posthog.Options{"cookieless_mode": nil}},
+		EventContext: EventContext{DistinctID: "user_1", EventOptions: posthog.Options{"cookieless_mode": nil}},
 		ToolName:     "nope",
 	}))
 	require.Len(t, client.messages, 1)

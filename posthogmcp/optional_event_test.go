@@ -192,13 +192,13 @@ func TestCaptureOptionalEventsFallBackToSessionAndRequestContext(t *testing.T) {
 
 	capture = captureOptional(t, func(a *Analytics) error {
 		return a.CaptureUnknownTool(ctx, UnknownTool{
-			EventContext: EventContext{Options: posthog.Options{"cookieless_mode": false, "ignore_sent_at": true}},
+			EventContext: EventContext{EventOptions: posthog.Options{"cookieless_mode": false, "ignore_sent_at": true}},
 			ToolName:     "nope",
 		})
 	})
 	assert.Equal(t, posthog.Options{"cookieless_mode": false, "ignore_sent_at": true}, capture.Options)
 
-	anonymous := EventContext{SessionID: "s1", Options: posthog.Options{"process_person_profile": true}}
+	anonymous := EventContext{SessionID: "s1", EventOptions: posthog.Options{"process_person_profile": true}}
 	for name, capture := range map[string]func(*Analytics) error{
 		"unknown tool": func(a *Analytics) error {
 			return a.CaptureUnknownTool(context.Background(), UnknownTool{EventContext: anonymous, ToolName: "nope"})

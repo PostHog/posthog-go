@@ -52,9 +52,9 @@ func New(client posthog.EnqueueClient, opts ...Option) *Analytics {
 //
 // A posthog.RequestContext attached to ctx supplies the distinct and session
 // IDs the call leaves empty. Its properties and options sit under
-// call.Properties and call.Options, and its properties go through the same
-// reserved-key and sanitization rules as call.Properties. They still win over
-// the client's Config.DefaultEventProperties and Config.DefaultEventOptions.
+// call.Properties and call.EventOptions, and its properties go through the
+// same reserved-key and sanitization rules as call.Properties. They still win
+// over the client's Config.DefaultEventProperties and Config.DefaultEventOptions.
 func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
@@ -112,8 +112,8 @@ func withRequestContext(call ToolCall, requestContext posthog.RequestContext) To
 		call.Properties = posthog.NewProperties().Merge(requestContext.Properties).Merge(call.Properties)
 	}
 	if len(requestContext.Options) > 0 {
-		options := make(posthog.Options, len(requestContext.Options)+len(call.Options))
-		for name, value := range call.Options {
+		options := make(posthog.Options, len(requestContext.Options)+len(call.EventOptions))
+		for name, value := range call.EventOptions {
 			options[name] = value
 		}
 		// A request option fills a call option that is missing or nil, as in the core SDK.
@@ -123,7 +123,7 @@ func withRequestContext(call ToolCall, requestContext posthog.RequestContext) To
 			}
 			options[name] = value
 		}
-		call.Options = options
+		call.EventOptions = options
 	}
 	return call
 }

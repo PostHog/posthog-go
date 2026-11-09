@@ -34,11 +34,13 @@ type EventContext struct {
 	VendorClient    string
 
 	// Properties adds custom event metadata. $mcp_* and identity control keys
-	// are reserved.
+	// are reserved; use the fields above instead, and EventOptions for person
+	// processing.
 	Properties posthog.Properties
-	// Options sets capture options on the event, over the RequestContext's.
-	// Without a DistinctID, process_person_profile is always false.
-	Options posthog.Options
+	// EventOptions sets capture options, such as process_person_profile, on
+	// the event, over the RequestContext's. Without a DistinctID,
+	// process_person_profile is set to false, though BeforeSend can change it.
+	EventOptions posthog.Options
 	// Timestamp is the time of the event. When zero, the PostHog client stamps
 	// the time it enqueues the event.
 	Timestamp time.Time
@@ -60,7 +62,7 @@ func (c EventContext) toolCall(toolName string) ToolCall {
 		ClientUserAgent: c.ClientUserAgent,
 		VendorClient:    c.VendorClient,
 		Properties:      c.Properties,
-		Options:         c.Options,
+		EventOptions:    c.EventOptions,
 		Timestamp:       c.Timestamp,
 	}
 }
