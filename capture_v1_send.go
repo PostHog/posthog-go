@@ -190,17 +190,10 @@ func (c *client) partitionV1Results(res *v1Result, data []json.RawMessage, msgs 
 // so a hostile or buggy header can't park a batch goroutine; the configured
 // backoff itself (Config.RetryAfter) is never truncated.
 func (c *client) retryDelayV1(attemptIndex int, res *v1Result) time.Duration {
-	retryDelay := c.RetryAfter(attemptIndex)
-	if res != nil && res.hasRetryAfter {
-		clamped := res.retryAfter
-		if clamped > defaultMaxBackoff {
-			clamped = defaultMaxBackoff
-		}
-		if clamped > retryDelay {
-			retryDelay = clamped
-		}
+	if res == nil {
+		return clampRetryWait(c.RetryAfter(attemptIndex), 0, false)
 	}
-	return retryDelay
+	return clampRetryWait(c.RetryAfter(attemptIndex), res.retryAfter, res.hasRetryAfter)
 }
 
 // backoffV1 waits before the next attempt using retryDelayV1. Returns false if
