@@ -392,3 +392,28 @@ func TestEmailsSendKeepsPostHogsFieldWhenAskingAgainFails(t *testing.T) {
 	require.Empty(t, emailErr.Field)
 	require.Empty(t, bucket.received())
 }
+
+func TestUploadTargetExpiresFifteenMinutesAfterTheAnswerByTheLocalClock(t *testing.T) {
+	file := attachment{SHA256: sha256Hex([]byte("invoice")), Filename: "invoice.pdf", content: []byte("invoice")}
+	answer := func(urlExpiresAt time.Time) emailReply {
+		return emailReply{status: http.StatusOK, fields: map[string]interface{}{"files": []interface{}{map[string]interface{}{
+			"sha256": file.SHA256, "status": "upload", "url": "https://storage.example/invoice", "method": "PUT",
+			"url_expires_at": urlExpiresAt.UTC().Format(time.RFC3339Nano),
+		}}}}
+	}
+
+	// PostHog's clock is ahead of the client's, so its deadline reads an hour
+	// away, but the URL was signed 15 minutes ago by the client's clock.
+	targets, err := answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now().Add(-emailUploadTimeout))
+	require.Nil(t, err)
+	require.True(t, targets[0].expired())
+
+	targets, err = answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now())
+	require.Nil(t, err)
+	require.False(t, targets[0].expired())
+
+	// An earlier deadline from PostHog still wins.
+	targets, err = answer(time.Now().Add(30*time.Second)).uploadTargets([]attachment{file}, time.Now())
+	require.Nil(t, err)
+	require.True(t, targets[0].expired())
+}
