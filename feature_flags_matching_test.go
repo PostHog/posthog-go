@@ -1749,3 +1749,36 @@ func TestMatchPropertySemverErrorsEscapeValues(t *testing.T) {
 		})
 	}
 }
+
+func TestSubtractMonthsAndYearsClampAfterEveryStep(t *testing.T) {
+	testCases := []struct {
+		now      string
+		subtract func(time.Time, int) time.Time
+		amount   int
+		want     string
+	}{
+		{"2025-03-31T12:00:00Z", subtractMonths, 1, "2025-02-28T12:00:00Z"},
+		{"2024-03-31T12:00:00Z", subtractMonths, 1, "2024-02-29T12:00:00Z"},
+		{"2025-03-31T12:00:00Z", subtractMonths, 2, "2025-01-28T12:00:00Z"},
+		{"2025-05-31T12:00:00Z", subtractMonths, 1, "2025-04-30T12:00:00Z"},
+		{"2025-05-31T12:00:00Z", subtractMonths, 4, "2025-01-28T12:00:00Z"},
+		{"2025-01-31T12:00:00Z", subtractMonths, 1, "2024-12-31T12:00:00Z"},
+		{"2025-03-30T12:00:00Z", subtractMonths, 13, "2024-02-28T12:00:00Z"},
+		{"2024-02-29T12:00:00Z", subtractMonths, 0, "2024-02-29T12:00:00Z"},
+		{"2024-02-29T12:00:00Z", subtractYears, 1, "2023-02-28T12:00:00Z"},
+		{"2024-02-29T12:00:00Z", subtractYears, 4, "2020-02-28T12:00:00Z"},
+		{"2024-03-31T12:00:00Z", subtractYears, 4, "2020-03-31T12:00:00Z"},
+		{"2024-02-29T12:00:00Z", subtractYears, 0, "2024-02-29T12:00:00Z"},
+	}
+
+	for _, tc := range testCases {
+		now, err := time.Parse(time.RFC3339, tc.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := tc.subtract(now, tc.amount).Format(time.RFC3339)
+		if got != tc.want {
+			t.Errorf("from %s minus %d: got %s, want %s", tc.now, tc.amount, got, tc.want)
+		}
+	}
+}
