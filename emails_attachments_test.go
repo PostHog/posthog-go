@@ -355,6 +355,40 @@ func TestEmailsSendDoesNotRetryTheDailyUploadQuota(t *testing.T) {
 
 	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: []byte("%PDF")}))
 
-	require.Equal(t, "upload_quota_exceeded", requireEmailError(t, err).Code)
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "upload_quota_exceeded", emailErr.Code)
+	require.Equal(t, EmailErrorDailyQuotaExceeded, emailErr.Name)
 	require.Len(t, server.received(), 1)
+}
+
+func TestEmailsSendSkipsAnExpiredUploadPostHogNowHas(t *testing.T) {
+	invoice := []byte("%PDF-1.7 invoice")
+	bucket := newBucketServer(t)
+	expired := toUpload(bucket, invoice)
+	expired["url_expires_at"] = time.Now().Add(-time.Second).UTC().Format(time.RFC3339)
+	server := newEmailServer(t, uploadsAnswer(expired), uploadsAnswer(present(invoice)), accepted("msg_1"))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+	require.NoError(t, err)
+	require.Empty(t, bucket.received())
+	require.Len(t, server.received(), 3)
+}
+
+func TestEmailsSendKeepsPostHogsFieldWhenAskingAgainFails(t *testing.T) {
+	invoice := []byte("%PDF-1.7 invoice")
+	bucket := newBucketServer(t)
+	expired := toUpload(bucket, invoice)
+	expired["url_expires_at"] = time.Now().Add(-time.Second).UTC().Format(time.RFC3339)
+	server := newEmailServer(t, uploadsAnswer(expired), stubReply{status: http.StatusTooManyRequests, body: `{"type":"throttled_error","code":"upload_quota_exceeded","detail":"This project uploaded as many file bytes as it can today."}`})
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "upload_quota_exceeded", emailErr.Code)
+	require.Equal(t, EmailErrorDailyQuotaExceeded, emailErr.Name)
+	require.Empty(t, emailErr.Field)
+	require.Empty(t, bucket.received())
 }

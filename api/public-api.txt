@@ -491,6 +491,7 @@ const (
 	EmailErrorInvalidIdempotentRequest EmailErrorName = "invalid_idempotent_request"
 	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
 	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
+	EmailErrorDailyQuotaExceeded EmailErrorName = "daily_quota_exceeded"
 	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
 	EmailErrorApplication EmailErrorName = "application_error"
 )

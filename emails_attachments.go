@@ -115,34 +115,31 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 	}
 	uploaded := map[string]bool{}
 	for i, target := range targets {
-		if target == nil || uploaded[files[i].SHA256] {
+		file := files[i]
+		if target == nil || uploaded[file.SHA256] {
 			continue
 		}
 		if err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
-			return s.uploadBeforeExpiry(ctx, files[i], &target)
+			if target.expired() {
+				fresh, err := s.uploadTargets(ctx, 0, []attachment{file})
+				if err != nil {
+					return err
+				}
+				if target = fresh[0]; target == nil {
+					return nil
+				}
+			}
+			if err := s.upload(ctx, file, *target); err != nil {
+				err.Field = "Attachments[" + strconv.Itoa(i) + "]"
+				return err
+			}
+			return nil
 		}); err != nil {
-			err.Field = "Attachments[" + strconv.Itoa(i) + "]"
 			return err
 		}
-		uploaded[files[i].SHA256] = true
+		uploaded[file.SHA256] = true
 	}
 	return nil
-}
-
-// uploadBeforeExpiry uploads a file, first asking PostHog again for a URL
-// when the one it holds expired while earlier files uploaded.
-func (s *emailSender) uploadBeforeExpiry(ctx context.Context, file attachment, target **uploadTarget) *EmailError {
-	if (*target).expired() {
-		fresh, err := s.uploadTargets(ctx, 0, []attachment{file})
-		if err != nil {
-			return err
-		}
-		if fresh[0] == nil {
-			return nil
-		}
-		*target = fresh[0]
-	}
-	return s.upload(ctx, file, **target)
 }
 
 // uploadTargets asks PostHog where to upload each file: per file, in request
@@ -165,8 +162,9 @@ func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files [
 	return reply.uploadTargets(files, time.Now())
 }
 
-// uploadTargets reads PostHog's answer to the upload request. A URL without
-// an expiry is taken to last as long as upload URLs do.
+// uploadTargets reads PostHog's answer to the upload request. A URL expires
+// at its url_expires_at or 15 minutes after the answer, whichever comes
+// first, so a client clock behind PostHog's can't keep an expired URL.
 func (r emailReply) uploadTargets(files []attachment, answeredAt time.Time) ([]*uploadTarget, *EmailError) {
 	slots, _ := r.fields["files"].([]interface{})
 	if len(slots) != len(files) {
@@ -186,11 +184,10 @@ func (r emailReply) uploadTargets(files []attachment, answeredAt time.Time) ([]*
 			if target.url == "" || target.method == "" {
 				return nil, r.apiError("PostHog answered without where to upload " + files[i].Filename + ".")
 			}
-			expiresAt, err := time.Parse(time.RFC3339Nano, slot.text("url_expires_at"))
-			if err != nil {
-				expiresAt = answeredAt.Add(emailUploadTimeout)
+			target.expiresAt = answeredAt.Add(emailUploadTimeout)
+			if expiresAt, err := time.Parse(time.RFC3339Nano, slot.text("url_expires_at")); err == nil && expiresAt.Before(target.expiresAt) {
+				target.expiresAt = expiresAt
 			}
-			target.expiresAt = expiresAt
 			headers, _ := fields["headers"].(map[string]interface{})
 			for name, value := range headers {
 				target.headers[name], _ = value.(string)

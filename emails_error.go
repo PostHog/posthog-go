@@ -36,6 +36,10 @@ const (
 	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
 	// EmailErrorMonthlyQuotaExceeded: the project is over its email quota.
 	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
+	// EmailErrorDailyQuotaExceeded: the project uploaded as many attachment
+	// bytes as it can today, counted in UTC. Files PostHog already has don't
+	// count.
+	EmailErrorDailyQuotaExceeded EmailErrorName = "daily_quota_exceeded"
 	// EmailErrorServiceUnavailable: PostHog or the network was unavailable.
 	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
 	// EmailErrorApplication: anything else.
@@ -130,6 +134,9 @@ func emailErrorName(status int, code string) EmailErrorName {
 	case http.StatusTooManyRequests:
 		if code == "quota_limited" {
 			return EmailErrorMonthlyQuotaExceeded
+		}
+		if code == "upload_quota_exceeded" {
+			return EmailErrorDailyQuotaExceeded
 		}
 		return EmailErrorRateLimitExceeded
 	case http.StatusServiceUnavailable:
