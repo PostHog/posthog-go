@@ -114,11 +114,11 @@ type CodeEmail struct {
 	From    string
 	ReplyTo []string
 	// CaptureEngagement says whether PostHog captures the email's engagement
-	// events, such as opens and clicks, on the recipient's person. Nil means
-	// true. Turning it off doesn't change the email: PostHog still adds its
-	// open pixel and rewrites links to count opens and clicks. A project whose
-	// admin turned engagement capture off captures nothing, whatever the send
-	// asks.
+	// events, such as deliveries and opens, on the recipient's person. Nil means
+	// true. Turning it off doesn't change the email: PostHog still adds its open
+	// pixel to count opens. It never rewrites the email's links, so it counts no
+	// clicks. A project whose admin turned engagement capture off captures
+	// nothing, whatever the send asks.
 	CaptureEngagement *bool
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
