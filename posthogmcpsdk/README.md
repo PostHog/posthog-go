@@ -221,7 +221,7 @@ server.AddSendingMiddleware(middleware.Sending)
 
 The adapter requires go-sdk v1.6.1 or later and Go 1.25, the SDK's minimum. It
 is a separate Go module so that the core `posthog-go` module, which supports Go
-1.21, does not depend on the MCP SDK. Its `go.mod` replaces `posthog-go` with
+1.25, does not depend on the MCP SDK. Its `go.mod` replaces `posthog-go` with
 the repository root, so it builds against the local core without a workspace.
 
 Consumers ignore that `replace`, so they build against the `posthog-go`
