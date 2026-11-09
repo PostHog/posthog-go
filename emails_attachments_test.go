@@ -37,6 +37,9 @@ func newBucketServer(t *testing.T, replies ...stubReply) *bucketServer {
 			reply, b.replies = b.replies[0], b.replies[1:]
 		}
 		b.mu.Unlock()
+		for name, value := range reply.header {
+			w.Header().Set(name, value)
+		}
 		w.WriteHeader(reply.status)
 		_, _ = w.Write([]byte(reply.body))
 	}))
@@ -349,6 +352,33 @@ func TestEmailsSendRetriesWhatFileStorageAsksToRetry(t *testing.T) {
 	}
 }
 
+func TestEmailsSendRetriesAnUploadStorageTimedOut(t *testing.T) {
+	invoice := []byte("%PDF-1.7 invoice")
+	bucket := newBucketServer(t, stubReply{status: http.StatusBadRequest, body: `<Error><Code>RequestTimeout</Code><Message>Your socket connection to the server was not read from or written to within the timeout period.</Message></Error>`})
+	server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)), accepted("msg_1"))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+	require.NoError(t, err)
+	require.Len(t, bucket.received(), 2)
+}
+
+func TestEmailsSendWaitsAsLongAsFileStorageAsks(t *testing.T) {
+	invoice := []byte("%PDF-1.7 invoice")
+	bucket := newBucketServer(t, stubReply{status: http.StatusServiceUnavailable, header: map[string]string{"Retry-After": "120"}, body: `<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>`})
+	server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "attachment_upload_failed", emailErr.Code)
+	require.Equal(t, 2*time.Minute, emailErr.RetryAfter)
+	require.Len(t, bucket.received(), 1, "a wait longer than the client retries goes back to the caller")
+	require.Len(t, server.received(), 1)
+}
+
 func TestEmailsSendDoesNotRetryTheDailyUploadQuota(t *testing.T) {
 	server := newEmailServer(t, stubReply{status: http.StatusTooManyRequests, body: `{"type":"throttled_error","code":"upload_quota_exceeded","detail":"This project uploaded as many file bytes as it can today."}`})
 	client := newEmailClient(t, server)
@@ -403,12 +433,13 @@ func TestUploadTargetExpiresFifteenMinutesAfterTheAnswerByTheLocalClock(t *testi
 	}
 
 	// PostHog's clock is ahead of the client's, so its deadline reads an hour
-	// away, but the URL was signed 15 minutes ago by the client's clock.
-	targets, err := answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now().Add(-emailUploadTimeout))
+	// away. By the client's clock the URL lives 15 minutes, and is asked for
+	// again in its last minute.
+	targets, err := answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now().Add(-14*time.Minute-time.Second))
 	require.Nil(t, err)
 	require.True(t, targets[0].expired())
 
-	targets, err = answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now())
+	targets, err = answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now().Add(-13*time.Minute))
 	require.Nil(t, err)
 	require.False(t, targets[0].expired())
 

@@ -65,11 +65,14 @@ type EmailError struct {
 	DocsURL    string
 	// Field names the request field the error is about, when there is one.
 	Field string
-	// RetryAfter is how long PostHog asked the client to wait before it sends
-	// again, and 0 when it did not ask.
+	// RetryAfter is how long PostHog, or file storage for an upload, asked the
+	// client to wait before it tries again, and 0 when it did not ask.
 	RetryAfter time.Duration
 
 	cause error
+	// storageAsksToRetry is set on a file storage refusal that may pass on a
+	// later attempt.
+	storageAsksToRetry bool
 }
 
 func (e *EmailError) Error() string {
@@ -155,7 +158,7 @@ func (e *EmailError) isRetryable() bool {
 		return true
 	}
 	if e.Code == "attachment_upload_failed" {
-		return e.StatusCode >= http.StatusInternalServerError || e.StatusCode == http.StatusTooManyRequests
+		return e.storageAsksToRetry
 	}
 	switch e.StatusCode {
 	case 0:

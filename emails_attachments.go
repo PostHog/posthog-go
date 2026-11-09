@@ -222,21 +222,26 @@ func (s *emailSender) upload(ctx context.Context, file attachment, target upload
 		return newEmailError("network_error", "Uploading "+file.Filename+" failed.", withoutURL(err))
 	}
 	defer res.Body.Close()
+	retryAfter, _ := parseRetryAfter(res.Header.Get("Retry-After"), time.Now())
 	answer, err := io.ReadAll(io.LimitReader(res.Body, maxBucketAnswerBytes))
 	if err != nil {
 		cutOff := newEmailError("network_error", "Reading file storage's answer to the upload of "+file.Filename+" failed.", withoutURL(err))
 		cutOff.StatusCode = res.StatusCode
+		cutOff.RetryAfter = retryAfter
 		return cutOff
 	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return nil
 	}
-	return uploadRefused(file.Filename, res.StatusCode, answer)
+	refused := uploadRefused(file.Filename, res.StatusCode, answer)
+	refused.RetryAfter = retryAfter
+	return refused
 }
 
 // uploadRefused is file storage's refusal of an upload, with its error code
-// and message when it gave them. A 5xx or a 429 is retried, as S3 asks; any
-// other refusal fails the send.
+// and message when it gave them. A 5xx, a 429 and a RequestTimeout (a stalled
+// upload, which S3 answers with a 400) are retried, as S3 asks; any other
+// refusal fails the send.
 func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	var refusal struct {
 		Code    string `xml:"Code"`
@@ -251,6 +256,7 @@ func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	}
 	err := newEmailError("attachment_upload_failed", message+". No email was sent.", nil)
 	err.StatusCode = status
+	err.storageAsksToRetry = status >= http.StatusInternalServerError || status == http.StatusTooManyRequests || refusal.Code == "RequestTimeout"
 	if status >= http.StatusInternalServerError {
 		err.Name = EmailErrorServiceUnavailable
 	}
