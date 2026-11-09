@@ -212,18 +212,18 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string          `json:"to"`
-	TemplateKey       string          `json:"template_key"`
-	Subject           string          `json:"subject"`
-	HTML              string          `json:"html,omitempty"`
-	Text              string          `json:"text,omitempty"`
-	From              string          `json:"from,omitempty"`
-	ReplyTo           []string        `json:"reply_to,omitempty"`
-	Cc                []string        `json:"cc,omitempty"`
-	Bcc               []string        `json:"bcc,omitempty"`
-	Attachments       []attachmentRef `json:"attachments,omitempty"`
-	CaptureEngagement bool            `json:"capture_engagement"`
-	DistinctID        string          `json:"distinct_id,omitempty"`
+	To                string       `json:"to"`
+	TemplateKey       string       `json:"template_key"`
+	Subject           string       `json:"subject"`
+	HTML              string       `json:"html,omitempty"`
+	Text              string       `json:"text,omitempty"`
+	From              string       `json:"from,omitempty"`
+	ReplyTo           []string     `json:"reply_to,omitempty"`
+	Cc                []string     `json:"cc,omitempty"`
+	Bcc               []string     `json:"bcc,omitempty"`
+	Attachments       []attachment `json:"attachments,omitempty"`
+	CaptureEngagement bool         `json:"capture_engagement"`
+	DistinctID        string       `json:"distinct_id,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -290,7 +290,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		ReplyTo:           e.ReplyTo,
 		Cc:                e.Cc,
 		Bcc:               e.Bcc,
-		Attachments:       references(attachments),
+		Attachments:       attachments,
 		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
 	})

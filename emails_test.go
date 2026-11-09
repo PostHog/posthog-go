@@ -446,6 +446,11 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 		{name: "a 30 MB file", email: code(func(e *CodeEmail) {
 			e.Attachments = []EmailAttachment{{Filename: "scan.pdf", Content: make([]byte, 30_000_000)}}
 		}), code: "message_too_large", field: "Attachments"},
+		{name: "three 10 MB files", email: code(func(e *CodeEmail) {
+			for i := 0; i < 3; i++ {
+				e.Attachments = append(e.Attachments, EmailAttachment{Filename: fmt.Sprintf("%d.pdf", i), Content: make([]byte, 10_000_000)})
+			}
+		}), code: "message_too_large", field: "Attachments"},
 		{name: "code idempotency key", email: code(func(e *CodeEmail) { e.IdempotencyKey = "é" }), code: "invalid_idempotency_key", field: "IdempotencyKey"},
 		{name: "code negative retries", email: code(func(e *CodeEmail) { e.MaxRetries = Ptr(-2) }), code: "invalid_max_retries", field: "MaxRetries"},
 		{name: "more than nine retries", email: template(func(e *TemplateEmail) { e.MaxRetries = Ptr(10) }), code: "invalid_max_retries", field: "MaxRetries"},

@@ -29,17 +29,14 @@ const (
 	maxBucketAnswerBytes = 64 << 10
 )
 
-// attachment is an EmailAttachment named by the SHA-256 of its content.
+// attachment is an EmailAttachment named by the SHA-256 of its content. A
+// send carries it as a reference: its content goes only to file storage.
 type attachment struct {
-	EmailAttachment
-	sha256 string
-}
-
-type attachmentRef struct {
 	SHA256      string `json:"sha256"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type,omitempty"`
 	ContentID   string `json:"content_id,omitempty"`
+	content     []byte
 }
 
 type uploadRequestFile struct {
@@ -69,7 +66,13 @@ func checkAttachments(attachments []EmailAttachment, bodies ...string) ([]attach
 			return nil, invalidEmail("invalid_attachment", field+".Content", "An attachment needs Content, the file's bytes.")
 		}
 		sum := sha256.Sum256(file.Content)
-		files = append(files, attachment{EmailAttachment: file, sha256: hex.EncodeToString(sum[:])})
+		files = append(files, attachment{
+			SHA256:      hex.EncodeToString(sum[:]),
+			Filename:    file.Filename,
+			ContentType: file.ContentType,
+			ContentID:   file.ContentID,
+			content:     file.Content,
+		})
 		sizes = append(sizes, len(file.Content))
 	}
 	for _, body := range bodies {
@@ -93,20 +96,12 @@ func estimateMessageBytes(partSizes []int) int64 {
 	return total
 }
 
-func references(files []attachment) []attachmentRef {
-	refs := make([]attachmentRef, 0, len(files))
-	for _, file := range files {
-		refs = append(refs, attachmentRef{SHA256: file.sha256, Filename: file.Filename, ContentType: file.ContentType, ContentID: file.ContentID})
-	}
-	return refs
-}
-
 // uploadAttachments asks PostHog which files it lacks and uploads each one,
 // so a send can name them by their hashes. It returns at the first failure.
 func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, files []attachment) *EmailError {
 	requested := make([]uploadRequestFile, 0, len(files))
 	for _, file := range files {
-		requested = append(requested, uploadRequestFile{SHA256: file.sha256, Size: len(file.Content)})
+		requested = append(requested, uploadRequestFile{SHA256: file.SHA256, Size: len(file.content)})
 	}
 	body, err := encodeEmailBody(map[string]interface{}{"files": requested})
 	if err != nil {
@@ -147,18 +142,15 @@ func (r emailReply) uploadTargets(files []attachment) ([]*uploadTarget, *EmailEr
 	for i, item := range slots {
 		fields, _ := item.(map[string]interface{})
 		slot := emailReply{fields: fields}
-		if slot.text("sha256") != files[i].sha256 {
+		if slot.text("sha256") != files[i].SHA256 {
 			return nil, r.apiError("PostHog answered with upload slots for other files.")
 		}
 		switch slot.text("status") {
 		case "present":
 		case "upload":
 			target := &uploadTarget{url: slot.text("url"), method: slot.text("method"), headers: map[string]string{}}
-			if target.url == "" {
-				return nil, r.apiError("PostHog answered without the URL to upload " + files[i].Filename + " to.")
-			}
-			if target.method == "" {
-				target.method = http.MethodPut
+			if target.url == "" || target.method == "" {
+				return nil, r.apiError("PostHog answered without where to upload " + files[i].Filename + ".")
 			}
 			headers, _ := fields["headers"].(map[string]interface{})
 			for name, value := range headers {
@@ -178,7 +170,7 @@ func (s *emailSender) upload(ctx context.Context, file attachment, target upload
 	ctx, cancel := context.WithTimeout(ctx, emailUploadTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, target.method, target.url, bytes.NewReader(file.Content))
+	req, err := http.NewRequestWithContext(ctx, target.method, target.url, bytes.NewReader(file.content))
 	if err != nil {
 		return newEmailError("unexpected_error", "The client could not build the upload of "+file.Filename+".", withoutURL(err))
 	}
