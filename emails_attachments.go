@@ -25,7 +25,10 @@ const (
 	// headers and MIME boundaries when it estimates its size.
 	emailHeadersAndMIMEBytes = 64 * 1024
 	// emailUploadTimeout is how long an upload URL accepts the upload.
-	emailUploadTimeout   = 15 * time.Minute
+	emailUploadTimeout = 15 * time.Minute
+	// uploadURLMargin is how long before its expiry an upload URL is asked for
+	// again, so a PUT never starts on a URL that expires on its way.
+	uploadURLMargin      = time.Minute
 	maxBucketAnswerBytes = 64 << 10
 )
 
@@ -46,9 +49,15 @@ type uploadRequestFile struct {
 
 // uploadTarget is where PostHog asked the client to upload one file.
 type uploadTarget struct {
-	url     string
-	method  string
-	headers map[string]string
+	url       string
+	method    string
+	headers   map[string]string
+	expiresAt time.Time
+}
+
+// expired says whether the URL may no longer accept an upload that starts now.
+func (t uploadTarget) expired() bool {
+	return !time.Now().Before(t.expiresAt.Add(-uploadURLMargin))
 }
 
 func checkAttachments(attachments []EmailAttachment, bodies ...string) ([]attachment, *EmailError) {
@@ -96,44 +105,69 @@ func estimateMessageBytes(partSizes []int) int64 {
 	return total
 }
 
-// uploadAttachments asks PostHog which files it lacks and uploads each one,
-// so a send can name them by their hashes. It returns at the first failure.
+// uploadAttachments asks PostHog which files it lacks and uploads each one
+// once, so a send can name them by their hashes. It returns at the first
+// failure.
 func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, files []attachment) *EmailError {
+	targets, err := s.uploadTargets(ctx, maxRetries, files)
+	if err != nil {
+		return err
+	}
+	uploaded := map[string]bool{}
+	for i, target := range targets {
+		if target == nil || uploaded[files[i].SHA256] {
+			continue
+		}
+		if err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
+			return s.uploadBeforeExpiry(ctx, files[i], &target)
+		}); err != nil {
+			err.Field = "Attachments[" + strconv.Itoa(i) + "]"
+			return err
+		}
+		uploaded[files[i].SHA256] = true
+	}
+	return nil
+}
+
+// uploadBeforeExpiry uploads a file, first asking PostHog again for a URL
+// when the one it holds expired while earlier files uploaded.
+func (s *emailSender) uploadBeforeExpiry(ctx context.Context, file attachment, target **uploadTarget) *EmailError {
+	if (*target).expired() {
+		fresh, err := s.uploadTargets(ctx, 0, []attachment{file})
+		if err != nil {
+			return err
+		}
+		if fresh[0] == nil {
+			return nil
+		}
+		*target = fresh[0]
+	}
+	return s.upload(ctx, file, **target)
+}
+
+// uploadTargets asks PostHog where to upload each file: per file, in request
+// order, nil when PostHog has the file and a target otherwise.
+func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files []attachment) ([]*uploadTarget, *EmailError) {
 	requested := make([]uploadRequestFile, 0, len(files))
 	for _, file := range files {
 		requested = append(requested, uploadRequestFile{SHA256: file.SHA256, Size: len(file.content)})
 	}
 	body, err := encodeEmailBody(map[string]interface{}{"files": requested})
 	if err != nil {
-		return newEmailError("unexpected_error", "The client could not encode the upload request.", err)
+		return nil, newEmailError("unexpected_error", "The client could not encode the upload request.", err)
 	}
 	header := s.header()
 	header.Set("Content-Type", "application/json")
 	reply, emailErr := s.request(ctx, maxRetries, http.MethodPost, s.appHost+emailUploadsPath, header, body)
 	if emailErr != nil {
-		return emailErr
+		return nil, emailErr
 	}
-	targets, emailErr := reply.uploadTargets(files)
-	if emailErr != nil {
-		return emailErr
-	}
-	for i, target := range targets {
-		if target == nil {
-			continue
-		}
-		if emailErr := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
-			return s.upload(ctx, files[i], *target)
-		}); emailErr != nil {
-			emailErr.Field = "Attachments[" + strconv.Itoa(i) + "]"
-			return emailErr
-		}
-	}
-	return nil
+	return reply.uploadTargets(files, time.Now())
 }
 
-// uploadTargets reads PostHog's answer to the upload request: per file, in
-// request order, nil when PostHog has the file and a target otherwise.
-func (r emailReply) uploadTargets(files []attachment) ([]*uploadTarget, *EmailError) {
+// uploadTargets reads PostHog's answer to the upload request. A URL without
+// an expiry is taken to last as long as upload URLs do.
+func (r emailReply) uploadTargets(files []attachment, answeredAt time.Time) ([]*uploadTarget, *EmailError) {
 	slots, _ := r.fields["files"].([]interface{})
 	if len(slots) != len(files) {
 		return nil, r.apiError("PostHog answered without an upload slot for each file.")
@@ -152,6 +186,11 @@ func (r emailReply) uploadTargets(files []attachment) ([]*uploadTarget, *EmailEr
 			if target.url == "" || target.method == "" {
 				return nil, r.apiError("PostHog answered without where to upload " + files[i].Filename + ".")
 			}
+			expiresAt, err := time.Parse(time.RFC3339Nano, slot.text("url_expires_at"))
+			if err != nil {
+				expiresAt = answeredAt.Add(emailUploadTimeout)
+			}
+			target.expiresAt = expiresAt
 			headers, _ := fields["headers"].(map[string]interface{})
 			for name, value := range headers {
 				target.headers[name], _ = value.(string)
@@ -199,8 +238,8 @@ func (s *emailSender) upload(ctx context.Context, file attachment, target upload
 }
 
 // uploadRefused is file storage's refusal of an upload, with its error code
-// and message when it gave them. A 503 asks the client to slow down, so it is
-// retried; any other refusal fails the send.
+// and message when it gave them. A 5xx or a 429 is retried, as S3 asks; any
+// other refusal fails the send.
 func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	var refusal struct {
 		Code    string `xml:"Code"`
@@ -215,7 +254,7 @@ func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	}
 	err := newEmailError("attachment_upload_failed", message+". No email was sent.", nil)
 	err.StatusCode = status
-	if status == http.StatusServiceUnavailable {
+	if status >= http.StatusInternalServerError {
 		err.Name = EmailErrorServiceUnavailable
 	}
 	return err

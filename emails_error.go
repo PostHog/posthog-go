@@ -147,13 +147,16 @@ func (e *EmailError) isRetryable() bool {
 	if e.Code == "network_error" {
 		return true
 	}
+	if e.Code == "attachment_upload_failed" {
+		return e.StatusCode >= http.StatusInternalServerError || e.StatusCode == http.StatusTooManyRequests
+	}
 	switch e.StatusCode {
 	case 0:
 		return false
 	case http.StatusConflict:
 		return e.Code == "idempotency_key_in_flight"
 	case http.StatusTooManyRequests:
-		return e.Code != "quota_limited"
+		return e.Code != "quota_limited" && e.Code != "upload_quota_exceeded"
 	default:
 		return e.StatusCode == http.StatusServiceUnavailable
 	}

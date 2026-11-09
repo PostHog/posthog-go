@@ -242,8 +242,11 @@ type Config struct {
 	// SecretKey and the email itself, so over http both travel unencrypted.
 	AllowInsecureAppHost bool
 
-	// EmailRequestTimeout is the timeout of each Client.Emails request. If
-	// zero, it defaults to DefaultEmailRequestTimeout.
+	// EmailRequestTimeout is the timeout of each Client.Emails request to
+	// PostHog. If zero, it defaults to DefaultEmailRequestTimeout. Uploading
+	// an attachment to file storage isn't such a request: each upload may take
+	// up to 15 minutes, the life of its upload URL. Bound a whole Send with
+	// its context.
 	EmailRequestTimeout time.Duration
 
 	// EmailRequestMaxRetries is the number of retries of a Client.Emails

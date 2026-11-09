@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	json "github.com/goccy/go-json"
 	"github.com/stretchr/testify/require"
@@ -71,7 +72,7 @@ func toUpload(bucket *bucketServer, content []byte) uploadSlot {
 			"Content-Length":        fmt.Sprint(len(content)),
 			"x-amz-checksum-sha256": "checksum-of-" + hash[:8],
 		},
-		"url_expires_at": "2026-11-09T10:15:00Z",
+		"url_expires_at": time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
 	}
 }
 
@@ -293,4 +294,67 @@ func TestEmailsSendRetriesAnUploadWhoseAnswerBrokeOff(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{string(invoice), string(invoice)}, uploads)
 	require.Len(t, server.received(), 2)
+}
+
+func TestEmailsSendAsksAgainForAnUploadURLThatExpired(t *testing.T) {
+	invoice := []byte("%PDF-1.7 invoice")
+	bucket := newBucketServer(t)
+	expired := toUpload(bucket, invoice)
+	expired["url"] = bucket.URL + "/expired"
+	expired["url_expires_at"] = time.Now().Add(-time.Second).UTC().Format(time.RFC3339)
+	fresh := toUpload(bucket, invoice)
+	server := newEmailServer(t, uploadsAnswer(expired), uploadsAnswer(fresh), accepted("msg_1"))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+	require.NoError(t, err)
+	requests := server.received()
+	require.Len(t, requests, 3)
+	require.Equal(t, requests[0].Body, requests[1].Body, "the client asks again for the same file")
+	puts := bucket.received()
+	require.Len(t, puts, 1)
+	require.NotContains(t, puts[0].Path, "/expired")
+}
+
+func TestEmailsSendUploadsAFileAttachedTwiceOnce(t *testing.T) {
+	logo := []byte{0x89, 'P', 'N', 'G'}
+	bucket := newBucketServer(t)
+	server := newEmailServer(t, uploadsAnswer(toUpload(bucket, logo), toUpload(bucket, logo)), accepted("msg_1"))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(
+		EmailAttachment{Filename: "logo.png", Content: logo, ContentID: "logo"},
+		EmailAttachment{Filename: "logo-copy.png", Content: logo},
+	))
+
+	require.NoError(t, err)
+	require.Len(t, bucket.received(), 1)
+	require.Len(t, server.received()[1].Body["attachments"], 2)
+}
+
+func TestEmailsSendRetriesWhatFileStorageAsksToRetry(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			invoice := []byte("%PDF-1.7 invoice")
+			bucket := newBucketServer(t, stubReply{status: status, body: `<Error><Code>InternalError</Code></Error>`})
+			server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)), accepted("msg_1"))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+			require.NoError(t, err)
+			require.Len(t, bucket.received(), 2)
+		})
+	}
+}
+
+func TestEmailsSendDoesNotRetryTheDailyUploadQuota(t *testing.T) {
+	server := newEmailServer(t, stubReply{status: http.StatusTooManyRequests, body: `{"type":"throttled_error","code":"upload_quota_exceeded","detail":"This project uploaded as many file bytes as it can today."}`})
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: []byte("%PDF")}))
+
+	require.Equal(t, "upload_quota_exceeded", requireEmailError(t, err).Code)
+	require.Len(t, server.received(), 1)
 }
