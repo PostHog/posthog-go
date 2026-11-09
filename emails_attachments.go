@@ -188,7 +188,9 @@ func (s *emailSender) upload(ctx context.Context, file attachment, target upload
 	defer res.Body.Close()
 	answer, err := io.ReadAll(io.LimitReader(res.Body, maxBucketAnswerBytes))
 	if err != nil {
-		return cutOffAnswer(withoutURL(err), res.StatusCode, 0)
+		cutOff := newEmailError("network_error", "Reading file storage's answer to the upload of "+file.Filename+" failed.", withoutURL(err))
+		cutOff.StatusCode = res.StatusCode
+		return cutOff
 	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return nil
@@ -208,7 +210,7 @@ func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	if xml.Unmarshal(answer, &refusal) == nil && refusal.Code != "" {
 		message += ", " + refusal.Code
 		if refusal.Message != "" {
-			message += ": " + refusal.Message
+			message += ": " + strings.TrimRight(refusal.Message, ".")
 		}
 	}
 	err := newEmailError("attachment_upload_failed", message+". No email was sent.", nil)

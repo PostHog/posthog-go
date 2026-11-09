@@ -158,8 +158,7 @@ func TestEmailsSendStopsWhenAnUploadFails(t *testing.T) {
 	require.Equal(t, "attachment_upload_failed", emailErr.Code)
 	require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
 	require.Equal(t, "Attachments[0]", emailErr.Field)
-	require.Contains(t, emailErr.Message, "invoice.pdf")
-	require.Contains(t, emailErr.Message, "BadDigest: The SHA256 you specified did not match the calculated checksum.")
+	require.Equal(t, "Uploading invoice.pdf failed: file storage answered HTTP 400, BadDigest: The SHA256 you specified did not match the calculated checksum. No email was sent.", emailErr.Message)
 	require.Len(t, bucket.received(), 1, "a refused upload is not retried")
 	require.Len(t, server.received(), 1, "no email is sent without its files")
 }
@@ -264,4 +263,34 @@ func TestEmailsSendCountsTheBodiesInTheMessageSize(t *testing.T) {
 			require.Equal(t, tt.code, requireEmailError(t, err).Code)
 		})
 	}
+}
+
+func TestEmailsSendRetriesAnUploadWhoseAnswerBrokeOff(t *testing.T) {
+	invoice := []byte("%PDF-1.7 invoice")
+	var mu sync.Mutex
+	var uploads []string
+	bucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		uploads = append(uploads, string(raw))
+		first := len(uploads) == 1
+		mu.Unlock()
+		if first {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<Error>"))
+			panic(http.ErrAbortHandler)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(bucket.Close)
+	slot := uploadSlot{"sha256": sha256Hex(invoice), "status": "upload", "url": bucket.URL + "/team/2/file", "method": "PUT", "headers": map[string]string{}}
+	server := newEmailServer(t, uploadsAnswer(slot), accepted("msg_1"))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: invoice}))
+
+	require.NoError(t, err)
+	require.Equal(t, []string{string(invoice), string(invoice)}, uploads)
+	require.Len(t, server.received(), 2)
 }
