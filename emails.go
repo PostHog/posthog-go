@@ -119,10 +119,15 @@ type CodeEmail struct {
 	// Bcc are bare addresses that get a copy the other recipients never see.
 	// At most 10.
 	Bcc []string
-	// Attachments are files sent with the email, at most 10 and 512 KB in
-	// total. PostHog refuses file types that mailbox providers block, such as
-	// .exe. PostHog can't fetch a file from a path or URL: read the file and
-	// pass its bytes.
+	// Attachments are files sent with the email: at most 10, and at most 40 MB
+	// for the whole message after Base64 encoding, which leaves about 29 MB
+	// for the files. Send checks both before any request. It then hashes each
+	// file, uploads the files PostHog doesn't have yet straight to PostHog's
+	// file storage, and sends the email naming them, so the network must
+	// allow uploads to the storage host the upload URL names. A file PostHog
+	// already has isn't uploaded again. PostHog refuses file types that
+	// mailbox providers block, such as .exe. PostHog can't fetch a file from a
+	// path or URL: read the file and pass its bytes.
 	Attachments []EmailAttachment
 	// CaptureEngagement says whether PostHog captures the email's engagement
 	// events, such as opens and clicks, as events of the recipient. Nil means
@@ -145,15 +150,15 @@ type CodeEmail struct {
 type EmailAttachment struct {
 	// Filename is the name the recipient sees, such as "invoice.pdf", with no
 	// path.
-	Filename string `json:"filename"`
-	// Content is the file's bytes. The client sends them Base64 encoded.
-	Content []byte `json:"content"`
+	Filename string
+	// Content is the file's bytes.
+	Content []byte
 	// ContentType is a MIME type, such as "application/pdf". Without it, the
 	// type follows from Filename.
-	ContentType string `json:"content_type,omitempty"`
+	ContentType string
 	// ContentID shows the file inline: the HTML references it as
 	// <img src="cid:logo"> when ContentID is "logo".
-	ContentID string `json:"content_id,omitempty"`
+	ContentID string
 }
 
 // SendEmailResult is an email that PostHog queued.
@@ -194,6 +199,7 @@ type EmailStatus struct {
 
 type emailSend struct {
 	body           []byte
+	attachments    []attachment
 	idempotencyKey string
 	maxRetries     *int
 }
@@ -206,18 +212,18 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string            `json:"to"`
-	TemplateKey       string            `json:"template_key"`
-	Subject           string            `json:"subject"`
-	HTML              string            `json:"html,omitempty"`
-	Text              string            `json:"text,omitempty"`
-	From              string            `json:"from,omitempty"`
-	ReplyTo           []string          `json:"reply_to,omitempty"`
-	Cc                []string          `json:"cc,omitempty"`
-	Bcc               []string          `json:"bcc,omitempty"`
-	Attachments       []EmailAttachment `json:"attachments,omitempty"`
-	CaptureEngagement bool              `json:"capture_engagement"`
-	DistinctID        string            `json:"distinct_id,omitempty"`
+	To                string          `json:"to"`
+	TemplateKey       string          `json:"template_key"`
+	Subject           string          `json:"subject"`
+	HTML              string          `json:"html,omitempty"`
+	Text              string          `json:"text,omitempty"`
+	From              string          `json:"from,omitempty"`
+	ReplyTo           []string        `json:"reply_to,omitempty"`
+	Cc                []string        `json:"cc,omitempty"`
+	Bcc               []string        `json:"bcc,omitempty"`
+	Attachments       []attachmentRef `json:"attachments,omitempty"`
+	CaptureEngagement bool            `json:"capture_engagement"`
+	DistinctID        string          `json:"distinct_id,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -270,8 +276,9 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 			}
 		}
 	}
-	if err := checkAttachments(e.Attachments); err != nil {
-		return emailSend{}, err
+	attachments, attachmentsErr := checkAttachments(e.Attachments, e.HTML, e.Text)
+	if attachmentsErr != nil {
+		return emailSend{}, attachmentsErr
 	}
 	body, err := encodeEmailBody(codeEmailBody{
 		To:                e.To,
@@ -283,27 +290,16 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		ReplyTo:           e.ReplyTo,
 		Cc:                e.Cc,
 		Bcc:               e.Bcc,
-		Attachments:       e.Attachments,
+		Attachments:       references(attachments),
 		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)
 	}
-	return newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
-}
-
-func checkAttachments(attachments []EmailAttachment) *EmailError {
-	for i, attachment := range attachments {
-		field := "Attachments[" + strconv.Itoa(i) + "]"
-		if strings.TrimSpace(attachment.Filename) == "" {
-			return invalidEmail("invalid_attachment", field+".Filename", "An attachment needs a Filename, such as \"invoice.pdf\".")
-		}
-		if len(attachment.Content) == 0 {
-			return invalidEmail("invalid_attachment", field+".Content", "An attachment needs Content, the file's bytes.")
-		}
-	}
-	return nil
+	send, sendErr := newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
+	send.attachments = attachments
+	return send, sendErr
 }
 
 func checkRecipient(to string) *EmailError {
@@ -424,6 +420,11 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	if send.maxRetries != nil {
 		maxRetries = *send.maxRetries
 	}
+	if len(send.attachments) > 0 {
+		if err := s.uploadAttachments(ctx, maxRetries, send.attachments); err != nil {
+			return nil, err
+		}
+	}
 	header := s.header()
 	header.Set("Content-Type", "application/json")
 	header.Set("Idempotency-Key", send.idempotencyKey)
@@ -522,27 +523,42 @@ func (s *emailSender) header() http.Header {
 // can fix. Every attempt carries the same header, so a send's idempotency key
 // holds across retries. A reply it returns is always a 2xx.
 func (s *emailSender) request(ctx context.Context, maxRetries int, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
+	var reply emailReply
+	err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
+		var err *EmailError
+		reply, err = s.do(ctx, method, url, header, body)
+		if err == nil && !reply.accepted() {
+			err = reply.error()
+		}
+		return err
+	})
+	if err != nil {
+		return emailReply{}, err
+	}
+	return reply, nil
+}
+
+// retry runs attempt until it succeeds, retrying what waiting can fix. Close
+// running out of time ends the attempt and the wait before the next one.
+func (s *emailSender) retry(ctx context.Context, maxRetries int, attempt func(context.Context) *EmailError) *EmailError {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(s.ctx, cancel)()
 	for n := 0; ; n++ {
-		reply, err := s.do(ctx, method, url, header, body)
-		if err == nil && !reply.accepted() {
-			err = reply.error()
-		}
+		err := attempt(ctx)
 		if err == nil {
-			return reply, nil
+			return nil
 		}
 		delay, retry := s.retryDelay(err, n, maxRetries)
 		if !retry {
-			return emailReply{}, err
+			return err
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			return emailReply{}, err.interruptedBy(ctx.Err())
+			return err.interruptedBy(ctx.Err())
 		}
 	}
 }

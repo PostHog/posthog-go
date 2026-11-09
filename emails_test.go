@@ -205,33 +205,23 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 	}, server.received()[0].Body)
 }
 
-func TestEmailsSendCodeCopiesAndAttachments(t *testing.T) {
+func TestEmailsSendCodeCopies(t *testing.T) {
 	server := newEmailServer(t, failed(http.StatusServiceUnavailable, "delivery_unavailable"), accepted("msg_1"))
 	client := newEmailClient(t, server)
-	invite := []byte("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n")
-	logo := []byte{0x89, 'P', 'N', 'G', 0xff, 0xfe}
 
 	_, err := client.Emails().Send(context.Background(), CodeEmail{
 		To:          "user@example.com",
 		TemplateKey: "invoice",
 		Subject:     "Your invoice",
-		HTML:        `<img src="cid:logo">`,
+		HTML:        "<p>Your invoice</p>",
 		Cc:          []string{"manager@example.com"},
 		Bcc:         []string{"audit@example.com", "archive@example.com"},
-		Attachments: []EmailAttachment{
-			{Filename: "invite.ics", Content: invite, ContentType: "text/calendar"},
-			{Filename: "logo.png", Content: logo, ContentID: "logo"},
-		},
 	})
 
 	require.NoError(t, err)
 	first, retry := server.received()[0], server.received()[1]
 	require.Equal(t, []interface{}{"manager@example.com"}, first.Body["cc"])
 	require.Equal(t, []interface{}{"audit@example.com", "archive@example.com"}, first.Body["bcc"])
-	require.Equal(t, []interface{}{
-		map[string]interface{}{"filename": "invite.ics", "content": "QkVHSU46VkNBTEVOREFSDQpFTkQ6VkNBTEVOREFSDQo=", "content_type": "text/calendar"},
-		map[string]interface{}{"filename": "logo.png", "content": "iVBOR//+", "content_id": "logo"},
-	}, first.Body["attachments"], "content goes out as standard Base64")
 	require.Equal(t, first.Raw, retry.Raw, "a retry sends the same body")
 }
 
@@ -262,17 +252,17 @@ func TestEmailsSendNamesAFieldTheServerDoesNotTakeYet(t *testing.T) {
 		"type": "validation_error",
 		"code": "invalid_input",
 		"detail": "PostHog doesn't take this field, so it doesn't send the email without it.",
-		"attr": "attachments"
+		"attr": "cc"
 	}`})
 	client := newEmailClient(t, server)
 
 	_, err := client.Emails().Send(context.Background(), CodeEmail{
-		To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Attached</p>",
-		Attachments: []EmailAttachment{{Filename: "invoice.pdf", Content: []byte("%PDF-1.7")}},
+		To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Copied</p>",
+		Cc: []string{"manager@example.com"},
 	})
 
 	emailErr := requireEmailError(t, err)
-	require.Equal(t, "attachments", emailErr.Field)
+	require.Equal(t, "cc", emailErr.Field)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
 	require.Len(t, server.received(), 1, "a refused field is not retried")
 }
@@ -448,6 +438,14 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 		{name: "attachment without content", email: code(func(e *CodeEmail) {
 			e.Attachments = []EmailAttachment{{Filename: "a.txt", Content: []byte("hi")}, {Filename: "b.txt", Content: []byte{}}}
 		}), code: "invalid_attachment", field: "Attachments[1].Content"},
+		{name: "more than 10 attachments", email: code(func(e *CodeEmail) {
+			for i := 0; i < 11; i++ {
+				e.Attachments = append(e.Attachments, EmailAttachment{Filename: fmt.Sprintf("%d.txt", i), Content: []byte{byte(i)}})
+			}
+		}), code: "too_many_attachments", field: "Attachments"},
+		{name: "a 30 MB file", email: code(func(e *CodeEmail) {
+			e.Attachments = []EmailAttachment{{Filename: "scan.pdf", Content: make([]byte, 30_000_000)}}
+		}), code: "message_too_large", field: "Attachments"},
 		{name: "code idempotency key", email: code(func(e *CodeEmail) { e.IdempotencyKey = "é" }), code: "invalid_idempotency_key", field: "IdempotencyKey"},
 		{name: "code negative retries", email: code(func(e *CodeEmail) { e.MaxRetries = Ptr(-2) }), code: "invalid_max_retries", field: "MaxRetries"},
 		{name: "more than nine retries", email: template(func(e *TemplateEmail) { e.MaxRetries = Ptr(10) }), code: "invalid_max_retries", field: "MaxRetries"},

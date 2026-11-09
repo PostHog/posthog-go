@@ -59,8 +59,9 @@ func ExampleEmails_code() {
 	}
 }
 
-// A receipt with a copy to finance and the PDF attached. The client sends the
-// file's bytes Base64 encoded.
+// A receipt with a copy to finance and the PDF attached. Send uploads the PDF
+// to PostHog's file storage unless PostHog already has it, then sends the
+// email.
 func ExampleEmails_attachments() {
 	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
 	if err != nil {

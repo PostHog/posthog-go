@@ -90,8 +90,10 @@ func newEmailError(code, message string, cause error) *EmailError {
 	return &EmailError{Name: emailErrorName(0, code), Code: code, Message: message, cause: cause}
 }
 
+// invalidEmail is an argument the client refuses before any request.
 func invalidEmail(code, field, message string) *EmailError {
 	err := newEmailError(code, message, nil)
+	err.Name = EmailErrorValidation
 	err.Field = field
 	return err
 }
