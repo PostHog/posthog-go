@@ -304,18 +304,24 @@ func sdkIdentityProperties() Properties {
 // $lib_version: only a value that serializes to a non-empty JSON string does,
 // because that is what PostHog sees. A named string type or a *string counts;
 // a json.Number does not. A missing, nil, empty or non-string value is unset.
-func libString(v interface{}) (string, bool) {
-	if s, ok := v.(string); ok {
-		return s, s != ""
+// It runs before BeforeSend, so a caller marshaler that panics also leaves the
+// value unset instead of crashing the caller.
+func libString(v interface{}) (s string, set bool) {
+	if str, ok := v.(string); ok {
+		return str, str != ""
 	}
 	if v == nil {
 		return "", false
 	}
+	defer func() {
+		if recover() != nil {
+			s, set = "", false
+		}
+	}()
 	b, err := json.Marshal(v)
 	if err != nil || len(b) == 0 || b[0] != '"' {
 		return "", false
 	}
-	var s string
 	if json.Unmarshal(b, &s) != nil {
 		return "", false
 	}

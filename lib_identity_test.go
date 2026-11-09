@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -329,4 +330,29 @@ func TestSDKIdentityPropertiesIsNotWritten(t *testing.T) {
 		require.Equal(t, before, sdkIdentityProperties())
 		require.Equal(t, props, caller, "the caller's map is not written")
 	}
+}
+
+type panickingLibMarshaler struct{}
+
+func (panickingLibMarshaler) MarshalJSON() ([]byte, error) { panic("marshal") }
+
+func TestPanickingLibMarshalerStaysInsideTheSDK(t *testing.T) {
+	_, set := libString(panickingLibMarshaler{})
+	require.False(t, set, "a value whose marshaler panics is unset")
+
+	var hookRan atomic.Bool
+	c, err := NewWithConfig("test-api-key", Config{
+		Endpoint: "http://127.0.0.1:1",
+		BeforeSend: func(Message) Message {
+			hookRan.Store(true)
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	defer c.Close()
+
+	require.NotPanics(t, func() {
+		_ = c.Enqueue(Capture{Event: "e", DistinctId: "d", Properties: Properties{propertyLib: panickingLibMarshaler{}}})
+	})
+	require.True(t, hookRan.Load(), "BeforeSend still runs and can drop the event")
 }
