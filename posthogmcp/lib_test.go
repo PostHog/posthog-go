@@ -113,6 +113,22 @@ func TestOversizedMCPEventsKeepTheCallerLibrary(t *testing.T) {
 	}
 }
 
+func TestOversizedMCPEventsDropANonStringLibraryVersion(t *testing.T) {
+	large := strings.Repeat("x", 30_000)
+	client := &fakeEnqueueClient{}
+	require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{
+		ToolName:   "query",
+		DistinctID: "user_1",
+		Properties: posthog.Properties{"$lib": "caller-lib", "$lib_version": map[string]interface{}{
+			"a": large, "b": large, "c": large, "d": large, "e": large, "f": large,
+		}},
+	}))
+	require.Len(t, client.messages, 1, "the event fits instead of being dropped")
+	got := messageProperties(t, client.messages[0])
+	assert.Equal(t, "caller-lib", got["$lib"])
+	assert.NotContains(t, got, "$lib_version")
+}
+
 func TestMCPLibraryOnWireAndBeforeSend(t *testing.T) {
 	type libPair struct{ lib, version any }
 	mcp := libPair{library, posthog.Version}
