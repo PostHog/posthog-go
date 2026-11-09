@@ -277,6 +277,28 @@ func TestEmailsSendNamesTheAttachmentPostHogRefusedToTake(t *testing.T) {
 	require.Equal(t, "Attachments[1]", emailErr.Field)
 }
 
+func TestEmailsSendNamesTheAttachmentWhoseURLPostHogWouldNotRenew(t *testing.T) {
+	logo, invoice := []byte("png"), []byte("%PDF-1.7 invoice")
+	bucket := newBucketServer(t)
+	expired := toUpload(bucket, invoice)
+	expired["url_expires_at"] = time.Now().Add(-time.Second).UTC().Format(time.RFC3339)
+	server := newEmailServer(t,
+		uploadsAnswer(toUpload(bucket, logo), expired),
+		stubReply{status: http.StatusBadRequest, body: `{"type":"invalid_request","code":"message_too_large","detail":"Too large.","attr":"files__0__size"}`},
+	)
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(
+		EmailAttachment{Filename: "logo.png", Content: logo},
+		EmailAttachment{Filename: "invoice.pdf", Content: invoice},
+	))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "message_too_large", emailErr.Code)
+	require.Equal(t, "Attachments[1]", emailErr.Field, "the re-ask lists one file, the second attachment")
+	require.Len(t, bucket.received(), 1)
+}
+
 func TestEmailsSendStopsOnAnUploadAnswerItCannotUse(t *testing.T) {
 	invoice := []byte("%PDF-1.7 invoice")
 	bucket := newBucketServer(t)

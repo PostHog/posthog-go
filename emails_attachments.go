@@ -110,7 +110,7 @@ func estimateMessageBytes(partSizes []int) int64 {
 // once, so a send can name them by their hashes. It returns at the first
 // failure.
 func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, files []attachment) *EmailError {
-	targets, err := s.uploadTargets(ctx, maxRetries, files)
+	targets, err := s.uploadTargets(ctx, maxRetries, files, 0)
 	if err != nil {
 		return err
 	}
@@ -122,7 +122,7 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 		}
 		if err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 			if target.expired() {
-				fresh, err := s.uploadTargets(ctx, 0, []attachment{file})
+				fresh, err := s.uploadTargets(ctx, 0, []attachment{file}, i)
 				if err != nil {
 					return err
 				}
@@ -144,8 +144,9 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 }
 
 // uploadTargets asks PostHog where to upload each file: per file, in request
-// order, nil when PostHog has the file and a target otherwise.
-func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files []attachment) ([]*uploadTarget, *EmailError) {
+// order, nil when PostHog has the file and a target otherwise. The files are
+// the attachments from index first on, so a refusal names the right one.
+func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files []attachment, first int) ([]*uploadTarget, *EmailError) {
 	requested := make([]uploadRequestFile, 0, len(files))
 	for _, file := range files {
 		requested = append(requested, uploadRequestFile{SHA256: file.SHA256, Size: len(file.content)})
@@ -158,7 +159,7 @@ func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files [
 	header.Set("Content-Type", "application/json")
 	reply, emailErr := s.request(ctx, maxRetries, http.MethodPost, s.appHost+emailUploadsPath, header, body)
 	if emailErr != nil {
-		emailErr.Field = attachmentsField(emailErr)
+		emailErr.Field = attachmentsField(emailErr, first)
 		return nil, emailErr
 	}
 	return reply.uploadTargets(files, time.Now())
@@ -168,15 +169,15 @@ func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files [
 // knows it: the caller never sent "files", only Attachments. A 404 comes from a
 // PostHog without the upload route or a project that can't send email from
 // code; the client can't tell which, so it keeps PostHog's answer and names
-// the attachments.
-func attachmentsField(err *EmailError) string {
+// the attachments. The request's file i is attachment first+i.
+func attachmentsField(err *EmailError, first int) string {
 	switch {
 	case err.Field == "files" || (err.Field == "" && err.StatusCode == http.StatusNotFound):
 		return "Attachments"
 	case strings.HasPrefix(err.Field, "files__"):
 		index, _, _ := strings.Cut(strings.TrimPrefix(err.Field, "files__"), "__")
-		if _, convErr := strconv.Atoi(index); convErr == nil {
-			return "Attachments[" + index + "]"
+		if i, convErr := strconv.Atoi(index); convErr == nil {
+			return "Attachments[" + strconv.Itoa(first+i) + "]"
 		}
 		return "Attachments"
 	}
