@@ -157,6 +157,12 @@ func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files [
 	header.Set("Content-Type", "application/json")
 	reply, emailErr := s.request(ctx, maxRetries, http.MethodPost, s.appHost+emailUploadsPath, header, body)
 	if emailErr != nil {
+		// A 404 comes from a PostHog without the upload route or a project that
+		// can't send email from code. The client can't tell which, so it
+		// reports PostHog's answer on the attachments as it is.
+		if emailErr.StatusCode == http.StatusNotFound && emailErr.Field == "" {
+			emailErr.Field = "Attachments"
+		}
 		return nil, emailErr
 	}
 	return reply.uploadTargets(files, time.Now())

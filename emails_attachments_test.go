@@ -225,6 +225,26 @@ func TestEmailsSendStopsWhenPostHogRefusesTheUploads(t *testing.T) {
 	require.Empty(t, bucket.received())
 }
 
+func TestEmailsSendReportsAMissingUploadRouteAsPostHogAnswered(t *testing.T) {
+	// A PostHog without the upload route, or a project that can't send email
+	// from code, answers 404. The client can't tell which, so it reports
+	// PostHog's answer on the attachments instead of guessing a cause.
+	bucket := newBucketServer(t)
+	server := newEmailServer(t, stubReply{status: http.StatusNotFound, body: `{"type":"invalid_request","code":"not_found","detail":"Endpoint not found.","attr":null}`})
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: []byte("%PDF")}))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "not_found", emailErr.Code)
+	require.Equal(t, EmailErrorNotFound, emailErr.Name)
+	require.Equal(t, http.StatusNotFound, emailErr.StatusCode)
+	require.Equal(t, "Attachments", emailErr.Field)
+	require.Equal(t, "Endpoint not found.", emailErr.Message)
+	require.Len(t, server.received(), 1, "nothing is sent")
+	require.Empty(t, bucket.received())
+}
+
 func TestEmailsSendStopsOnAnUploadAnswerItCannotUse(t *testing.T) {
 	invoice := []byte("%PDF-1.7 invoice")
 	bucket := newBucketServer(t)
