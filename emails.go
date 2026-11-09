@@ -118,12 +118,13 @@ type CodeEmail struct {
 	// true. A project whose admin turned engagement capture off captures
 	// nothing, whatever the send asks.
 	CaptureEngagement *bool
-	// TrackOpensAndClicks says whether the email carries PostHog's open and
-	// click tracking. Nil means true, and the request leaves the field out.
-	// With Ptr(false), PostHog sends the email without its open pixel or click
-	// tracking, so it can't count the email's opens and clicks. It is
-	// independent of CaptureEngagement, which decides whether engagement events
-	// are captured on the recipient's person.
+	// TrackOpensAndClicks says whether PostHog tracks opens and clicks of the
+	// email. Nil means true, and the request leaves the field out. With
+	// Ptr(false), the email goes out without PostHog's open pixel, so PostHog
+	// can't count its opens. PostHog doesn't track clicks on a CodeEmail, so
+	// its links are never rewritten either way. It is independent of
+	// CaptureEngagement, which decides whether engagement events are captured
+	// on the recipient's person.
 	TrackOpensAndClicks *bool
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
