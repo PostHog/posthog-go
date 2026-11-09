@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -23,11 +24,6 @@ const (
 
 	optionProcessPersonProfile = "process_person_profile"
 )
-
-// sdkInfoProperties are set by capture from the PostHog-Sdk-Info header and
-// appended after the event's own keys, so a copy left in properties is a
-// duplicate JSON key.
-var sdkInfoProperties = []string{"$lib", "$lib_version"}
 
 // Per-event result codes (the only four the backend emits, see
 // rust/capture/src/v1/analytics/types.rs EventResult).
@@ -158,9 +154,6 @@ func buildEvent(e apiEvent, logger Logger) eventPayload {
 		props = Properties{}
 	}
 	options := mergeOptions(e.options, props)
-	for _, key := range sdkInfoProperties {
-		delete(props, key)
-	}
 	sessionId := liftStringProperty(props, propertySessionID, logger)
 	windowId := liftStringProperty(props, propertyWindowID, logger)
 	return eventPayload{
@@ -270,9 +263,10 @@ func warnDroppedProperty(logger Logger, key, valueType string) {
 }
 
 // fillSDKProperties fills the values the SDK adds to every event: system
-// context, $is_server and $geoip_disable. They fill last, after the context and
-// default values, so any value the caller set wins. Enqueue calls it before
-// BeforeSend, so the hook sees these values and can change or remove them.
+// context, $lib, $lib_version, $is_server and $geoip_disable. They fill last,
+// after the context and default values, so any value the caller set wins.
+// $lib and $lib_version follow fillSDKLib. Enqueue calls it before BeforeSend,
+// so the hook sees these values and can change or remove them.
 func fillSDKProperties(props Properties, isServer, disableGeoIP bool) Properties {
 	enrichment := Properties{}
 	if isServer {
@@ -281,7 +275,91 @@ func fillSDKProperties(props Properties, isServer, disableGeoIP bool) Properties
 	if disableGeoIP {
 		enrichment[propertyGeoipDisable] = true
 	}
-	return fillProperties(props, getSystemContext().ToProperties(), enrichment)
+	// System context is never empty, so filled is a new map and fillSDKLib
+	// never writes the caller's.
+	filled := fillProperties(props, getSystemContext().ToProperties(), enrichment)
+	fillSDKLib(filled)
+	return filled
+}
+
+var (
+	cachedSDKIdentityProps     Properties
+	cachedSDKIdentityPropsOnce sync.Once
+)
+
+// sdkIdentityProperties returns the SDK's $lib and $lib_version. It is built on
+// first use, not at package init, because this package's tests set the
+// version in an init function. The map is shared, so never write to it.
+func sdkIdentityProperties() Properties {
+	cachedSDKIdentityPropsOnce.Do(func() {
+		cachedSDKIdentityProps = Properties{
+			propertyLib:        SDKName,
+			propertyLibVersion: getVersion(),
+		}
+	})
+	return cachedSDKIdentityProps
+}
+
+// libString returns v as a string and reports whether it sets $lib or
+// $lib_version: only a value that serializes to a non-empty JSON string does,
+// because that is what PostHog sees. A named string type or a *string counts;
+// a json.Number does not. A missing, nil, empty or non-string value is unset.
+// It runs before BeforeSend, so a caller marshaler that panics also leaves the
+// value unset instead of crashing the caller.
+func libString(v interface{}) (s string, set bool) {
+	if str, ok := v.(string); ok {
+		return str, str != ""
+	}
+	if v == nil {
+		return "", false
+	}
+	defer func() {
+		if recover() != nil {
+			s, set = "", false
+		}
+	}()
+	b, err := json.Marshal(v)
+	if err != nil || len(b) == 0 || b[0] != '"' {
+		return "", false
+	}
+	if json.Unmarshal(b, &s) != nil {
+		return "", false
+	}
+	return s, s != ""
+}
+
+// libIdentity returns the $lib and $lib_version PostHog stores for an event
+// sent with props. When $lib is unset PostHog takes both from the
+// PostHog-Sdk-Info header, which names this SDK, and it adds the header's
+// version to this SDK's $lib when the event has none. Another library's pair is
+// stored as sent, so its version is "" when it is unset. Callback messages use
+// it to report the identity the event is stored with.
+func libIdentity(props Properties) (lib, libVersion string) {
+	lib, set := libString(props[propertyLib])
+	if !set {
+		return SDKName, getVersion()
+	}
+	libVersion, set = libString(props[propertyLibVersion])
+	if !set && lib == SDKName {
+		return lib, getVersion()
+	}
+	return lib, libVersion
+}
+
+// fillSDKLib writes the SDK's own values into props where libIdentity fills
+// them: both when $lib is unset, replacing a lone $lib_version, and only the
+// version when $lib is this SDK's and the version is unset. A caller's other
+// $lib keeps its own $lib_version or none. It returns libIdentity's values.
+func fillSDKLib(props Properties) (lib, libVersion string) {
+	lib, libVersion = libIdentity(props)
+	identity := sdkIdentityProperties()
+	if _, set := libString(props[propertyLib]); !set {
+		props[propertyLib] = identity[propertyLib]
+		props[propertyLibVersion] = identity[propertyLibVersion]
+	} else if _, set := libString(props[propertyLibVersion]); !set && lib == SDKName {
+		props[propertyLibVersion] = identity[propertyLibVersion]
+	}
+	return lib, libVersion
 }
 
 // boolProperty reads a boolean SDK value back from properties after
@@ -305,9 +383,7 @@ func prepareForSend(msg Message, logger Logger) (json.RawMessage, APIMessage, st
 	return json.RawMessage(data), apiMsg, canonicalUUID(ev.Uuid), nil
 }
 
-// apifyEvent builds the intermediate event for a Capture. It mirrors the
-// properties APIfy assembles, minus $lib/$lib_version (the PostHog-Sdk-Info
-// header is the authoritative SDK identity).
+// apifyEvent builds the intermediate event for a Capture.
 func (msg Capture) apifyEvent() apiEvent {
 	myProperties := Properties{}.Merge(msg.Properties)
 

@@ -39,7 +39,7 @@ type captureConfig struct {
 
 	// properties optionally returns custom properties to attach to the
 	// captured exception event. Returning nil attaches no extra properties.
-	// Built-in exception keys (e.g. "$lib", "distinct_id") win on collision.
+	// Built-in exception keys (e.g. "distinct_id") win on collision.
 	properties func(ctx context.Context, r slog.Record) Properties
 }
 
@@ -110,7 +110,8 @@ func WithDescriptionExtractor(extractor DescriptionExtractor) SlogOption {
 }
 
 // WithPropertiesFn sets a function that returns custom properties for captured exceptions.
-// Built-in exception properties take precedence if keys collide.
+// Built-in exception properties take precedence if keys collide. $lib and
+// $lib_version are SDK defaults, so a value it returns wins.
 func WithPropertiesFn(fn func(ctx context.Context, r slog.Record) Properties) SlogOption {
 	return func(c *captureConfig) {
 		if fn != nil {

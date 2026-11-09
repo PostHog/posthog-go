@@ -118,9 +118,9 @@ type ExceptionInApi struct {
 	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library string `json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
@@ -133,9 +133,9 @@ type ExceptionInApi struct {
 // ExceptionInApiProperties is the wire-format properties object for an Exception message.
 type ExceptionInApiProperties struct {
 	sysContext
-	// Lib is the SDK name sent as $lib.
+	// Lib is the $lib the event is stored with.
 	Lib string `json:"$lib"`
-	// LibVersion is the SDK version sent as $lib_version.
+	// LibVersion is the $lib_version the event is stored with.
 	LibVersion string `json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
 	// Omitted entirely when nil (Config.IsServer resolved to false).
@@ -238,7 +238,7 @@ func (msg ExceptionItem) Validate() error {
 
 // APIfy converts an Exception message into the PostHog batch API representation.
 func (msg Exception) APIfy() APIMessage {
-	libVersion := getVersion()
+	library, libVersion := libIdentity(msg.Properties)
 
 	var isServer *bool
 	if msg.IsServer {
@@ -249,12 +249,12 @@ func (msg Exception) APIfy() APIMessage {
 		Type:           msg.Type, // set to "exception" by Enqueue switch
 		Uuid:           msg.Uuid,
 		Event:          "$exception",
-		Library:        SDKName,
+		Library:        library,
 		LibraryVersion: libVersion,
 		Timestamp:      msg.Timestamp.UTC(),
 		Properties: ExceptionInApiProperties{
 			sysContext:           getSystemContext(),
-			Lib:                  SDKName,
+			Lib:                  library,
 			LibVersion:           libVersion,
 			IsServer:             isServer,
 			DistinctId:           msg.DistinctId,

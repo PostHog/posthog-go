@@ -541,6 +541,14 @@ func (m *middleware) captureToolCall(
 			call.Properties = properties
 		}
 	}
+	if m.eventOptions != nil {
+		options, err := callEventOptionsResolver(ctx, m.eventOptions, toolRequest, toolResult, handlerErr)
+		if err != nil {
+			m.report(ctx, fmt.Errorf("posthogmcpsdk: event options resolver: %w", err))
+		} else {
+			call.EventOptions = options
+		}
+	}
 
 	return capture(ctx, func(ctx context.Context) error { return m.analytics.CaptureToolCall(ctx, call) })
 }
@@ -639,6 +647,17 @@ func callPropertiesResolver(
 	handlerErr error,
 ) (properties map[string]any, err error) {
 	defer recoverInstrumentationPanic("properties resolver", &err)
+	return resolver(ctx, req, result, handlerErr)
+}
+
+func callEventOptionsResolver(
+	ctx context.Context,
+	resolver EventOptionsResolver,
+	req *mcpsdk.CallToolRequest,
+	result *mcpsdk.CallToolResult,
+	handlerErr error,
+) (options map[string]any, err error) {
+	defer recoverInstrumentationPanic("event options resolver", &err)
 	return resolver(ctx, req, result, handlerErr)
 }
 

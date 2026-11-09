@@ -59,9 +59,9 @@ type IdentifyInApi struct {
 	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library string `json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
@@ -78,9 +78,7 @@ type IdentifyInApi struct {
 
 // APIfy converts an Identify message into the PostHog batch API representation.
 func (msg Identify) APIfy() APIMessage {
-	myProperties := Properties{}.
-		Set("$lib", SDKName).
-		Set("$lib_version", getVersion())
+	myProperties := Properties{}
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
@@ -92,13 +90,14 @@ func (msg Identify) APIfy() APIMessage {
 
 	myProperties.
 		mergeDefaults(msg.EventProperties)
+	library, libraryVersion := fillSDKLib(myProperties)
 
 	apified := IdentifyInApi{
 		Type:           msg.Type,
 		Uuid:           msg.Uuid,
 		Event:          "$identify",
-		Library:        SDKName,
-		LibraryVersion: getVersion(),
+		Library:        library,
+		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp.UTC(),
 		DistinctId:     msg.DistinctId,
 

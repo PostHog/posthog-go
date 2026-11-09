@@ -1035,6 +1035,12 @@ Analytics.CaptureInputRequired, and Analytics.CaptureMissingCapability send
 their own events. Parameter or response JSON exceeding 1 MiB after media
 redaction is replaced with an omission marker.
 
+MCP events carry $lib posthog-go-mcp and $lib_version set to the SDK version.
+ToolCall.Properties, the EventContext's Properties and the request context's
+properties can set either one, key by key like other properties, so set both
+together. A $lib that is not a non-empty string gets the MCP pair. BeforeSend
+can change either.
+
 TYPES
 
 type Analytics struct {
@@ -1067,7 +1073,7 @@ type EventContext struct {
 	VendorClient    string
 
 	Properties posthog.Properties
-	Options posthog.Options
+	EventOptions posthog.Options
 	Timestamp time.Time
 }
 
@@ -1136,7 +1142,7 @@ type ToolCall struct {
 	ErrorType string
 
 	Properties posthog.Properties
-	Options posthog.Options
+	EventOptions posthog.Options
 	Timestamp time.Time
 }
 

@@ -44,8 +44,24 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   (`io.modelcontextprotocol/aiInvocation` or `x-codex-turn-metadata`) when it
   names one, else from the `llm_model` argument described below.
 
-Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
-`WithProperties` to add event properties.
+Use `WithIdentity` to attach a distinct ID, groups, and person properties,
+`WithProperties` to add event properties, and `WithEventOptions` to set capture
+options, such as turning off person processing:
+
+```go
+posthogmcpsdk.Instrument(server, analytics,
+	posthogmcpsdk.WithEventOptions(func(
+		context.Context, *mcp.CallToolRequest, *mcp.CallToolResult, error,
+	) (posthog.Options, error) {
+		return posthog.NewOptions().Set("process_person_profile", false), nil
+	}),
+)
+```
+
+These options override a `posthog.RequestContext`'s options. A call without a
+distinct ID is sent with `process_person_profile` set to `false`, though a
+`BeforeSend` hook on the client can still change it. A resolver error or panic
+goes to `WithErrorHandler`, and the call is captured without these options.
 
 ## Calls that are not tool calls
 
@@ -78,8 +94,8 @@ properties of a tool call, and no `$exception`.
 - **`$mcp_missing_capability`** for a call to the opt-in virtual tool, described
   under "Reporting a missing capability".
 
-`WithProperties` applies to `$mcp_tool_call` only. `WithIdentity` applies to
-all of these events.
+`WithProperties` and `WithEventOptions` apply only to `$mcp_tool_call` and its
+`$exception`. `WithIdentity` applies to all of these events.
 
 ## The context argument
 

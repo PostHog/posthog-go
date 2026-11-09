@@ -166,9 +166,7 @@ type Config struct {
 	// They fill in before BeforeSend, only for options that the event and the
 	// request context left missing or nil. BeforeSend sees the filled options and
 	// can change them. Set an option to false on the event to turn a default off.
-	// They win over the personless default and, like any option, over the
-	// matching legacy property, such as $cookieless_mode, set on an event or in
-	// BeforeSend.
+	// They win over the personless default.
 	DefaultEventOptions Options
 
 	// Callback receives success or failure notifications for messages sent to the
@@ -184,8 +182,7 @@ type Config struct {
 	// personless process_person_profile option and the SDK: $is_server,
 	// $geoip_disable, system context and feature flag properties. The SDK fills
 	// only keys the caller left unset. Its changes are final. To
-	// change an option, set it in Options: a legacy property such as
-	// $process_person_profile does not replace an option that is already set.
+	// change an option, set it in Options.
 	BeforeSend BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.

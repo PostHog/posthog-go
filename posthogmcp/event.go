@@ -356,6 +356,7 @@ func setStringProperty(properties posthog.Properties, key, value string) {
 }
 
 func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, includeSet bool) {
+	applyLibrary(properties)
 	if len(p.groups) > 0 {
 		properties[propertyGroups] = p.groups
 	}
@@ -366,12 +367,30 @@ func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, 
 	}
 }
 
-// options returns the event's capture options: the caller's Options plus the
-// person profile opt-out. The opt-out goes in as an option, not a property, so
-// it wins over client and request-context defaults.
+// applyLibrary labels the event with this package's $lib and $lib_version when
+// the caller's properties set no $lib, replacing a lone $lib_version. A set
+// $lib is a non-empty string, as in the core SDK. A caller's $lib wins with its
+// own $lib_version, and gets this package's version only when it names this
+// package and has none.
+func applyLibrary(properties posthog.Properties) {
+	lib, _ := properties[propertyLib].(string)
+	switch {
+	case lib == "":
+		properties[propertyLib] = library
+		properties[propertyLibVersion] = posthog.Version
+	case lib == library:
+		if version, _ := properties[propertyLibVersion].(string); version == "" {
+			properties[propertyLibVersion] = posthog.Version
+		}
+	}
+}
+
+// options returns the event's capture options: the caller's EventOptions plus
+// the person profile opt-out. The opt-out goes in as an option, not a
+// property, so it wins over client and request-context defaults.
 func (p preparedToolCall) options() posthog.Options {
-	options := make(posthog.Options, len(p.call.Options)+1)
-	for name, value := range p.call.Options {
+	options := make(posthog.Options, len(p.call.EventOptions)+1)
+	for name, value := range p.call.EventOptions {
 		options[name] = value
 	}
 	switch {
@@ -399,6 +418,31 @@ func isNilOption(v interface{}) bool {
 		return rv.IsNil()
 	}
 	return false
+}
+
+// customOrLibrary returns the caller's custom properties, or only their $lib
+// and $lib_version when the event drops custom properties to fit, so a
+// smaller event keeps the caller's label. Only string values are kept: the
+// size bound can truncate a string but not a non-string value.
+func (p preparedToolCall) customOrLibrary(includeCustom bool) posthog.Properties {
+	if includeCustom {
+		return p.custom
+	}
+	var lib posthog.Properties
+	for _, key := range []string{propertyLib, propertyLibVersion} {
+		value, ok := p.custom[key]
+		if !ok {
+			continue
+		}
+		if _, isString := value.(string); !isString {
+			continue
+		}
+		if lib == nil {
+			lib = posthog.Properties{}
+		}
+		lib[key] = value
+	}
+	return lib
 }
 
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {

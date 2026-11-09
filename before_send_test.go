@@ -289,6 +289,7 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 	}
 	withSDKValues := func(keys []interface{}) []interface{} {
 		all := NewProperties().Merge(getSystemContext().ToProperties()).
+			Merge(sdkIdentityProperties()).
 			Set(propertyGeoipDisable, true).
 			Set(propertyIsServer, true)
 		for _, key := range keys {
