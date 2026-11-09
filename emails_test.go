@@ -185,6 +185,22 @@ func TestEmailsSendCode(t *testing.T) {
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
 }
 
+func TestEmailsSendCodeInAMarketingCategory(t *testing.T) {
+	server := newEmailServer(t, accepted("msg_1"))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "monthly-newsletter",
+		Subject:     "What's new",
+		HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
+		Category:    "product-updates",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "product-updates", server.received()[0].Body["category"])
+}
+
 func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 	server := newEmailServer(t, accepted("msg_1"))
 	client := newEmailClient(t, server)
