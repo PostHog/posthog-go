@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -269,12 +270,24 @@ func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	return err
 }
 
-// withoutURL drops the URL from a request error. An upload URL is signed, so
-// it must not reach logs.
+// withoutURL drops every URL from a request error. An upload URL is signed,
+// and so is a storage redirect, which Go quotes when it can't parse the
+// redirect's Location, so neither may reach logs. An error whose text names no
+// URL is kept as it is, so a caller can still tell a timeout or a refused
+// connection.
 func withoutURL(err error) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return urlErr.Err
+		err = urlErr.Err
 	}
-	return err
+	if text := err.Error(); !strings.Contains(text, "://") && !strings.Contains(text, "?") {
+		return err
+	}
+	const redacted = "the request failed with an error naming a URL, left out because it may be signed"
+	for _, kind := range []error{context.Canceled, context.DeadlineExceeded} {
+		if errors.Is(err, kind) {
+			return fmt.Errorf(redacted+": %w", kind)
+		}
+	}
+	return errors.New(redacted)
 }

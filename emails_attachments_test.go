@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -201,6 +202,37 @@ func TestEmailsSendUploadErrorNeverHoldsTheSignedURL(t *testing.T) {
 	require.Equal(t, EmailErrorServiceUnavailable, emailErr.Name)
 	require.NotContains(t, fmt.Sprintf("%v %+v", err, emailErr.Unwrap()), "X-Amz-Signature")
 	require.Len(t, server.received(), 1)
+}
+
+func TestEmailsSendUploadErrorNeverHoldsARedirectsSignedURL(t *testing.T) {
+	// Go reads a redirect's Location before any redirect policy runs, and
+	// quotes a Location it can't parse in its error. Storage redirects keep
+	// the request's signature, so that text must not reach the caller.
+	for name, location := range map[string]string{
+		"absolute": "http://storage.example/team/2/%zz?X-Amz-Signature=secret",
+		"relative": "/team/2/%zz?X-Amz-Signature=secret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			invoice := []byte("%PDF-1.7 invoice")
+			bucket := newBucketServer(t, stubReply{status: http.StatusTemporaryRedirect, header: map[string]string{"Location": location}})
+			server := newEmailServer(t, uploadsAnswer(toUpload(bucket, invoice)))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Attached</p>",
+				Attachments: []EmailAttachment{{Filename: "invoice.pdf", Content: invoice}},
+				MaxRetries:  Ptr(0),
+			})
+
+			emailErr := requireEmailError(t, err)
+			require.Equal(t, "network_error", emailErr.Code)
+			for cause := error(emailErr); cause != nil; cause = errors.Unwrap(cause) {
+				require.NotContains(t, fmt.Sprintf("%v %+v", cause, cause), "X-Amz-Signature")
+			}
+			require.Len(t, bucket.received(), 1)
+			require.Len(t, server.received(), 1)
+		})
+	}
 }
 
 func TestEmailsSendStopsWhenPostHogRefusesTheUploads(t *testing.T) {
