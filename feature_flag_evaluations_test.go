@@ -1835,3 +1835,20 @@ func TestFeatureFlagEvaluations_UnresolvedFlagsErrorKeepsResponseErrors(t *testi
 		FeatureFlagErrorErrorsWhileComputing + "," + FeatureFlagErrorFlagMissing,
 	}, errorsReported)
 }
+
+func TestFailedRemoteFlagIsNotADecision(t *testing.T) {
+	remote := `{"flags":{"checkout":{"key":"checkout","enabled":false,"failed":true,"metadata":{"id":1,"version":1}}},"errorsWhileComputingFlags":true}`
+	client, capture, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(betaUIDefinition, continuityCheckoutDefinition), remote)
+
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{Key: "checkout", DistinctId: "user-1"})
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrFlagNotFound)
+	require.Contains(t, flagCalledError(t, client, capture, "checkout"), FeatureFlagErrorEvaluationFailed)
+	require.NotZero(t, remoteCalls.Load())
+
+	flags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-1", SendFeatureFlagEvents: Ptr(false)})
+	require.NoError(t, err)
+	require.Equal(t, true, flags["beta-ui"])
+	_, hasCheckout := flags["checkout"]
+	require.False(t, hasCheckout)
+}

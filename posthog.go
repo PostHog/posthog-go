@@ -932,6 +932,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
+		evalResult.FlagFailed = combined.flagFailed
 		if combined.payload != "" {
 			payloadStr = combined.payload
 			hasPayload = true
@@ -2107,5 +2108,15 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 		return emptyFlagValues, nil
 	}
 
-	return flagsResponse.FeatureFlags, nil
+	if flagsResponse.FeatureFlags == nil {
+		return map[string]interface{}{}, nil
+	}
+	values := make(map[string]interface{}, len(flagsResponse.FeatureFlags))
+	for key, value := range flagsResponse.FeatureFlags {
+		if remoteFlagFailed(flagsResponse, key) {
+			continue
+		}
+		values[key] = value
+	}
+	return values, nil
 }
