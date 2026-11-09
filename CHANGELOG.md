@@ -1,5 +1,27 @@
 ## Unreleased
 
+## 1.42.0
+
+### Minor Changes
+
+- 761d995: Add `posthogmcp.WithCaptureErrorMessages(false)`, which keeps a failed MCP tool call's error text out of `$mcp_error_message` and the `$exception` event. Tool errors often repeat their arguments, and only credentials are redacted from them. The failure is still recorded with its error type, and both carry `Tool <name> returned an error` instead. It applies to the manual API and to the `posthogmcpsdk` and `posthogmcpgo` adapters. An `IsError` result's content is still part of `$mcp_response`, so turn response capture off too to keep failure text out entirely.
+
+### Patch Changes
+
+- a528b3f: Aligned `posthogmcpsdk` with the sdk-specs MCP spec. The `get_more_tools` virtual tool now advertises `readOnlyHint`, `idempotentHint`, `destructiveHint` and `openWorldHint` as `false`, since it records data, and no longer sets a title. The injected `context` argument has a shorter description that asks for a few words on why the tool is called, described by role. The injected `llm_model` argument is no longer listed as required. This changes your published tool definitions; if your server is listed in the ChatGPT or Claude directories, those platforms may re-review the updated tools.
+
+## 1.41.1
+
+### Patch Changes
+
+- 17365fe: Suppress local-evaluation definition warnings for client-only flags, including definitions loaded from a shared cache, without changing their evaluation behavior.
+
+## 1.41.0
+
+### Minor Changes
+
+- d4ea159: Add `posthogmcpgo`, MCP analytics for servers built on `github.com/mark3labs/mcp-go`. `posthogmcpgo.Instrument` returns one `server.ServerOption` that captures `$mcp_tool_call` events with the same properties as `posthogmcpsdk`, including the agent's intent from an added `context` argument. Tools whose input schema disallows other properties get no added arguments, so servers using `WithInputSchemaValidation` keep working.
+
 ## 1.40.1
 
 ### Patch Changes

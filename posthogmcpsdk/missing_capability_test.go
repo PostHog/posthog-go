@@ -3,6 +3,7 @@ package posthogmcpsdk
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -107,7 +108,7 @@ func TestMissingCapabilityToolSchema(t *testing.T) {
 		{
 			name:         "every enabled argument",
 			wantProperty: []string{"context", "llm_model", "conversation_id"},
-			wantRequired: []any{"context", "llm_model"},
+			wantRequired: []any{"context"},
 		},
 		{
 			name:         "without the model argument",
@@ -439,4 +440,48 @@ func TestMissingCapabilityToolCallIsGuardedByInnerMiddleware(t *testing.T) {
 
 	require.ErrorContains(t, err, "unauthenticated")
 	assert.NotContains(t, queue.eventNames(), "$mcp_missing_capability")
+}
+
+func TestMissingCapabilityToolDeclaresItRecordsData(t *testing.T) {
+	server := newServer()
+	Instrument(server, posthogmcp.New(&fakeQueue{}), WithMissingCapabilityTool(""))
+
+	tools := listedTools(t, connectInMemory(t, server))
+
+	require.Len(t, tools, 1)
+	wire, err := json.Marshal(tools[0].Annotations)
+	require.NoError(t, err)
+	var hints map[string]any
+	require.NoError(t, json.Unmarshal(wire, &hints))
+	// go-sdk before v1.8 drops a false readOnlyHint and idempotentHint from the
+	// wire, and MCP reads an absent hint as false, so a client sees all four as
+	// false either way.
+	assert.Subset(t, []string{"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"}, keys(hints))
+	assert.Contains(t, hints, "destructiveHint")
+	assert.Contains(t, hints, "openWorldHint")
+	for hint, value := range hints {
+		assert.Equal(t, false, value, hint)
+	}
+}
+
+func keys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestContextArgumentDescriptionIsSharedAcrossSDKs(t *testing.T) {
+	const want = "A few words on why you are calling this tool, for the server developer's analytics. " +
+		`Describe people and things by role, such as "a customer". Do not quote the user or include names, emails, or other personal details.`
+	server := newServer()
+	Instrument(server, posthogmcp.New(&fakeQueue{}))
+	server.AddTool(&mcpsdk.Tool{Name: "echo", InputSchema: map[string]any{"type": "object"}}, echoHandler)
+
+	tools := listedTools(t, connectInMemory(t, server))
+
+	require.Len(t, tools, 1)
+	properties, _ := inputSchemaOf(t, tools[0])
+	assert.Equal(t, want, properties["context"].(map[string]any)["description"])
 }

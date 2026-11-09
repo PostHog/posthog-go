@@ -86,7 +86,8 @@ func WithCaptureParameters(enabled bool) Option {
 // WithCaptureResponses controls capture of terminal tool results as
 // $mcp_response. It is enabled by default. Disabling it does not cover
 // failures: the text of an IsError result is still sent as $mcp_error_message
-// and in a $exception event, as in the Python SDK.
+// and in a $exception event, as in the Python SDK, unless the recorder is
+// created with posthogmcp.WithCaptureErrorMessages(false).
 func WithCaptureResponses(enabled bool) Option {
 	return func(cfg *config) { cfg.captureResponses = enabled }
 }
@@ -114,9 +115,8 @@ func WithIntentFallback(fallback IntentFallback) Option {
 
 // WithCaptureModel controls capture of the model that made each call. The
 // model comes from the client's own request metadata when it names one, else
-// from an llm_model argument the agent fills in, advertised as required and
-// removed before the tool's handler and input validation see the call, like
-// context. Tools that declare their own llm_model argument keep it, and its
+// from an optional llm_model argument the agent fills in, which is removed
+// before the tool's handler and input validation see the call, like context. Tools that declare their own llm_model argument keep it, and its
 // value is not read as the model. It is enabled by default.
 func WithCaptureModel(enabled bool) Option {
 	return func(cfg *config) { cfg.captureModel = enabled }
