@@ -73,7 +73,10 @@ func normalizeLegacyMessage(apiMsg APIMessage) (APIMessage, error) {
 		msg.Properties = properties
 		return msg, nil
 	case ExceptionInApi:
-		custom, err := normalizeEventProperties(msg.Properties.Custom)
+		// Typed exception fields win on collision and are never sent from Custom.
+		// Normalize only the keys MarshalJSON will keep. A failing or cyclic value
+		// under a shadowed key, such as $lib, must not drop the exception.
+		custom, err := normalizeEventProperties(exceptionCustomWithoutShadowedKeys(msg.Properties))
 		if err != nil {
 			return nil, err
 		}
@@ -199,4 +202,32 @@ func marshalOpaqueEventProperty(value interface{}, custom bool) (interface{}, er
 		return nil, invalidEventJSON(data)
 	}
 	return json.RawMessage(data), nil
+}
+
+// exceptionCustomWithoutShadowedKeys drops custom keys that ExceptionInApiProperties
+// already emits. MarshalJSON skips those keys, so they must be ignored before
+// normalization too.
+func exceptionCustomWithoutShadowedKeys(properties ExceptionInApiProperties) Properties {
+	custom := properties.Custom
+	if len(custom) == 0 {
+		return custom
+	}
+	typed := properties
+	typed.Custom = nil
+	typedBytes, err := json.Marshal(typed)
+	if err != nil {
+		return custom
+	}
+	var reserved map[string]json.RawMessage
+	if err := json.Unmarshal(typedBytes, &reserved); err != nil {
+		return custom
+	}
+	filtered := make(Properties, len(custom))
+	for key, value := range custom {
+		if _, shadowed := reserved[key]; shadowed {
+			continue
+		}
+		filtered[key] = value
+	}
+	return filtered
 }

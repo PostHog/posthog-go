@@ -316,3 +316,47 @@ func TestPrepareNonCaptureFloat32NaNKeepsTheEvent(t *testing.T) {
 		})
 	}
 }
+
+type failingEventProperty struct{}
+
+func (*failingEventProperty) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("property marshaler failed")
+}
+
+func TestExceptionIgnoredCustomCollision(t *testing.T) {
+	cycle := map[string]interface{}{}
+	cycle["self"] = cycle
+	messages := []Exception{
+		{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"$lib": &failingEventProperty{}, "kept": "yes"},
+		},
+		{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"$lib": cycle, "kept": "yes"},
+		},
+	}
+	for i, msg := range messages {
+		t.Run(fmt.Sprintf("shadowed %d", i), func(t *testing.T) {
+			data, _, err := prepareForSend(msg)
+			require.NoError(t, err)
+			var wire struct {
+				Properties map[string]interface{} `json:"properties"`
+			}
+			require.NoError(t, json.Unmarshal(data, &wire))
+			require.Equal(t, SDKName, wire.Properties["$lib"])
+			require.Equal(t, "yes", wire.Properties["kept"])
+		})
+	}
+
+	dropped := Exception{
+		DistinctId:    "user-1",
+		ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+		Properties:    Properties{"kept": &failingEventProperty{}},
+	}
+	_, _, err := prepareForSend(dropped)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "property marshaler failed")
+}
