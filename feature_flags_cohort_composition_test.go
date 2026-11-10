@@ -49,12 +49,15 @@ func TestUnsupportedCohortChildComposition(t *testing.T) {
 							localCohorts = preParseCohortValues(cohorts)
 						}
 						got, err := poller.matchPropertyGroup(group, Properties{"email": "user@x"}, localCohorts, nil, nil, "user", nil, nil)
-						if tc.unresolved {
+						if invalidFirst || tc.unresolved {
+							var serverErr *RequiresServerEvaluationError
+							require.ErrorAs(t, err, &serverErr)
 							requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+							require.False(t, got)
 						} else {
 							require.NoError(t, err)
+							require.Equal(t, tc.want, got)
 						}
-						require.Equal(t, tc.want, got)
 					})
 				}
 			}
@@ -62,7 +65,7 @@ func TestUnsupportedCohortChildComposition(t *testing.T) {
 	}
 }
 
-func TestDecisiveCohortSiblingStaysLocal(t *testing.T) {
+func TestCohortSiblingOrderPreservesBackendFallback(t *testing.T) {
 	for _, tc := range []struct {
 		groupType, leafValue string
 		want                 bool
@@ -84,15 +87,26 @@ func TestDecisiveCohortSiblingStaysLocal(t *testing.T) {
 				client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, remoteCheckoutEnabled)
 				payload := FeatureFlagPayload{Key: "checkout", DistinctId: "user", PersonProperties: Properties{"email": "user@x"}, OnlyEvaluateLocally: true}
 				got, err := client.GetFeatureFlag(payload)
-				require.NoError(t, err)
-				require.Equal(t, tc.want, got)
+				if invalidFirst {
+					var serverErr *RequiresServerEvaluationError
+					require.ErrorAs(t, err, &serverErr)
+					require.Nil(t, got)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, tc.want, got)
+				}
 				require.Zero(t, remoteCalls.Load())
 
 				payload.OnlyEvaluateLocally = false
 				got, err = client.GetFeatureFlag(payload)
 				require.NoError(t, err)
-				require.Equal(t, tc.want, got)
-				require.Zero(t, remoteCalls.Load())
+				if invalidFirst {
+					require.Equal(t, true, got)
+					require.Equal(t, int32(1), remoteCalls.Load())
+				} else {
+					require.Equal(t, tc.want, got)
+					require.Zero(t, remoteCalls.Load())
+				}
 			})
 		}
 	}

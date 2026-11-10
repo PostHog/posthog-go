@@ -25,7 +25,7 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 		}
 		fallthrough
 	default:
-		return false, &InconclusiveMatchError{msg: "Unsupported cohort group type", Reason: UnresolvedFlagReasonUnsupportedDefinition}
+		return false, &RequiresServerEvaluationError{msg: "Unsupported cohort group type", Reason: UnresolvedFlagReasonUnsupportedDefinition}
 	}
 
 	// Use pre-parsed values if available (built at load time), otherwise fall back to raw values
