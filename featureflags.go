@@ -873,7 +873,6 @@ func (poller *FeatureFlagsPoller) run() {
 		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
-			close(poller.forceReload)
 			timer.Stop()
 			poller.shutdownCacheProvider(poller.shutdownCtx)
 			return
@@ -2383,12 +2382,40 @@ func parseRelativeDate(dateStr string) (time.Time, error) {
 	case "w":
 		return now.AddDate(0, 0, -number*7), nil
 	case "m":
-		return now.AddDate(0, -number, 0), nil
+		return subtractMonths(now, number), nil
 	case "y":
-		return now.AddDate(-number, 0, 0), nil
+		return subtractYears(now, number), nil
 	default:
 		return time.Time{}, errors.New("invalid interval in relative date")
 	}
+}
+
+// subtractMonths steps back one month at a time and clamps the day after every
+// step, as the SDK spec requires: March 31 minus two months is January 28.
+// time.AddDate would normalize February 31 forward into March.
+func subtractMonths(t time.Time, months int) time.Time {
+	year, month, day := t.Date()
+	// Every month has at least 28 days, so nothing can clamp further after that.
+	for step := 1; step <= months && day > 28; step++ {
+		// Day 0 of a month is the last day of the month before it.
+		lastDay := time.Date(year, month-time.Month(step)+1, 0, 0, 0, 0, 0, time.UTC).Day()
+		if lastDay < day {
+			day = lastDay
+		}
+	}
+	hour, minute, second := t.Clock()
+	return time.Date(year, month-time.Month(months), day, hour, minute, second, t.Nanosecond(), t.Location())
+}
+
+func subtractYears(t time.Time, years int) time.Time {
+	year, month, day := t.Date()
+	// The year before a leap year is never a leap year, so February 29 clamps
+	// on the first step and stays on the 28th.
+	if years > 0 && month == time.February && day == 29 {
+		day = 28
+	}
+	hour, minute, second := t.Clock()
+	return time.Date(year-years, month, day, hour, minute, second, t.Nanosecond(), t.Location())
 }
 
 // semverTuple represents a parsed semantic version as (major, minor, patch).
@@ -3300,8 +3327,13 @@ func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestD
 }
 
 // ForceReload requests an immediate reload of local feature flag definitions.
+// It does nothing once the poller has shut down. The send selects on shutdown
+// so a reload racing Close cannot send on a closed channel.
 func (poller *FeatureFlagsPoller) ForceReload() {
-	poller.forceReload <- true
+	select {
+	case <-poller.shutdown:
+	case poller.forceReload <- true:
+	}
 }
 
 // shutdownPoller stops the polling goroutine, which releases the cache provider on

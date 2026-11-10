@@ -855,7 +855,13 @@ func (c *client) ReloadFeatureFlags() error {
 		c.warnPersonalAPIKeyMissing("ReloadFeatureFlags")
 		return ErrNoSecretKey
 	}
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	c.featureFlagsPoller.ForceReload()
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	return nil
 }
 
@@ -1657,15 +1663,22 @@ func (c *client) send(pb preparedBatch) {
 			return
 		}
 
+		// The last attempt has already failed. Waiting here only delays the
+		// failure callback and any flush that still owns this delivery.
+		if i == c.maxAttempts-1 {
+			break
+		}
+
 		// The batch remains owned by this worker while waiting to retry.
 		// Flush waits for this attempt, not the entire retry budget.
-		if i < c.maxAttempts-1 {
-			c.deferDeliveryRetry(pb.done)
+		c.deferDeliveryRetry(pb.done)
+		var header time.Duration
+		hasHeader := false
+		if httpErr != nil && httpErr.hasRetryAfter {
+			header = httpErr.retryAfter
+			hasHeader = true
 		}
-		retryDelay := c.RetryAfter(i)
-		if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
-			retryDelay = httpErr.retryAfter
-		}
+		retryDelay := clampRetryWait(c.RetryAfter(i), header, hasHeader)
 
 		// Wait for retry or shutdown
 		retryTimer := time.NewTimer(retryDelay)
