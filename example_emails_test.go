@@ -58,9 +58,9 @@ func ExampleEmails_code() {
 	}
 }
 
-// Marketing email in one of the project's message categories, by its key. It
-// honors the recipient's opt-outs, and PostHog fills {{ unsubscribe_url }}
-// with the recipient's preferences link.
+// Marketing email in a message category defined in code. The first send
+// creates the category, and PostHog fills {{ unsubscribe_url }} with the
+// recipient's preferences link.
 func ExampleEmails_marketing() {
 	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
 	if err != nil {
@@ -73,13 +73,18 @@ func ExampleEmails_marketing() {
 		TemplateKey: "monthly-newsletter",
 		Subject:     "What's new this month",
 		HTML:        `<p>Our news</p><a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
-		Category:    "product-updates",
-		DistinctID:  "user_123",
+		Category: posthog.MessageCategory{
+			Key:         "newsletter",
+			Type:        posthog.MessageCategoryMarketing,
+			Name:        "Newsletter",
+			Description: "Monthly product news",
+		},
+		DistinctID: "user_123",
 	})
 
 	var emailErr *posthog.EmailError
 	if errors.As(err, &emailErr) && emailErr.Code == "recipient_opted_out" {
-		fmt.Println("the recipient opted out of product updates")
+		fmt.Println("the recipient opted out of the newsletter")
 	}
 }
 

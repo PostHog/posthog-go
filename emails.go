@@ -27,10 +27,6 @@ const (
 	emailStatusNotRead = "no email status was read"
 )
 
-// EmailCategoryTransactional is the built-in CodeEmail.Category. A CodeEmail
-// without a Category is transactional too.
-const EmailCategoryTransactional = "transactional"
-
 var (
 	idempotencyKeyPattern = regexp.MustCompile(`^[\x21-\x7e]{1,255}$`)
 	templateKeyPattern    = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,400}$`)
@@ -123,13 +119,10 @@ type CodeEmail struct {
 	// true. A project whose admin turned engagement capture off captures
 	// nothing, whatever the send asks.
 	CaptureEngagement *bool
-	// Category is EmailCategoryTransactional or the key of one of the
-	// project's marketing message categories, such as "product-updates".
-	// Without it, PostHog sends transactional email. A marketing send honors
-	// the recipient's opt-outs, and its HTML, or its Text when it has no HTML,
-	// needs the {{ unsubscribe_url }} placeholder, which PostHog fills with the
-	// recipient's preferences link.
-	Category string
+	// Category is EmailCategoryTransactional or a MessageCategory, which
+	// defines the category in code. Without it, PostHog sends transactional
+	// email with no category.
+	Category EmailCategory
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
 	// ID is the email address.
@@ -140,6 +133,52 @@ type CodeEmail struct {
 	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
 	// Ptr(0) turns retries off.
 	MaxRetries *int
+}
+
+// EmailCategory is the category of a CodeEmail: EmailCategoryTransactional or
+// a MessageCategory.
+type EmailCategory interface {
+	wireValue() (interface{}, *EmailError)
+}
+
+type builtInEmailCategory string
+
+// EmailCategoryTransactional sends transactional email with no category, the
+// same as a CodeEmail without a Category.
+const EmailCategoryTransactional builtInEmailCategory = "transactional"
+
+// MessageCategoryType is the type of a MessageCategory.
+type MessageCategoryType string
+
+const (
+	// MessageCategoryMarketing: a marketing send honors the recipient's
+	// opt-outs, and its HTML, or its Text when it has no HTML, needs the
+	// {{ unsubscribe_url }} placeholder, which PostHog fills with the
+	// recipient's preferences link.
+	MessageCategoryMarketing MessageCategoryType = "marketing"
+	// MessageCategoryTransactional: the email is sent as transactional and
+	// filed under the category.
+	MessageCategoryTransactional MessageCategoryType = "transactional"
+)
+
+// MessageCategory defines a message category in code. The first send with a
+// Key creates the category, and a later send with a new Name or Description
+// updates it.
+//
+// PostHog refuses a send with the error code "category_mismatch" when the Key
+// exists with another Type, "too_many_categories" when the project can't take
+// another category, "unsubscribe_link_required" when a marketing send has no
+// {{ unsubscribe_url }} placeholder, and "recipient_opted_out" when the
+// recipient opted out of the category or of all marketing.
+type MessageCategory struct {
+	// Key names the category, such as "newsletter". Recipients' opt-outs and
+	// preferences refer to the category by its key.
+	Key  string
+	Type MessageCategoryType
+	// Name is the category's display name, such as "Newsletter".
+	Name string
+	// Description is optional, such as "Monthly product news".
+	Description string
 }
 
 // SendEmailResult is an email that PostHog queued.
@@ -173,8 +212,9 @@ type EmailStatus struct {
 	// StatusAt is when the email reached its current status.
 	StatusAt time.Time
 	// Reason says why a failed email was not sent, such as "provider_error",
-	// "recipient_suppressed" or "recipient_opted_out", or gives the bounce type of a bounced email:
-	// "hard", "soft" or "unknown". It is empty otherwise.
+	// "recipient_suppressed" or "recipient_opted_out", or gives the bounce
+	// type of a bounced email: "hard", "soft" or "unknown". It is empty
+	// otherwise.
 	Reason string
 }
 
@@ -192,16 +232,49 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string   `json:"to"`
-	TemplateKey       string   `json:"template_key"`
-	Subject           string   `json:"subject"`
-	HTML              string   `json:"html,omitempty"`
-	Text              string   `json:"text,omitempty"`
-	From              string   `json:"from,omitempty"`
-	ReplyTo           []string `json:"reply_to,omitempty"`
-	CaptureEngagement bool     `json:"capture_engagement"`
-	DistinctID        string   `json:"distinct_id,omitempty"`
-	Category          string   `json:"category,omitempty"`
+	To                string      `json:"to"`
+	TemplateKey       string      `json:"template_key"`
+	Subject           string      `json:"subject"`
+	HTML              string      `json:"html,omitempty"`
+	Text              string      `json:"text,omitempty"`
+	From              string      `json:"from,omitempty"`
+	ReplyTo           []string    `json:"reply_to,omitempty"`
+	CaptureEngagement bool        `json:"capture_engagement"`
+	DistinctID        string      `json:"distinct_id,omitempty"`
+	Category          interface{} `json:"category,omitempty"`
+}
+
+type messageCategoryBody struct {
+	Key         string              `json:"key"`
+	Type        MessageCategoryType `json:"type"`
+	Name        string              `json:"name"`
+	Description string              `json:"description,omitempty"`
+}
+
+func (c builtInEmailCategory) wireValue() (interface{}, *EmailError) {
+	return string(c), nil
+}
+
+func (c MessageCategory) wireValue() (interface{}, *EmailError) {
+	if strings.TrimSpace(c.Key) == "" {
+		return nil, invalidEmail("invalid_category", "Category.Key", "A MessageCategory needs a Key.")
+	}
+	if c.Type != MessageCategoryMarketing && c.Type != MessageCategoryTransactional {
+		return nil, invalidEmail("invalid_category", "Category.Type", "A MessageCategory's Type must be MessageCategoryMarketing or MessageCategoryTransactional.")
+	}
+	if strings.TrimSpace(c.Name) == "" {
+		return nil, invalidEmail("invalid_category", "Category.Name", "A MessageCategory needs a Name.")
+	}
+	return messageCategoryBody{Key: c.Key, Type: c.Type, Name: c.Name, Description: c.Description}, nil
+}
+
+// categoryWireValue is nil when the email has no category, which leaves the
+// field out so the server decides.
+func categoryWireValue(category EmailCategory) (interface{}, *EmailError) {
+	if isNil(category) {
+		return nil, nil
+	}
+	return category.wireValue()
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -245,6 +318,10 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 			return emailSend{}, invalidEmail("invalid_reply_to", "ReplyTo", "ReplyTo must not hold a blank address.")
 		}
 	}
+	category, categoryErr := categoryWireValue(e.Category)
+	if categoryErr != nil {
+		return emailSend{}, categoryErr
+	}
 	body, err := encodeEmailBody(codeEmailBody{
 		To:                e.To,
 		TemplateKey:       e.TemplateKey,
@@ -255,7 +332,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		ReplyTo:           e.ReplyTo,
 		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
-		Category:          e.Category,
+		Category:          category,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)
@@ -364,7 +441,7 @@ func isHyphenatedUUID(id string) bool {
 }
 
 func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, error) {
-	if isNilEmail(email) {
+	if isNil(email) {
 		return nil, newEmailError("invalid_form", "Send needs a TemplateEmail or a CodeEmail.", nil)
 	}
 	send, err := email.prepare()
@@ -434,13 +511,14 @@ func encodeEmailBody(body interface{}) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// isNilEmail reports a nil Email, including a nil *TemplateEmail or *CodeEmail.
-func isNilEmail(email Email) bool {
-	if email == nil {
+// isNil reports a nil interface value, including one that holds a nil
+// pointer, such as a nil *CodeEmail or *MessageCategory.
+func isNil(value interface{}) bool {
+	if value == nil {
 		return true
 	}
-	value := reflect.ValueOf(email)
-	return value.Kind() == reflect.Pointer && value.IsNil()
+	reflected := reflect.ValueOf(value)
+	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
 }
 
 // start admits one request into the in-flight set, or says why it can't run.

@@ -185,42 +185,68 @@ func TestEmailsSendCode(t *testing.T) {
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
 }
 
-func TestEmailsSendCodeInAMarketingCategory(t *testing.T) {
-	server := newEmailServer(t, accepted("msg_1"))
-	client := newEmailClient(t, server)
+func TestEmailsSendCodeDefinesItsCategory(t *testing.T) {
+	tests := []struct {
+		name     string
+		category EmailCategory
+		want     map[string]interface{}
+	}{
+		{
+			name:     "marketing",
+			category: MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: "Monthly product news"},
+			want:     map[string]interface{}{"key": "newsletter", "type": "marketing", "name": "Newsletter", "description": "Monthly product news"},
+		},
+		{
+			name:     "transactional without a description",
+			category: &MessageCategory{Key: "receipts", Type: MessageCategoryTransactional, Name: "Receipts"},
+			want:     map[string]interface{}{"key": "receipts", "type": "transactional", "name": "Receipts"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
 
-	_, err := client.Emails().Send(context.Background(), CodeEmail{
-		To:          "user@example.com",
-		TemplateKey: "monthly-newsletter",
-		Subject:     "What's new",
-		HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
-		Category:    "product-updates",
-	})
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:          "user@example.com",
+				TemplateKey: "monthly-newsletter",
+				Subject:     "What's new",
+				HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
+				Category:    tt.category,
+			})
 
-	require.NoError(t, err)
-	require.Equal(t, "product-updates", server.received()[0].Body["category"])
+			require.NoError(t, err)
+			require.Equal(t, tt.want, server.received()[0].Body["category"])
+		})
+	}
 }
 
 func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
-	server := newEmailServer(t, accepted("msg_1"))
-	client := newEmailClient(t, server)
+	var noCategory *MessageCategory
+	for name, category := range map[string]EmailCategory{"no category": nil, "nil category pointer": noCategory} {
+		t.Run(name, func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
 
-	_, err := client.Emails().Send(context.Background(), CodeEmail{
-		To:                "user@example.com",
-		TemplateKey:       "digest",
-		Subject:           "Your digest",
-		Text:              "Plain text only",
-		CaptureEngagement: Ptr(false),
-	})
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:                "user@example.com",
+				TemplateKey:       "digest",
+				Subject:           "Your digest",
+				Text:              "Plain text only",
+				CaptureEngagement: Ptr(false),
+				Category:          category,
+			})
 
-	require.NoError(t, err)
-	require.Equal(t, map[string]interface{}{
-		"to":                 "user@example.com",
-		"template_key":       "digest",
-		"subject":            "Your digest",
-		"text":               "Plain text only",
-		"capture_engagement": false,
-	}, server.received()[0].Body)
+			require.NoError(t, err)
+			require.Equal(t, map[string]interface{}{
+				"to":                 "user@example.com",
+				"template_key":       "digest",
+				"subject":            "Your digest",
+				"text":               "Plain text only",
+				"capture_engagement": false,
+			}, server.received()[0].Body)
+		})
+	}
 }
 
 func TestEmailsSendHeaders(t *testing.T) {
@@ -374,6 +400,14 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 		{name: "no subject", email: code(func(e *CodeEmail) { e.Subject = "" }), code: "invalid_form", field: "Subject"},
 		{name: "no html or text", email: code(func(e *CodeEmail) { e.HTML = "" }), code: "invalid_form", field: "HTML"},
 		{name: "blank reply-to", email: code(func(e *CodeEmail) { e.ReplyTo = []string{"a@example.com", " "} }), code: "invalid_reply_to", field: "ReplyTo"},
+		{name: "category without a key", email: code(func(e *CodeEmail) {
+			e.Category = MessageCategory{Key: " ", Type: MessageCategoryMarketing, Name: "Newsletter"}
+		}), code: "invalid_category", field: "Category.Key"},
+		{name: "category without a type", email: code(func(e *CodeEmail) { e.Category = MessageCategory{Key: "newsletter", Name: "Newsletter"} }), code: "invalid_category", field: "Category.Type"},
+		{name: "category of an unknown type", email: code(func(e *CodeEmail) {
+			e.Category = MessageCategory{Key: "newsletter", Type: "promotional", Name: "Newsletter"}
+		}), code: "invalid_category", field: "Category.Type"},
+		{name: "category without a name", email: code(func(e *CodeEmail) { e.Category = &MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing} }), code: "invalid_category", field: "Category.Name"},
 		{name: "code idempotency key", email: code(func(e *CodeEmail) { e.IdempotencyKey = "é" }), code: "invalid_idempotency_key", field: "IdempotencyKey"},
 		{name: "code negative retries", email: code(func(e *CodeEmail) { e.MaxRetries = Ptr(-2) }), code: "invalid_max_retries", field: "MaxRetries"},
 		{name: "more than nine retries", email: template(func(e *TemplateEmail) { e.MaxRetries = Ptr(10) }), code: "invalid_max_retries", field: "MaxRetries"},
@@ -632,9 +666,10 @@ func TestEmailsErrorNames(t *testing.T) {
 		{http.StatusUnprocessableEntity, "idempotency_key_reused", EmailErrorInvalidIdempotentRequest},
 		{http.StatusUnprocessableEntity, "recipient_suppressed", EmailErrorValidation},
 		{http.StatusUnprocessableEntity, "recipient_opted_out", EmailErrorValidation},
-		{http.StatusBadRequest, "unknown_category", EmailErrorValidation},
 		{http.StatusBadRequest, "category_mismatch", EmailErrorValidation},
+		{http.StatusBadRequest, "too_many_categories", EmailErrorValidation},
 		{http.StatusBadRequest, "unsubscribe_link_required", EmailErrorValidation},
+		{http.StatusBadRequest, "copies_not_allowed", EmailErrorValidation},
 		{http.StatusTooManyRequests, "quota_limited", EmailErrorMonthlyQuotaExceeded},
 		{http.StatusTooManyRequests, "throttled", EmailErrorRateLimitExceeded},
 		{http.StatusServiceUnavailable, "delivery_unavailable", EmailErrorServiceUnavailable},
