@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.42.2
+
+### Patch Changes
+
+- f28be34: Identify, group identify, and exception events keep the rest of their properties when a value is NaN or Inf
+
 ## 1.42.1
 
 ### Patch Changes
