@@ -238,8 +238,9 @@ type Config struct {
 	AppHost string
 
 	// AllowInsecureAppHost lets Client.Emails send to an http AppHost, such as
-	// http://localhost:8010 during local development. Email requests carry
-	// SecretKey and the email itself, so over http both travel unencrypted.
+	// http://localhost:8010 during local development, and upload attachments
+	// to an http file storage URL. Email requests carry SecretKey and the
+	// email itself, so over http both travel unencrypted.
 	AllowInsecureAppHost bool
 
 	// EmailRequestTimeout is the timeout of each Client.Emails request to

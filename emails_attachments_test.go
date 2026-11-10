@@ -300,6 +300,33 @@ func TestEmailsSendCountsTheSubjectInTheMessageSize(t *testing.T) {
 	}
 }
 
+func TestEmailsSendCountsTheTextPostHogDerivesFromTheHTML(t *testing.T) {
+	// Without Text, PostHog derives the plain text from the HTML and counts it
+	// too. The derived text is never longer than the HTML, so the client
+	// counts the HTML twice: this file and HTML fit beside a one-byte text,
+	// and not alone.
+	scan := make([]byte, 29_082_000)
+	html := "<p>" + strings.Repeat("x", 99_993) + "</p>"
+	for name, tt := range map[string]struct {
+		text string
+		fits bool
+	}{
+		"with its own short text it fits": {text: "a", fits: true},
+		"without text it's too large":     {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			world := newAttachmentsWorld(t)
+
+			_, err := world.client.Emails().Send(context.Background(), CodeEmail{
+				To: "user@example.com", TemplateKey: "scan", Subject: "Your scan", HTML: html, Text: tt.text,
+				Attachments: []EmailAttachment{{Filename: "scan.pdf", Content: scan}},
+			})
+
+			requireFitsTheMessageSize(t, world, err, tt.fits)
+		})
+	}
+}
+
 func requireFitsTheMessageSize(t *testing.T, world attachmentsWorld, err error, fits bool) {
 	t.Helper()
 	if fits {
@@ -312,6 +339,27 @@ func requireFitsTheMessageSize(t *testing.T, world attachmentsWorld, err error, 
 	require.Equal(t, "Attachments", emailErr.Field)
 	require.True(t, world.storage.isEmpty(), "nothing is uploaded for an email PostHog would refuse")
 	require.Empty(t, world.posthog.deliveredEmails())
+}
+
+func TestEmailsSendUploadsOverHTTPOnlyWhenAllowed(t *testing.T) {
+	// PostHog over HTTPS names a plain-HTTP storage URL, as misconfigured
+	// self-hosted storage would. The file and its signed URL would travel
+	// unencrypted, so the client stops unless AllowInsecureAppHost allows
+	// plain HTTP, as it does for local development.
+	storage := newFakeStorage(t, time.Now)
+	posthog := newFakePostHogOverTLS(t, storage)
+	client := newEmailClientFor(t, posthog.URL, func(c *Config) {
+		c.AllowInsecureAppHost = false
+		c.Transport = posthog.Client().Transport
+	})
+
+	_, err := client.Emails().Send(context.Background(), invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: []byte("%PDF")}))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "api_error", emailErr.Code)
+	require.Equal(t, "Attachments[0]", emailErr.Field)
+	require.True(t, storage.isEmpty())
+	require.Empty(t, posthog.deliveredEmails())
 }
 
 func TestEmailsSendRetriesWhatFileStorageAsksToRetry(t *testing.T) {

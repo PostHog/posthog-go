@@ -64,12 +64,12 @@ func (t uploadTarget) expired(now time.Time) bool {
 	return !now.Before(t.expiresAt.Add(-uploadURLMargin))
 }
 
-func checkAttachments(attachments []EmailAttachment, subject string, bodies ...string) ([]attachment, *EmailError) {
+func checkAttachments(attachments []EmailAttachment, subject, html, text string) ([]attachment, *EmailError) {
 	if len(attachments) > maxEmailAttachments {
 		return nil, invalidEmail("too_many_attachments", "Attachments", "An email carries at most 10 attachments.")
 	}
 	files := make([]attachment, 0, len(attachments))
-	sizes := make([]int, 0, len(attachments)+len(bodies))
+	sizes := make([]int, 0, len(attachments)+2)
 	for i, file := range attachments {
 		field := "Attachments[" + strconv.Itoa(i) + "]"
 		if strings.TrimSpace(file.Filename) == "" {
@@ -88,9 +88,12 @@ func checkAttachments(attachments []EmailAttachment, subject string, bodies ...s
 		})
 		sizes = append(sizes, len(file.Content))
 	}
-	for _, body := range bodies {
-		sizes = append(sizes, len(body))
+	if text == "" {
+		// PostHog derives the text from the HTML and counts it too. The
+		// derived text is never longer than the HTML.
+		text = html
 	}
+	sizes = append(sizes, len(html), len(text))
 	if len(files) > 0 && estimateMessageBytes(sizes, len(subject)) > maxEmailMessageBytes {
 		return nil, invalidEmail("message_too_large", "Attachments", "The email would be over 40 MB after Base64 encoding, PostHog's limit. Send fewer or smaller files, about 29 MB in total, or link to large files from the body.")
 	}
@@ -164,7 +167,18 @@ func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files [
 		emailErr.Field = attachmentsField(emailErr, first)
 		return nil, emailErr
 	}
-	return reply.uploadTargets(files, s.now())
+	targets, emailErr := reply.uploadTargets(files, s.now())
+	if emailErr != nil {
+		return nil, emailErr
+	}
+	for i, target := range targets {
+		if target != nil && !s.allowInsecureUploads && !strings.HasPrefix(strings.ToLower(target.url), "https://") {
+			emailErr := reply.apiError("PostHog named an upload URL that isn't https, so " + files[i].Filename + " would travel unencrypted. Fix the file storage's URL, or set AllowInsecureAppHost for local development. No email was sent.")
+			emailErr.Field = "Attachments[" + strconv.Itoa(first+i) + "]"
+			return nil, emailErr
+		}
+	}
+	return targets, nil
 }
 
 // attachmentsField names the field of an upload route refusal as the caller

@@ -339,6 +339,8 @@ type emailSender struct {
 	backoff      func(attempt int) time.Duration
 	// now is the client's clock, which times how long an upload URL lives.
 	now func() time.Time
+	// allowInsecureUploads lets attachments upload to an http URL.
+	allowInsecureUploads bool
 
 	// ctx ends when Close runs out of time, which aborts requests and retry waits.
 	ctx      context.Context
@@ -363,8 +365,10 @@ func newEmailSender(config Config, transport http.RoundTripper) *emailSender {
 		logger:  config.Logger,
 		backoff: NewBackoff(time.Second, 2, 0.2, maxEmailRetryDelay).Duration,
 		now:     config.now,
-		ctx:     ctx,
-		cancel:  cancel,
+
+		allowInsecureUploads: config.AllowInsecureAppHost,
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 }
 

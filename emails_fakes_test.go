@@ -218,12 +218,26 @@ type deliveredAttachment struct {
 }
 
 func newFakePostHog(t *testing.T, storage *fakeStorage) *fakePostHog {
+	p := unstartedFakePostHog(storage)
+	p.Start()
+	t.Cleanup(p.Close)
+	return p
+}
+
+// newFakePostHogOverTLS is PostHog served over HTTPS; its Client trusts it.
+func newFakePostHogOverTLS(t *testing.T, storage *fakeStorage) *fakePostHog {
+	p := unstartedFakePostHog(storage)
+	p.StartTLS()
+	t.Cleanup(p.Close)
+	return p
+}
+
+func unstartedFakePostHog(storage *fakeStorage) *fakePostHog {
 	p := &fakePostHog{storage: storage, clock: storage.clock, takes: map[string]bool{}}
 	for _, field := range codeSendFields {
 		p.takes[field] = true
 	}
-	p.Server = httptest.NewServer(http.HandlerFunc(p.serve))
-	t.Cleanup(p.Close)
+	p.Server = httptest.NewUnstartedServer(http.HandlerFunc(p.serve))
 	return p
 }
 
