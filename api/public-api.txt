@@ -73,8 +73,6 @@ const (
 )
 const Version = "<version>"
 
-const EmailCategoryTransactional builtInEmailCategory = "transactional"
-
 
 VARIABLES
 
@@ -95,6 +93,8 @@ var (
 
 	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
 )
+var EmailCategoryTransactional = transactionalEmailCategory{}
+
 var ErrFlagNotFound = errors.New("feature flag not found")
 
 

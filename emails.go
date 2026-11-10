@@ -141,11 +141,13 @@ type EmailCategory interface {
 	wireValue() (interface{}, *EmailError)
 }
 
-type builtInEmailCategory string
+// transactionalEmailCategory has no fields, so EmailCategoryTransactional is
+// the only value it can hold.
+type transactionalEmailCategory struct{}
 
 // EmailCategoryTransactional sends transactional email with no category, the
 // same as a CodeEmail without a Category.
-const EmailCategoryTransactional builtInEmailCategory = "transactional"
+var EmailCategoryTransactional = transactionalEmailCategory{}
 
 // MessageCategoryType is the type of a MessageCategory.
 type MessageCategoryType string
@@ -253,8 +255,8 @@ type messageCategoryBody struct {
 	Description *string             `json:"description,omitempty"`
 }
 
-func (c builtInEmailCategory) wireValue() (interface{}, *EmailError) {
-	return string(c), nil
+func (transactionalEmailCategory) wireValue() (interface{}, *EmailError) {
+	return "transactional", nil
 }
 
 func (c MessageCategory) wireValue() (interface{}, *EmailError) {
