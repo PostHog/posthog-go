@@ -166,7 +166,6 @@ func TestEmailsSendCode(t *testing.T) {
 		From:        "Acme <security@example.com>",
 		ReplyTo:     []string{"support@example.com"},
 		DistinctID:  "user_123",
-		Category:    EmailCategoryTransactional,
 	})
 
 	require.NoError(t, err)
@@ -180,78 +179,30 @@ func TestEmailsSendCode(t *testing.T) {
 		"reply_to":           []interface{}{"support@example.com"},
 		"capture_engagement": true,
 		"distinct_id":        "user_123",
-		"category":           "transactional",
 	}, server.received()[0].Body)
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
 }
 
-func TestEmailsSendCodeDefinesItsCategory(t *testing.T) {
-	tests := []struct {
-		name     string
-		category EmailCategory
-		want     map[string]interface{}
-	}{
-		{
-			name:     "marketing",
-			category: MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: Ptr("Monthly product news")},
-			want:     map[string]interface{}{"key": "newsletter", "type": "marketing", "name": "Newsletter", "description": "Monthly product news"},
-		},
-		{
-			name:     "transactional without a description",
-			category: &MessageCategory{Key: "receipts", Type: MessageCategoryTransactional, Name: "Receipts"},
-			want:     map[string]interface{}{"key": "receipts", "type": "transactional", "name": "Receipts"},
-		},
-		{
-			name:     "an empty description, which clears it",
-			category: MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: Ptr("")},
-			want:     map[string]interface{}{"key": "newsletter", "type": "marketing", "name": "Newsletter", "description": ""},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := newEmailServer(t, accepted("msg_1"))
-			client := newEmailClient(t, server)
-
-			_, err := client.Emails().Send(context.Background(), CodeEmail{
-				To:          "user@example.com",
-				TemplateKey: "monthly-newsletter",
-				Subject:     "What's new",
-				HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
-				Category:    tt.category,
-			})
-
-			require.NoError(t, err)
-			require.Equal(t, tt.want, server.received()[0].Body["category"])
-		})
-	}
-}
-
 func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
-	var noCategory *MessageCategory
-	for name, category := range map[string]EmailCategory{"no category": nil, "nil category pointer": noCategory} {
-		t.Run(name, func(t *testing.T) {
-			server := newEmailServer(t, accepted("msg_1"))
-			client := newEmailClient(t, server)
+	server := newEmailServer(t, accepted("msg_1"))
+	client := newEmailClient(t, server)
 
-			_, err := client.Emails().Send(context.Background(), CodeEmail{
-				To:                "user@example.com",
-				TemplateKey:       "digest",
-				Subject:           "Your digest",
-				Text:              "Plain text only",
-				CaptureEngagement: Ptr(false),
-				Category:          category,
-			})
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:                "user@example.com",
+		TemplateKey:       "digest",
+		Subject:           "Your digest",
+		Text:              "Plain text only",
+		CaptureEngagement: Ptr(false),
+	})
 
-			require.NoError(t, err)
-			require.Equal(t, map[string]interface{}{
-				"to":                 "user@example.com",
-				"template_key":       "digest",
-				"subject":            "Your digest",
-				"text":               "Plain text only",
-				"capture_engagement": false,
-			}, server.received()[0].Body)
-		})
-	}
+	require.NoError(t, err)
+	require.Equal(t, map[string]interface{}{
+		"to":                 "user@example.com",
+		"template_key":       "digest",
+		"subject":            "Your digest",
+		"text":               "Plain text only",
+		"capture_engagement": false,
+	}, server.received()[0].Body)
 }
 
 // sendAPI fakes PostHog's code send. A category object creates or updates the
@@ -378,6 +329,66 @@ func newsletterTemplateClient(t *testing.T) (Client, *sendAPI) {
 		"newsletter": {Type: "marketing", Name: "Newsletter"},
 	})
 	return sendAPIClient(t, api), api
+}
+
+func TestEmailsSendCodeCreatesItsCategory(t *testing.T) {
+	tests := []struct {
+		name     string
+		category EmailCategory
+		key      string
+		want     storedCategory
+	}{
+		{
+			name:     "marketing",
+			category: MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: Ptr("Monthly product news")},
+			key:      "newsletter",
+			want:     storedCategory{Type: "marketing", Name: "Newsletter", Description: "Monthly product news"},
+		},
+		{
+			name:     "transactional, through a pointer",
+			category: &MessageCategory{Key: "receipts", Type: MessageCategoryTransactional, Name: "Receipts"},
+			key:      "receipts",
+			want:     storedCategory{Type: "transactional", Name: "Receipts"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newSendAPI(t, nil, nil)
+			client := sendAPIClient(t, api)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:          "user@example.com",
+				TemplateKey: "monthly-newsletter",
+				Subject:     "What's new",
+				HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
+				Category:    tt.category,
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, map[string]storedCategory{tt.key: tt.want}, api.storedCategories())
+			require.Equal(t, []sentEmail{{To: "user@example.com", Category: tt.key}}, api.sentEmails())
+		})
+	}
+}
+
+func TestEmailsSendCodeRefusesACategoryOfAnotherType(t *testing.T) {
+	stored := map[string]storedCategory{"newsletter": {Type: "marketing", Name: "Newsletter"}}
+	api := newSendAPI(t, nil, map[string]storedCategory{"newsletter": stored["newsletter"]})
+	client := sendAPIClient(t, api)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "monthly-newsletter",
+		Subject:     "What's new",
+		Text:        "Our news",
+		Category:    MessageCategory{Key: "newsletter", Type: MessageCategoryTransactional, Name: "Newsletter"},
+	})
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "category_mismatch", emailErr.Code)
+	require.Equal(t, EmailErrorValidation, emailErr.Name)
+	require.Equal(t, stored, api.storedCategories())
+	require.Empty(t, api.sentEmails())
 }
 
 func TestEmailsSendCodeUpdatesItsCategorysDescription(t *testing.T) {
