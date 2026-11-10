@@ -32,15 +32,17 @@ const (
 	// EmailErrorInvalidIdempotentRequest: the idempotency key was used with
 	// another request.
 	EmailErrorInvalidIdempotentRequest EmailErrorName = "invalid_idempotent_request"
-	// EmailErrorRateLimitExceeded: PostHog rate limited the request.
+	// EmailErrorRateLimitExceeded: PostHog, or file storage for an upload,
+	// rate limited the request.
 	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
 	// EmailErrorMonthlyQuotaExceeded: the project is over its email quota.
 	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
 	// EmailErrorDailyQuotaExceeded: the project uploaded as many attachment
 	// bytes as it can today, counted in UTC. Files PostHog already has don't
-	// count.
+	// count, and emails without new attachments still go out.
 	EmailErrorDailyQuotaExceeded EmailErrorName = "daily_quota_exceeded"
-	// EmailErrorServiceUnavailable: PostHog or the network was unavailable.
+	// EmailErrorServiceUnavailable: PostHog, file storage for an upload, or
+	// the network was unavailable.
 	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
 	// EmailErrorApplication: anything else.
 	EmailErrorApplication EmailErrorName = "application_error"
@@ -57,7 +59,8 @@ type EmailError struct {
 	Name    EmailErrorName
 	Code    string
 	Message string
-	// StatusCode is the HTTP status when PostHog answered, and 0 otherwise.
+	// StatusCode is the HTTP status when PostHog, or file storage for an
+	// upload, answered, and 0 otherwise.
 	// A network_error keeps the status of an answer that broke off mid-body.
 	StatusCode int
 	Why        string

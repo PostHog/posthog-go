@@ -23,8 +23,11 @@ const (
 	maxEmailAttachments  = 10
 	maxEmailMessageBytes = 40_000_000
 	// emailHeadersAndMIMEBytes is what PostHog reserves for the message's
-	// headers and MIME boundaries when it estimates its size.
-	emailHeadersAndMIMEBytes = 64 * 1024
+	// headers and MIME boundaries when it estimates its size. It counts the
+	// subject apart, as encoded words of 75 bytes per 42 bytes of UTF-8.
+	emailHeadersAndMIMEBytes   = 64 * 1024
+	subjectBytesPerEncodedWord = 42
+	encodedWordBytes           = 75
 	// emailUploadTimeout is how long an upload URL accepts the upload.
 	emailUploadTimeout = 15 * time.Minute
 	// uploadURLMargin is how long before its expiry an upload URL is asked for
@@ -61,7 +64,7 @@ func (t uploadTarget) expired() bool {
 	return !time.Now().Before(t.expiresAt.Add(-uploadURLMargin))
 }
 
-func checkAttachments(attachments []EmailAttachment, bodies ...string) ([]attachment, *EmailError) {
+func checkAttachments(attachments []EmailAttachment, subject string, bodies ...string) ([]attachment, *EmailError) {
 	if len(attachments) > maxEmailAttachments {
 		return nil, invalidEmail("too_many_attachments", "Attachments", "An email carries at most 10 attachments.")
 	}
@@ -88,7 +91,7 @@ func checkAttachments(attachments []EmailAttachment, bodies ...string) ([]attach
 	for _, body := range bodies {
 		sizes = append(sizes, len(body))
 	}
-	if len(files) > 0 && estimateMessageBytes(sizes) > maxEmailMessageBytes {
+	if len(files) > 0 && estimateMessageBytes(sizes, len(subject)) > maxEmailMessageBytes {
 		return nil, invalidEmail("message_too_large", "Attachments", "The email would be over 40 MB after Base64 encoding, PostHog's limit. Send fewer or smaller files, about 29 MB in total, or link to large files from the body.")
 	}
 	return files, nil
@@ -96,9 +99,10 @@ func checkAttachments(attachments []EmailAttachment, bodies ...string) ([]attach
 
 // estimateMessageBytes is PostHog's estimate of a message whose files and
 // bodies have these sizes: each part Base64 encoded in 76-character lines,
-// plus room for headers and MIME boundaries.
-func estimateMessageBytes(partSizes []int) int64 {
-	total := int64(emailHeadersAndMIMEBytes)
+// plus the encoded subject and room for headers and MIME boundaries.
+func estimateMessageBytes(partSizes []int, subjectBytes int) int64 {
+	encodedWords := (int64(subjectBytes) + subjectBytesPerEncodedWord - 1) / subjectBytesPerEncodedWord
+	total := int64(emailHeadersAndMIMEBytes) + encodedWords*encodedWordBytes
 	for _, size := range partSizes {
 		encoded := (int64(size) + 2) / 3 * 4
 		total += (encoded*78 + 75) / 76

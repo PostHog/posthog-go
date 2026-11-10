@@ -276,7 +276,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 			}
 		}
 	}
-	attachments, attachmentsErr := checkAttachments(e.Attachments, e.HTML, e.Text)
+	attachments, attachmentsErr := checkAttachments(e.Attachments, e.Subject, e.HTML, e.Text)
 	if attachmentsErr != nil {
 		return emailSend{}, attachmentsErr
 	}

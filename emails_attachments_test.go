@@ -343,6 +343,32 @@ func TestEmailsSendCountsTheBodiesInTheMessageSize(t *testing.T) {
 	}
 }
 
+func TestEmailsSendCountsTheSubjectInTheMessageSize(t *testing.T) {
+	// PostHog counts a subject as 75 bytes per 42 bytes of UTF-8, the encoded
+	// words it folds into. With a one-byte text body, this file leaves room
+	// for one encoded word, not two.
+	scan := make([]byte, 29_182_800)
+	for name, tt := range map[string]struct {
+		subject string
+		code    string
+	}{
+		"a 7-byte subject fits":         {subject: "Receipt", code: "field_not_accepted"},
+		"a 50-byte subject is too much": {subject: "Ihre Bestellbestätigung Nr. 12345 vom 9. November", code: "message_too_large"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newEmailServer(t, failed(http.StatusBadRequest, "field_not_accepted"))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To: "user@example.com", TemplateKey: "scan", Subject: tt.subject, Text: "a",
+				Attachments: []EmailAttachment{{Filename: "scan.pdf", Content: scan}},
+			})
+
+			require.Equal(t, tt.code, requireEmailError(t, err).Code)
+		})
+	}
+}
+
 func TestEmailsSendRetriesAnUploadWhoseAnswerBrokeOff(t *testing.T) {
 	invoice := []byte("%PDF-1.7 invoice")
 	var mu sync.Mutex
