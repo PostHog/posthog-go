@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
-        go-version: ['1.21', '1.x']
+        go-version: ['1.25', '1.x']
     steps:
       - name: Check out source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -143,7 +143,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.21'
+          go-version: '1.25'
 
       - name: Check public API snapshot
         run: make api-diff
@@ -155,7 +155,7 @@ jobs:
       fail-fast: false
       matrix:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
-        go-version: ['1.21', '1.x']
+        go-version: ['1.25', '1.x']
     steps:
       - name: Check out source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -169,7 +169,7 @@ jobs:
         run: go test -count=1 -timeout=5m ./...
 
       - name: Test debug-image discovery
-        if: matrix.go-version == '1.21'
+        if: matrix.go-version == '1.25'
         env:
           BUILD_ID_SEED: ${{ github.sha }}-${{ github.job }}-${{ matrix.go-version }}
         run: |
@@ -185,7 +185,7 @@ jobs:
       fail-fast: false
       matrix:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
-        go-version: ['1.21', '1.x']
+        go-version: ['1.25', '1.x']
     steps:
       - name: Check out source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -199,7 +199,7 @@ jobs:
         run: go test -race -count=1 -timeout=5m ./...
 
       - name: Race-test debug-image discovery
-        if: matrix.go-version == '1.21'
+        if: matrix.go-version == '1.25'
         env:
           BUILD_ID_SEED: ${{ github.sha }}-${{ github.job }}-${{ matrix.go-version }}
         run: |
@@ -215,7 +215,7 @@ jobs:
       fail-fast: false
       matrix:
         # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
-        go-version: ['1.21', '1.x']
+        go-version: ['1.25', '1.x']
     steps:
       - name: Check out source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
