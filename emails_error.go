@@ -23,9 +23,9 @@ const (
 	EmailErrorMissingAPIKey EmailErrorName = "missing_api_key"
 	// EmailErrorInvalidPermission: the secret key lacks the scope.
 	EmailErrorInvalidPermission EmailErrorName = "invalid_permission"
-	// EmailErrorNotFound: no template or email with this ID, the API is not
-	// enabled for the project, or, on Attachments, this PostHog can't take
-	// attachments yet.
+	// EmailErrorNotFound: no template or email with this ID, or the API is not
+	// enabled for the project. On Attachments it can also mean this PostHog
+	// can't take attachments yet; the client can't tell which.
 	EmailErrorNotFound EmailErrorName = "not_found"
 	// EmailErrorConcurrentIdempotentRequests: a send with the same idempotency
 	// key is still in flight.
