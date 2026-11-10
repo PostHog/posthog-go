@@ -912,7 +912,7 @@ type MessageCategory struct {
 	Key  string
 	Type MessageCategoryType
 	Name string
-	Description string
+	Description *string
 }
 
 

@@ -193,13 +193,18 @@ func TestEmailsSendCodeDefinesItsCategory(t *testing.T) {
 	}{
 		{
 			name:     "marketing",
-			category: MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: "Monthly product news"},
+			category: MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: Ptr("Monthly product news")},
 			want:     map[string]interface{}{"key": "newsletter", "type": "marketing", "name": "Newsletter", "description": "Monthly product news"},
 		},
 		{
 			name:     "transactional without a description",
 			category: &MessageCategory{Key: "receipts", Type: MessageCategoryTransactional, Name: "Receipts"},
 			want:     map[string]interface{}{"key": "receipts", "type": "transactional", "name": "Receipts"},
+		},
+		{
+			name:     "an empty description, which clears it",
+			category: MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: Ptr("")},
+			want:     map[string]interface{}{"key": "newsletter", "type": "marketing", "name": "Newsletter", "description": ""},
 		},
 	}
 	for _, tt := range tests {

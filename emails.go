@@ -175,10 +175,12 @@ type MessageCategory struct {
 	// preferences refer to the category by its key.
 	Key  string
 	Type MessageCategoryType
-	// Name is the category's display name, such as "Newsletter".
+	// Name is the category's name in the PostHog app, such as "Newsletter".
 	Name string
-	// Description is optional, such as "Monthly product news".
-	Description string
+	// Description notes which emails belong to the category, such as
+	// Ptr("Monthly product news"). Recipients don't see it. Nil keeps an
+	// existing category's description, and Ptr("") clears it.
+	Description *string
 }
 
 // SendEmailResult is an email that PostHog queued.
@@ -248,7 +250,7 @@ type messageCategoryBody struct {
 	Key         string              `json:"key"`
 	Type        MessageCategoryType `json:"type"`
 	Name        string              `json:"name"`
-	Description string              `json:"description,omitempty"`
+	Description *string             `json:"description,omitempty"`
 }
 
 func (c builtInEmailCategory) wireValue() (interface{}, *EmailError) {

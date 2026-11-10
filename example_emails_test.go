@@ -77,7 +77,7 @@ func ExampleEmails_marketing() {
 			Key:         "newsletter",
 			Type:        posthog.MessageCategoryMarketing,
 			Name:        "Newsletter",
-			Description: "Monthly product news",
+			Description: posthog.Ptr("Monthly product news"),
 		},
 		DistinctID: "user_123",
 	})
