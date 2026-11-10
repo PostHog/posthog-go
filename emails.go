@@ -113,19 +113,20 @@ type CodeEmail struct {
 	// Without it, PostHog sends from the project's default sender.
 	From    string
 	ReplyTo []string
+	// Tracking says what PostHog tracks for this email. Nil keeps the
+	// defaults: PostHog counts opens and captures engagement events, but
+	// doesn't rewrite links to count clicks, because a link in an email sent
+	// from code can carry a login or password reset token. Use
+	// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+	Tracking *EmailTracking
 	// CaptureEngagement says whether PostHog captures the email's engagement
-	// events, such as opens and clicks, as events of the recipient. Nil means
-	// true. A project whose admin turned engagement capture off captures
-	// nothing, whatever the send asks.
+	// events as events of the recipient. Nil means true. A project whose
+	// admin turned engagement capture off captures nothing, whatever the send
+	// asks. PostHog refuses a send that sets both CaptureEngagement and
+	// Tracking.
+	//
+	// Deprecated: Use Tracking with EmailTrackingOptions.Engagement.
 	CaptureEngagement *bool
-	// TrackOpensAndClicks says whether PostHog tracks opens and clicks of the
-	// email. Nil means true, and the request leaves the field out. With
-	// Ptr(false), the email goes out without PostHog's open pixel, so PostHog
-	// can't count its opens. PostHog doesn't track clicks on a CodeEmail, so
-	// its links are never rewritten either way. It is independent of
-	// CaptureEngagement, which decides whether engagement events are captured
-	// on the recipient's person.
-	TrackOpensAndClicks *bool
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
 	// ID is the email address.
@@ -136,6 +137,56 @@ type CodeEmail struct {
 	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
 	// Ptr(0) turns retries off.
 	MaxRetries *int
+}
+
+// EmailTracking says what PostHog tracks for a CodeEmail. Make one with
+// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+type EmailTracking struct {
+	all     *bool
+	options EmailTrackingOptions
+}
+
+// EmailTrackingOptions turns each kind of tracking on or off. A nil field
+// keeps its default.
+type EmailTrackingOptions struct {
+	// Opens says whether PostHog adds its open pixel to count opens. Nil
+	// means true. Clicks need Opens.
+	Opens *bool `json:"opens,omitempty"`
+	// Clicks says whether PostHog rewrites the email's links to count clicks.
+	// Nil means false. Turn it on only when the links are safe to send
+	// through a redirect, so not for a login or password reset link. A link
+	// with a data-ph-no-track attribute is never rewritten.
+	Clicks *bool `json:"clicks,omitempty"`
+	// Engagement says whether PostHog captures the email's engagement events,
+	// such as opens and clicks, as events of the recipient. Nil means true.
+	Engagement *bool `json:"engagement,omitempty"`
+}
+
+// EmailTrackingOn tracks opens and clicks and captures engagement events.
+// Use it only when the email's links are safe to send through a redirect.
+func EmailTrackingOn() *EmailTracking {
+	return &EmailTracking{all: Ptr(true)}
+}
+
+// EmailTrackingOff turns off every kind of tracking, including kinds PostHog
+// adds later. PostHog then can't count the email's opens and clicks, and
+// captures no engagement events.
+func EmailTrackingOff() *EmailTracking {
+	return &EmailTracking{all: Ptr(false)}
+}
+
+// EmailTrackingWith sets each kind of tracking on its own.
+func EmailTrackingWith(options EmailTrackingOptions) *EmailTracking {
+	return &EmailTracking{options: options}
+}
+
+// MarshalJSON encodes the tracking as true, false or an object of the kinds
+// that are set.
+func (t EmailTracking) MarshalJSON() ([]byte, error) {
+	if t.all != nil {
+		return json.Marshal(*t.all)
+	}
+	return json.Marshal(t.options)
 }
 
 // SendEmailResult is an email that PostHog queued.
@@ -188,18 +239,16 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string   `json:"to"`
-	TemplateKey       string   `json:"template_key"`
-	Subject           string   `json:"subject"`
-	HTML              string   `json:"html,omitempty"`
-	Text              string   `json:"text,omitempty"`
-	From              string   `json:"from,omitempty"`
-	ReplyTo           []string `json:"reply_to,omitempty"`
-	CaptureEngagement bool     `json:"capture_engagement"`
-	// A pointer, so an unset field stays out of the body and a send still works
-	// against a PostHog API that predates it.
-	TrackOpensAndClicks *bool  `json:"track_opens_and_clicks,omitempty"`
-	DistinctID          string `json:"distinct_id,omitempty"`
+	To                string         `json:"to"`
+	TemplateKey       string         `json:"template_key"`
+	Subject           string         `json:"subject"`
+	HTML              string         `json:"html,omitempty"`
+	Text              string         `json:"text,omitempty"`
+	From              string         `json:"from,omitempty"`
+	ReplyTo           []string       `json:"reply_to,omitempty"`
+	Tracking          *EmailTracking `json:"tracking,omitempty"`
+	CaptureEngagement *bool          `json:"capture_engagement,omitempty"`
+	DistinctID        string         `json:"distinct_id,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -244,16 +293,16 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		}
 	}
 	body, err := encodeEmailBody(codeEmailBody{
-		To:                  e.To,
-		TemplateKey:         e.TemplateKey,
-		Subject:             e.Subject,
-		HTML:                e.HTML,
-		Text:                e.Text,
-		From:                e.From,
-		ReplyTo:             e.ReplyTo,
-		CaptureEngagement:   e.CaptureEngagement == nil || *e.CaptureEngagement,
-		TrackOpensAndClicks: e.TrackOpensAndClicks,
-		DistinctID:          e.DistinctID,
+		To:                e.To,
+		TemplateKey:       e.TemplateKey,
+		Subject:           e.Subject,
+		HTML:              e.HTML,
+		Text:              e.Text,
+		From:              e.From,
+		ReplyTo:           e.ReplyTo,
+		Tracking:          e.Tracking,
+		CaptureEngagement: e.CaptureEngagement,
+		DistinctID:        e.DistinctID,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)

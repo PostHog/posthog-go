@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -170,54 +171,108 @@ func TestEmailsSendCode(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, map[string]interface{}{
-		"to":                 "user@example.com",
-		"template_key":       "password-reset",
-		"subject":            "Reset your password",
-		"html":               "<p>Reset & go</p>",
-		"text":               "Reset and go",
-		"from":               "Acme <security@example.com>",
-		"reply_to":           []interface{}{"support@example.com"},
-		"capture_engagement": true,
-		"distinct_id":        "user_123",
+		"to":           "user@example.com",
+		"template_key": "password-reset",
+		"subject":      "Reset your password",
+		"html":         "<p>Reset & go</p>",
+		"text":         "Reset and go",
+		"from":         "Acme <security@example.com>",
+		"reply_to":     []interface{}{"support@example.com"},
+		"distinct_id":  "user_123",
 	}, server.received()[0].Body)
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
 }
 
 func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
+	server := newEmailServer(t, accepted("msg_1"))
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "digest",
+		Subject:     "Your digest",
+		Text:        "Plain text only",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]interface{}{
+		"to":           "user@example.com",
+		"template_key": "digest",
+		"subject":      "Your digest",
+		"text":         "Plain text only",
+	}, server.received()[0].Body)
+}
+
+func TestEmailsSendCodeTracking(t *testing.T) {
 	for _, tc := range []struct {
-		name                string
-		trackOpensAndClicks *bool
-		extra               map[string]interface{}
+		name     string
+		tracking *EmailTracking
+		want     interface{}
 	}{
-		{name: "tracking unset", extra: map[string]interface{}{}},
-		{name: "tracking off", trackOpensAndClicks: Ptr(false), extra: map[string]interface{}{"track_opens_and_clicks": false}},
-		{name: "tracking on", trackOpensAndClicks: Ptr(true), extra: map[string]interface{}{"track_opens_and_clicks": true}},
+		{name: "on", tracking: EmailTrackingOn(), want: true},
+		{name: "off", tracking: EmailTrackingOff(), want: false},
+		{
+			name:     "one kind",
+			tracking: EmailTrackingWith(EmailTrackingOptions{Clicks: Ptr(true)}),
+			want:     map[string]interface{}{"clicks": true},
+		},
+		{
+			name:     "every kind",
+			tracking: EmailTrackingWith(EmailTrackingOptions{Opens: Ptr(true), Clicks: Ptr(false), Engagement: Ptr(false)}),
+			want:     map[string]interface{}{"opens": true, "clicks": false, "engagement": false},
+		},
+		{
+			name:     "no kind",
+			tracking: EmailTrackingWith(EmailTrackingOptions{}),
+			want:     map[string]interface{}{},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := newEmailServer(t, accepted("msg_1"))
 			client := newEmailClient(t, server)
 
 			_, err := client.Emails().Send(context.Background(), CodeEmail{
-				To:                  "user@example.com",
-				TemplateKey:         "digest",
-				Subject:             "Your digest",
-				Text:                "Plain text only",
-				CaptureEngagement:   Ptr(false),
-				TrackOpensAndClicks: tc.trackOpensAndClicks,
+				To:          "user@example.com",
+				TemplateKey: "digest",
+				Subject:     "Your digest",
+				Text:        "Plain text only",
+				Tracking:    tc.tracking,
 			})
 
 			require.NoError(t, err)
-			want := map[string]interface{}{
+			require.Equal(t, map[string]interface{}{
+				"to":           "user@example.com",
+				"template_key": "digest",
+				"subject":      "Your digest",
+				"text":         "Plain text only",
+				"tracking":     tc.want,
+			}, server.received()[0].Body)
+		})
+	}
+}
+
+func TestEmailsSendCodeDeprecatedCaptureEngagement(t *testing.T) {
+	for _, capture := range []bool{false, true} {
+		t.Run(strconv.FormatBool(capture), func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:                "user@example.com",
+				TemplateKey:       "digest",
+				Subject:           "Your digest",
+				Text:              "Plain text only",
+				CaptureEngagement: Ptr(capture),
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, map[string]interface{}{
 				"to":                 "user@example.com",
 				"template_key":       "digest",
 				"subject":            "Your digest",
 				"text":               "Plain text only",
-				"capture_engagement": false,
-			}
-			for key, value := range tc.extra {
-				want[key] = value
-			}
-			require.Equal(t, want, server.received()[0].Body)
+				"capture_engagement": capture,
+			}, server.received()[0].Body)
 		})
 	}
 }

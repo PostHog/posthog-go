@@ -294,8 +294,8 @@ type CodeEmail struct {
 	Text string
 	From    string
 	ReplyTo []string
+	Tracking *EmailTracking
 	CaptureEngagement *bool
-	TrackOpensAndClicks *bool
 	DistinctID string
 	IdempotencyKey string
 	MaxRetries *int
@@ -491,6 +491,23 @@ type EmailStatus struct {
 	CreatedAt time.Time
 	StatusAt time.Time
 	Reason string
+}
+
+type EmailTracking struct {
+}
+
+func EmailTrackingOff() *EmailTracking
+
+func EmailTrackingOn() *EmailTracking
+
+func EmailTrackingWith(options EmailTrackingOptions) *EmailTracking
+
+func (t EmailTracking) MarshalJSON() ([]byte, error)
+
+type EmailTrackingOptions struct {
+	Opens *bool `json:"opens,omitempty"`
+	Clicks *bool `json:"clicks,omitempty"`
+	Engagement *bool `json:"engagement,omitempty"`
 }
 
 type EmailWarning struct {

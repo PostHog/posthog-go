@@ -58,6 +58,27 @@ func ExampleEmails_code() {
 	}
 }
 
+// Count clicks on an email whose links carry no login or reset token. Clicks
+// are off by default for content sent from code.
+func ExampleEmails_tracking() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = client.Emails().Send(context.Background(), posthog.CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "weekly-digest",
+		Subject:     "Your weekly digest",
+		HTML:        "<p>Read this week's posts: https://example.com/blog</p>",
+		Tracking:    posthog.EmailTrackingWith(posthog.EmailTrackingOptions{Clicks: posthog.Ptr(true)}),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
 // Read what happened to a sent email, for 30 days after the send.
 func ExampleEmails_Get() {
 	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
