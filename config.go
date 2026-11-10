@@ -251,9 +251,10 @@ type Config struct {
 	EmailRequestTimeout time.Duration
 
 	// EmailRequestMaxRetries is the number of retries of a Client.Emails
-	// request after its first attempt, 0 to 9. If nil, it defaults to
-	// DefaultEmailRequestMaxRetries. Set Ptr(0) when a job runner already
-	// retries the send, and pass an IdempotencyKey that names the email.
+	// request after its first attempt, and of each attachment upload, 0 to 9.
+	// If nil, it defaults to DefaultEmailRequestMaxRetries. Set Ptr(0) when a
+	// job runner already retries the send, and pass an IdempotencyKey that
+	// names the email.
 	EmailRequestMaxRetries *int
 
 	// MigratedFrom names the email provider your sends moved from, such as
