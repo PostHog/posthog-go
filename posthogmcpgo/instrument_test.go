@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"sync"
 	"testing"
@@ -426,4 +427,51 @@ func TestInstrumentReportsInstrumentationErrorsWithoutChangingTheCall(t *testing
 	require.Len(t, reported, 1)
 	assert.ErrorContains(t, reported[0], "identity resolver panic")
 	assert.Len(t, queue.toolCalls(), 1)
+}
+
+func TestInstrumentKeepsErrorTextOutWhenErrorMessagesAreOff(t *testing.T) {
+	const city = "jane@example.com"
+	for _, test := range []struct {
+		name       string
+		handler    *weatherHandler
+		wantType   string
+		wantRPCErr bool
+	}{
+		{
+			name:     "an isError result",
+			handler:  &weatherHandler{result: mcp.NewToolResultError("no forecast for " + city)},
+			wantType: "Error",
+		},
+		{
+			name:       "a returned error",
+			handler:    &weatherHandler{err: &fs.PathError{Op: "open", Path: city, Err: fs.ErrNotExist}},
+			wantType:   "fs.PathError",
+			wantRPCErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			s := server.NewMCPServer("weather-server", "1.2.3",
+				server.WithToolCapabilities(true),
+				Instrument(posthogmcp.New(queue, posthogmcp.WithCaptureErrorMessages(false)),
+					WithCaptureParameters(false), WithCaptureResponses(false)),
+			)
+			s.AddTool(weatherTool(), test.handler.handle)
+			c := connectInProcess(t, s)
+
+			_, err := callTool(t, c, "weather", map[string]any{"city": city, "context": "Checking a forecast"})
+			assert.Equal(t, test.wantRPCErr, err != nil, "the client sees the handler's outcome unchanged: %v", err)
+
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, true, properties["$mcp_is_error"])
+			assert.Equal(t, test.wantType, properties["$mcp_error_type"])
+			assert.Equal(t, "Tool weather returned an error", properties["$mcp_error_message"])
+			exceptions := queue.exceptions()
+			require.Len(t, exceptions, 1)
+			assert.Equal(t, "Tool weather returned an error", exceptions[0].ExceptionList[0].Value)
+			queue.mu.Lock()
+			defer queue.mu.Unlock()
+			assert.NotContains(t, jsonString(t, queue.messages), city)
+		})
+	}
 }
