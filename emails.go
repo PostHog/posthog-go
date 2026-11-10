@@ -95,8 +95,9 @@ type TemplateEmail struct {
 }
 
 // CodeEmail sends content your code rendered, named by a key. PostHog sends
-// it as is and never stores it. To send a React email, render it to HTML in
-// your app and pass the HTML.
+// the subject and bodies as is and never stores them; it keeps attachments,
+// as Attachments says. To send a React email, render it to HTML in your app
+// and pass the HTML.
 type CodeEmail struct {
 	// To is one recipient email address.
 	To string
@@ -127,7 +128,9 @@ type CodeEmail struct {
 	// allow uploads to the storage host the upload URL names. A file PostHog
 	// already has isn't uploaded again. PostHog refuses file types that
 	// mailbox providers block, such as .exe. PostHog can't fetch a file from a
-	// path or URL: read the file and pass its bytes.
+	// path or URL: read the file and pass its bytes. PostHog keeps each
+	// uploaded file in its file storage for its retention period, and a later
+	// send of the same bytes, from any of the project's code, reuses it.
 	Attachments []EmailAttachment
 	// CaptureEngagement says whether PostHog captures the email's engagement
 	// events, such as opens and clicks, as events of the recipient. Nil means

@@ -73,9 +73,6 @@ type EmailError struct {
 	RetryAfter time.Duration
 
 	cause error
-	// storageAsksToRetry is set on a file storage refusal that may pass on a
-	// later attempt.
-	storageAsksToRetry bool
 }
 
 func (e *EmailError) Error() string {
@@ -161,7 +158,9 @@ func (e *EmailError) isRetryable() bool {
 		return true
 	}
 	if e.Code == "attachment_upload_failed" {
-		return e.storageAsksToRetry
+		// File storage throttled, timed out or was down; anything else it
+		// refused fails the same way again.
+		return e.Name == EmailErrorRateLimitExceeded || e.Name == EmailErrorServiceUnavailable
 	}
 	switch e.StatusCode {
 	case 0:

@@ -90,7 +90,11 @@ func failed(status int, code string) stubReply {
 type emailClientOption func(*Config)
 
 func newEmailClient(t *testing.T, server *emailServer, options ...emailClientOption) Client {
-	config := Config{Endpoint: server.URL, AppHost: server.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
+	return newEmailClientFor(t, server.URL, options...)
+}
+
+func newEmailClientFor(t *testing.T, url string, options ...emailClientOption) Client {
+	config := Config{Endpoint: url, AppHost: url, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
 	for _, option := range options {
 		option(&config)
 	}
@@ -206,8 +210,10 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 }
 
 func TestEmailsSendCodeCopies(t *testing.T) {
-	server := newEmailServer(t, failed(http.StatusServiceUnavailable, "delivery_unavailable"), accepted("msg_1"))
-	client := newEmailClient(t, server)
+	// PostHog is briefly unavailable, so the copies must survive the retry.
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.sendFaults = map[int]stubReply{0: failed(http.StatusServiceUnavailable, "delivery_unavailable")}
+	client := newEmailClientFor(t, posthog.URL)
 
 	_, err := client.Emails().Send(context.Background(), CodeEmail{
 		To:          "user@example.com",
@@ -219,15 +225,19 @@ func TestEmailsSendCodeCopies(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	first, retry := server.received()[0], server.received()[1]
-	require.Equal(t, []interface{}{"manager@example.com"}, first.Body["cc"])
-	require.Equal(t, []interface{}{"audit@example.com", "archive@example.com"}, first.Body["bcc"])
-	require.Equal(t, first.Raw, retry.Raw, "a retry sends the same body")
+	require.Equal(t, []deliveredEmail{{
+		To: "user@example.com", Subject: "Your invoice",
+		Cc:  []string{"manager@example.com"},
+		Bcc: []string{"audit@example.com", "archive@example.com"},
+	}}, posthog.deliveredEmails())
 }
 
-func TestEmailsSendCodeLeavesOutEmptyCopiesAndAttachments(t *testing.T) {
-	server := newEmailServer(t, accepted("msg_1"))
-	client := newEmailClient(t, server)
+func TestEmailsSendCodeWithEmptyCopiesReachesAnOlderPostHog(t *testing.T) {
+	// A PostHog from before cc, bcc and attachments refuses those fields even
+	// when empty, so empty lists must not stop the email.
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.takeOnly(fieldsBeforeAttachments)
+	client := newEmailClientFor(t, posthog.URL)
 
 	_, err := client.Emails().Send(context.Background(), CodeEmail{
 		To:          "user@example.com",
@@ -241,20 +251,13 @@ func TestEmailsSendCodeLeavesOutEmptyCopiesAndAttachments(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	body := server.received()[0].Body
-	for _, field := range []string{"reply_to", "cc", "bcc", "attachments"} {
-		require.NotContains(t, body, field, "a server that doesn't take a field yet refuses it even when empty")
-	}
+	require.Len(t, posthog.deliveredEmails(), 1)
 }
 
 func TestEmailsSendNamesAFieldTheServerDoesNotTakeYet(t *testing.T) {
-	server := newEmailServer(t, stubReply{status: http.StatusBadRequest, body: `{
-		"type": "validation_error",
-		"code": "invalid_input",
-		"detail": "PostHog doesn't take this field, so it doesn't send the email without it.",
-		"attr": "cc"
-	}`})
-	client := newEmailClient(t, server)
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.takeOnly(fieldsBeforeAttachments)
+	client := newEmailClientFor(t, posthog.URL)
 
 	_, err := client.Emails().Send(context.Background(), CodeEmail{
 		To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Copied</p>",
@@ -264,7 +267,7 @@ func TestEmailsSendNamesAFieldTheServerDoesNotTakeYet(t *testing.T) {
 	emailErr := requireEmailError(t, err)
 	require.Equal(t, "cc", emailErr.Field)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
-	require.Len(t, server.received(), 1, "a refused field is not retried")
+	require.Empty(t, posthog.deliveredEmails(), "the email isn't sent without the copy")
 }
 
 func TestEmailsAttachmentErrorNeverHoldsTheContent(t *testing.T) {

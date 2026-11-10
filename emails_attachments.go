@@ -118,10 +118,9 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 	if err != nil {
 		return err
 	}
-	uploaded := map[string]bool{}
 	for i, target := range targets {
 		file := files[i]
-		if target == nil || uploaded[file.SHA256] {
+		if target == nil {
 			continue
 		}
 		if err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
@@ -142,7 +141,6 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 		}); err != nil {
 			return err
 		}
-		uploaded[file.SHA256] = true
 	}
 	return nil
 }
@@ -245,13 +243,13 @@ func (s *emailSender) upload(ctx context.Context, file attachment, target upload
 	}
 	res, err := s.http.Do(req)
 	if err != nil {
-		return newEmailError("network_error", "Uploading "+file.Filename+" failed.", withoutURL(err))
+		return newEmailError("network_error", "Uploading "+file.Filename+" failed. No email was sent.", withoutURL(err))
 	}
 	defer res.Body.Close()
 	retryAfter, _ := parseRetryAfter(res.Header.Get("Retry-After"), time.Now())
 	answer, err := io.ReadAll(io.LimitReader(res.Body, maxBucketAnswerBytes))
 	if err != nil {
-		cutOff := newEmailError("network_error", "Reading file storage's answer to the upload of "+file.Filename+" failed.", withoutURL(err))
+		cutOff := newEmailError("network_error", "Reading file storage's answer to the upload of "+file.Filename+" failed. No email was sent.", withoutURL(err))
 		cutOff.StatusCode = res.StatusCode
 		cutOff.RetryAfter = retryAfter
 		return cutOff
@@ -285,10 +283,8 @@ func uploadRefused(filename string, status int, answer []byte) *EmailError {
 	switch {
 	case status == http.StatusTooManyRequests:
 		err.Name = EmailErrorRateLimitExceeded
-		err.storageAsksToRetry = true
 	case status >= http.StatusInternalServerError || refusal.Code == "RequestTimeout":
 		err.Name = EmailErrorServiceUnavailable
-		err.storageAsksToRetry = true
 	}
 	return err
 }
