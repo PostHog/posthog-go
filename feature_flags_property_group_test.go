@@ -129,3 +129,56 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchPropertyGroupTypes(t *testing.T) {
+	match := map[string]any{"type": "person", "key": "email", "operator": "exact", "value": "user@x"}
+	mismatch := map[string]any{"type": "person", "key": "email", "operator": "exact", "value": "other@x"}
+	tests := []struct {
+		name       string
+		group      PropertyGroup
+		want       bool
+		wantServer bool
+	}{
+		{name: "unknown matching", group: PropertyGroup{Type: "XOR", Values: []any{match}}, wantServer: true},
+		{name: "unknown mismatching", group: PropertyGroup{Type: "XOR", Values: []any{mismatch}}, wantServer: true},
+		{name: "unknown nil values", group: PropertyGroup{Type: "XOR"}, wantServer: true},
+		{name: "unknown empty values", group: PropertyGroup{Type: "XOR", Values: []any{}}, wantServer: true},
+		{name: "nested unknown", group: PropertyGroup{Type: "AND", Values: []any{map[string]any{"type": "XOR", "values": []any{match}}}}, wantServer: true},
+		{name: "nested unknown empty", group: PropertyGroup{Type: "OR", Values: []any{map[string]any{"type": "XOR", "values": []any{}}}}, wantServer: true},
+		{name: "negated cohort reference", group: PropertyGroup{Type: "OR", Values: []any{map[string]any{"type": "cohort", "value": "invalid", "negation": true}}}, wantServer: true},
+		{name: "missing nonempty type", group: PropertyGroup{Values: []any{match}}, wantServer: true},
+		{name: "AND matches", group: PropertyGroup{Type: "AND", Values: []any{match}}, want: true},
+		{name: "AND mismatch", group: PropertyGroup{Type: "AND", Values: []any{match, mismatch}}},
+		{name: "OR matches", group: PropertyGroup{Type: "OR", Values: []any{mismatch, match}}, want: true},
+		{name: "OR mismatch", group: PropertyGroup{Type: "OR", Values: []any{mismatch}}},
+		{name: "property matches", group: PropertyGroup{Type: "property", Values: []any{match}}, want: true},
+		{name: "property mismatch", group: PropertyGroup{Type: "property", Values: []any{match, mismatch}}},
+		{name: "empty AND", group: PropertyGroup{Type: "AND"}, want: true},
+		{name: "empty OR", group: PropertyGroup{Type: "OR"}},
+		{name: "empty property", group: PropertyGroup{Type: "property"}, want: true},
+		{name: "canonical empty", group: PropertyGroup{}, want: true},
+	}
+	poller := &FeatureFlagsPoller{}
+	cohorts := map[string]PropertyGroup{"invalid": {Type: "XOR", Values: []any{mismatch}}}
+	for _, tt := range tests {
+		for _, parsed := range []bool{false, true} {
+			t.Run(tt.name+"/parsed="+valueToString(parsed), func(t *testing.T) {
+				group := tt.group
+				localCohorts := cohorts
+				if parsed {
+					group = preParsePG(group)
+					localCohorts = preParseCohortValues(cohorts)
+				}
+				got, err := poller.matchPropertyGroup(group, Properties{"email": "user@x"}, localCohorts, nil, nil, "user", nil, nil)
+				if tt.wantServer {
+					var serverErr *RequiresServerEvaluationError
+					require.ErrorAs(t, err, &serverErr)
+					requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+				} else {
+					require.NoError(t, err)
+				}
+				require.Equal(t, tt.want, got)
+			})
+		}
+	}
+}
