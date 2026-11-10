@@ -30,7 +30,8 @@ type fakeStorage struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	// faults are answers to the next PUTs, for failures real storage can't
-	// be made to produce on demand. Each is used once, in order.
+	// be made to produce on demand. Each is used once, in order; one without
+	// a status lets that PUT through.
 	faults []storageFault
 	// afterStore, when set, runs each time storage has stored an upload.
 	afterStore func()
@@ -59,7 +60,7 @@ func (s *fakeStorage) serve(w http.ResponseWriter, r *http.Request) {
 		fault, s.faults = &s.faults[0], s.faults[1:]
 	}
 	s.mu.Unlock()
-	if fault != nil {
+	if fault != nil && fault.status != 0 {
 		for name, value := range fault.header {
 			w.Header().Set(name, value)
 		}

@@ -101,13 +101,15 @@ func TestEmailsSendDeliversFilesPostHogHasWithoutStorage(t *testing.T) {
 }
 
 func TestEmailsSendDeliversAFileAttachedTwice(t *testing.T) {
+	// Storage throttles a second upload of the same bytes. The file is
+	// already there, so the email still goes out.
 	logo := []byte{0x89, 'P', 'N', 'G'}
-	world := newAttachmentsWorld(t)
+	world := newAttachmentsWorld(t, storageFault{}, storageRefusal(http.StatusTooManyRequests, "SlowDown"))
 
-	_, err := world.client.Emails().Send(context.Background(), invoiceWith(
+	_, err := world.client.Emails().Send(context.Background(), withoutRetries(invoiceWith(
 		EmailAttachment{Filename: "logo.png", Content: logo, ContentID: "logo"},
 		EmailAttachment{Filename: "logo-copy.png", Content: logo},
-	))
+	)))
 
 	require.NoError(t, err)
 	require.Equal(t, []deliveredAttachment{

@@ -121,9 +121,10 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 	if err != nil {
 		return err
 	}
+	uploaded := map[string]bool{}
 	for i, target := range targets {
 		file := files[i]
-		if target == nil {
+		if target == nil || uploaded[file.SHA256] {
 			continue
 		}
 		if err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
@@ -144,6 +145,7 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 		}); err != nil {
 			return err
 		}
+		uploaded[file.SHA256] = true
 	}
 	return nil
 }
