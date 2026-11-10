@@ -132,8 +132,7 @@ func TestUnsupportedCohortGroupFallsBackToAPI(t *testing.T) {
 			client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, remoteCheckoutEnabled)
 			payload := FeatureFlagPayload{Key: "checkout", DistinctId: "user", PersonProperties: Properties{"email": "other@x"}, OnlyEvaluateLocally: true}
 			value, err := client.GetFeatureFlag(payload)
-			var serverErr *RequiresServerEvaluationError
-			require.ErrorAs(t, err, &serverErr)
+			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
 			require.Nil(t, value)
 			require.Zero(t, remoteCalls.Load())
 

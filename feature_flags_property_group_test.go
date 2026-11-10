@@ -112,6 +112,24 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 			}},
 			wantErr: errCohortRequiresServerEval,
 		},
+		{
+			name: "missing cohort before an OR match still requires the server",
+			group: PropertyGroup{Type: "OR", Values: []any{
+				map[string]any{"type": "cohort", "value": "missing-cohort"},
+				map[string]any{"key": "country", "operator": "exact", "value": "US"},
+			}},
+			properties: Properties{"country": "US"},
+			wantErr:    errCohortRequiresServerEval,
+		},
+		{
+			name: "missing cohort before an AND mismatch still requires the server",
+			group: PropertyGroup{Type: "AND", Values: []any{
+				map[string]any{"type": "cohort", "value": "missing-cohort"},
+				map[string]any{"key": "country", "operator": "exact", "value": "CA"},
+			}},
+			properties: Properties{"country": "US"},
+			wantErr:    errCohortRequiresServerEval,
+		},
 	}
 
 	poller := &FeatureFlagsPoller{}
@@ -134,19 +152,19 @@ func TestMatchPropertyGroupTypes(t *testing.T) {
 	match := map[string]any{"type": "person", "key": "email", "operator": "exact", "value": "user@x"}
 	mismatch := map[string]any{"type": "person", "key": "email", "operator": "exact", "value": "other@x"}
 	tests := []struct {
-		name       string
-		group      PropertyGroup
-		want       bool
-		wantServer bool
+		name           string
+		group          PropertyGroup
+		want           bool
+		wantUnresolved bool
 	}{
-		{name: "unknown matching", group: PropertyGroup{Type: "XOR", Values: []any{match}}, wantServer: true},
-		{name: "unknown mismatching", group: PropertyGroup{Type: "XOR", Values: []any{mismatch}}, wantServer: true},
-		{name: "unknown nil values", group: PropertyGroup{Type: "XOR"}, wantServer: true},
-		{name: "unknown empty values", group: PropertyGroup{Type: "XOR", Values: []any{}}, wantServer: true},
-		{name: "nested unknown", group: PropertyGroup{Type: "AND", Values: []any{map[string]any{"type": "XOR", "values": []any{match}}}}, wantServer: true},
-		{name: "nested unknown empty", group: PropertyGroup{Type: "OR", Values: []any{map[string]any{"type": "XOR", "values": []any{}}}}, wantServer: true},
-		{name: "negated cohort reference", group: PropertyGroup{Type: "OR", Values: []any{map[string]any{"type": "cohort", "value": "invalid", "negation": true}}}, wantServer: true},
-		{name: "missing nonempty type", group: PropertyGroup{Values: []any{match}}, wantServer: true},
+		{name: "unknown matching", group: PropertyGroup{Type: "XOR", Values: []any{match}}, wantUnresolved: true},
+		{name: "unknown mismatching", group: PropertyGroup{Type: "XOR", Values: []any{mismatch}}, wantUnresolved: true},
+		{name: "unknown nil values", group: PropertyGroup{Type: "XOR"}, wantUnresolved: true},
+		{name: "unknown empty values", group: PropertyGroup{Type: "XOR", Values: []any{}}, wantUnresolved: true},
+		{name: "nested unknown", group: PropertyGroup{Type: "AND", Values: []any{map[string]any{"type": "XOR", "values": []any{match}}}}, wantUnresolved: true},
+		{name: "nested unknown empty", group: PropertyGroup{Type: "OR", Values: []any{map[string]any{"type": "XOR", "values": []any{}}}}, wantUnresolved: true},
+		{name: "negated cohort reference", group: PropertyGroup{Type: "OR", Values: []any{map[string]any{"type": "cohort", "value": "invalid", "negation": true}}}, wantUnresolved: true},
+		{name: "missing nonempty type", group: PropertyGroup{Values: []any{match}}, wantUnresolved: true},
 		{name: "AND matches", group: PropertyGroup{Type: "AND", Values: []any{match}}, want: true},
 		{name: "AND mismatch", group: PropertyGroup{Type: "AND", Values: []any{match, mismatch}}},
 		{name: "OR matches", group: PropertyGroup{Type: "OR", Values: []any{mismatch, match}}, want: true},
@@ -170,9 +188,7 @@ func TestMatchPropertyGroupTypes(t *testing.T) {
 					localCohorts = preParseCohortValues(cohorts)
 				}
 				got, err := poller.matchPropertyGroup(group, Properties{"email": "user@x"}, localCohorts, nil, nil, "user", nil, nil)
-				if tt.wantServer {
-					var serverErr *RequiresServerEvaluationError
-					require.ErrorAs(t, err, &serverErr)
+				if tt.wantUnresolved {
 					requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
 				} else {
 					require.NoError(t, err)
