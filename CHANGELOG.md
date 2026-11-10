@@ -1,5 +1,13 @@
 ## Unreleased
 
+## 1.42.1
+
+### Patch Changes
+
+- d722122: Stop the legacy `/batch/` sender from sleeping after its last failed attempt, and clamp its `Retry-After` to the same 30s ceiling as analytics v1 capture.
+- 57c652f: Relative date filters in local flag evaluation no longer roll past the end of a shorter month. `1m` on March 31 now resolves to February 28.
+- dfd5ba3: ReloadFeatureFlags returns ErrClosed after the client is closed instead of panicking
+
 ## 1.42.0
 
 ### Minor Changes
