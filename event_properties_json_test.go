@@ -360,3 +360,29 @@ func TestExceptionIgnoredCustomCollision(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "property marshaler failed")
 }
+
+func TestExceptionOmitZero(t *testing.T) {
+	type payload struct {
+		Optional time.Time `json:"optional,omitzero"`
+		Kept     string    `json:"kept"`
+	}
+	for _, value := range []payload{
+		{Kept: "yes"},
+		{Kept: "yes", Optional: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)},
+	} {
+		want, err := json.Marshal(value)
+		require.NoError(t, err)
+		msg := Exception{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"payload": value},
+		}
+		data, _, err := prepareForSend(msg)
+		require.NoError(t, err)
+		var wire struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		require.NoError(t, json.Unmarshal(data, &wire))
+		require.JSONEq(t, string(want), string(wire.Properties["payload"]))
+	}
+}

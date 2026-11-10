@@ -76,7 +76,10 @@ func normalizeLegacyMessage(apiMsg APIMessage) (APIMessage, error) {
 		// Typed exception fields win on collision and are never sent from Custom.
 		// Normalize only the keys MarshalJSON will keep. A failing or cyclic value
 		// under a shadowed key, such as $lib, must not drop the exception.
-		custom, err := normalizeEventProperties(exceptionCustomWithoutShadowedKeys(msg.Properties))
+		// Exception custom values are encoded with encoding/json, which honors
+		// omitzero. Pre-encoding them with go-json would send zero fields the
+		// standard encoder omits.
+		custom, err := normalizeEventPropertiesMode(exceptionCustomWithoutShadowedKeys(msg.Properties), true)
 		if err != nil {
 			return nil, err
 		}
@@ -88,13 +91,17 @@ func normalizeLegacyMessage(apiMsg APIMessage) (APIMessage, error) {
 }
 
 func normalizeEventProperties(properties Properties) (Properties, error) {
+	return normalizeEventPropertiesMode(properties, false)
+}
+
+func normalizeEventPropertiesMode(properties Properties, standardJSON bool) (Properties, error) {
 	if properties == nil {
 		return nil, nil
 	}
 	normalized := make(Properties, len(properties))
 	seen := make(map[jsonPropertyVisit]bool)
 	for key, value := range properties {
-		child, err := normalizeEventProperty(reflect.ValueOf(value), seen)
+		child, err := normalizeEventProperty(reflect.ValueOf(value), seen, standardJSON)
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +110,7 @@ func normalizeEventProperties(properties Properties) (Properties, error) {
 	return normalized, nil
 }
 
-func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (interface{}, error) {
+func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool, standardJSON bool) (interface{}, error) {
 	if !v.IsValid() {
 		return nil, nil
 	}
@@ -116,7 +123,7 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (i
 	}
 	switch value.(type) {
 	case json.Marshaler, json.MarshalerContext, encoding.TextMarshaler:
-		return marshalOpaqueEventProperty(value, true)
+		return marshalOpaqueEventProperty(value, true, standardJSON)
 	}
 	switch v.Kind() {
 	case reflect.Map, reflect.Slice, reflect.Ptr:
@@ -139,12 +146,12 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (i
 			return nil, nil
 		}
 	case reflect.Ptr, reflect.Interface:
-		return normalizeEventProperty(v.Elem(), seen)
+		return normalizeEventProperty(v.Elem(), seen, standardJSON)
 	case reflect.Map:
 		out := reflect.MakeMapWithSize(reflect.MapOf(v.Type().Key(), reflect.TypeOf((*interface{})(nil)).Elem()), v.Len())
 		iter := v.MapRange()
 		for iter.Next() {
-			child, err := normalizeEventProperty(iter.Value(), seen)
+			child, err := normalizeEventProperty(iter.Value(), seen, standardJSON)
 			if err != nil {
 				return nil, err
 			}
@@ -158,7 +165,7 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (i
 	case reflect.Slice:
 		// Byte slices use the encoder's base64 representation, not JSON array slots.
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			return marshalOpaqueEventProperty(value, false)
+			return marshalOpaqueEventProperty(value, false, standardJSON)
 		}
 		fallthrough
 	case reflect.Array:
@@ -170,7 +177,7 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (i
 		}
 		out := make([]interface{}, v.Len())
 		for i := range out {
-			child, err := normalizeEventProperty(v.Index(i), seen)
+			child, err := normalizeEventProperty(v.Index(i), seen, standardJSON)
 			if err != nil {
 				return nil, err
 			}
@@ -178,13 +185,22 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool) (i
 		}
 		return out, nil
 	case reflect.Struct:
-		return marshalOpaqueEventProperty(value, false)
+		return marshalOpaqueEventProperty(value, false, standardJSON)
 	}
 	return v.Interface(), nil
 }
 
-func marshalOpaqueEventProperty(value interface{}, custom bool) (interface{}, error) {
-	data, err := json.Marshal(value)
+func marshalOpaqueEventProperty(value interface{}, custom bool, standardJSON bool) (interface{}, error) {
+	var (
+		data []byte
+		err  error
+	)
+	if standardJSON {
+		// Match ExceptionInApiProperties, which merges custom values with encoding/json.
+		data, err = stdjson.Marshal(value)
+	} else {
+		data, err = json.Marshal(value)
+	}
 	if !custom && isNonFiniteJSONError(err) {
 		return nil, nil
 	}
@@ -200,6 +216,9 @@ func marshalOpaqueEventProperty(value interface{}, custom bool) (interface{}, er
 			}
 		}
 		return nil, invalidEventJSON(data)
+	}
+	if standardJSON {
+		return stdjson.RawMessage(data), nil
 	}
 	return json.RawMessage(data), nil
 }
