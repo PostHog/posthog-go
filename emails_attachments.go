@@ -60,8 +60,8 @@ type uploadTarget struct {
 }
 
 // expired says whether the URL may no longer accept an upload that starts now.
-func (t uploadTarget) expired() bool {
-	return !time.Now().Before(t.expiresAt.Add(-uploadURLMargin))
+func (t uploadTarget) expired(now time.Time) bool {
+	return !now.Before(t.expiresAt.Add(-uploadURLMargin))
 }
 
 func checkAttachments(attachments []EmailAttachment, subject string, bodies ...string) ([]attachment, *EmailError) {
@@ -125,7 +125,7 @@ func (s *emailSender) uploadAttachments(ctx context.Context, maxRetries int, fil
 			continue
 		}
 		if err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
-			if target.expired() {
+			if target.expired(s.now()) {
 				fresh, err := s.uploadTargets(ctx, 0, []attachment{file}, i)
 				if err != nil {
 					return err
@@ -166,7 +166,7 @@ func (s *emailSender) uploadTargets(ctx context.Context, maxRetries int, files [
 		emailErr.Field = attachmentsField(emailErr, first)
 		return nil, emailErr
 	}
-	return reply.uploadTargets(files, time.Now())
+	return reply.uploadTargets(files, s.now())
 }
 
 // attachmentsField names the field of an upload route refusal as the caller

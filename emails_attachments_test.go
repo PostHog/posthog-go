@@ -25,6 +25,8 @@ type bucketServer struct {
 	mu      sync.Mutex
 	replies []stubReply
 	puts    []receivedRequest
+	// onRequest, when set, runs on each request before storage answers.
+	onRequest func()
 }
 
 func newBucketServer(t *testing.T, replies ...stubReply) *bucketServer {
@@ -37,7 +39,11 @@ func newBucketServer(t *testing.T, replies ...stubReply) *bucketServer {
 		if len(b.replies) > 0 {
 			reply, b.replies = b.replies[0], b.replies[1:]
 		}
+		onRequest := b.onRequest
 		b.mu.Unlock()
+		if onRequest != nil {
+			onRequest()
+		}
 		for name, value := range reply.header {
 			w.Header().Set(name, value)
 		}
@@ -583,28 +589,69 @@ func TestEmailsSendKeepsPostHogsFieldWhenAskingAgainFails(t *testing.T) {
 	require.Empty(t, bucket.received())
 }
 
-func TestUploadTargetExpiresFifteenMinutesAfterTheAnswerByTheLocalClock(t *testing.T) {
-	file := attachment{SHA256: sha256Hex([]byte("invoice")), Filename: "invoice.pdf", content: []byte("invoice")}
-	answer := func(urlExpiresAt time.Time) emailReply {
-		return emailReply{status: http.StatusOK, fields: map[string]interface{}{"files": []interface{}{map[string]interface{}{
-			"sha256": file.SHA256, "status": "upload", "url": "https://storage.example/invoice", "method": "PUT",
-			"url_expires_at": urlExpiresAt.UTC().Format(time.RFC3339Nano),
-		}}}}
-	}
+// testClock is a clock the test moves forward by hand.
+type testClock struct {
+	mu sync.Mutex
+	at time.Time
+}
 
-	// PostHog's clock is ahead of the client's, so its deadline reads an hour
-	// away. By the client's clock the URL lives 15 minutes, and is asked for
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
+func TestEmailsSendAsksAgainForAnUploadURLOlderThanFifteenMinutesByTheLocalClock(t *testing.T) {
+	// PostHog's clock runs an hour ahead, so its deadline reads an hour away.
+	// By the client's clock an upload URL lives 15 minutes, and is asked for
 	// again in its last minute.
-	targets, err := answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now().Add(-14*time.Minute-time.Second))
-	require.Nil(t, err)
-	require.True(t, targets[0].expired())
+	tests := map[string]struct {
+		firstUploadTakes time.Duration
+		asksAgain        bool
+	}{
+		"13 minutes in, the URL is still used":              {firstUploadTakes: 13 * time.Minute},
+		"14 minutes and a second in, it is asked for again": {firstUploadTakes: 14*time.Minute + time.Second, asksAgain: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			invoice, logo := []byte("%PDF-1.7 invoice"), []byte("logo")
+			clock := &testClock{at: time.Now()}
+			bucket := newBucketServer(t)
+			bucket.onRequest = func() { clock.advance(tt.firstUploadTakes) }
+			postHogsDeadline := clock.now().Add(time.Hour).UTC().Format(time.RFC3339)
+			first := toUpload(bucket, invoice)
+			first["url_expires_at"] = postHogsDeadline
+			stale := toUpload(bucket, logo)
+			stale["url"] = bucket.URL + "/stale"
+			stale["url_expires_at"] = postHogsDeadline
+			replies := []stubReply{uploadsAnswer(first, stale)}
+			if tt.asksAgain {
+				replies = append(replies, uploadsAnswer(toUpload(bucket, logo)))
+			}
+			replies = append(replies, accepted("msg_1"))
+			server := newEmailServer(t, replies...)
+			client := newEmailClient(t, server, func(c *Config) { c.now = clock.now })
 
-	targets, err = answer(time.Now().Add(time.Hour)).uploadTargets([]attachment{file}, time.Now().Add(-13*time.Minute))
-	require.Nil(t, err)
-	require.False(t, targets[0].expired())
+			_, err := client.Emails().Send(context.Background(), invoiceWith(
+				EmailAttachment{Filename: "invoice.pdf", Content: invoice},
+				EmailAttachment{Filename: "logo.png", Content: logo},
+			))
 
-	// An earlier deadline from PostHog still wins.
-	targets, err = answer(time.Now().Add(30*time.Second)).uploadTargets([]attachment{file}, time.Now())
-	require.Nil(t, err)
-	require.True(t, targets[0].expired())
+			require.NoError(t, err)
+			require.Len(t, server.received(), len(replies))
+			puts := bucket.received()
+			require.Len(t, puts, 2)
+			if tt.asksAgain {
+				require.NotContains(t, puts[1].Path, "/stale")
+			} else {
+				require.Contains(t, puts[1].Path, "/stale")
+			}
+		})
+	}
 }
