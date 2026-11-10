@@ -62,6 +62,36 @@ func TestFlushKeepsFailedEventsRetryable(t *testing.T) {
 	}
 }
 
+func TestLegacyFinalAttemptDoesNotWait(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	callback := &flushCallbacks{}
+	c, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:    server.URL,
+		CaptureMode: posthog.CaptureModeLegacy,
+		Interval:    time.Hour,
+		MaxRetries:  posthog.Ptr(0),
+		RetryAfter:  func(int) time.Duration { return 5 * time.Second },
+		Callback:    callback,
+	})
+	require.NoError(t, err)
+	defer c.Close()
+
+	require.NoError(t, c.Enqueue(posthog.Capture{DistinctId: "user-123", Event: "Save"}))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, c.(flushingClient).FlushWithContext(ctx))
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("final legacy attempt waited %s", elapsed)
+	}
+	require.EqualValues(t, 1, callback.failed.Load())
+}
+
 func TestFlushWaitsForActiveRetry(t *testing.T) {
 	for _, mode := range []posthog.CaptureMode{posthog.CaptureModeLegacy, posthog.CaptureModeAnalyticsV1} {
 		t.Run(fmt.Sprint(mode), func(t *testing.T) {
