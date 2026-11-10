@@ -254,6 +254,127 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 	}
 }
 
+// sendAPI fakes PostHog's code send for a template_key that names a template
+// in a message category: a send without a category follows the template's
+// category, and "transactional" is refused with category_mismatch.
+type sendAPI struct {
+	*httptest.Server
+	mu sync.Mutex
+	// templates maps a template key to its category key, "" for none.
+	templates map[string]string
+	sent      []sentEmail
+}
+
+type sentEmail struct {
+	To       string
+	Category string
+}
+
+func newSendAPI(t *testing.T, templates map[string]string) *sendAPI {
+	api := &sendAPI{templates: templates}
+	api.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isEmailPath(r.URL.Path) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body struct {
+			To          string          `json:"to"`
+			TemplateKey string          `json:"template_key"`
+			Category    json.RawMessage `json:"category"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"validation_error","code":"invalid_input","detail":"Not JSON."}`))
+			return
+		}
+		status, reply := api.send(body.To, body.TemplateKey, body.Category)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(reply))
+	}))
+	t.Cleanup(api.Close)
+	return api
+}
+
+func (api *sendAPI) send(to, templateKey string, category json.RawMessage) (int, string) {
+	const mismatch = `{"type":"validation_error","code":"category_mismatch","attr":"category","detail":"The category differs from the template's."}`
+	var asString string
+	var asObject struct {
+		Key string `json:"key"`
+	}
+	leftOut := len(category) == 0 || string(category) == "null"
+	transactional := !leftOut && json.Unmarshal(category, &asString) == nil && asString == "transactional"
+	if !leftOut && !transactional && (json.Unmarshal(category, &asObject) != nil || asObject.Key == "") {
+		return http.StatusBadRequest, `{"type":"validation_error","code":"invalid_input","attr":"category","detail":"Not a category."}`
+	}
+
+	stored := asObject.Key
+	if templateCategory, isTemplate := api.templates[templateKey]; isTemplate {
+		switch {
+		case leftOut:
+			stored = templateCategory
+		case transactional && templateCategory != "":
+			return http.StatusBadRequest, mismatch
+		case !transactional && asObject.Key != templateCategory:
+			return http.StatusBadRequest, mismatch
+		}
+	}
+
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	api.sent = append(api.sent, sentEmail{To: to, Category: stored})
+	return http.StatusAccepted, `{"message_id":"msg_1","replayed":false,"warnings":[]}`
+}
+
+func (api *sendAPI) sentEmails() []sentEmail {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return append([]sentEmail(nil), api.sent...)
+}
+
+func newsletterTemplateClient(t *testing.T) (Client, *sendAPI) {
+	api := newSendAPI(t, map[string]string{"november-digest": "newsletter"})
+	client, err := NewWithConfig("phc_test", Config{Endpoint: api.URL, AppHost: api.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	senderOf(client).backoff = func(int) time.Duration { return 0 }
+	return client, api
+}
+
+func digestEmail(category EmailCategory) CodeEmail {
+	return CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "november-digest",
+		Subject:     "November digest",
+		HTML:        `<p>News</p><a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
+		Category:    category,
+	}
+}
+
+func TestEmailsSendCodeWithoutACategoryFollowsTheTemplatesCategory(t *testing.T) {
+	var noCategory *MessageCategory
+	for name, category := range map[string]EmailCategory{"no category": nil, "nil category pointer": noCategory} {
+		t.Run(name, func(t *testing.T) {
+			client, api := newsletterTemplateClient(t)
+
+			_, err := client.Emails().Send(context.Background(), digestEmail(category))
+
+			require.NoError(t, err)
+			require.Equal(t, []sentEmail{{To: "user@example.com", Category: "newsletter"}}, api.sentEmails())
+		})
+	}
+}
+
+func TestEmailsSendCodeRefusesTransactionalForATemplateInACategory(t *testing.T) {
+	client, api := newsletterTemplateClient(t)
+
+	_, err := client.Emails().Send(context.Background(), digestEmail(EmailCategoryTransactional))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "category_mismatch", emailErr.Code)
+	require.Equal(t, EmailErrorValidation, emailErr.Name)
+	require.Empty(t, api.sentEmails())
+}
+
 func TestEmailsSendHeaders(t *testing.T) {
 	server := newEmailServer(t, accepted("msg_1"))
 	client := newEmailClient(t, server, func(c *Config) {

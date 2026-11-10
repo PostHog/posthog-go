@@ -120,8 +120,9 @@ type CodeEmail struct {
 	// nothing, whatever the send asks.
 	CaptureEngagement *bool
 	// Category is EmailCategoryTransactional or a MessageCategory, which
-	// defines the category in code. Without it, PostHog sends transactional
-	// email with no category.
+	// defines the category in code. Without it, the email follows the
+	// category of the template that TemplateKey names, or is transactional
+	// with no category.
 	Category EmailCategory
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
@@ -145,8 +146,10 @@ type EmailCategory interface {
 // the only value it can hold.
 type transactionalEmailCategory struct{}
 
-// EmailCategoryTransactional sends transactional email with no category, the
-// same as a CodeEmail without a Category.
+// EmailCategoryTransactional sends transactional email with no category.
+// Unlike a CodeEmail without a Category, it doesn't follow the category of
+// the template that TemplateKey names: PostHog refuses it with
+// "category_mismatch" when that template is in a category.
 var EmailCategoryTransactional = transactionalEmailCategory{}
 
 // MessageCategoryType is the type of a MessageCategory.
@@ -168,7 +171,8 @@ const (
 // updates it.
 //
 // PostHog refuses a send with the error code "category_mismatch" when the Key
-// exists with another Type, "too_many_categories" when the project can't take
+// exists with another Type or TemplateKey names a template in another
+// category, "too_many_categories" when the project can't take
 // another category, "unsubscribe_link_required" when a marketing send has no
 // {{ unsubscribe_url }} placeholder, and "recipient_opted_out" when the
 // recipient opted out of the category or of all marketing.
