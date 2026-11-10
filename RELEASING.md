@@ -45,3 +45,13 @@ The core SDK, `otel`, and `posthogmcpsdk` share a release version. During releas
 ### No changesets found
 
 If the release workflow reports that no changesets were found, make sure your PR includes at least one releasable `.changeset/*.md` file.
+
+### Failed or cancelled release
+
+The independent [release failure notification workflow](.github/workflows/release-failure-notification.yml) checks every completed main-branch release attempt and alerts if a job failed, timed out, or was cancelled. This includes runner startup failures and cancellations with job records. It also alerts when the run failed but the `Bump version and release` job never appears in the job list, for example when GitHub Actions stops mid-run. Once the GitHub release exists, alerts describe follow-up problems rather than claiming the release failed, and the workflow still alerts if the released Slack notification was skipped.
+
+Cancelled runs with no jobs are ignored, including superseded queued runs and manual cancellations before any job is created. A `Bump version and release` failure before any steps ran is also ignored when the rejection-reply step confirms an explicit rejection in the same attempt and no other job failed.
+
+Job inspection retries transient GitHub API failures up to three times. If inspection still fails, it logs the HTTP status or error type and message, then posts a fallback alert with the overall run status and logs link so the release can be checked manually. Error diagnostics stay in the run log, not in the Slack message.
+
+Alerts reply to the approval thread in the release approvals Slack channel. The release workflow preserves the thread timestamp in a run artifact for 30 days, independently of release approval. Failed-job reruns reuse the latest available thread from the same or an earlier attempt. If the timestamp is missing, invalid, or unavailable, the alert falls back to a new channel message, so it does not depend on the approval notification succeeding. The completion workflow must be present on the default branch to run; local tests do not send Slack messages.
