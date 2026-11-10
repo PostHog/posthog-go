@@ -873,7 +873,6 @@ func (poller *FeatureFlagsPoller) run() {
 		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
-			close(poller.forceReload)
 			timer.Stop()
 			poller.shutdownCacheProvider(poller.shutdownCtx)
 			return
@@ -3312,8 +3311,13 @@ func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestD
 }
 
 // ForceReload requests an immediate reload of local feature flag definitions.
+// It does nothing once the poller has shut down. The send selects on shutdown
+// so a reload racing Close cannot send on a closed channel.
 func (poller *FeatureFlagsPoller) ForceReload() {
-	poller.forceReload <- true
+	select {
+	case <-poller.shutdown:
+	case poller.forceReload <- true:
+	}
 }
 
 // shutdownPoller stops the polling goroutine, which releases the cache provider on
