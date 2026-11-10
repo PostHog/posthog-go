@@ -1910,8 +1910,10 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 					return conditionNoMatch, err
 				}
 			}
-			// Negation inverts a decided match. An error above never reaches this.
-			if isMatch == prop.Negation {
+			// Negation inverts a decided match. An invalid regex is not one:
+			// both regex and not_regex report it as a non-match, and
+			// complementing that failure would enable the flag for every value.
+			if propertyComparisonFailed(prop) || isMatch == prop.Negation {
 				return conditionNoMatch, nil
 			}
 		}
@@ -1934,6 +1936,19 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	}
 
 	return conditionMatch, nil
+}
+
+// propertyComparisonFailed reports an operator that did not decide a match.
+// Invalid regex syntax stays a non-match for regex and not_regex. Condition
+// negation must not turn that failure into a match.
+func propertyComparisonFailed(property FlagProperty) bool {
+	switch property.Operator {
+	case "regex", "not_regex":
+		_, err := getOrCompileRegex(valueToString(property.Value))
+		return err != nil && !isServerEvalError(err)
+	default:
+		return false
+	}
 }
 
 func matchProperty(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {

@@ -85,6 +85,56 @@ func TestCohortNotInAndConditionNegation(t *testing.T) {
 	}
 }
 
+func TestInvalidRegexNegationDoesNotEnableFlag(t *testing.T) {
+	email := NewProperties().Set("email", "user@x")
+	other := NewProperties().Set("email", "other@x")
+	tests := []struct {
+		name       string
+		filter     string
+		properties Properties
+		want       bool
+	}{
+		{
+			name:       "negated invalid regex stays off",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"[","negation":true}`,
+			properties: email,
+			want:       false,
+		},
+		{
+			name:       "negated invalid not_regex stays off",
+			filter:     `{"key":"email","type":"person","operator":"not_regex","value":"[","negation":true}`,
+			properties: email,
+			want:       false,
+		},
+		{
+			name:       "invalid regex without negation stays off",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"["}`,
+			properties: email,
+			want:       false,
+		},
+		{
+			name:       "negated valid regex still excludes the match",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"^user@x$","negation":true}`,
+			properties: email,
+			want:       false,
+		},
+		{
+			name:       "negated valid regex still matches a different value",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"^user@x$","negation":true}`,
+			properties: other,
+			want:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flag := `{"key":"checkout","active":true,"filters":{"groups":[{"properties":[` + tt.filter + `],"rollout_percentage":100}]}}`
+			got, err := computeDefinedFlag(t, localDefinitionsWithCohorts(`{}`, flag), "checkout", tt.properties)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestComplexCohortsWithNegationLocally(t *testing.T) {
 	client := newCohortTestClient(t, "feature_flag/test-complex-cohorts-negation-locally.json")
 	payload := cohortPayload(NewProperties().Set("region", "UK"))
