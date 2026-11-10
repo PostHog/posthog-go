@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -177,6 +178,36 @@ func TestEmailsSendUploadErrorNeverHoldsARedirectsSignedURL(t *testing.T) {
 			require.Empty(t, world.posthog.deliveredEmails())
 		})
 	}
+}
+
+func TestEmailsSendNeverFollowsAStorageRedirect(t *testing.T) {
+	// Following a 307 would re-send the file to wherever storage points, even
+	// over http, and report success. A signed upload never works through a
+	// redirect, so a redirect fails the attachment.
+	var elsewhere int
+	var mu sync.Mutex
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		elsewhere++
+		mu.Unlock()
+	}))
+	t.Cleanup(other.Close)
+	world := newAttachmentsWorld(t, storageFault{stubReply: stubReply{status: http.StatusTemporaryRedirect, header: map[string]string{"Location": other.URL + "/team/2/invoice"}}})
+
+	_, err := world.client.Emails().Send(context.Background(), withoutRetries(invoiceWith(EmailAttachment{Filename: "invoice.pdf", Content: []byte("%PDF")})))
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "attachment_upload_failed", emailErr.Code)
+	require.Equal(t, http.StatusTemporaryRedirect, emailErr.StatusCode)
+	require.Equal(t, "Attachments[0]", emailErr.Field)
+	require.Equal(t, "Uploading invoice.pdf failed: file storage answered HTTP 307. No email was sent.", emailErr.Message)
+	for cause := error(emailErr); cause != nil; cause = errors.Unwrap(cause) {
+		require.NotContains(t, fmt.Sprintf("%v %+v", cause, cause), other.URL)
+	}
+	mu.Lock()
+	require.Zero(t, elsewhere, "the file went to the redirect's target")
+	mu.Unlock()
+	require.Empty(t, world.posthog.deliveredEmails())
 }
 
 func TestEmailsSendStopsWhenPostHogRefusesTheUploads(t *testing.T) {
