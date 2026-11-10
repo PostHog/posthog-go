@@ -71,7 +71,7 @@ func ExampleEmails_tracking() {
 		To:          "user@example.com",
 		TemplateKey: "weekly-digest",
 		Subject:     "Your weekly digest",
-		HTML:        "<p>Read this week's posts: https://example.com/blog</p>",
+		HTML:        `<p><a href="https://example.com/blog">Read this week's posts</a></p>`,
 		Tracking:    posthog.EmailTrackingWith(posthog.EmailTrackingOptions{Clicks: posthog.Ptr(true)}),
 	})
 	if err != nil {

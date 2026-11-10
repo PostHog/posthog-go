@@ -222,6 +222,11 @@ func TestEmailsSendCodeTracking(t *testing.T) {
 			want:     map[string]interface{}{"opens": true, "clicks": false, "engagement": false},
 		},
 		{
+			name:     "opens off",
+			tracking: EmailTrackingWith(EmailTrackingOptions{Opens: Ptr(false), Engagement: Ptr(true)}),
+			want:     map[string]interface{}{"opens": false, "engagement": true},
+		},
+		{
 			name:     "no kind",
 			tracking: EmailTrackingWith(EmailTrackingOptions{}),
 			want:     map[string]interface{}{},
