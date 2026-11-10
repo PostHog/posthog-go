@@ -56,21 +56,33 @@ func TestCohortNotInAndConditionNegation(t *testing.T) {
 			want:       true,
 		},
 		{
-			name:       "negated exact excludes the listed country",
+			name:       "legacy exact ignores negation and still matches",
 			filter:     `{"key":"country","type":"person","operator":"exact","value":"CA","negation":true}`,
 			properties: countryCA,
-			want:       false,
+			want:       true,
 		},
 		{
-			name:       "negated exact matches a different country",
+			name:       "legacy exact ignores negation and still excludes a different country",
 			filter:     `{"key":"country","type":"person","operator":"exact","value":"CA","negation":true}`,
 			properties: countryUS,
-			want:       true,
+			want:       false,
 		},
 		{
 			name:       "exact without negation still matches",
 			filter:     `{"key":"country","type":"person","operator":"exact","value":"CA"}`,
 			properties: countryCA,
+			want:       true,
+		},
+		{
+			name:       "legacy is_not ignores negation and still excludes the listed country",
+			filter:     `{"key":"country","type":"person","operator":"is_not","value":"CA","negation":true}`,
+			properties: countryCA,
+			want:       false,
+		},
+		{
+			name:       "legacy is_not ignores negation and still matches a different country",
+			filter:     `{"key":"country","type":"person","operator":"is_not","value":"CA","negation":true}`,
+			properties: countryUS,
 			want:       true,
 		},
 	}
@@ -113,16 +125,16 @@ func TestInvalidRegexNegationDoesNotEnableFlag(t *testing.T) {
 			want:       false,
 		},
 		{
-			name:       "negated valid regex still excludes the match",
+			name:       "valid regex ignores negation and still matches",
 			filter:     `{"key":"email","type":"person","operator":"regex","value":"^user@x$","negation":true}`,
 			properties: email,
-			want:       false,
+			want:       true,
 		},
 		{
-			name:       "negated valid regex still matches a different value",
+			name:       "valid regex ignores negation and still excludes a different value",
 			filter:     `{"key":"email","type":"person","operator":"regex","value":"^user@x$","negation":true}`,
 			properties: other,
-			want:       true,
+			want:       false,
 		},
 	}
 	for _, tt := range tests {
