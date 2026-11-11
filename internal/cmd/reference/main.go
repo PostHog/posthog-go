@@ -423,7 +423,7 @@ func nest(page string) string {
 			out = append(out, "#"+line)
 		}
 	}
-	return strings.Join(out, "\n")
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 func read(path string) string {
