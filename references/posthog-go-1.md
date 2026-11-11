@@ -407,11 +407,13 @@ Enqueue(Message) error
 
 Enqueue queues a message to be sent by the client when the conditions for a batch upload are met. This is the main method you'll be using, a typical flow would look like this:
 
-	client := posthog.New(apiKey)
-	...
-	client.Enqueue(posthog.Capture{ ... })
-	...
-	client.Close()
+```go
+client := posthog.New(apiKey)
+...
+client.Enqueue(posthog.Capture{ ... })
+...
+client.Close()
+```
 
 Enqueue returns an error if the message could not be queued, which happens when the client is closed, the message is invalid, or the in-memory queue is full (ErrQueueFull) -- in the latter case the message is dropped rather than blocking the caller. A full-queue drop is reported only through this returned error, not through Callback.Failure.
 
@@ -603,14 +605,16 @@ The next parameter receives all records as your normal handler. The client param
 
 You typically wrap your existing handler:
 
-	client, err := posthog.NewWithConfig(...)
-	// error handling and `defer client.Close()` call
-	base := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
-	logger := slog.New(posthog.NewSlogCaptureHandler(base, client,
-	  posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
-	    return "my-user-id" // or pull from ctx
-	  }),
-	))
+```go
+client, err := posthog.NewWithConfig(...)
+// error handling and `defer client.Close()` call
+base := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+logger := slog.New(posthog.NewSlogCaptureHandler(base, client,
+  posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
+    return "my-user-id" // or pull from ctx
+  }),
+))
+```
 
 ## Flush
 
@@ -1271,10 +1275,12 @@ func DefaultBackoff() *Backoff
 
 DefaultBackoff creates a Backoff with the SDK's default retry policy:
 
-	base: 100 milliseconds
-	factor: 2
-	jitter: 0
-	cap: 30 seconds
+```go
+base: 100 milliseconds
+factor: 2
+jitter: 0
+cap: 30 seconds
+```
 
 #### `posthog.NewBackoff`
 
@@ -1377,6 +1383,17 @@ type CaptureMode uint8
 
 CaptureMode selects the capture wire protocol used for event ingestion.
 
+```go
+const (
+	// CaptureModeLegacy sends events to the legacy POST /batch/ endpoint. This
+	// is the default, so upgrading is transparent to existing callers.
+	CaptureModeLegacy	CaptureMode	= 0
+	// CaptureModeAnalyticsV1 opts into POST /i/v1/analytics/events (Bearer auth,
+	// per-event results, partial retry).
+	CaptureModeAnalyticsV1	CaptureMode	= 1
+)
+```
+
 ### `CaptureRequestError`
 
 ```go
@@ -1440,6 +1457,25 @@ type CompressionMode uint8
 ```
 
 CompressionMode specifies the compression algorithm for batch payloads.
+
+```go
+const (
+	// CompressionNone disables compression (default).
+	CompressionNone	CompressionMode	= 0
+	// CompressionGzip enables GZIP compression for batch payloads. Valid on
+	// both capture modes.
+	CompressionGzip	CompressionMode	= 1
+	// CompressionZstd enables Zstandard compression. Requires
+	// CaptureModeAnalyticsV1 (the legacy /batch/ endpoint cannot decode it).
+	CompressionZstd	CompressionMode	= 2
+	// CompressionDeflate enables zlib (RFC 1950) compression, sent as
+	// Content-Encoding: deflate. Requires CaptureModeAnalyticsV1.
+	CompressionDeflate	CompressionMode	= 3
+	// CompressionBrotli enables Brotli compression, sent as
+	// Content-Encoding: br. Requires CaptureModeAnalyticsV1.
+	CompressionBrotli	CompressionMode	= 4
+)
+```
 
 #### `CompressionMode.String`
 
@@ -2401,13 +2437,15 @@ type Properties map[string]interface{}
 
 Properties is used to represent properties in messages that support it. It is a free-form object so the application can set any value it sees fit but a few helper method are defined to make it easier to instantiate properties with common fields. Here's a quick example of how this type is meant to be used:
 
-	posthog.Capture{
-		DistinctId: "0123456789",
-		Event:      "order completed",
-		Properties: posthog.NewProperties()
-			.Set("revenue", 10.0)
-			.Set("currency", "USD"),
-	}
+```go
+posthog.Capture{
+	DistinctId: "0123456789",
+	Event:      "order completed",
+	Properties: posthog.NewProperties()
+		.Set("revenue", 10.0)
+		.Set("currency", "USD"),
+}
+```
 
 #### `Properties.Merge`
 
@@ -2836,6 +2874,25 @@ type UnresolvedFlagReason string
 ```
 
 UnresolvedFlagReason explains why local evaluation could not resolve a flag. Experience continuity and unsupported definitions come from the flag's definition, missing context from the evaluation call, and unresolved dependencies from a flag the definition depends on.
+
+```go
+const (
+	// UnresolvedFlagReasonExperienceContinuity means the flag has experience continuity
+	// enabled, which local evaluation never resolves.
+	UnresolvedFlagReasonExperienceContinuity	UnresolvedFlagReason	= "experience_continuity"
+	// UnresolvedFlagReasonUnsupportedDefinition means the flag uses something local
+	// evaluation does not support, such as a static cohort, an unknown operator, a
+	// malformed value, or a missing or circular flag dependency.
+	UnresolvedFlagReasonUnsupportedDefinition	UnresolvedFlagReason	= "unsupported_definition"
+	// UnresolvedFlagReasonUnresolvedDependency means a flag this flag depends on has a
+	// loaded definition but local evaluation could not resolve it.
+	UnresolvedFlagReasonUnresolvedDependency	UnresolvedFlagReason	= "unresolved_dependency"
+	// UnresolvedFlagReasonMissingContext means the call did not pass a property, group
+	// property or device id the flag needs, or passed it in a form local evaluation
+	// cannot use.
+	UnresolvedFlagReasonMissingContext	UnresolvedFlagReason	= "missing_context"
+)
+```
 
 ### `Variants`
 

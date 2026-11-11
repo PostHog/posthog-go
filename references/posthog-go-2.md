@@ -227,9 +227,7 @@ type Config struct {
 	// They fill in before BeforeSend, only for options that the event and the
 	// request context left missing or nil. BeforeSend sees the filled options and
 	// can change them. Set an option to false on the event to turn a default off.
-	// They win over the personless default and, like any option, over the
-	// matching legacy property, such as $cookieless_mode, set on an event or in
-	// BeforeSend.
+	// They win over the personless default.
 	DefaultEventOptions	Options
 
 	// Callback receives success or failure notifications for messages sent to the
@@ -245,8 +243,7 @@ type Config struct {
 	// personless process_person_profile option and the SDK: $is_server,
 	// $geoip_disable, system context and feature flag properties. The SDK fills
 	// only keys the caller left unset. Its changes are final. To
-	// change an option, set it in Options: a legacy property such as
-	// $process_person_profile does not replace an option that is already set.
+	// change an option, set it in Options.
 	BeforeSend	BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
@@ -485,14 +482,16 @@ Enqueue(Message) error
 
 Enqueue queues a message to be sent by the client when the conditions for a batch upload are met. This is the main method you'll be using, a typical flow would look like this:
 
-	client, err := posthog.New(apiKey)
-	if err != nil {
-	    return err
-	}
-	...
-	client.Enqueue(posthog.Capture{ ... })
-	...
-	client.Close()
+```go
+client, err := posthog.New(apiKey)
+if err != nil {
+    return err
+}
+...
+client.Enqueue(posthog.Capture{ ... })
+...
+client.Close()
+```
 
 Enqueue returns an error if the message could not be queued, which happens when the client is closed, the message is invalid, or the in-memory queue is full (ErrQueueFull) -- in the latter case the message is dropped rather than blocking the caller. A full-queue drop is reported only through this returned error, not through Callback.Failure.
 
@@ -727,14 +726,16 @@ The next parameter receives all records as your normal handler. The client param
 
 You typically wrap your existing handler:
 
-	client, err := posthog.NewWithConfig(...)
-	// error handling and `defer client.Close()` call
-	base := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
-	logger := slog.New(posthog.NewSlogCaptureHandler(base, client,
-	  posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
-	    return "my-user-id" // or pull from ctx
-	  }),
-	))
+```go
+client, err := posthog.NewWithConfig(...)
+// error handling and `defer client.Close()` call
+base := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+logger := slog.New(posthog.NewSlogCaptureHandler(base, client,
+  posthog.WithDistinctIDFn(func(ctx context.Context, r slog.Record) string {
+    return "my-user-id" // or pull from ctx
+  }),
+))
+```
 
 ## Flush
 
@@ -1346,9 +1347,9 @@ type AliasInApi struct {
 	Type	string	`json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid	string	`json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library	string	`json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion	string	`json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp	time.Time	`json:"timestamp"`
@@ -1372,9 +1373,9 @@ type AliasInApiProperties struct {
 	DistinctId	string	`json:"distinct_id"`
 	// Alias is the alternate distinct ID being linked to DistinctId.
 	Alias	string	`json:"alias"`
-	// Lib is the SDK name sent as $lib.
+	// Lib is the $lib the event is stored with.
 	Lib	string	`json:"$lib"`
-	// LibVersion is the SDK version sent as $lib_version.
+	// LibVersion is the $lib_version the event is stored with.
 	LibVersion	string	`json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
 	// Omitted entirely when nil (Config.IsServer resolved to false).
@@ -1437,10 +1438,12 @@ func DefaultBackoff() *Backoff
 
 DefaultBackoff creates a Backoff with the SDK's default retry policy:
 
-	base: 100 milliseconds
-	factor: 2
-	jitter: 0.25 (each delay is scaled by a random factor in [0.75, 1.25])
-	cap: 30 seconds
+```go
+base: 100 milliseconds
+factor: 2
+jitter: 0.25 (each delay is scaled by a random factor in [0.75, 1.25])
+cap: 30 seconds
+```
 
 #### `posthog.NewBackoff`
 
@@ -1511,13 +1514,12 @@ type CaptureInApi struct {
 	Type	string	`json:"-"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid	string	`json:"uuid"`
-	// Library is the legacy top-level SDK name retained for callbacks.
-	// Deprecated: PostHog reads SDK identity from the PostHog-Sdk-Info header, so
-	// this top-level field is no longer serialized.
+	// Library is the $lib the event is stored with, for callbacks. It is not
+	// serialized: the wire carries $lib in Properties.
 	Library	string	`json:"-"`
-	// LibraryVersion is the legacy top-level SDK version retained for callbacks.
-	// Deprecated: PostHog reads the SDK version from the PostHog-Sdk-Info header,
-	// so this top-level field is no longer serialized.
+	// LibraryVersion is the $lib_version the event is stored with, for
+	// callbacks. It is not serialized: the wire carries $lib_version in
+	// Properties.
 	LibraryVersion	string	`json:"-"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp	time.Time	`json:"timestamp"`
@@ -1635,6 +1637,23 @@ type CompressionMode uint8
 ```
 
 CompressionMode specifies the compression algorithm for batch payloads.
+
+```go
+const (
+	// CompressionNone disables compression (default).
+	CompressionNone	CompressionMode	= 0
+	// CompressionGzip enables GZIP compression for batch payloads.
+	CompressionGzip	CompressionMode	= 1
+	// CompressionZstd enables Zstandard compression.
+	CompressionZstd	CompressionMode	= 2
+	// CompressionDeflate enables zlib (RFC 1950) compression, sent as
+	// Content-Encoding: deflate.
+	CompressionDeflate	CompressionMode	= 3
+	// CompressionBrotli enables Brotli compression, sent as
+	// Content-Encoding: br.
+	CompressionBrotli	CompressionMode	= 4
+)
+```
 
 #### `CompressionMode.String`
 
@@ -1813,9 +1832,9 @@ type ExceptionInApi struct {
 	Type	string	`json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid	string	`json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library	string	`json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion	string	`json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp	time.Time	`json:"timestamp"`
@@ -1833,9 +1852,9 @@ ExceptionInApi is the wire-format payload produced from an Exception message.
 ```go
 type ExceptionInApiProperties struct {
 
-	// Lib is the SDK name sent as $lib.
+	// Lib is the $lib the event is stored with.
 	Lib	string	`json:"$lib"`
-	// LibVersion is the SDK version sent as $lib_version.
+	// LibVersion is the $lib_version the event is stored with.
 	LibVersion	string	`json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
 	// Omitted entirely when nil (Config.IsServer resolved to false).
@@ -2414,9 +2433,9 @@ UnmarshalJSON implements custom unmarshaling to handle both v3 and v4 formats
 type GroupIdentifyInApi struct {
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid	string	`json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library	string	`json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion	string	`json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp	time.Time	`json:"timestamp"`
@@ -2478,9 +2497,9 @@ type IdentifyInApi struct {
 	Type	string	`json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid	string	`json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library	string	`json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion	string	`json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp	time.Time	`json:"timestamp"`
@@ -2598,20 +2617,24 @@ Options holds per-event capture options, such as person profile processing. They
 
 Keys are strings and values are any JSON-serializable value. The SDK sends them unchanged, so an option that PostHog adds later needs no SDK upgrade. PostHog validates them: it ignores unknown keys, reads common forms of a known key's value (for a boolean, "yes", "off" or 0), and drops the event when a known key has a value it cannot read. That drop reaches Callback.Failure as a \*CaptureEventError whose Details is "invalid\_options".
 
-The options PostHog reads today:
+The options PostHog reads:
 
-	process_person_profile   boolean
-	cookieless_mode          boolean
-	disable_skew_correction  boolean
-	product_tour_id          string
+```go
+process_person_profile   boolean
+cookieless_mode          boolean
+disable_skew_correction  boolean
+product_tour_id          string
+```
 
-The legacy properties $process\_person\_profile, $cookieless\_mode, $ignore\_sent\_at and $product\_tour\_id still work. The SDK removes each one from properties and uses its value only when the matching option is missing or nil, so an option always wins.
+The legacy properties $process\_person\_profile, $cookieless\_mode, $ignore\_sent\_at and $product\_tour\_id still work, but an option overrides its legacy property. Use options.
 
-	posthog.Capture{
-		DistinctId: "0123456789",
-		Event:      "order completed",
-		Options:    posthog.NewOptions().Set("process_person_profile", false),
-	}
+```go
+posthog.Capture{
+	DistinctId: "0123456789",
+	Event:      "order completed",
+	Options:    posthog.NewOptions().Set("process_person_profile", false),
+}
+```
 
 #### `Options.Set`
 
@@ -2637,13 +2660,15 @@ type Properties map[string]interface{}
 
 Properties is used to represent properties in messages that support it. It is a free-form object so the application can set any value it sees fit but a few helper method are defined to make it easier to instantiate properties with common fields. Here's a quick example of how this type is meant to be used:
 
-	posthog.Capture{
-		DistinctId: "0123456789",
-		Event:      "order completed",
-		Properties: posthog.NewProperties()
-			.Set("revenue", 10.0)
-			.Set("currency", "USD"),
-	}
+```go
+posthog.Capture{
+	DistinctId: "0123456789",
+	Event:      "order completed",
+	Properties: posthog.NewProperties()
+		.Set("revenue", 10.0)
+		.Set("currency", "USD"),
+}
+```
 
 #### `Properties.Merge`
 
@@ -2985,7 +3010,7 @@ WithMinCaptureLevel sets the minimum slog level captured as a PostHog exception.
 func WithPropertiesFn(fn func(ctx context.Context, r slog.Record) Properties) SlogOption
 ```
 
-WithPropertiesFn sets a function that returns custom properties for captured exceptions. Built-in exception properties take precedence if keys collide.
+WithPropertiesFn sets a function that returns custom properties for captured exceptions. Built-in exception properties take precedence if keys collide. $lib and $lib\_version are SDK defaults, so a value it returns wins.
 
 #### `posthog.WithSkip`
 
@@ -3087,6 +3112,25 @@ type UnresolvedFlagReason string
 ```
 
 UnresolvedFlagReason explains why local evaluation could not resolve a flag. Experience continuity and unsupported definitions come from the flag's definition, missing context from the evaluation call, and unresolved dependencies from a flag the definition depends on.
+
+```go
+const (
+	// UnresolvedFlagReasonExperienceContinuity means the flag has experience continuity
+	// enabled, which local evaluation never resolves.
+	UnresolvedFlagReasonExperienceContinuity	UnresolvedFlagReason	= "experience_continuity"
+	// UnresolvedFlagReasonUnsupportedDefinition means the flag uses something local
+	// evaluation does not support, such as a static cohort, an unknown operator, a
+	// malformed value, or a missing or circular flag dependency.
+	UnresolvedFlagReasonUnsupportedDefinition	UnresolvedFlagReason	= "unsupported_definition"
+	// UnresolvedFlagReasonUnresolvedDependency means a flag this flag depends on has a
+	// loaded definition but local evaluation could not resolve it.
+	UnresolvedFlagReasonUnresolvedDependency	UnresolvedFlagReason	= "unresolved_dependency"
+	// UnresolvedFlagReasonMissingContext means the call did not pass a property, group
+	// property or device id the flag needs, or passed it in a form local evaluation
+	// cannot use.
+	UnresolvedFlagReasonMissingContext	UnresolvedFlagReason	= "missing_context"
+)
+```
 
 ### `Variants`
 
