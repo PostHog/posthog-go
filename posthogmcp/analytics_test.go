@@ -801,7 +801,7 @@ func TestPreparedPayloadsAreBoundedOnce(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		wide[fmt.Sprintf("key_%04d", i)] = i
 	}
-	prepared, err := prepareToolCall(ToolCall{ToolName: "query", Parameters: wide, Response: wide})
+	prepared, err := prepareToolCall(ToolCall{ToolName: "query", Parameters: wide, Response: wide}, true)
 	require.NoError(t, err)
 
 	for name, payload := range map[string]any{"parameters": prepared.parameters, "response": prepared.response} {
@@ -1051,4 +1051,62 @@ func TestCaptureToolCallMintsADifferentSessionForEachSessionlessCall(t *testing.
 	first, second := requireCapture(t, client.messages[0]), requireCapture(t, client.messages[1])
 	assert.Regexp(t, mintedSessionPattern, first.Properties[propertySessionID])
 	assert.NotEqual(t, first.Properties[propertySessionID], second.Properties[propertySessionID])
+}
+
+func TestCaptureToolCallWithoutErrorMessages(t *testing.T) {
+	const value = "jane@example.com"
+	tests := []struct {
+		name              string
+		call              ToolCall
+		wantErrorType     string
+		wantExceptionType string
+	}{
+		{
+			name:              "handler error",
+			call:              ToolCall{ToolName: "lookup", Error: fmt.Errorf("lookup: %w", &fs.PathError{Op: "open", Path: value, Err: fs.ErrNotExist})},
+			wantErrorType:     "fs.PathError",
+			wantExceptionType: "fs.PathError",
+		},
+		{
+			name:              "IsError result text",
+			call:              ToolCall{ToolName: "lookup", Error: errors.New("workspace not found for " + value)},
+			wantErrorType:     "Error",
+			wantExceptionType: "Error",
+		},
+		{
+			name:              "explicit error type",
+			call:              ToolCall{ToolName: "lookup", Error: errors.New("no user " + value), ErrorType: "validation"},
+			wantErrorType:     "validation",
+			wantExceptionType: "Error",
+		},
+		{
+			name:              "Error method panics",
+			call:              ToolCall{ToolName: "lookup", Error: panickingError{}},
+			wantErrorType:     "posthogmcp.panickingError",
+			wantExceptionType: "posthogmcp.panickingError",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client, WithCaptureErrorMessages(false)).CaptureToolCall(context.Background(), tt.call))
+			require.Len(t, client.messages, 2)
+
+			capture := requireCapture(t, client.messages[0])
+			assert.Equal(t, true, capture.Properties[propertyIsError])
+			assert.Equal(t, tt.wantErrorType, capture.Properties[propertyErrorType])
+			assert.Equal(t, "Tool lookup returned an error", capture.Properties[propertyErrorMessage])
+
+			exception := requireException(t, client.messages[1])
+			require.Len(t, exception.ExceptionList, 1)
+			assert.Equal(t, tt.wantExceptionType, exception.ExceptionList[0].Type)
+			assert.Equal(t, "Tool lookup returned an error", exception.ExceptionList[0].Value)
+
+			for _, message := range client.messages {
+				encoded, err := json.Marshal(message)
+				require.NoError(t, err)
+				assert.NotContains(t, string(encoded), value)
+			}
+		})
+	}
 }

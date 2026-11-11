@@ -32,6 +32,10 @@ const (
 	DefaultMaxEnqueuedRequests = 1000
 
 	DefaultMaxQueueSize = 10000
+
+	DefaultEmailRequestTimeout = 15 * time.Second
+
+	DefaultEmailRequestMaxRetries = 2
 )
 const (
 	FeatureFlagErrorErrorsWhileComputing = "errors_while_computing_flags"
@@ -272,6 +276,8 @@ type Client interface {
 	ReloadFeatureFlags() error
 
 	CloseWithContext(context.Context) error
+
+	Emails() Emails
 }
 
 func New(apiKey string) Client
@@ -279,6 +285,20 @@ func New(apiKey string) Client
 
 func NewWithConfig(apiKey string, config Config) (cli Client, err error)
 
+
+type CodeEmail struct {
+	To string
+	TemplateKey string
+	Subject     string
+	HTML string
+	Text string
+	From    string
+	ReplyTo []string
+	CaptureEngagement *bool
+	DistinctID string
+	IdempotencyKey string
+	MaxRetries *int
+}
 
 type CommonResponseFields struct {
 	QuotaLimited []string `json:"quota_limited"`
@@ -357,6 +377,16 @@ type Config struct {
 
 	CaptureMode CaptureMode
 
+	AppHost string
+
+	AllowInsecureAppHost bool
+
+	EmailRequestTimeout time.Duration
+
+	EmailRequestMaxRetries *int
+
+	MigratedFrom string
+
 }
 
 
@@ -417,6 +447,63 @@ func (d DefaultStackTraceExtractor) GetStackTrace(skip int) *ExceptionStacktrace
 type DescriptionExtractor interface {
 	ExtractDescription(r slog.Record) string
 }
+
+
+type Email interface {
+}
+
+type EmailError struct {
+	Name    EmailErrorName
+	Code    string
+	Message string
+	StatusCode int
+	Why        string
+	Fix        string
+	DocsURL    string
+	Field string
+	RetryAfter time.Duration
+
+}
+
+
+func (e *EmailError) Error() string
+
+func (e *EmailError) Unwrap() error
+
+type EmailErrorName string
+
+const (
+	EmailErrorValidation EmailErrorName = "validation_error"
+	EmailErrorMissingAPIKey EmailErrorName = "missing_api_key"
+	EmailErrorInvalidPermission EmailErrorName = "invalid_permission"
+	EmailErrorNotFound EmailErrorName = "not_found"
+	EmailErrorConcurrentIdempotentRequests EmailErrorName = "concurrent_idempotent_requests"
+	EmailErrorInvalidIdempotentRequest EmailErrorName = "invalid_idempotent_request"
+	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
+	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
+	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
+	EmailErrorApplication EmailErrorName = "application_error"
+)
+type EmailStatus struct {
+	ID string
+	Status string
+	CreatedAt time.Time
+	StatusAt time.Time
+	Reason string
+}
+
+type EmailWarning struct {
+	Code    string
+	Message string
+	Fix     string
+}
+
+type Emails interface {
+	Send(ctx context.Context, email Email) (*SendEmailResult, error)
+
+	Get(ctx context.Context, messageID string) (*EmailStatus, error)
+}
+
 
 
 type EnqueueClient interface {
@@ -517,6 +604,7 @@ type ExceptionStacktrace struct {
 
 type FeatureFlag struct {
 	Key string `json:"key"`
+	EvaluationRuntime *string `json:"evaluation_runtime"`
 	RolloutPercentage *float64 `json:"rollout_percentage"`
 	Active bool `json:"active"`
 	Filters Filter `json:"filters"`
@@ -865,6 +953,12 @@ type RequiresServerEvaluationError struct {
 
 func (e *RequiresServerEvaluationError) Error() string
 
+type SendEmailResult struct {
+	ID string
+	Replayed bool
+	Warnings []EmailWarning
+}
+
 type SendFeatureFlagsBool bool
 
 func (b SendFeatureFlagsBool) GetOptions() *SendFeatureFlagsOptions
@@ -940,6 +1034,15 @@ type StackFrame struct {
 
 type StackTraceExtractor interface {
 	GetStackTrace(skip int) *ExceptionStacktrace
+}
+
+type TemplateEmail struct {
+	To string
+	TemplateID string
+	TemplateData map[string]interface{}
+	DistinctID string
+	IdempotencyKey string
+	MaxRetries *int
 }
 
 type Ticker struct {
@@ -1050,6 +1153,8 @@ const (
 	ModelSourceSelfReported ModelSource = "self_reported"
 )
 type Option func(*config)
+
+func WithCaptureErrorMessages(enabled bool) Option
 
 func WithExceptionAutocapture(enabled bool) Option
 

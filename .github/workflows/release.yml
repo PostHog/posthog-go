@@ -53,6 +53,26 @@ jobs:
       slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
       posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
 
+  preserve-slack-thread:
+    name: Preserve Slack thread
+    needs: notify-approval-needed
+    if: needs.notify-approval-needed.outputs.slack_ts != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Save approval thread timestamp
+        env:
+          THREAD_TS: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+        run: printf '%s' "$THREAD_TS" > thread-ts.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-slack-thread-${{ github.run_attempt }}
+          path: thread-ts.txt
+          retention-days: 30
+          if-no-files-found: error
+
   release:
     name: Bump version and release
     needs: [check-changesets, notify-approval-needed]
@@ -94,7 +114,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup pnpm and Node.js
-        uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
           # pnpm/setup installs runtimes via pnpm runtime, which requires pnpm >=11.1.0.
           version: 11.7.0
@@ -125,7 +145,7 @@ jobs:
         env:
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
         run: |
-          for MODULE in otel posthogmcpsdk; do
+          for MODULE in otel posthogmcpsdk posthogmcpgo; do
             (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go@v${NEW_VERSION}")
           done
 
@@ -191,7 +211,7 @@ jobs:
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          for MODULE in otel posthogmcpsdk; do
+          for MODULE in otel posthogmcpsdk posthogmcpgo; do
             TAG="${MODULE}/v${NEW_VERSION}"
             EXISTING_SHA=$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)
             if [ -n "$EXISTING_SHA" ]; then
@@ -245,16 +265,6 @@ jobs:
               "alertText": ":rotating_light: Failed to release posthog-go@${{ steps.apply-changesets.outputs.new-version }} :rotating_light:",
               "alertContext": "The release workflow failed before completion."
             }
-
-      - name: Notify Slack - Failed
-        if: failure() && needs.notify-approval-needed.outputs.slack_ts != ''
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to release `posthog-go@${{ steps.apply-changesets.outputs.new-version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
-          emoji_reaction: "x"
 
   notify-rejected:
     name: Notify Slack - Rejected

@@ -33,8 +33,8 @@ type preparedToolCall struct {
 	custom                posthog.Properties
 }
 
-func buildToolCallMessages(call ToolCall, exceptionAutocapture bool) ([]namedMessage, error) {
-	prepared, err := prepareToolCall(call)
+func buildToolCallMessages(call ToolCall, cfg config) ([]namedMessage, error) {
+	prepared, err := prepareToolCall(call, cfg.captureErrorMessages)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func buildToolCallMessages(call ToolCall, exceptionAutocapture bool) ([]namedMes
 	}
 	messages := []namedMessage{{name: eventToolCall, message: capture}}
 
-	if call.Error != nil && exceptionAutocapture {
+	if call.Error != nil && cfg.exceptionAutocapture {
 		exception, err := prepared.buildException()
 		if err != nil {
 			return nil, err
@@ -58,7 +58,7 @@ func buildToolCallMessages(call ToolCall, exceptionAutocapture bool) ([]namedMes
 // emptyJSONObject is what a client sends for an empty context, which is no intent.
 const emptyJSONObject = "{}"
 
-func prepareToolCall(call ToolCall) (preparedToolCall, error) {
+func prepareToolCall(call ToolCall, captureErrorMessages bool) (preparedToolCall, error) {
 	if strings.TrimSpace(call.ToolName) == "" {
 		return preparedToolCall{}, errors.New("posthogmcp: ToolName must not be blank")
 	}
@@ -161,7 +161,7 @@ func prepareToolCall(call ToolCall) (preparedToolCall, error) {
 		}
 
 		prepared.errorMessage = fmt.Sprintf("Tool %s returned an error", prepared.toolName)
-		if call.Error != nil {
+		if call.Error != nil && captureErrorMessages {
 			provided, err := safeErrorMessage(call.Error)
 			if err != nil {
 				return preparedToolCall{}, err

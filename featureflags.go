@@ -319,6 +319,8 @@ type unresolvableFlagFingerprint struct {
 type FeatureFlag struct {
 	// Key is the feature flag key.
 	Key string `json:"key"`
+	// EvaluationRuntime is the flag's configured runtime, or nil when unknown.
+	EvaluationRuntime *string `json:"evaluation_runtime"`
 	// RolloutPercentage is the top-level rollout percentage, when configured.
 	RolloutPercentage *float64 `json:"rollout_percentage"`
 	// Active reports whether the flag is active.
@@ -871,7 +873,6 @@ func (poller *FeatureFlagsPoller) run() {
 		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
-			close(poller.forceReload)
 			timer.Stop()
 			poller.shutdownCacheProvider(poller.shutdownCtx)
 			return
@@ -1041,10 +1042,13 @@ func (poller *FeatureFlagsPoller) warnAboutUnresolvableFlags(state *flagsState) 
 	poller.warnedUnresolvableMu.Lock()
 	defer poller.warnedUnresolvableMu.Unlock()
 	// Rebuilt from the current definitions, so a flag that is deleted or becomes
-	// resolvable is forgotten and warns again if it later returns.
+	// resolvable or client-only is forgotten and warns again if it later returns.
 	warned := make(map[string]unresolvableFlagFingerprint)
 	var experienceContinuityKeys, unsupportedDefinitionKeys []string
 	for _, flag := range state.featureFlags {
+		if flag.EvaluationRuntime != nil && *flag.EvaluationRuntime == "client" {
+			continue
+		}
 		reason := definitionUnresolvedReason(flag, state.flagsByKey, state.cohorts, state.propertyMatchingVersion)
 		if reason == "" {
 			continue
@@ -1384,6 +1388,9 @@ type flagValueAndPayload struct {
 	// from whichever source produced the value (local definitions or the
 	// remote /flags response).
 	minimalFlagCalledEvents bool
+	// flagFailed is set when /flags included the key but could not evaluate it.
+	// The enabled value on that detail is not a decision.
+	flagFailed bool
 }
 
 // GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
@@ -1421,6 +1428,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 	}
 
 	locallyEvaluated := err == nil && result != nil
+	flagFailed := false
 	hasExperiment := flag.HasExperiment
 	minimalFlagCalledEvents := state != nil && state.minimalFlagCalledEvents
 
@@ -1440,24 +1448,29 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		minimalFlagCalledEvents = false
 		if flagsResponse != nil {
 			minimalFlagCalledEvents = flagsResponse.MinimalFlagCalledEvents
-			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
+			if remoteFlagFailed(flagsResponse, flagConfig.Key) {
+				// enabled=false on a failed detail is a placeholder. Leave the
+				// value unset so the caller reports evaluation_failed.
+				result = nil
+				flagFailed = true
+			} else if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue
+				if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
+					payload = rawMessageToString(rawPayload)
+				}
+				if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
+					hasExperiment = detail.Metadata.HasExperiment
+				}
 			} else {
 				// Flag not in remote response — treat as false (matches getFeatureFlagVariant behavior)
 				result = false
-			}
-			if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
-				payload = rawMessageToString(rawPayload)
-			}
-			if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
-				hasExperiment = detail.Metadata.HasExperiment
 			}
 		} else {
 			result = false
 		}
 	}
 
-	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents}
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents, flagFailed: flagFailed}
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
@@ -1524,11 +1537,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		if err != nil {
 			return response, err
 		}
-		if flagsResponse != nil {
-			for k, v := range flagsResponse.FeatureFlags {
-				response[k] = v
-			}
-		}
+		copyEvaluatedFlagValues(response, flagsResponse)
 	}
 
 	return response, nil
@@ -1905,6 +1914,9 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 					return conditionNoMatch, err
 				}
 			}
+			// Legacy release conditions ignore the negation field. Cohort
+			// leaves apply it themselves; flag filters use operators such
+			// as is_not and not_in. An invalid regex is already a non-match.
 			if !isMatch {
 				return conditionNoMatch, nil
 			}
@@ -2362,12 +2374,40 @@ func parseRelativeDate(dateStr string) (time.Time, error) {
 	case "w":
 		return now.AddDate(0, 0, -number*7), nil
 	case "m":
-		return now.AddDate(0, -number, 0), nil
+		return subtractMonths(now, number), nil
 	case "y":
-		return now.AddDate(-number, 0, 0), nil
+		return subtractYears(now, number), nil
 	default:
 		return time.Time{}, errors.New("invalid interval in relative date")
 	}
+}
+
+// subtractMonths steps back one month at a time and clamps the day after every
+// step, as the SDK spec requires: March 31 minus two months is January 28.
+// time.AddDate would normalize February 31 forward into March.
+func subtractMonths(t time.Time, months int) time.Time {
+	year, month, day := t.Date()
+	// Every month has at least 28 days, so nothing can clamp further after that.
+	for step := 1; step <= months && day > 28; step++ {
+		// Day 0 of a month is the last day of the month before it.
+		lastDay := time.Date(year, month-time.Month(step)+1, 0, 0, 0, 0, 0, time.UTC).Day()
+		if lastDay < day {
+			day = lastDay
+		}
+	}
+	hour, minute, second := t.Clock()
+	return time.Date(year, month-time.Month(months), day, hour, minute, second, t.Nanosecond(), t.Location())
+}
+
+func subtractYears(t time.Time, years int) time.Time {
+	year, month, day := t.Date()
+	// The year before a leap year is never a leap year, so February 29 clamps
+	// on the first step and stays on the 28th.
+	if years > 0 && month == time.February && day == 29 {
+		day = 28
+	}
+	hour, minute, second := t.Clock()
+	return time.Date(year-years, month, day, hour, minute, second, t.Nanosecond(), t.Location())
 }
 
 // semverTuple represents a parsed semantic version as (major, minor, patch).
@@ -3279,8 +3319,13 @@ func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestD
 }
 
 // ForceReload requests an immediate reload of local feature flag definitions.
+// It does nothing once the poller has shut down. The send selects on shutdown
+// so a reload racing Close cannot send on a closed channel.
 func (poller *FeatureFlagsPoller) ForceReload() {
-	poller.forceReload <- true
+	select {
+	case <-poller.shutdown:
+	case poller.forceReload <- true:
+	}
 }
 
 // shutdownPoller stops the polling goroutine, which releases the cache provider on
@@ -3370,12 +3415,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 		if remoteErr != nil {
 			return nil, remoteErr
 		}
-		if flagsResponse != nil {
-			// Remote evaluation is authoritative for the flags it returns.
-			for key, value := range flagsResponse.FeatureFlags {
-				result[key] = value
-			}
-		}
+		copyEvaluatedFlagValues(result, flagsResponse)
 	}
 
 	return result, nil
@@ -3388,6 +3428,10 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId s
 
 	if variantErr != nil {
 		return false, variantErr
+	}
+
+	if remoteFlagFailed(flagsResponse, key) {
+		return nil, errFlagEvaluationFailed(key)
 	}
 
 	for flagKey, flagValue := range flagsResponse.FeatureFlags {
@@ -3404,6 +3448,9 @@ func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId s
 		return "", err
 	}
 	if flagsResponse != nil {
+		if remoteFlagFailed(flagsResponse, key) {
+			return "", errFlagEvaluationFailed(key)
+		}
 		if payload, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
 			return rawMessageToString(payload), nil
 		}
