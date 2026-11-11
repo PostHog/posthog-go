@@ -938,6 +938,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
+		evalResult.FlagFailed = combined.flagFailed
 		if combined.payload != "" {
 			payloadStr = combined.payload
 			hasPayload = true
@@ -1021,7 +1022,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			return nil, evalResult.Err
 		}
 		if evalResult.FlagFailed {
-			return nil, fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, flagConfig.Key)
+			return nil, errFlagEvaluationFailed(flagConfig.Key)
 		}
 		return nil, fmt.Errorf("%w: '%s' does not exist or is disabled", ErrFlagNotFound, flagConfig.Key)
 	}
@@ -1445,7 +1446,7 @@ func recordFromFlagDetail(detail FlagDetail, minimalFlagCalledEvents bool) evalu
 		HasExperiment:           detail.Metadata.HasExperiment,
 		MinimalFlagCalledEvents: minimalFlagCalledEvents,
 	}
-	if detail.Failed != nil && *detail.Failed {
+	if flagDetailFailed(detail) {
 		record.Enabled = false
 		errStr := FeatureFlagErrorEvaluationFailed
 		record.Error = &errStr
@@ -2096,7 +2097,7 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceI
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
 		// If the flag failed evaluation due to a transient server error,
 		// don't return the incorrect enabled=false value
-		if flagDetail.Failed != nil && *flagDetail.Failed {
+		if flagDetailFailed(flagDetail) {
 			result.FlagFailed = true
 		} else {
 			result.Value = flagDetail
@@ -2120,5 +2121,10 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 		return emptyFlagValues, nil
 	}
 
-	return flagsResponse.FeatureFlags, nil
+	if flagsResponse.FeatureFlags == nil {
+		return map[string]interface{}{}, nil
+	}
+	values := make(map[string]interface{}, len(flagsResponse.FeatureFlags))
+	copyEvaluatedFlagValues(values, flagsResponse)
+	return values, nil
 }
