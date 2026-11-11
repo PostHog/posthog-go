@@ -11,9 +11,9 @@ import "reflect"
 //	posthog.Capture{
 //		DistinctId: "0123456789",
 //		Event:      "order completed",
-//		Properties: posthog.NewProperties()
-//			.Set("revenue", 10.0)
-//			.Set("currency", "USD"),
+//		Properties: posthog.NewProperties().
+//			Set("revenue", 10.0).
+//			Set("currency", "USD"),
 //	}
 type Properties map[string]interface{}
 
