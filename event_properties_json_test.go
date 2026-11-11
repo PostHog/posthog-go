@@ -162,26 +162,33 @@ func TestPrepareCaptureFloat32StrictJSON(t *testing.T) {
 			{"nested map", map[string]interface{}{"value": n, "finite": float32(2)}, map[string]interface{}{"value": nil, "finite": float64(2)}},
 			{"object in array", []interface{}{map[string]float32{"value": n}, "NaN"}, []interface{}{map[string]interface{}{"value": nil}, "NaN"}},
 		} {
-			t.Run(fmt.Sprintf("%v/%s", n, tc.name), func(t *testing.T) {
-				// go-json reports only a float64, so the float64 sends the event down the path that also nulls float32 values.
-				got, _ := preparedProperties(t, Capture{Event: "float32", DistinctId: "user", Properties: Properties{"value": tc.value, "number": math.NaN()}})
-				require.Contains(t, got, "value")
-				require.Equal(t, tc.want, got["value"])
-			})
+			// go-json reports a non-finite float64 but writes a float32 as a bare token,
+			// so the float32 must be nulled with and without a float64 beside it.
+			for _, withFloat64 := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%v/%s/float64=%t", n, tc.name, withFloat64), func(t *testing.T) {
+					props := Properties{"value": tc.value}
+					if withFloat64 {
+						props["number"] = math.NaN()
+					}
+					got, _ := preparedProperties(t, Capture{Event: "float32", DistinctId: "user", Properties: props})
+					require.Contains(t, got, "value")
+					require.Equal(t, tc.want, got["value"])
+				})
+			}
 		}
 	}
 }
 
-func TestPrepareCaptureNormalizesOnlyNonFiniteEvents(t *testing.T) {
+func TestPrepareCaptureChangesOnlyNonFiniteNumbers(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		number    interface{}
 		wire      interface{}
 		wantCalls int
 	}{
+		// Every event is normalized once: the custom value is marshaled once and its bytes are reused.
 		{"finite", 42.5, 42.5, 1},
-		// Normalization marshals the custom value again, so a second call shows the slower path ran.
-		{"non-finite", math.NaN(), nil, 2},
+		{"non-finite", math.NaN(), nil, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			custom := &countingJSONProperty{}
@@ -376,6 +383,19 @@ func BenchmarkPrepareForSendFinite(b *testing.B) {
 	}
 }
 
+func TestFloat32NonFiniteKeepsTheBatch(t *testing.T) {
+	events, _, cb := captureWire(t,
+		Capture{Event: "float32", DistinctId: "user", Properties: Properties{"score": float32(math.NaN())}},
+		Capture{Event: "neighbor", DistinctId: "user", Properties: Properties{"finite": 7}})
+	successes, failures := cb.counts()
+	require.Zero(t, failures)
+	require.Equal(t, 2, successes)
+	require.Len(t, events, 2)
+	props := events[0]["properties"].(map[string]interface{})
+	require.Contains(t, props, "score")
+	require.Nil(t, props["score"])
+}
+
 func TestPrepareNonCaptureFloat32NaNKeepsTheEvent(t *testing.T) {
 	score := float32(math.NaN())
 	messages := []Message{
@@ -407,39 +427,39 @@ func (*failingEventProperty) MarshalJSON() ([]byte, error) {
 func TestExceptionIgnoredCustomCollision(t *testing.T) {
 	cycle := map[string]interface{}{}
 	cycle["self"] = cycle
-	messages := []Exception{
-		{
-			DistinctId:    "user-1",
-			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
-			Properties:    Properties{"$lib": &failingEventProperty{}, "kept": "yes"},
-		},
-		{
-			DistinctId:    "user-1",
-			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
-			Properties:    Properties{"$lib": cycle, "kept": "yes"},
-		},
+	exception := func(properties Properties) Exception {
+		return Exception{
+			DistinctId:           "user-1",
+			ExceptionList:        []ExceptionItem{{Type: "Error", Value: "boom"}},
+			ExceptionFingerprint: Ptr("fp"),
+			Properties:           properties,
+		}
 	}
-	for i, msg := range messages {
-		t.Run(fmt.Sprintf("shadowed %d", i), func(t *testing.T) {
-			data, _, _, err := prepareForSend(msg, nil)
-			require.NoError(t, err)
-			var wire struct {
-				Properties map[string]interface{} `json:"properties"`
-			}
-			require.NoError(t, json.Unmarshal(data, &wire))
-			require.Equal(t, SDKName, wire.Properties["$lib"])
-			require.Equal(t, "yes", wire.Properties["kept"])
-		})
+	// The typed fields overwrite these keys, so their custom values are never sent and must not drop the event.
+	for _, key := range []string{"$exception_list", "$exception_fingerprint"} {
+		for name, value := range map[string]interface{}{"failing": &failingEventProperty{}, "cycle": cycle} {
+			t.Run(key+"/"+name, func(t *testing.T) {
+				data, _, _, err := prepareForSend(exception(Properties{key: value, "kept": "yes"}), nil)
+				require.NoError(t, err)
+				var wire struct {
+					Properties map[string]interface{} `json:"properties"`
+				}
+				require.NoError(t, json.Unmarshal(data, &wire))
+				require.Equal(t, "yes", wire.Properties["kept"])
+				require.Equal(t, "fp", wire.Properties["$exception_fingerprint"])
+				require.Len(t, wire.Properties["$exception_list"], 1)
+			})
+		}
 	}
 
-	dropped := Exception{
-		DistinctId:    "user-1",
-		ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
-		Properties:    Properties{"kept": &failingEventProperty{}},
-	}
-	_, _, _, err := prepareForSend(dropped, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "property marshaler failed")
+	// Without a typed fingerprint the custom value is sent, so it is encoded and its error drops the event.
+	unshadowed := exception(Properties{"$exception_fingerprint": &failingEventProperty{}})
+	unshadowed.ExceptionFingerprint = nil
+	_, _, _, err := prepareForSend(unshadowed, nil)
+	require.ErrorContains(t, err, "property marshaler failed")
+
+	_, _, _, err = prepareForSend(exception(Properties{"kept": &failingEventProperty{}}), nil)
+	require.ErrorContains(t, err, "property marshaler failed")
 }
 
 func TestExceptionOmitZero(t *testing.T) {

@@ -479,12 +479,11 @@ versions reject the whole request with a 400, which the SDK reports as a
 
 ### Non-finite numbers
 
-A `float64` NaN or ±Inf property value is sent as `null` and the event is kept,
-as in 1.36.1 and later. A struct value that holds one is sent as `null` as a whole.
-Unlike 1.36.1 and later, v2 does not re-validate each encoded event. An event
-whose only non-finite numbers are `float32` values, or whose custom
-`MarshalJSON` returns invalid JSON, can be sent as invalid JSON, and capture
-then rejects the whole request it is in.
+A NaN or ±Inf property value, `float32` or `float64`, is sent as `null` and the
+event is kept, as in 1.36.1 and later. A struct value that holds one is sent as
+`null` as a whole. Each event is checked as JSON before it is queued, so a
+custom `MarshalJSON` that returns invalid JSON fails only its own event, which
+`Callback.Failure` reports.
 
 ## New: event options
 

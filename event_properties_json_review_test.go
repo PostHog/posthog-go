@@ -19,17 +19,13 @@ func TestCaptureContextMarshalerPrivacy(t *testing.T) {
 		name, output string
 		err          error
 		wantFailure  bool
-		// Only the non-finite path validates custom output; a normal event keeps one encode pass.
-		nonFiniteOnly bool
 	}{
-		{"valid", `{"redacted":true}`, nil, false, false},
-		{"invalid JSON", `{"value":01}`, nil, true, true},
-		{"explicit error", "", customErr, true, false},
+		{"valid", `{"redacted":true}`, nil, false},
+		// Every event's custom output is validated, so invalid bytes fail only their own event.
+		{"invalid JSON", `{"value":01}`, nil, true},
+		{"explicit error", "", customErr, true},
 	} {
 		for _, withNonFinite := range []bool{false, true} {
-			if tc.nonFiniteOnly && !withNonFinite {
-				continue
-			}
 			t.Run(fmt.Sprintf("%s/nonfinite=%t", tc.name, withNonFinite), func(t *testing.T) {
 				input := contextmarshaler.NewProperty("do-not-send", tc.output, tc.err)
 				props := Properties{"custom": input, "finite": 42.5, "literal": "NaN"}
