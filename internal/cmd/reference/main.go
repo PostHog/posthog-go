@@ -35,7 +35,6 @@ var (
 	first   = []string{"setup", "capture", "identify"}
 	classes = []string{"FeatureFlagEvaluations"} // client types that get their own H2
 	fset    = token.NewFileSet()
-	notes   []*ast.CommentGroup
 	pkg     *doc.Package
 	mapped  = map[string]label{} // entry label to capability slug, "" for SDK utils
 )
@@ -60,20 +59,27 @@ func main() {
 		if !strings.HasSuffix(p, "_test.go") {
 			f, err := parser.ParseFile(fset, p, nil, parser.ParseComments)
 			check(err)
-			files, notes = append(files, f), append(notes, f.Comments...)
+			files = append(files, f)
 		}
 	}
 	var labels map[string]any
 	check(json.Unmarshal([]byte(read("docs/capabilities.json")), &labels))
 	load(labels, false)
 	var err error
-	pkg, err = doc.NewFromFiles(fset, files, "github.com/posthog/posthog-go")
+	module := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(read("go.mod"), "\n", 2)[0], "module"))
+	pkg, err = doc.NewFromFiles(fset, files, module)
 	check(err)
 	declared, _ := strconv.Atoi(strings.Split(strings.Trim(constant("Version"), `"`), ".")[0])
 	if *major == 0 {
 		*major = declared
 	}
-	body := append([]string{"## Getting started", nest(read("docs/getting-started.md"))}, reference(capabilities(*specs), *major <= declared)...)
+	// The next major's code lives on its own branch with its own module path, such as .../posthog-go/v2,
+	// and reuses this getting-started page, so its install and import lines take that path.
+	start := read("docs/getting-started.md")
+	if module != "github.com/posthog/posthog-go" && !strings.Contains(start, module) {
+		start = strings.ReplaceAll(start, "github.com/posthog/posthog-go", module)
+	}
+	body := append([]string{"## Getting started", nest(start)}, reference(capabilities(*specs), *major <= declared)...)
 	title := fmt.Sprintf("%s %d.x", name, *major)
 	if *major > declared {
 		title += " (experimental)"
@@ -144,7 +150,8 @@ func reference(caps [][2]string, current bool) []string {
 		}
 	}
 	utils = append(utils, funcs(pkg.Funcs, "posthog.")...)
-	types = slices.DeleteFunc(types, func(e entry) bool { return embedded[e.title] })
+	// An interface Client embeds keeps its type entry, because public signatures such as
+	// NewSlogCaptureHandler take it. Its methods are listed with Client's.
 	// A mapped symbol moves to its capability, from wherever go/doc listed it.
 	tagged, found := map[string][]entry{}, map[string]bool{}
 	untagged := func(list []entry) []entry {
@@ -184,8 +191,16 @@ func reference(caps [][2]string, current bool) []string {
 		log.Fatalf("docs/capabilities.json: %s maps to %q, which is not an sdk-specs capability", list[0].title, slug)
 	}
 	out = append(append(out, "## SDK utils"), render(utils, 3)...)
-	for _, v := range append(pkg.Consts, pkg.Vars...) {
-		out = append(out, block(v.Decl), markdown(v.Doc))
+	for _, group := range []struct {
+		heading string
+		values  []*doc.Value
+	}{{"### Constants", pkg.Consts}, {"### Variables", pkg.Vars}} {
+		if len(group.values) > 0 {
+			out = append(out, group.heading)
+		}
+		for _, v := range group.values {
+			out = append(out, block(v.Decl), markdown(v.Doc))
+		}
 	}
 	for _, c := range own {
 		out = append(append(out, "## `"+c.title+"`", c.code, c.doc), render(c.children, 3)...)
@@ -238,26 +253,29 @@ func render(list []entry, level int) (out []string) {
 	return out
 }
 
-// markdown renders a doc comment. The site reads Markdown as MDX, so prose escapes < and braces, and
-// code examples print as fenced Go blocks, which MDX keeps as code. It doesn't support indented code.
+// markdown renders a doc comment as Markdown. Prose escapes <, because the site keeps raw HTML in a page
+// and would read <key> as a tag. Code examples print as fenced blocks, tagged go only when they look like Go.
 func markdown(text string) string {
 	d := pkg.Parser().Parse(text)
 	escape(d.Content)
 	p := pkg.Printer()
 	p.HeadingLevel = 5
-	p.DocLinkURL = func(l *comment.DocLink) string { return "#" + anchor(l.Recv+l.Name) }
+	p.DocLinkURL = docLink
 	var out []string
 	var prose []comment.Block
 	flush := func() {
 		if len(prose) > 0 {
-			out = append(out, strings.TrimSpace(string(p.Markdown(&comment.Doc{Content: prose, Links: d.Links}))))
+			// The printer escapes backticks so prose can't open a code span; doc comments use them for code.
+			md := strings.ReplaceAll(string(p.Markdown(&comment.Doc{Content: prose, Links: d.Links})), "\\`", "`")
+			out = append(out, strings.TrimSpace(md))
 			prose = nil
 		}
 	}
 	for _, b := range d.Content {
 		if c, ok := b.(*comment.Code); ok {
 			flush()
-			out = append(out, code(strings.TrimRight(c.Text, "\n")))
+			src := strings.TrimRight(c.Text, "\n")
+			out = append(out, "```"+language(src)+"\n"+src+"\n```")
 		} else {
 			prose = append(prose, b)
 		}
@@ -266,7 +284,38 @@ func markdown(text string) string {
 	return strings.Join(out, "\n\n")
 }
 
-var mdx = strings.NewReplacer("<", "&lt;", "{", "&#123;", "}", "&#125;")
+// language tags a code example go when it parses as Go, or looks like Go with placeholders such as
+// NewWithConfig(...). Other examples, such as a list of default values, are text.
+func language(src string) string {
+	if _, err := parser.ParseExpr(src); err == nil {
+		return "go"
+	}
+	for _, wrap := range []string{"package p\n%s", "package p\nfunc _() {\n%s\n}"} {
+		if _, err := parser.ParseFile(token.NewFileSet(), "", fmt.Sprintf(wrap, src), 0); err == nil {
+			return "go"
+		}
+	}
+	if strings.ContainsAny(src, "({") || strings.Contains(src, ":=") {
+		return "go"
+	}
+	return "text"
+}
+
+// docLink points a [Name] doc link at the heading the reference gives that symbol: Type.Method for a
+// method, the type's name for a type, and posthog.Name for a function.
+func docLink(l *comment.DocLink) string {
+	if l.Recv != "" {
+		return "#" + anchor(l.Recv+"."+l.Name)
+	}
+	for _, t := range pkg.Types {
+		if t.Name == l.Name {
+			return "#" + anchor(l.Name)
+		}
+	}
+	return "#" + anchor("posthog."+l.Name)
+}
+
+var mdx = strings.NewReplacer("<", "&lt;")
 
 func escape(blocks []comment.Block) {
 	for _, b := range blocks {
@@ -297,15 +346,42 @@ func constant(want string) string {
 	return ""
 }
 
+// block prints a declaration with the comments of the fields and values go/doc kept, so the comments of
+// unexported fields it filtered out don't show.
 func block(decl *ast.GenDecl) string {
 	d := *decl
 	d.Doc = nil
-	return code(source(&printer.CommentedNode{Node: &d, Comments: notes}))
+	var kept []*ast.CommentGroup
+	ast.Inspect(&d, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.Field:
+			kept = append(kept, n.Doc, n.Comment)
+		case *ast.ValueSpec:
+			kept = append(kept, n.Doc, n.Comment)
+		case *ast.TypeSpec:
+			kept = append(kept, n.Comment)
+		}
+		return true
+	})
+	kept = slices.DeleteFunc(kept, func(c *ast.CommentGroup) bool { return c == nil })
+	// A filtered-out member leaves blank lines where it was, such as right after an interface's brace.
+	lines := strings.Split(source(&printer.CommentedNode{Node: &d, Comments: kept}), "\n")
+	var out []string
+	for i, line := range lines {
+		blank := strings.TrimSpace(line) == ""
+		afterOpen := len(out) > 0 && strings.HasSuffix(out[len(out)-1], "{")
+		beforeClose := i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1]), "}")
+		if !blank || (!afterOpen && !beforeClose) {
+			out = append(out, line)
+		}
+	}
+	return code(strings.Join(out, "\n"))
 }
 
+// source prints a node the way gofmt does: tabs indent, spaces align columns.
 func source(node any) string {
 	var buf bytes.Buffer
-	check(printer.Fprint(&buf, fset, node))
+	check((&printer.Config{Mode: printer.UseSpaces | printer.TabIndent, Tabwidth: 8}).Fprint(&buf, fset, node))
 	return buf.String()
 }
 
@@ -359,6 +435,8 @@ func read(path string) string {
 func write(file, front string, body []string) {
 	// A fresh checkout has no references folder yet.
 	check(os.MkdirAll("references", 0o755))
+	// A symbol with no doc comment leaves an empty part, which would print as a run of blank lines.
+	body = slices.DeleteFunc(slices.Clone(body), func(s string) bool { return strings.TrimSpace(s) == "" })
 	check(os.WriteFile(filepath.Join("references", file), []byte(strings.Join(append([]string{front}, body...), "\n\n")+"\n"), 0o644))
 	fmt.Println("wrote references/" + file)
 }
