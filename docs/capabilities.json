@@ -4,6 +4,7 @@
   "Capture": "capture",
   "Client.Close": "shutdown",
   "Client.CloseWithContext": "shutdown",
+  "Client.Emails": "emails",
   "Client.EvaluateFlags": "evaluate-flags",
   "Client.Flush": "flush",
   "Client.FlushWithContext": "flush",
