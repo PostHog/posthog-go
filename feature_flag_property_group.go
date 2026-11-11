@@ -8,12 +8,34 @@ func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties 
 		return false, errCohortRequiresServerEval
 	}
 
-	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, aggregationGroupTypeIndex, state)
+	matches, err := poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, aggregationGroupTypeIndex, state)
+	if err != nil {
+		return false, err
+	}
+	// "in" and an empty operator mean membership. "not_in" is the inverse.
+	// Negation is applied by the caller, so it is not applied again here.
+	if property.Operator == "not_in" {
+		return !matches, nil
+	}
+	return matches, nil
 }
 
 func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string, aggregationGroupTypeIndex *uint8, snapshots ...*flagsState) (bool, error) {
 	state := poller.evaluationState(snapshots)
 	groupType := propertyGroup.Type
+	switch groupType {
+	case "AND", "OR":
+	case "property":
+		groupType = "AND"
+	case "":
+		// The canonical empty cohort definition is {}.
+		if len(propertyGroup.Values) == 0 && len(propertyGroup.ParsedValues) == 0 {
+			return true, nil
+		}
+		fallthrough
+	default:
+		return false, &RequiresServerEvaluationError{msg: "Unsupported cohort group type", Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	}
 
 	// Use pre-parsed values if available (built at load time), otherwise fall back to raw values
 	if len(propertyGroup.ParsedValues) > 0 {
@@ -21,8 +43,7 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 	}
 
 	if len(propertyGroup.Values) == 0 {
-		// empty groups are no-ops, always match
-		return true, nil
+		return groupType == "AND", nil
 	}
 
 	// Raw values are a compatibility fallback. Convert them to the same typed

@@ -99,6 +99,40 @@ jobs:
           GOFLAGS=-mod=mod go build ./...
           GOFLAGS=-mod=mod go vet ./...
 
+  mcp-go:
+    name: MCP mcp-go adapter (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test the minimum supported Go version from go.mod and the latest stable Go 1 release.
+        go-version: ['1.25', '1.x']
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Build, vet, and test
+        working-directory: posthogmcpgo
+        run: |
+          go build ./...
+          go vet ./...
+          go test -race -count=1 -timeout=5m ./...
+
+      # Consumers ignore go.mod's replace and get the pinned posthog-go release,
+      # so prove the adapter builds against it and not only the checkout.
+      - name: Build and vet against the pinned posthog-go
+        run: |
+          cp -r posthogmcpgo "$RUNNER_TEMP/pinned"
+          cd "$RUNNER_TEMP/pinned"
+          go mod edit -dropreplace github.com/posthog/posthog-go -dropreplace github.com/posthog/posthog-go/posthogmcpsdk
+          GOFLAGS=-mod=mod go build ./...
+          GOFLAGS=-mod=mod go vet ./...
+
   public-api:
     name: Public API
     runs-on: ubuntu-latest

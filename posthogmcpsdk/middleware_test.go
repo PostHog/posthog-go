@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -175,13 +176,13 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			name:           "added to a closed schema",
 			inputSchema:    map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []any{"city"}, "additionalProperties": false},
 			wantProperties: []string{"city", "context", "llm_model", "conversation_id"},
-			wantRequired:   []string{"city", "context", "llm_model"},
+			wantRequired:   []string{"city", "context"},
 		},
 		{
 			name:           "added to an empty schema",
 			inputSchema:    map[string]any{"type": "object"},
 			wantProperties: []string{"context", "llm_model", "conversation_id"},
-			wantRequired:   []string{"context", "llm_model"},
+			wantRequired:   []string{"context"},
 		},
 		{
 			name:           "a tool's own arguments are kept",
@@ -197,7 +198,6 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			opts:           []Option{WithContextParameter(false)},
 			inputSchema:    map[string]any{"type": "object"},
 			wantProperties: []string{"llm_model", "conversation_id"},
-			wantRequired:   []string{"llm_model"},
 		},
 		{
 			name:           "model capture disabled",
@@ -211,7 +211,7 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 			opts:           []Option{WithConversationID(false)},
 			inputSchema:    map[string]any{"type": "object"},
 			wantProperties: []string{"context", "llm_model"},
-			wantRequired:   []string{"context", "llm_model"},
+			wantRequired:   []string{"context"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1358,6 +1358,78 @@ func TestInstrumentRecoversATypedHandlersError(t *testing.T) {
 			call := queue.onlyToolCall(t)
 			assert.Equal(t, test.wantErrorType, call["$mcp_error_type"])
 			assert.Equal(t, test.wantMessage, call["$mcp_error_message"])
+		})
+	}
+}
+
+func TestInstrumentKeepsErrorTextOutWhenErrorMessagesAreOff(t *testing.T) {
+	const city = "jane@example.com"
+	type input struct {
+		City string `json:"city"`
+	}
+	typed := func(handler func(input) (*mcpsdk.CallToolResult, error)) func(*mcpsdk.Server) {
+		return func(server *mcpsdk.Server) {
+			mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "weather"},
+				func(_ context.Context, _ *mcpsdk.CallToolRequest, in input) (*mcpsdk.CallToolResult, any, error) {
+					result, err := handler(in)
+					return result, nil, err
+				})
+		}
+	}
+	for _, test := range []struct {
+		name     string
+		addTool  func(*mcpsdk.Server)
+		wantType string
+	}{
+		{
+			name: "typed handler error",
+			addTool: typed(func(in input) (*mcpsdk.CallToolResult, error) {
+				return nil, &fs.PathError{Op: "open", Path: in.City, Err: fs.ErrNotExist}
+			}),
+			wantType: "fs.PathError",
+		},
+		{
+			name: "isError result text",
+			addTool: typed(func(in input) (*mcpsdk.CallToolResult, error) {
+				return &mcpsdk.CallToolResult{IsError: true, Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "no forecast for " + in.City}}}, nil
+			}),
+			wantType: "Error",
+		},
+		{
+			name: "raw handler error",
+			addTool: func(server *mcpsdk.Server) {
+				server.AddTool(
+					&mcpsdk.Tool{Name: "weather", InputSchema: map[string]any{"type": "object"}},
+					func(_ context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+						return nil, fmt.Errorf("no forecast for %s", req.Params.Arguments)
+					},
+				)
+			},
+			wantType: "Error",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			server := newServer()
+			Instrument(server, posthogmcp.New(queue, posthogmcp.WithCaptureErrorMessages(false)),
+				WithCaptureParameters(false), WithCaptureResponses(false))
+			test.addTool(server)
+
+			_, _ = connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "weather",
+				Arguments: map[string]any{"city": city, "context": "Checking a forecast"},
+			})
+
+			properties := queue.onlyToolCall(t)
+			assert.Equal(t, true, properties["$mcp_is_error"])
+			assert.Equal(t, test.wantType, properties["$mcp_error_type"])
+			assert.Equal(t, "Tool weather returned an error", properties["$mcp_error_message"])
+			exceptions := queue.exceptions()
+			require.Len(t, exceptions, 1)
+			assert.Equal(t, "Tool weather returned an error", exceptions[0].ExceptionList[0].Value)
+			queue.mu.Lock()
+			defer queue.mu.Unlock()
+			assert.NotContains(t, jsonString(t, queue.messages), city)
 		})
 	}
 }
