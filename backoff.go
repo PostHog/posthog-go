@@ -26,6 +26,23 @@ func NewBackoff(base time.Duration, factor uint8, jitter float64, cap time.Durat
 // posthog-python (all 30s).
 const defaultMaxBackoff = 30 * time.Second
 
+// clampRetryWait is the wait before another capture attempt. A server
+// Retry-After raises the configured backoff when it is longer, but not past
+// defaultMaxBackoff. The configured backoff itself is left alone.
+func clampRetryWait(configured, header time.Duration, hasHeader bool) time.Duration {
+	if !hasHeader {
+		return configured
+	}
+	clamped := header
+	if clamped > defaultMaxBackoff {
+		clamped = defaultMaxBackoff
+	}
+	if clamped > configured {
+		return clamped
+	}
+	return configured
+}
+
 // DefaultBackoff creates a Backoff with the SDK's default retry policy:
 //
 //	base: 100 milliseconds

@@ -117,3 +117,30 @@ func TestCohortWithMissingPropertyFallsBackToAPI(t *testing.T) {
 		})
 	}
 }
+
+func TestUnsupportedCohortGroupFallsBackToAPI(t *testing.T) {
+	for _, cohort := range []string{
+		`{"type":"XOR","values":[{"type":"person","key":"email","operator":"exact","value":"user@x"}]}`,
+		`{"type":"XOR","values":[]}`,
+		`{"type":"XOR"}`,
+		`{"type":"AND","values":[{"type":"XOR","values":[]}]}`,
+		`{"type":"OR","values":[{"type":"cohort","value":2,"negation":true}]}`,
+	} {
+		t.Run(cohort, func(t *testing.T) {
+			definitions := localDefinitionsWithCohorts(`{"1":`+cohort+`,"2":{"type":"XOR","values":[]}}`,
+				flagDefinition("checkout", flagCondition(100, `{"type":"cohort","value":1}`)))
+			client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, remoteCheckoutEnabled)
+			payload := FeatureFlagPayload{Key: "checkout", DistinctId: "user", PersonProperties: Properties{"email": "other@x"}, OnlyEvaluateLocally: true}
+			value, err := client.GetFeatureFlag(payload)
+			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+			require.Nil(t, value)
+			require.Zero(t, remoteCalls.Load())
+
+			payload.OnlyEvaluateLocally = false
+			value, err = client.GetFeatureFlag(payload)
+			require.NoError(t, err)
+			require.Equal(t, true, value)
+			require.Equal(t, int32(1), remoteCalls.Load(), "unsupported groups must use remote evaluation")
+		})
+	}
+}
