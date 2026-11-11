@@ -294,6 +294,7 @@ type CodeEmail struct {
 	Text string
 	From    string
 	ReplyTo []string
+	Sensitive *bool
 	Tracking *EmailTracking
 	CaptureEngagement *bool
 	DistinctID string

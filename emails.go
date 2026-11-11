@@ -113,10 +113,15 @@ type CodeEmail struct {
 	// Without it, PostHog sends from the project's default sender.
 	From    string
 	ReplyTo []string
+	// Sensitive marks an email that carries a login link, a reset token or a
+	// code. PostHog keeps a sensitive email's links unchanged, leaves its
+	// subject off engagement events and keeps its content out of logs. Nil
+	// takes the setting of the saved template whose key is TemplateKey, or
+	// true when no template has that key.
+	Sensitive *bool
 	// Tracking says what PostHog tracks for this email. Nil keeps the
-	// defaults: PostHog counts opens and captures engagement events, but
-	// doesn't rewrite links to count clicks, because a link in an email sent
-	// from code can carry a login or password reset token. Use
+	// defaults: PostHog counts opens and captures engagement events, and
+	// rewrites links to count clicks only when the email isn't Sensitive. Use
 	// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
 	Tracking *EmailTracking
 	// CaptureEngagement says whether PostHog captures the email's engagement
@@ -150,12 +155,14 @@ type EmailTracking struct {
 // keeps its default.
 type EmailTrackingOptions struct {
 	// Opens says whether PostHog adds its open pixel to count opens. Nil
-	// means true. Clicks need Opens.
+	// means true. With Opens false, PostHog counts no clicks, and refuses
+	// Clicks true.
 	Opens *bool `json:"opens,omitempty"`
 	// Clicks says whether PostHog rewrites the email's links to count clicks.
-	// Nil means false. Turn it on only when the links are safe to send
-	// through a redirect, so not for a login or password reset link. A link
-	// with a data-ph-no-track attribute is never rewritten.
+	// Nil means true when the email isn't Sensitive and false when it is.
+	// Turn it on only when the links are safe to send through a redirect, so
+	// not for a login or password reset link. A link with a data-ph-no-track
+	// attribute is never rewritten.
 	Clicks *bool `json:"clicks,omitempty"`
 	// Engagement says whether PostHog captures the email's engagement events,
 	// such as opens and clicks, as events of the recipient. Nil means true.
@@ -246,6 +253,7 @@ type codeEmailBody struct {
 	Text              string         `json:"text,omitempty"`
 	From              string         `json:"from,omitempty"`
 	ReplyTo           []string       `json:"reply_to,omitempty"`
+	Sensitive         *bool          `json:"sensitive,omitempty"`
 	Tracking          *EmailTracking `json:"tracking,omitempty"`
 	CaptureEngagement *bool          `json:"capture_engagement,omitempty"`
 	DistinctID        string         `json:"distinct_id,omitempty"`
@@ -300,6 +308,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		Text:              e.Text,
 		From:              e.From,
 		ReplyTo:           e.ReplyTo,
+		Sensitive:         e.Sensitive,
 		Tracking:          e.Tracking,
 		CaptureEngagement: e.CaptureEngagement,
 		DistinctID:        e.DistinctID,

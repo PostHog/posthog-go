@@ -256,6 +256,50 @@ func TestEmailsSendCodeTracking(t *testing.T) {
 	}
 }
 
+func TestEmailsSendCodeSensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sensitive bool
+		tracking  *EmailTracking
+		want      map[string]interface{}
+	}{
+		{name: "sensitive", sensitive: true, want: map[string]interface{}{"sensitive": true}},
+		{name: "not sensitive", sensitive: false, want: map[string]interface{}{"sensitive": false}},
+		{
+			name:      "not sensitive with clicks off",
+			sensitive: false,
+			tracking:  EmailTrackingWith(EmailTrackingOptions{Clicks: Ptr(false)}),
+			want:      map[string]interface{}{"sensitive": false, "tracking": map[string]interface{}{"clicks": false}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:          "user@example.com",
+				TemplateKey: "digest",
+				Subject:     "Your digest",
+				Text:        "Plain text only",
+				Sensitive:   Ptr(tc.sensitive),
+				Tracking:    tc.tracking,
+			})
+
+			require.NoError(t, err)
+			want := map[string]interface{}{
+				"to":           "user@example.com",
+				"template_key": "digest",
+				"subject":      "Your digest",
+				"text":         "Plain text only",
+			}
+			for key, value := range tc.want {
+				want[key] = value
+			}
+			require.Equal(t, want, server.received()[0].Body)
+		})
+	}
+}
+
 func TestEmailsSendCodeDeprecatedCaptureEngagement(t *testing.T) {
 	for _, capture := range []bool{false, true} {
 		t.Run(strconv.FormatBool(capture), func(t *testing.T) {
