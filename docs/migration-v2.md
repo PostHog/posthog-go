@@ -402,10 +402,12 @@ final. The request context's session ID is part of the event's identity, so it
 is set as `$session_id` first, unless the event has its own.
 
 `DefaultEventProperties` now apply to `Exception`, `Identify`, `Alias` and
-`GroupIdentify` events too, not only to `Capture`. For `Identify`, `Alias` and
-`GroupIdentify` they fill the new `EventProperties` field: the properties of
-the event itself, separate from the `$set` or `$group_set` that `Properties`
-sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
+`GroupIdentify` events too, not only to `Capture`. A
+`$process_person_profile: false` there turns person processing off for these
+events too (see [New: event options](#new-event-options)). For `Identify`,
+`Alias` and `GroupIdentify` they fill the new `EventProperties` field: the
+properties of the event itself, separate from the `$set` or `$group_set` that
+`Properties` sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
 `GroupIdentify.EventProperties` merges under `Properties`, which win key by
 key. The `Config.Callback` message for an `Alias` does not include its
 `EventProperties`.
@@ -529,12 +531,26 @@ Options can also be set for every event and for a request:
   `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
-These layers reach `Identify`, `Alias` and `GroupIdentify` events too. PostHog
-drops an `$identify`, `$create_alias` or `$groupidentify` event that has
-person processing off, with an ingestion warning. `Callback` does not report
-the drop, because capture accepts the event. So do not turn person processing
-off in `DefaultEventOptions` or a request context's `Options`. Set it on each
-message that needs it instead.
+These layers reach `Identify`, `Alias` and `GroupIdentify` events too, and so
+does a legacy `$process_person_profile` property in `DefaultEventProperties` or
+`RequestContext.Properties`. 1.x never sent those values with these messages.
+PostHog drops an `$identify`, `$create_alias` or `$groupidentify` event that
+has person processing off, with an ingestion warning, so it never creates or
+merges a person or updates a group. It keeps a `$set` event but ignores its
+person update. `Callback` does not report the drop, because capture accepts the
+event. To keep these events, set the option on the message, which wins over
+every layer, or set it in `BeforeSend`:
+
+```go
+client.Enqueue(posthog.Identify{
+    DistinctId: "user-123",
+    Properties: posthog.NewProperties().Set("plan", "pro"),
+    Options:    posthog.NewOptions().Set("process_person_profile", true),
+})
+```
+
+A `$process_person_profile` property in the message's `EventProperties` does
+not override `DefaultEventOptions` or `RequestContext.Options`.
 
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
 option that is still missing or `nil`, from these layers in order:
