@@ -2,4 +2,4 @@
 "posthog-go": patch
 ---
 
-Cohort `not_in` now excludes members of that cohort. Legacy release conditions still ignore the `negation` field.
+Cohort `not_in` now excludes members and matches non-members during local feature flag evaluation.
