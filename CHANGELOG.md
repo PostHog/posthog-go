@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.42.4
+
+### Patch Changes
+
+- 1b62fef: Cohort `not_in` now excludes members and matches non-members during local feature flag evaluation.
+
 ## 1.42.3
 
 ### Patch Changes
