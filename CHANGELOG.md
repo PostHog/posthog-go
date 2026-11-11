@@ -1,5 +1,12 @@
 ## Unreleased
 
+## 1.42.3
+
+### Patch Changes
+
+- 5f936d6: Fall back to server evaluation for unsupported cohort group types and correctly evaluate supported group types.
+- f09dd5c: A /flags result with `failed: true` is no longer reported as a successful disable.
+
 ## 1.42.2
 
 ### Patch Changes
