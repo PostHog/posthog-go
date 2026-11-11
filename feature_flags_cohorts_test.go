@@ -34,8 +34,10 @@ func TestCohortNotInAndConditionNegation(t *testing.T) {
 	tests := []struct {
 		name       string
 		filter     string
+		cohorts    string
 		properties Properties
 		want       bool
+		wantReason UnresolvedFlagReason
 	}{
 		{
 			name:       "not_in excludes a cohort member",
@@ -48,6 +50,19 @@ func TestCohortNotInAndConditionNegation(t *testing.T) {
 			filter:     `{"key":"id","type":"cohort","operator":"not_in","value":42}`,
 			properties: outsider,
 			want:       true,
+		},
+		{
+			name:       "not_in preserves a missing cohort error",
+			filter:     `{"key":"id","type":"cohort","operator":"not_in","value":42}`,
+			cohorts:    `{}`,
+			properties: member,
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+		},
+		{
+			name:       "not_in preserves a missing property error",
+			filter:     `{"key":"id","type":"cohort","operator":"not_in","value":42}`,
+			properties: NewProperties(),
+			wantReason: UnresolvedFlagReasonMissingContext,
 		},
 		{
 			name:       "in includes a cohort member",
@@ -90,7 +105,16 @@ func TestCohortNotInAndConditionNegation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			flag := `{"key":"checkout","active":true,"filters":{"groups":[{"properties":[` + tt.filter + `],"rollout_percentage":100}]}}`
-			got, err := computeDefinedFlag(t, localDefinitionsWithCohorts(cohort, flag), "checkout", tt.properties)
+			cohorts := tt.cohorts
+			if cohorts == "" {
+				cohorts = cohort
+			}
+			got, err := computeDefinedFlag(t, localDefinitionsWithCohorts(cohorts, flag), "checkout", tt.properties)
+			if tt.wantReason != "" {
+				require.Error(t, err)
+				requireUnresolvedReason(t, err, tt.wantReason)
+				return
+			}
 			require.NoError(t, err)
 			require.Equal(t, tt.want, got)
 		})
