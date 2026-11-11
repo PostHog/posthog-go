@@ -211,9 +211,14 @@ func methods(t *doc.Type, embedded map[string]bool) (out []entry) {
 	return out
 }
 
+// typeEntry renders a type with the constants and variables go/doc groups under it, such as an enum's values.
 func typeEntry(t *doc.Type) entry {
 	children := append(funcs(t.Funcs, "posthog."), funcs(t.Methods, t.Name+".")...)
-	return entry{t.Name, block(t.Decl), markdown(t.Doc), children}
+	text := []string{markdown(t.Doc)}
+	for _, v := range append(t.Consts, t.Vars...) {
+		text = append(text, block(v.Decl), markdown(v.Doc))
+	}
+	return entry{t.Name, block(t.Decl), strings.TrimSpace(strings.Join(text, "\n\n")), children}
 }
 
 func funcs(list []*doc.Func, prefix string) (out []entry) {
@@ -233,14 +238,32 @@ func render(list []entry, level int) (out []string) {
 	return out
 }
 
-// markdown renders a doc comment. The site reads Markdown as MDX, so prose escapes < and braces.
+// markdown renders a doc comment. The site reads Markdown as MDX, so prose escapes < and braces, and
+// code examples print as fenced Go blocks, which MDX keeps as code. It doesn't support indented code.
 func markdown(text string) string {
 	d := pkg.Parser().Parse(text)
 	escape(d.Content)
 	p := pkg.Printer()
 	p.HeadingLevel = 5
 	p.DocLinkURL = func(l *comment.DocLink) string { return "#" + anchor(l.Recv+l.Name) }
-	return strings.TrimSpace(string(p.Markdown(d)))
+	var out []string
+	var prose []comment.Block
+	flush := func() {
+		if len(prose) > 0 {
+			out = append(out, strings.TrimSpace(string(p.Markdown(&comment.Doc{Content: prose, Links: d.Links}))))
+			prose = nil
+		}
+	}
+	for _, b := range d.Content {
+		if c, ok := b.(*comment.Code); ok {
+			flush()
+			out = append(out, code(strings.TrimRight(c.Text, "\n")))
+		} else {
+			prose = append(prose, b)
+		}
+	}
+	flush()
+	return strings.Join(out, "\n\n")
 }
 
 var mdx = strings.NewReplacer("<", "&lt;", "{", "&#123;", "}", "&#125;")
@@ -334,6 +357,8 @@ func read(path string) string {
 }
 
 func write(file, front string, body []string) {
+	// A fresh checkout has no references folder yet.
+	check(os.MkdirAll("references", 0o755))
 	check(os.WriteFile(filepath.Join("references", file), []byte(strings.Join(append([]string{front}, body...), "\n\n")+"\n"), 0o644))
 	fmt.Println("wrote references/" + file)
 }
