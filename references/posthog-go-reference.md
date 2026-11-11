@@ -23,6 +23,9 @@ tableOfContents:
   - value: "Capture exception"
     url: capture-exception
     depth: 0
+  - value: "Emails"
+    url: emails
+    depth: 0
   - value: "Flush"
     url: flush
     depth: 0
@@ -264,6 +267,36 @@ type Config struct {
 	// CaptureModeLegacy (POST /batch/). Set CaptureModeAnalyticsV1 to opt into
 	// POST /i/v1/analytics/events.
 	CaptureMode CaptureMode
+
+	// AppHost is the PostHog app host that Client.Emails sends to, such as
+	// https://posthog.example.com for a self-hosted instance. If empty, a
+	// PostHog Cloud Endpoint maps to its region's app host, us.posthog.com or
+	// eu.posthog.com. Any other Endpoint may be a reverse proxy for ingestion,
+	// so email requests never go there: without AppHost, they fail with the
+	// code missing_app_host. It must use https unless AllowInsecureAppHost is
+	// set. When AppHost is set, every request that carries SecretKey goes to
+	// it: email requests, flag definitions for local evaluation, and remote
+	// config payloads. Without AppHost, flag requests use Endpoint.
+	AppHost string
+
+	// AllowInsecureAppHost lets Client.Emails send to an http AppHost, such as
+	// http://localhost:8010 during local development. Email requests carry
+	// SecretKey and the email itself, so over http both travel unencrypted.
+	AllowInsecureAppHost bool
+
+	// EmailRequestTimeout is the timeout of each Client.Emails request. If
+	// zero, it defaults to DefaultEmailRequestTimeout.
+	EmailRequestTimeout time.Duration
+
+	// EmailRequestMaxRetries is the number of retries of a Client.Emails
+	// request after its first attempt, 0 to 9. If nil, it defaults to
+	// DefaultEmailRequestMaxRetries. Set Ptr(0) when a job runner already
+	// retries the send, and pass an IdempotencyKey that names the email.
+	EmailRequestMaxRetries *int
+
+	// MigratedFrom names the email provider your sends moved from, such as
+	// "resend". Client.Emails sends it as the X-PostHog-Migrated-From header.
+	MigratedFrom string
 }
 ```
 
@@ -600,6 +633,16 @@ logger := slog.New(posthog.NewSlogCaptureHandler(base, client,
 ))
 ```
 
+## Emails
+
+### `Client.Emails`
+
+```go
+Emails() Emails
+```
+
+Emails sends transactional email from PostHog email templates or from content your code rendered, and reads the status of each email it sent. It needs Config.SecretKey, a project secret API key with the transactional\_email:write scope. Close waits for email requests in flight, and a request after Close fails with the code client\_closed.
+
 ## Flush
 
 ### `Client.Flush`
@@ -908,6 +951,13 @@ const (
 	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
 	// posthog-node defaults so backend SDKs behave consistently under bursty load.
 	DefaultMaxQueueSize = 10000
+
+	// DefaultEmailRequestTimeout is the default timeout of each Client.Emails request.
+	DefaultEmailRequestTimeout = 15 * time.Second
+
+	// DefaultEmailRequestMaxRetries is the default number of retries of a
+	// Client.Emails request after its first attempt.
+	DefaultEmailRequestMaxRetries = 2
 )
 ```
 
@@ -976,7 +1026,7 @@ const (
 ```
 
 ```go
-const Version = "1.39.0"
+const Version = "1.42.4"
 ```
 
 Version of the client.
@@ -1386,6 +1436,45 @@ func (e *CaptureRequestError) Error() string
 func (e *CaptureRequestError) Unwrap() error
 ```
 
+### `CodeEmail`
+
+```go
+type CodeEmail struct {
+	// To is one recipient email address.
+	To string
+	// TemplateKey names the email, such as "password-reset", so its metrics,
+	// logs and status group under it in PostHog. Letters, digits, hyphens and
+	// underscores, at most 400.
+	TemplateKey string
+	Subject     string
+	// HTML is the HTML body. Set HTML, Text or both.
+	HTML string
+	// Text is the plain-text body. Without it, PostHog derives it from HTML.
+	Text string
+	// From is a verified sender, such as "Acme <security@example.com>".
+	// Without it, PostHog sends from the project's default sender.
+	From    string
+	ReplyTo []string
+	// CaptureEngagement says whether PostHog captures the email's engagement
+	// events, such as opens and clicks, as events of the recipient. Nil means
+	// true. A project whose admin turned engagement capture off captures
+	// nothing, whatever the send asks.
+	CaptureEngagement *bool
+	// DistinctID is the recipient's distinct ID in your product. The email's
+	// events go to this person. Without it, they go to a person whose distinct
+	// ID is the email address.
+	DistinctID string
+	// IdempotencyKey is 1 to 255 visible ASCII characters. See
+	// TemplateEmail.IdempotencyKey.
+	IdempotencyKey string
+	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
+	// Ptr(0) turns retries off.
+	MaxRetries *int
+}
+```
+
+CodeEmail sends content your code rendered, named by a key. PostHog sends it as is and never stores it. To send a React email, render it to HTML in your app and pass the HTML.
+
 ### `CommonResponseFields`
 
 ```go
@@ -1578,6 +1667,152 @@ DescriptionExtractor defines the interface for extracting a human-readable descr
 
 Implementations should always return a non-empty string; returning an empty string will prevent the error from being captured.
 
+### `Email`
+
+```go
+type Email interface {
+	// contains filtered or unexported methods
+}
+```
+
+Email is the content of one send: a TemplateEmail or a CodeEmail.
+
+### `EmailError`
+
+```go
+type EmailError struct {
+	Name    EmailErrorName
+	Code    string
+	Message string
+	// StatusCode is the HTTP status when PostHog answered, and 0 otherwise.
+	// A network_error keeps the status of an answer that broke off mid-body.
+	StatusCode int
+	Why        string
+	Fix        string
+	DocsURL    string
+	// Field names the request field the error is about, when there is one.
+	Field string
+	// RetryAfter is how long PostHog asked the client to wait before it sends
+	// again, and 0 when it did not ask.
+	RetryAfter time.Duration
+}
+```
+
+EmailError reports that PostHog did not queue the email or return its status, or that the client could not tell whether it did. Every error that Emails returns is an \*EmailError; read it with errors.As.
+
+Branch on Code, PostHog's stable error code such as "recipient\_suppressed", or an SDK code such as "network\_error" or "missing\_app\_host". Name is its coarse category. The error never holds the secret key or the request body.
+
+#### `EmailError.Error`
+
+```go
+func (e *EmailError) Error() string
+```
+
+#### `EmailError.Unwrap`
+
+```go
+func (e *EmailError) Unwrap() error
+```
+
+Unwrap returns the cause, such as a network error, context.DeadlineExceeded, ErrSDKDisabled or ErrClosed.
+
+### `EmailErrorName`
+
+```go
+type EmailErrorName string
+```
+
+EmailErrorName is a coarse category of an EmailError, for code that branches on the kind of failure rather than the exact code. The names follow Resend's error names, so code moved from Resend keeps working.
+
+```go
+const (
+	// EmailErrorValidation: PostHog or the client refused the email as sent,
+	// such as an unverified sender, a suppressed recipient or an argument the
+	// client checks before any request.
+	EmailErrorValidation EmailErrorName = "validation_error"
+	// EmailErrorMissingAPIKey: the client has no secret key, or PostHog
+	// refused it.
+	EmailErrorMissingAPIKey EmailErrorName = "missing_api_key"
+	// EmailErrorInvalidPermission: the secret key lacks the scope.
+	EmailErrorInvalidPermission EmailErrorName = "invalid_permission"
+	// EmailErrorNotFound: no template or email with this ID, or the API is not
+	// enabled for the project.
+	EmailErrorNotFound EmailErrorName = "not_found"
+	// EmailErrorConcurrentIdempotentRequests: a send with the same idempotency
+	// key is still in flight.
+	EmailErrorConcurrentIdempotentRequests EmailErrorName = "concurrent_idempotent_requests"
+	// EmailErrorInvalidIdempotentRequest: the idempotency key was used with
+	// another request.
+	EmailErrorInvalidIdempotentRequest EmailErrorName = "invalid_idempotent_request"
+	// EmailErrorRateLimitExceeded: PostHog rate limited the request.
+	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
+	// EmailErrorMonthlyQuotaExceeded: the project is over its email quota.
+	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
+	// EmailErrorServiceUnavailable: PostHog or the network was unavailable.
+	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
+	// EmailErrorApplication: anything else.
+	EmailErrorApplication EmailErrorName = "application_error"
+)
+```
+
+### `EmailStatus`
+
+```go
+type EmailStatus struct {
+	// ID is the message ID that Send returned.
+	ID string
+	// Status is "queued", "sent", "failed", "delivered", "bounced" or
+	// "complained" today. Later SDK versions can see values this list does not
+	// have yet.
+	Status string
+	// CreatedAt is when PostHog queued the email.
+	CreatedAt time.Time
+	// StatusAt is when the email reached its current status.
+	StatusAt time.Time
+	// Reason says why a failed email was not sent, such as "provider_error" or
+	// "recipient_suppressed", or gives the bounce type of a bounced email:
+	// "hard", "soft" or "unknown". It is empty otherwise.
+	Reason string
+}
+```
+
+EmailStatus is what happened to an email that Emails.Send queued.
+
+### `EmailWarning`
+
+```go
+type EmailWarning struct {
+	Code    string
+	Message string
+	Fix     string
+}
+```
+
+EmailWarning is a warning PostHog returned with a queued email.
+
+### `Emails`
+
+```go
+type Emails interface {
+	// Send queues one email, from a TemplateEmail made in PostHog or from a
+	// CodeEmail your code rendered. A result means PostHog queued the email,
+	// not that it was delivered.
+	Send(ctx context.Context, email Email) (*SendEmailResult, error)
+
+	// Get reads the status of an email that Send queued, for 30 days after the
+	// send. The error code is "not_found" when no email of the project has the
+	// ID, when the email is older than 30 days, or for a few seconds after the
+	// send.
+	Get(ctx context.Context, messageID string) (*EmailStatus, error)
+}
+```
+
+Emails sends transactional email, such as a password reset or a receipt, to one recipient per call, and reads the status of an email it sent.
+
+It needs Config.SecretKey, a project secret API key (phs\_...) with the transactional\_email:write scope, the "Send transactional email" preset in your project settings. A key with only transactional\_email:read can read statuses but not send. Keys made with hog\_flow:write still work. Requests go to Config.AppHost, or to the PostHog Cloud app host of Config.Endpoint.
+
+Every error is an \*EmailError. Network errors, rate limits, an idempotency key in flight and an unavailable service are retried up to Config.EmailRequestMaxRetries times, with the same idempotency key.
+
 ### `EnqueueClient`
 
 ```go
@@ -1756,6 +1991,8 @@ ExceptionStacktrace is a PostHog-compatible stack trace.
 type FeatureFlag struct {
 	// Key is the feature flag key.
 	Key string `json:"key"`
+	// EvaluationRuntime is the flag's configured runtime, or nil when unknown.
+	EvaluationRuntime *string `json:"evaluation_runtime"`
 	// RolloutPercentage is the top-level rollout percentage, when configured.
 	RolloutPercentage *float64 `json:"rollout_percentage"`
 	// Active reports whether the flag is active.
@@ -1892,7 +2129,7 @@ FeatureFlagsPoller periodically loads feature flag definitions for local evaluat
 func (poller *FeatureFlagsPoller) ForceReload()
 ```
 
-ForceReload requests an immediate reload of local feature flag definitions.
+ForceReload requests an immediate reload of local feature flag definitions. It does nothing once the poller has shut down. The send selects on shutdown so a reload racing Close cannot send on a closed channel.
 
 #### `FeatureFlagsPoller.GetAllFlags`
 
@@ -2548,6 +2785,22 @@ func (e *RequiresServerEvaluationError) Error() string
 
 Error returns the reason server-side evaluation is required.
 
+### `SendEmailResult`
+
+```go
+type SendEmailResult struct {
+	// ID is the queued email's message ID.
+	ID string
+	// Replayed is true when PostHog had already accepted this idempotency key
+	// and returned the first send's result.
+	Replayed bool
+	// Warnings are logged through Config.Logger as well.
+	Warnings []EmailWarning
+}
+```
+
+SendEmailResult is an email that PostHog queued.
+
 ### `SendFeatureFlagsBool`
 
 ```go
@@ -2795,6 +3048,34 @@ type StackTraceExtractor interface {
 ```
 
 StackTraceExtractor produces a stack trace for the current goroutine to enrich captured exceptions with call-site context.
+
+### `TemplateEmail`
+
+```go
+type TemplateEmail struct {
+	// To is one recipient email address.
+	To string
+	// TemplateID is the UUID of the template.
+	TemplateID string
+	// TemplateData fills the template's {{ variables.* }} placeholders.
+	TemplateData map[string]interface{}
+	// DistinctID is the recipient's distinct ID in your product. The email's
+	// events go to this person. Without it, they go to a person whose distinct
+	// ID is the email address.
+	DistinctID string
+	// IdempotencyKey is 1 to 255 visible ASCII characters. A send with a key
+	// that PostHog already accepted queues nothing and returns the first send's
+	// result. Without it, the client makes a UUID that covers its own retries.
+	// Pass a key derived from what the email is for, such as
+	// "welcome:user_123", to cover retries outside this call too.
+	IdempotencyKey string
+	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
+	// Ptr(0) turns retries off.
+	MaxRetries *int
+}
+```
+
+TemplateEmail sends an email template made transactional in PostHog, by its ID. The template sets its own sender, subject and content, and follows the project's engagement setting.
 
 ### `Ticker`
 
