@@ -1837,18 +1837,23 @@ func TestFeatureFlagEvaluations_UnresolvedFlagsErrorKeepsResponseErrors(t *testi
 }
 
 func TestFailedRemoteFlagIsNotADecision(t *testing.T) {
-	remote := `{"flags":{"checkout":{"key":"checkout","enabled":false,"failed":true,"metadata":{"id":1,"version":1}}},"errorsWhileComputingFlags":true}`
-	client, capture, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(betaUIDefinition, continuityCheckoutDefinition), remote)
+	remote := `{"flags":{"checkout":{"key":"checkout","enabled":false,"failed":true,"metadata":{"id":1,"version":1}},"beta-ui":{"key":"beta-ui","enabled":false,"failed":true,"metadata":{"id":2,"version":1}}},"errorsWhileComputingFlags":true}`
+	posthog, capture, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(betaUIDefinition, continuityCheckoutDefinition), remote)
 
-	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{Key: "checkout", DistinctId: "user-1"})
+	result, err := posthog.GetFeatureFlagResult(FeatureFlagPayload{Key: "checkout", DistinctId: "user-1"})
 	require.Nil(t, result)
 	require.ErrorIs(t, err, ErrFlagNotFound)
-	require.Contains(t, flagCalledError(t, client, capture, "checkout"), FeatureFlagErrorEvaluationFailed)
+	require.Contains(t, flagCalledError(t, posthog, capture, "checkout"), FeatureFlagErrorEvaluationFailed)
 	require.NotZero(t, remoteCalls.Load())
 
-	flags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-1", SendFeatureFlagEvents: Ptr(false)})
+	flags, err := posthog.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-1", SendFeatureFlagEvents: Ptr(false)})
 	require.NoError(t, err)
 	require.Equal(t, true, flags["beta-ui"])
 	_, hasCheckout := flags["checkout"]
 	require.False(t, hasCheckout)
+
+	capturedFlags, err := posthog.(*client).featureFlagsPoller.getFeatureFlagVariantsWithFallback("user-1", nil, nil, nil, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, true, capturedFlags["beta-ui"])
+	require.NotContains(t, capturedFlags, "checkout")
 }

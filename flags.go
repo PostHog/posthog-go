@@ -100,6 +100,21 @@ func remoteFlagFailed(resp *FlagsResponse, key string) bool {
 	return ok && flagDetailFailed(detail)
 }
 
+func copyEvaluatedFlagValues(dst map[string]interface{}, resp *FlagsResponse) {
+	if resp == nil {
+		return
+	}
+	for key, value := range resp.FeatureFlags {
+		if !remoteFlagFailed(resp, key) {
+			dst[key] = value
+		}
+	}
+}
+
+func errFlagEvaluationFailed(key string) error {
+	return fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, key)
+}
+
 // NewFlagDetail creates a FlagDetail from a flag key, a bool or string value,
 // and an optional raw JSON payload. String values are treated as enabled variants;
 // bool values are treated as boolean flag results.

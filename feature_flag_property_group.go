@@ -48,33 +48,22 @@ func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup
 func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, parsedValues []parsedPropertyValue, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string, aggregationGroupTypeIndex *uint8, snapshots ...*flagsState) (bool, error) {
 	state := poller.evaluationState(snapshots)
 	var inconclusiveReason UnresolvedFlagReason
-	var serverEvaluationErr *RequiresServerEvaluationError
-
-	// A server-required or inconclusive leaf does not decide the group. A later
-	// sibling can still prove an AND group false or an OR group true. Filters
-	// have no defined order, matching isConditionMatch.
-	rememberUndecided := func(err error) error {
-		if serverErr, ok := err.(*RequiresServerEvaluationError); ok {
-			serverEvaluationErr = serverErr
-			inconclusiveReason = pickUnresolvedReason(inconclusiveReason, serverErr.Reason)
-			return nil
-		}
-		if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok {
-			inconclusiveReason = pickUnresolvedReason(inconclusiveReason, inconclusiveErr.Reason)
-			return nil
-		}
-		return err
-	}
 
 	for i := range parsedValues {
 		pv := &parsedValues[i]
 		if pv.IsGroup {
 			matches, err := poller.matchPropertyGroup(pv.Group, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, aggregationGroupTypeIndex, state)
 			if err != nil {
-				if hard := rememberUndecided(err); hard != nil {
-					return false, hard
+				if serverErr, ok := err.(*RequiresServerEvaluationError); ok {
+					return false, serverErr.withReason(inconclusiveReason)
+				} else if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok {
+					// An inconclusive entry is neither a match nor a mismatch, so it
+					// can't decide the group, with or without negation.
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, inconclusiveErr.Reason)
+					continue
+				} else {
+					return false, err
 				}
-				continue
 			}
 
 			if groupType == "AND" {
@@ -99,10 +88,16 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 			}
 
 			if err != nil {
-				if hard := rememberUndecided(err); hard != nil {
-					return false, hard
+				if serverErr, ok := err.(*RequiresServerEvaluationError); ok {
+					return false, serverErr.withReason(inconclusiveReason)
+				} else if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok {
+					// An inconclusive entry is neither a match nor a mismatch, so it
+					// can't decide the group, with or without negation.
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, inconclusiveErr.Reason)
+					continue
+				} else {
+					return false, err
 				}
-				continue
 			}
 
 			negation := fp.Negation
@@ -124,9 +119,6 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 		}
 	}
 
-	if serverEvaluationErr != nil {
-		return false, serverEvaluationErr.withReason(inconclusiveReason)
-	}
 	if inconclusiveReason != "" {
 		return false, errCohortPropertyValue.withReason(inconclusiveReason)
 	}

@@ -1428,6 +1428,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 	}
 
 	locallyEvaluated := err == nil && result != nil
+	flagFailed := false
 	hasExperiment := flag.HasExperiment
 	minimalFlagCalledEvents := state != nil && state.minimalFlagCalledEvents
 
@@ -1445,18 +1446,15 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		// reset both and only pick them up from the response.
 		hasExperiment = nil
 		minimalFlagCalledEvents = false
-		flagFailed := false
 		if flagsResponse != nil {
 			minimalFlagCalledEvents = flagsResponse.MinimalFlagCalledEvents
 			if remoteFlagFailed(flagsResponse, flagConfig.Key) {
 				// enabled=false on a failed detail is a placeholder. Leave the
 				// value unset so the caller reports evaluation_failed.
 				result = nil
-				err = nil
 				flagFailed = true
 			} else if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue
-				err = nil
 				if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
 					payload = rawMessageToString(rawPayload)
 				}
@@ -1466,15 +1464,13 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 			} else {
 				// Flag not in remote response — treat as false (matches getFeatureFlagVariant behavior)
 				result = false
-				err = nil
 			}
 		} else {
 			result = false
 		}
-		return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents, flagFailed: flagFailed}
 	}
 
-	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents}
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents, flagFailed: flagFailed}
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
@@ -1541,14 +1537,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		if err != nil {
 			return response, err
 		}
-		if flagsResponse != nil {
-			for k, v := range flagsResponse.FeatureFlags {
-				if remoteFlagFailed(flagsResponse, k) {
-					continue
-				}
-				response[k] = v
-			}
-		}
+		copyEvaluatedFlagValues(response, flagsResponse)
 	}
 
 	return response, nil
@@ -3423,16 +3412,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 		if remoteErr != nil {
 			return nil, remoteErr
 		}
-		if flagsResponse != nil {
-			// Remote evaluation is authoritative for the flags it returns.
-			// A failed detail is not a value, so it must not overwrite a local one.
-			for key, value := range flagsResponse.FeatureFlags {
-				if remoteFlagFailed(flagsResponse, key) {
-					continue
-				}
-				result[key] = value
-			}
-		}
+		copyEvaluatedFlagValues(result, flagsResponse)
 	}
 
 	return result, nil
@@ -3448,7 +3428,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId s
 	}
 
 	if remoteFlagFailed(flagsResponse, key) {
-		return nil, fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, key)
+		return nil, errFlagEvaluationFailed(key)
 	}
 
 	for flagKey, flagValue := range flagsResponse.FeatureFlags {
@@ -3466,7 +3446,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId s
 	}
 	if flagsResponse != nil {
 		if remoteFlagFailed(flagsResponse, key) {
-			return "", fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, key)
+			return "", errFlagEvaluationFailed(key)
 		}
 		if payload, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
 			return rawMessageToString(payload), nil

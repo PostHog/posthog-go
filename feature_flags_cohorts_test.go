@@ -118,31 +118,6 @@ func TestCohortWithMissingPropertyFallsBackToAPI(t *testing.T) {
 	}
 }
 
-func TestCohortGroupShortCircuitsAroundServerLeaf(t *testing.T) {
-	cohortFilter := `{"key":"id","type":"cohort","value":7}`
-	flag := flagDefinition("checkout", flagCondition(100, cohortFilter))
-	canada := NewProperties().Set("country", "CA")
-	usa := NewProperties().Set("country", "US")
-
-	andCohorts := `{"7":{"type":"AND","values":[` + staticCohortFilter + `,` + countryIsUSFilter + `]}}`
-	got, err := computeDefinedFlag(t, localDefinitionsWithCohorts(andCohorts, flag), "checkout", canada)
-	require.NoError(t, err)
-	require.Equal(t, false, got)
-
-	orCohorts := `{"7":{"type":"OR","values":[` + staticCohortFilter + `,` + countryIsUSFilter + `]}}`
-	got, err = computeDefinedFlag(t, localDefinitionsWithCohorts(orCohorts, flag), "checkout", usa)
-	require.NoError(t, err)
-	require.Equal(t, true, got)
-
-	// A matching AND sibling does not prove the group. The static cohort still needs the server.
-	_, err = computeDefinedFlag(t, localDefinitionsWithCohorts(andCohorts, flag), "checkout", usa)
-	require.True(t, isServerEvalError(err), "%v", err)
-
-	// A mismatching OR sibling does not prove the group either.
-	_, err = computeDefinedFlag(t, localDefinitionsWithCohorts(orCohorts, flag), "checkout", canada)
-	require.True(t, isServerEvalError(err), "%v", err)
-}
-
 func TestUnsupportedCohortGroupFallsBackToAPI(t *testing.T) {
 	for _, cohort := range []string{
 		`{"type":"XOR","values":[{"type":"person","key":"email","operator":"exact","value":"user@x"}]}`,
