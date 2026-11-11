@@ -24,6 +24,153 @@ func TestComplexCohortsLocally(t *testing.T) {
 	assertFeatureEnabled(t, client, payload, true)
 }
 
+func TestCohortNotInAndConditionNegation(t *testing.T) {
+	cohort := `{"42":{"type":"AND","values":[{"key":"email","type":"person","operator":"exact","value":"user@x"}]}}`
+	member := NewProperties().Set("email", "user@x")
+	outsider := NewProperties().Set("email", "other@x")
+	countryUS := NewProperties().Set("country", "US")
+	countryCA := NewProperties().Set("country", "CA")
+
+	tests := []struct {
+		name       string
+		filter     string
+		cohorts    string
+		properties Properties
+		want       bool
+		wantReason UnresolvedFlagReason
+	}{
+		{
+			name:       "not_in excludes a cohort member",
+			filter:     `{"key":"id","type":"cohort","operator":"not_in","value":42}`,
+			properties: member,
+			want:       false,
+		},
+		{
+			name:       "not_in includes someone outside the cohort",
+			filter:     `{"key":"id","type":"cohort","operator":"not_in","value":42}`,
+			properties: outsider,
+			want:       true,
+		},
+		{
+			name:       "not_in preserves a missing cohort error",
+			filter:     `{"key":"id","type":"cohort","operator":"not_in","value":42}`,
+			cohorts:    `{}`,
+			properties: member,
+			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
+		},
+		{
+			name:       "not_in preserves a missing property error",
+			filter:     `{"key":"id","type":"cohort","operator":"not_in","value":42}`,
+			properties: NewProperties(),
+			wantReason: UnresolvedFlagReasonMissingContext,
+		},
+		{
+			name:       "in includes a cohort member",
+			filter:     `{"key":"id","type":"cohort","operator":"in","value":42}`,
+			properties: member,
+			want:       true,
+		},
+		{
+			name:       "legacy exact ignores negation and still matches",
+			filter:     `{"key":"country","type":"person","operator":"exact","value":"CA","negation":true}`,
+			properties: countryCA,
+			want:       true,
+		},
+		{
+			name:       "legacy exact ignores negation and still excludes a different country",
+			filter:     `{"key":"country","type":"person","operator":"exact","value":"CA","negation":true}`,
+			properties: countryUS,
+			want:       false,
+		},
+		{
+			name:       "exact without negation still matches",
+			filter:     `{"key":"country","type":"person","operator":"exact","value":"CA"}`,
+			properties: countryCA,
+			want:       true,
+		},
+		{
+			name:       "legacy is_not ignores negation and still excludes the listed country",
+			filter:     `{"key":"country","type":"person","operator":"is_not","value":"CA","negation":true}`,
+			properties: countryCA,
+			want:       false,
+		},
+		{
+			name:       "legacy is_not ignores negation and still matches a different country",
+			filter:     `{"key":"country","type":"person","operator":"is_not","value":"CA","negation":true}`,
+			properties: countryUS,
+			want:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flag := `{"key":"checkout","active":true,"filters":{"groups":[{"properties":[` + tt.filter + `],"rollout_percentage":100}]}}`
+			cohorts := tt.cohorts
+			if cohorts == "" {
+				cohorts = cohort
+			}
+			got, err := computeDefinedFlag(t, localDefinitionsWithCohorts(cohorts, flag), "checkout", tt.properties)
+			if tt.wantReason != "" {
+				require.Error(t, err)
+				requireUnresolvedReason(t, err, tt.wantReason)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestInvalidRegexNegationDoesNotEnableFlag(t *testing.T) {
+	email := NewProperties().Set("email", "user@x")
+	other := NewProperties().Set("email", "other@x")
+	tests := []struct {
+		name       string
+		filter     string
+		properties Properties
+		want       bool
+	}{
+		{
+			name:       "negated invalid regex stays off",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"[","negation":true}`,
+			properties: email,
+			want:       false,
+		},
+		{
+			name:       "negated invalid not_regex stays off",
+			filter:     `{"key":"email","type":"person","operator":"not_regex","value":"[","negation":true}`,
+			properties: email,
+			want:       false,
+		},
+		{
+			name:       "invalid regex without negation stays off",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"["}`,
+			properties: email,
+			want:       false,
+		},
+		{
+			name:       "valid regex ignores negation and still matches",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"^user@x$","negation":true}`,
+			properties: email,
+			want:       true,
+		},
+		{
+			name:       "valid regex ignores negation and still excludes a different value",
+			filter:     `{"key":"email","type":"person","operator":"regex","value":"^user@x$","negation":true}`,
+			properties: other,
+			want:       false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flag := `{"key":"checkout","active":true,"filters":{"groups":[{"properties":[` + tt.filter + `],"rollout_percentage":100}]}}`
+			got, err := computeDefinedFlag(t, localDefinitionsWithCohorts(`{}`, flag), "checkout", tt.properties)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestComplexCohortsWithNegationLocally(t *testing.T) {
 	client := newCohortTestClient(t, "feature_flag/test-complex-cohorts-negation-locally.json")
 	payload := cohortPayload(NewProperties().Set("region", "UK"))

@@ -1914,6 +1914,9 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 					return conditionNoMatch, err
 				}
 			}
+			// Legacy release conditions ignore the negation field. Cohort
+			// leaves apply it themselves; flag filters use operators such
+			// as is_not and not_in. An invalid regex is already a non-match.
 			if !isMatch {
 				return conditionNoMatch, nil
 			}

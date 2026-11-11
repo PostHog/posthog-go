@@ -8,7 +8,16 @@ func (poller *FeatureFlagsPoller) matchCohort(property FlagProperty, properties 
 		return false, errCohortRequiresServerEval
 	}
 
-	return poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, aggregationGroupTypeIndex, state)
+	matches, err := poller.matchPropertyGroup(propertyGroup, properties, cohorts, flagsByKey, evaluationCache, distinctId, deviceId, aggregationGroupTypeIndex, state)
+	if err != nil {
+		return false, err
+	}
+	// "in" and an empty operator mean membership. "not_in" is the inverse.
+	// Negation is applied by the caller, so it is not applied again here.
+	if property.Operator == "not_in" {
+		return !matches, nil
+	}
+	return matches, nil
 }
 
 func (poller *FeatureFlagsPoller) matchPropertyGroup(propertyGroup PropertyGroup, properties Properties, cohorts map[string]PropertyGroup, flagsByKey map[string]FeatureFlag, evaluationCache map[string]interface{}, distinctId string, deviceId *string, aggregationGroupTypeIndex *uint8, snapshots ...*flagsState) (bool, error) {
