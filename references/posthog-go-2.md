@@ -1095,7 +1095,6 @@ Feature flag error type constants for the $feature\_flag\_error property. These 
 
 ```go
 const (
-
 	// CACHE_DEFAULT_SIZE is the number of feature flag calls tracked for local deduplication.
 	CACHE_DEFAULT_SIZE = 300_000
 
@@ -1398,7 +1397,7 @@ func DefaultBackoff() *Backoff
 
 DefaultBackoff creates a Backoff with the SDK's default retry policy:
 
-```go
+```text
 base: 100 milliseconds
 factor: 2
 jitter: 0.25 (each delay is scaled by a random factor in [0.75, 1.25])
@@ -2607,7 +2606,7 @@ type Properties map[string]interface{}
 
 Properties is used to represent properties in messages that support it. It is a free-form object so the application can set any value it sees fit but a few helper method are defined to make it easier to instantiate properties with common fields. Here's a quick example of how this type is meant to be used:
 
-```go
+```text
 posthog.Capture{
 	DistinctId: "0123456789",
 	Event:      "order completed",

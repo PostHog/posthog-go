@@ -947,7 +947,6 @@ Feature flag error type constants for the $feature\_flag\_error property. These 
 
 ```go
 const (
-
 	// CACHE_DEFAULT_SIZE is the number of feature flag calls tracked for local deduplication.
 	CACHE_DEFAULT_SIZE = 300_000
 
