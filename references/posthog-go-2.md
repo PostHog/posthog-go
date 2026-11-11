@@ -72,7 +72,6 @@ tableOfContents:
 
 ## Getting started
 
-
 The Go SDK runs on your server, on Go 1.21 or later.
 
 To send your first event, create a client with your project token and host from your [project settings](https://app.posthog.com/project/settings), then call `Enqueue` with a `Capture`.
@@ -82,7 +81,7 @@ The client queues events and sends them in batches, so call `Close` before your 
 Install the module (Go 1.21 or later):
 
 ```bash
-go get github.com/posthog/posthog-go
+go get github.com/posthog/posthog-go/v2
 ```
 
 Create a client with your project API key, send an event, and close the client to flush the queue:
@@ -90,7 +89,7 @@ Create a client with your project API key, send an event, and close the client t
 ```go
 package main
 
-import "github.com/posthog/posthog-go"
+import "github.com/posthog/posthog-go/v2"
 
 func main() {
 	client, _ := posthog.NewWithConfig("<ph_project_api_key>", posthog.Config{
@@ -112,10 +111,9 @@ func main() {
 
 ```go
 type Config struct {
-
 	// Endpoint is the PostHog API host used for event ingestion and feature flag requests.
 	// If empty, it defaults to DefaultEndpoint.
-	Endpoint	string
+	Endpoint string
 
 	// SecretKey is the credential used to fetch local feature flag definitions,
 	// remote config payloads, and lower-latency flag APIs. It accepts either a Personal
@@ -125,25 +123,25 @@ type Config struct {
 	// the method requires local-only behavior. When both SecretKey and PersonalApiKey
 	// are set, SecretKey takes precedence.
 	// See https://posthog.com/docs/api/overview for how to create these keys.
-	SecretKey	string
+	SecretKey string
 
 	// PersonalApiKey is a deprecated alias for SecretKey. It is still honored for
 	// backwards compatibility but SecretKey is preferred.
 	//
 	// Deprecated: use SecretKey instead.
-	PersonalApiKey	string
+	PersonalApiKey string
 
 	// Disabled makes NewWithConfig return a client that sends nothing: its
 	// methods return default values and ErrSDKDisabled. Use it in tests and
 	// local development.
-	Disabled	bool
+	Disabled bool
 
 	// DisableGeoIP controls whether event and feature flag requests include
 	// $geoip_disable/geoip_disable. Nil defaults to true because this SDK usually
 	// runs server-side; set Ptr(false) to allow GeoIP lookup. On events it is a
 	// default: a $geoip_disable value in the event, the RequestContext or
 	// DefaultEventProperties wins.
-	DisableGeoIP	*bool
+	DisableGeoIP *bool
 
 	// IsServer controls whether events include the $is_server property.
 	//
@@ -158,31 +156,31 @@ type Config struct {
 	//
 	//	// CLI/client usage
 	//	config := posthog.Config{IsServer: posthog.Ptr(false)}
-	IsServer	*bool
+	IsServer *bool
 
 	// Interval is the flush interval for queued messages. Messages are sent when
 	// BatchSize is reached or when this timer fires. If zero, it defaults to
 	// DefaultInterval.
-	Interval	time.Duration
+	Interval time.Duration
 
 	// DefaultFeatureFlagsPollingInterval is the interval for reloading local feature
 	// flag definitions when SecretKey or FlagDefinitionCacheProvider is configured.
 	// If zero, it defaults to
 	// DefaultFeatureFlagsPollingInterval.
-	DefaultFeatureFlagsPollingInterval	time.Duration
+	DefaultFeatureFlagsPollingInterval time.Duration
 
 	// FeatureFlagRequestTimeout is the timeout for feature flag and remote config
 	// HTTP requests. If zero, it defaults to DefaultFeatureFlagRequestTimeout.
 	// Use time.Duration values such as 3 * time.Second.
-	FeatureFlagRequestTimeout	time.Duration
+	FeatureFlagRequestTimeout time.Duration
 
 	// FeatureFlagRequestMaxRetries is the maximum number of retries after a transient
 	// network error on /flags requests. If nil, it defaults to 1. Set to 0 to disable.
-	FeatureFlagRequestMaxRetries	*int
+	FeatureFlagRequestMaxRetries *int
 
 	// NextFeatureFlagsPollingTick optionally calculates the next local feature flag
 	// polling delay. When set, it overrides DefaultFeatureFlagsPollingInterval.
-	NextFeatureFlagsPollingTick	func() time.Duration
+	NextFeatureFlagsPollingTick func() time.Duration
 
 	// FlagDefinitionCacheProvider shares local evaluation flag definitions with other
 	// SDK instances through an external cache. Without SecretKey, instances read
@@ -193,20 +191,20 @@ type Config struct {
 	// for guidance.
 	//
 	// EXPERIMENTAL: this API may change in a minor version bump.
-	FlagDefinitionCacheProvider	FlagDefinitionCacheProvider
+	FlagDefinitionCacheProvider FlagDefinitionCacheProvider
 
 	// HistoricalMigration marks captured batches as historical migration traffic.
 	// See https://posthog.com/docs/migrate for migration guidance.
-	HistoricalMigration	bool
+	HistoricalMigration bool
 
 	// Transport is the HTTP transport used by the client. Set it to customize
 	// low-level request behavior such as connection pooling or proxies. If nil,
 	// the client uses a clone of http.DefaultTransport with SDK defaults.
-	Transport	http.RoundTripper
+	Transport http.RoundTripper
 
 	// Logger receives informational, warning, and error messages from background
 	// operations. If nil, the client logs to os.Stderr with the standard logger.
-	Logger	Logger
+	Logger Logger
 
 	// DefaultEventProperties are added to the event properties of every Capture,
 	// Exception, Identify, Alias and GroupIdentify event. They are useful for
@@ -218,7 +216,7 @@ type Config struct {
 	// $set_once, $groups and $group_set fill one level deep when both values are
 	// maps. BeforeSend sees the filled values and can change or remove them. On
 	// Identify, Alias and GroupIdentify they fill EventProperties.
-	DefaultEventProperties	Properties
+	DefaultEventProperties Properties
 
 	// DefaultEventOptions are added to the options of every Capture, Exception,
 	// Identify, Alias and GroupIdentify event, such as process_person_profile or
@@ -228,12 +226,12 @@ type Config struct {
 	// request context left missing or nil. BeforeSend sees the filled options and
 	// can change them. Set an option to false on the event to turn a default off.
 	// They win over the personless default.
-	DefaultEventOptions	Options
+	DefaultEventOptions Options
 
 	// Callback receives success or failure notifications for messages sent to the
 	// PostHog capture API. The message for an Alias does not include its
 	// EventProperties or the DefaultEventProperties filled into them.
-	Callback	Callback
+	Callback Callback
 
 	// BeforeSend is called after SDK enrichment and before messages are serialized.
 	// Return the message to send a modified version, or nil to drop it.
@@ -244,19 +242,19 @@ type Config struct {
 	// $geoip_disable, system context and feature flag properties. The SDK fills
 	// only keys the caller left unset. Its changes are final. To
 	// change an option, set it in Options.
-	BeforeSend	BeforeSendFunc
+	BeforeSend BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
 	// Messages are sent when BatchSize is reached or when Interval fires. If zero,
 	// it defaults to DefaultBatchSize. MaxBatchBytes targets the combined event size.
-	BatchSize	int
+	BatchSize int
 
 	// MaxEventBytes optionally caps the serialized size of a single event. A
 	// larger event is rejected through Callback.Failure with ErrMessageTooBig
 	// rather than being sent. Zero disables the SDK's per-event cap. Backend
 	// request limits still apply; events processed within those limits can be
 	// rejected individually.
-	MaxEventBytes	int
+	MaxEventBytes int
 
 	// MaxBatchBytes bounds the combined serialized size of the events in one
 	// capture request, independently of BatchSize, which bounds event count. A
@@ -265,23 +263,23 @@ type Config struct {
 	// a hard wire limit. An event larger than MaxBatchBytes is sent alone.
 	// When MaxEventBytes is set, MaxBatchBytes must be at least MaxEventBytes.
 	// If zero, it defaults to DefaultMaxBatchBytes.
-	MaxBatchBytes	int
+	MaxBatchBytes int
 
 	// CaptureAICompression selects the compression mode for EnqueueAI request
 	// bodies, independently of Compression. If zero, AI bodies are sent
 	// uncompressed. CompressionZstd is a good choice: AI events are large JSON.
-	CaptureAICompression	CompressionMode
+	CaptureAICompression CompressionMode
 
 	// CaptureAIBatchUploadTimeout is the timeout for uploading one AI batch. AI
 	// events are far larger than analytics events, so the lane gets its own
 	// budget. If zero, it defaults to DefaultCaptureAIBatchUploadTimeout.
-	CaptureAIBatchUploadTimeout	time.Duration
+	CaptureAIBatchUploadTimeout time.Duration
 
 	// CaptureAIMaxQueueSize is the maximum number of AI messages buffered in
 	// memory. It is lower than MaxQueueSize by default because AI events can be
 	// multi-megabyte, so the same count would pin far more memory. If zero, it
 	// defaults to DefaultCaptureAIMaxQueueSize.
-	CaptureAIMaxQueueSize	int
+	CaptureAIMaxQueueSize int
 
 	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
 	// be batched and sent. If zero, it defaults to DefaultMaxQueueSize. It is
@@ -293,57 +291,50 @@ type Config struct {
 	// client can upload should check the error returned by Enqueue for ErrQueueFull
 	// and throttle or retry (or raise MaxQueueSize), otherwise events are dropped,
 	// not delayed.
-	MaxQueueSize	int
+	MaxQueueSize int
 
 	// Verbose enables more frequent and detailed debug logging through Logger.
-	Verbose	bool
+	Verbose bool
 
 	// RetryAfter returns the delay before retrying a failed batch upload. The int
 	// argument is the retry attempt number. If nil, the SDK uses DefaultBackoff's
 	// policy (with ±25% jitter), capped at MaxRetryBackoff. A custom RetryAfter
 	// is used as given, with no jitter added.
-	RetryAfter	func(int) time.Duration
+	RetryAfter func(int) time.Duration
 
 	// MaxRetries is the maximum number of retries after the first send attempt.
 	// It must be in [0,9]. If nil, it defaults to 3 retries (4 total attempts).
-	MaxRetries	*int
+	MaxRetries *int
 
 	// MaxRetryBackoff caps how long a single retry waits. It bounds the default
 	// exponential backoff and clamps a server Retry-After to the same value, so
 	// a large or hostile header cannot park a batch. If zero, it defaults to
 	// DefaultMaxRetryBackoff. A custom RetryAfter is used as given.
-	MaxRetryBackoff	time.Duration
+	MaxRetryBackoff time.Duration
 
 	// ShutdownTimeout is the maximum time Close waits for in-flight messages to be
 	// sent. If zero or negative, Close waits indefinitely for backward compatibility.
-	ShutdownTimeout	time.Duration
+	ShutdownTimeout time.Duration
 
 	// BatchUploadTimeout is the timeout for uploading one batch to the capture
 	// endpoint. If zero, it defaults to DefaultBatchUploadTimeout.
-	BatchUploadTimeout	time.Duration
+	BatchUploadTimeout time.Duration
 
 	// BatchSubmitTimeout is the maximum time to wait when submitting a batch to the
 	// worker pool while its queue is full. If zero, it defaults to
 	// DefaultBatchSubmitTimeout. Set a negative duration for non-blocking behavior
 	// that drops immediately when the queue is full.
-	BatchSubmitTimeout	time.Duration
+	BatchSubmitTimeout time.Duration
 
 	// MaxEnqueuedRequests is the maximum number of batches waiting for upload.
 	// When the queue is full, new batches are dropped and the failure callback is
 	// invoked. If zero, it defaults to DefaultMaxEnqueuedRequests.
-	MaxEnqueuedRequests	int
+	MaxEnqueuedRequests int
 
 	// Compression selects the compression mode for batch payloads. CompressionGzip
 	// compresses payloads and sets the matching Content-Encoding header. If zero,
 	// it defaults to CompressionNone.
-	Compression	CompressionMode
-
-	// A function called by the client to get the current time, `time.Now` is
-	// used by default.
-	// This field is not exported and only exposed internally to control concurrency.
-
-	// maxAttempts is a maximum numbers we try to send data to capture endpoint, must be in range [1,10].
-
+	Compression CompressionMode
 }
 ```
 
@@ -406,53 +397,47 @@ type Capture struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: PostHog ignores the top-level type field on capture events. Use Event for
 	// the captured event name.
-	Type	string
+	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
 	// Set it only when you need idempotency, for example to prevent duplicate events.
-	Uuid	string
+	Uuid string
 	// DistinctId identifies the user or entity that performed Event.
 	// When using EnqueueWithContext, this can be inherited from RequestContext.
-	DistinctId	string
+	DistinctId string
 	// Event is the event name to capture. It must be non-empty.
-	Event	string
+	Event string
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
-	Timestamp	time.Time
+	Timestamp time.Time
 	// Properties are event properties. They win over request-context properties
 	// and Config.DefaultEventProperties, which fill in before BeforeSend only for
 	// keys missing here. A key with a nil value blocks the fill. $set, $set_once,
 	// $groups and $group_set fill one level deep when both values are maps.
-	Properties	Properties
+	Properties Properties
 	// Groups associates the event with group analytics groups. They win key by
 	// key over a $groups map in Properties.
-	Groups	Groups
+	Groups Groups
 	// Options are per-event capture options, sent unchanged. See Options. They
 	// win over request-context options, Config.DefaultEventOptions and the
 	// personless default, which fill in before BeforeSend only for options
 	// missing or nil here.
-	Options	Options
+	Options Options
 	// SendFeatureFlags requests legacy feature flag enrichment on this event.
 	// Deprecated: Prefer Client.EvaluateFlags and pass the returned snapshot via Flags.
 	// Flags writes the canonical $feature/<key> and $active_feature_flags properties.
-	SendFeatureFlags	SendFeatureFlagsValue
+	SendFeatureFlags SendFeatureFlagsValue
 	// Flags, when set, attaches $feature/<key> and $active_feature_flags
 	// properties from a snapshot returned by Client.EvaluateFlags. It is
 	// preferred over SendFeatureFlags: the snapshot guarantees the event
 	// carries the exact values the application branched on and avoids a
 	// hidden /flags request on every capture. Flags takes precedence when
 	// both are set.
-	Flags	*FeatureFlagEvaluations
+	Flags *FeatureFlagEvaluations
 	// IsServer reports whether the event sets $is_server. Enqueue sets it from
 	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
 	// To change $is_server, set the property.
-	IsServer	bool
-	// minimalFlagCalledEvent marks a $feature_flag_called event for the minimal
-	// shape: Enqueue keeps only the allowlisted properties before BeforeSend. It is set only when the server enabled
-	// minimal_flag_called_events and the flag has no linked experiment. This is
-	// the resolved per-event decision (shouldMinimizeFlagCalledEvent's output),
-	// distinct from the plural minimalFlagCalledEvents gate that decision reads.
-
+	IsServer bool
 }
 ```
 
@@ -513,33 +498,33 @@ EnqueueWithContext queues a message and applies any PostHog request context atta
 type Identify struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
-	Type	string
+	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
-	Uuid	string
+	Uuid string
 
 	// DistinctId is the user distinct ID whose person profile should be updated.
-	DistinctId	string
+	DistinctId string
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
-	Timestamp	time.Time
+	Timestamp time.Time
 	// Properties are sent as the $set person properties for DistinctId.
-	Properties	Properties
+	Properties Properties
 	// EventProperties are properties of the $identify event itself, not of the
 	// person. Enqueue fills the keys they leave unset from the request context,
 	// then from Config.DefaultEventProperties, before BeforeSend. A $set in them is merged
 	// under Properties, which win key by key.
-	EventProperties	Properties
+	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
-	Options	Options
+	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
 	// after BeforeSend. To change $geoip_disable, set the property.
-	DisableGeoIP	bool
+	DisableGeoIP bool
 	// IsServer reports whether the event sets $is_server. Enqueue sets it from
 	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
 	// To change $is_server, set the property.
-	IsServer	bool
+	IsServer bool
 }
 ```
 
@@ -569,33 +554,33 @@ Validate checks that the identify message has a DistinctId.
 type Alias struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
-	Type	string
+	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
-	Uuid	string
+	Uuid string
 
 	// Alias is the alternate distinct ID to attach to DistinctId.
-	Alias	string
+	Alias string
 	// DistinctId is the existing user distinct ID that Alias should resolve to.
-	DistinctId	string
+	DistinctId string
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
-	Timestamp	time.Time
+	Timestamp time.Time
 	// EventProperties are properties of the $create_alias event. Enqueue fills
 	// the keys they leave unset from the request context, then from
 	// Config.DefaultEventProperties, before BeforeSend. The SDK's alias property wins over an "alias" key in them.
 	// The Config.Callback message does not include them.
-	EventProperties	Properties
+	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
-	Options	Options
+	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
 	// after BeforeSend. To change $geoip_disable, set the property.
-	DisableGeoIP	bool
+	DisableGeoIP bool
 	// IsServer reports whether the event sets $is_server. Enqueue sets it from
 	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
 	// To change $is_server, set the property.
-	IsServer	bool
+	IsServer bool
 }
 ```
 
@@ -649,37 +634,37 @@ EnqueueAIWithContext queues a message for the dedicated AI capture endpoint and 
 type Exception struct {
 	// Type is reserved for SDK serialization and is overwritten by Enqueue.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
-	Type	string
+	Type string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
-	Uuid	string
+	Uuid string
 
 	// DistinctId identifies the user or entity associated with the exception.
 	// When using EnqueueWithContext, this can be inherited from RequestContext.
-	DistinctId	string
+	DistinctId string
 	// DebugImages lists the binary images referenced by "native" stack
 	// frames, sent as $debug_images for server-side symbolication.
-	DebugImages	[]DebugImage
+	DebugImages []DebugImage
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
-	Timestamp	time.Time
+	Timestamp time.Time
 	// Properties are custom event properties flattened into the exception event.
-	Properties	Properties
+	Properties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
-	Options	Options
+	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
 	// after BeforeSend. To change $geoip_disable, set the property.
-	DisableGeoIP	bool
+	DisableGeoIP bool
 	// IsServer reports whether the event sets $is_server. Enqueue sets it from
 	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
 	// To change $is_server, set the property.
-	IsServer	bool
+	IsServer bool
 
 	// ExceptionList is the list of exception items sent as $exception_list. It must be non-empty.
-	ExceptionList	[]ExceptionItem
+	ExceptionList []ExceptionItem
 	// ExceptionFingerprint optionally overrides PostHog's default exception grouping fingerprint.
-	ExceptionFingerprint	*string
+	ExceptionFingerprint *string
 }
 ```
 
@@ -813,22 +798,22 @@ If FlagKeys contains a key missing from loaded local definitions, EvaluateFlags 
 type EvaluateFlagsPayload struct {
 	// DistinctId is the user distinct ID to evaluate flags for. It is required
 	// unless EvaluateFlagsWithContext can read one from RequestContext.
-	DistinctId	string
+	DistinctId string
 	// DeviceId optionally provides a device_id for remote /flags requests and event deduplication.
-	DeviceId	*string
+	DeviceId *string
 	// Groups supplies group identifiers for group-targeted flags.
-	Groups	Groups
+	Groups Groups
 	// PersonProperties overrides person properties used during flag evaluation.
-	PersonProperties	Properties
+	PersonProperties Properties
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
-	GroupProperties	map[string]Properties
+	GroupProperties map[string]Properties
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests. Flags
 	// that cannot be resolved from loaded local definitions are omitted, and
 	// FeatureFlagEvaluations.UnresolvedFlags lists them with a reason.
-	OnlyEvaluateLocally	bool
+	OnlyEvaluateLocally bool
 	// DisableGeoIP, when non-nil, overrides the client-level DisableGeoIP for
 	// this evaluation only.
-	DisableGeoIP	*bool
+	DisableGeoIP *bool
 	// FlagKeys restricts local evaluation, the remote request, and the returned
 	// snapshot to the named flags. Nil evaluates all flags, while an explicitly
 	// empty slice returns an empty snapshot without evaluating flags. A requested
@@ -836,7 +821,7 @@ type EvaluateFlagsPayload struct {
 	// OnlyEvaluateLocally is true. EvaluateFlags does not cache snapshots, so a
 	// key that does not exist remotely can trigger a request on each call.
 	// Use FeatureFlagEvaluations.Only to filter an existing snapshot in memory.
-	FlagKeys	[]string
+	FlagKeys []string
 }
 ```
 
@@ -857,38 +842,38 @@ EvaluateFlagsWithContext evaluates feature flags and uses the request-scoped dis
 ```go
 type GroupIdentify struct {
 	// Type is the group type, such as "company" or "organization".
-	Type	string
+	Type string
 	// Key is the group key or ID within the group type.
-	Key	string
+	Key string
 	// Uuid is an optional event UUID. If empty, Enqueue generates a random UUID.
 	// If set, it must be a valid UUID; invalid values are replaced with a generated UUID.
-	Uuid	string
+	Uuid string
 
 	// DistinctId is the distinct ID the $groupidentify event is sent under. If
 	// empty, Enqueue uses the request context's distinct ID, then
 	// "$<Type>_<Key>".
-	DistinctId	string
+	DistinctId string
 	// Timestamp is the event timestamp. UTC is preferred; non-UTC values are
 	// converted to the equivalent UTC instant. If zero, Enqueue uses the current time.
-	Timestamp	time.Time
+	Timestamp time.Time
 	// Properties are sent as the $group_set properties for the group.
-	Properties	Properties
+	Properties Properties
 	// EventProperties are properties of the $groupidentify event itself, not of
 	// the group. Enqueue fills the keys they leave unset from the request
 	// context (except its session ID), then from Config.DefaultEventProperties,
 	// before BeforeSend. A $group_set in them is
 	// merged under Properties, which win key by key.
-	EventProperties	Properties
+	EventProperties Properties
 	// Options are per-event capture options, sent unchanged. See Options.
-	Options	Options
+	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
 	// after BeforeSend. To change $geoip_disable, set the property.
-	DisableGeoIP	bool
+	DisableGeoIP bool
 	// IsServer reports whether the event sets $is_server. Enqueue sets it from
 	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
 	// To change $is_server, set the property.
-	IsServer	bool
+	IsServer bool
 }
 ```
 
@@ -958,7 +943,7 @@ type BeforeSendFunc func(Message) Message
 
 BeforeSendFunc is called before a message is converted to the PostHog API format. It can return a modified message, or nil to drop the message. If the hook panics, returns an invalid message, or returns a different message type, the message is dropped.
 
-The SDK passes an isolated copy of SDK-owned mutable fields where practical: Properties, Groups and Options clone common JSON-like maps and slices, and Exception clones its exception list, stack traces, mechanisms, fingerprint, and debug images. Arbitrary reference values stored inside Properties, Groups or Options (for example, pointers or custom mutable structs held as interface&#123;&#125; values) are not deep-cloned and can still share state with the caller. Options is never nil inside the hook, so the hook can call Set directly.
+The SDK passes an isolated copy of SDK-owned mutable fields where practical: Properties, Groups and Options clone common JSON-like maps and slices, and Exception clones its exception list, stack traces, mechanisms, fingerprint, and debug images. Arbitrary reference values stored inside Properties, Groups or Options (for example, pointers or custom mutable structs held as interface{} values) are not deep-cloned and can still share state with the caller. Options is never nil inside the hook, so the hook can call Set directly.
 
 ## SDK utils
 
@@ -1012,97 +997,97 @@ func WithRequestContext(ctx context.Context, requestContext RequestContext) cont
 
 WithRequestContext returns a child context with PostHog request metadata attached. Existing PostHog request context values are inherited: non-empty DistinctId and SessionId override the parent values, and Properties and Options are merged with child values taking precedence.
 
+### Constants
+
 ```go
 const (
 	// SDKName is the library identifier sent in event metadata.
-	SDKName	= "posthog-go"
+	SDKName = "posthog-go"
 
 	// DefaultEndpoint is the default PostHog API host used when Config.Endpoint is empty.
-	DefaultEndpoint	= "https://us.i.posthog.com"
+	DefaultEndpoint = "https://us.i.posthog.com"
 
 	// DefaultInterval is the default flush interval used when Config.Interval is zero.
-	DefaultInterval	= 5 * time.Second
+	DefaultInterval = 5 * time.Second
 
 	// DefaultFeatureFlagsPollingInterval is the default local feature flag reload interval.
-	DefaultFeatureFlagsPollingInterval	= 5 * time.Minute
+	DefaultFeatureFlagsPollingInterval = 5 * time.Minute
 
 	// DefaultFeatureFlagRequestTimeout is the default timeout for feature flag requests.
-	DefaultFeatureFlagRequestTimeout	= 3 * time.Second
+	DefaultFeatureFlagRequestTimeout = 3 * time.Second
 
 	// DefaultBatchSize is the default batch size used when Config.BatchSize is zero.
-	DefaultBatchSize	= 100
+	DefaultBatchSize = 100
 
 	// DefaultMaxAttempts is the total number of capture delivery attempts (1
 	// initial + retries) used when Config.MaxRetries is unset or out of range.
 	// Chosen to match the cross-SDK capture parity standard (posthog-rs
 	// defaults to the same envelope).
-	DefaultMaxAttempts	= 4
+	DefaultMaxAttempts = 4
 
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
 	// events to the capture endpoint.
-	DefaultBatchUploadTimeout	= 10 * time.Second
+	DefaultBatchUploadTimeout = 10 * time.Second
 
 	// DefaultBatchSubmitTimeout is the default timeout for submitting batches
 	// to the worker pool when the queue is full. This allows workers time to
 	// complete during transient latency spikes, reducing unnecessary data loss.
-	DefaultBatchSubmitTimeout	= 100 * time.Millisecond
+	DefaultBatchSubmitTimeout = 100 * time.Millisecond
 
 	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
 	// can be queued for sending.
-	DefaultMaxEnqueuedRequests	= 1000
+	DefaultMaxEnqueuedRequests = 1000
 
 	// DefaultMaxBatchBytes is the default maximum serialized size of one capture
 	// request, used when Config.MaxBatchBytes is zero.
-	DefaultMaxBatchBytes	= 500000
+	DefaultMaxBatchBytes = 500000
 
 	// DefaultCaptureAIBatchUploadTimeout is the default AI-lane upload timeout,
 	// used when Config.CaptureAIBatchUploadTimeout is zero. Larger than
 	// DefaultBatchUploadTimeout because AI batches are far bigger.
-	DefaultCaptureAIBatchUploadTimeout	= 30 * time.Second
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
 
 	// DefaultCaptureAIMaxQueueSize is the default AI-lane queue capacity, used
 	// when Config.CaptureAIMaxQueueSize is zero. Lower than DefaultMaxQueueSize
 	// because AI events can be multi-megabyte.
-	DefaultCaptureAIMaxQueueSize	= 1000
+	DefaultCaptureAIMaxQueueSize = 1000
 
 	// DefaultMaxQueueSize is the default in-memory message queue capacity used when
 	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
 	// posthog-node defaults so backend SDKs behave consistently under bursty load.
-	DefaultMaxQueueSize	= 10000
+	DefaultMaxQueueSize = 10000
 )
 ```
-
-
 
 ```go
 const (
 	// FeatureFlagErrorErrorsWhileComputing indicates the server returned errorsWhileComputingFlags=true
-	FeatureFlagErrorErrorsWhileComputing	= "errors_while_computing_flags"
+	FeatureFlagErrorErrorsWhileComputing = "errors_while_computing_flags"
 
 	// FeatureFlagErrorFlagMissing indicates the requested flag was not in the API response
-	FeatureFlagErrorFlagMissing	= "flag_missing"
+	FeatureFlagErrorFlagMissing = "flag_missing"
 
 	// FeatureFlagErrorLocalEvaluationInconclusive indicates the flag has a loaded local
 	// definition, but neither local evaluation nor a remote fallback resolved it
-	FeatureFlagErrorLocalEvaluationInconclusive	= "local_evaluation_inconclusive"
+	FeatureFlagErrorLocalEvaluationInconclusive = "local_evaluation_inconclusive"
 
 	// FeatureFlagErrorEvaluationFailed indicates the flag was present but failed to evaluate due to a transient server error
-	FeatureFlagErrorEvaluationFailed	= "evaluation_failed"
+	FeatureFlagErrorEvaluationFailed = "evaluation_failed"
 
 	// FeatureFlagErrorQuotaLimited indicates rate/quota limit was exceeded
-	FeatureFlagErrorQuotaLimited	= "quota_limited"
+	FeatureFlagErrorQuotaLimited = "quota_limited"
 
 	// FeatureFlagErrorTimeout indicates request timed out
-	FeatureFlagErrorTimeout	= "timeout"
+	FeatureFlagErrorTimeout = "timeout"
 
 	// FeatureFlagErrorConnectionError indicates network connectivity issue
-	FeatureFlagErrorConnectionError	= "connection_error"
+	FeatureFlagErrorConnectionError = "connection_error"
 
 	// FeatureFlagErrorUnknownError indicates an unexpected error occurred
-	FeatureFlagErrorUnknownError	= "unknown_error"
+	FeatureFlagErrorUnknownError = "unknown_error"
 
 	// FeatureFlagErrorAPIErrorPrefix is the prefix for API errors with status codes
-	FeatureFlagErrorAPIErrorPrefix	= "api_error_"
+	FeatureFlagErrorAPIErrorPrefix = "api_error_"
 )
 ```
 
@@ -1112,29 +1097,25 @@ Feature flag error type constants for the $feature\_flag\_error property. These 
 const (
 
 	// CACHE_DEFAULT_SIZE is the number of feature flag calls tracked for local deduplication.
-	CACHE_DEFAULT_SIZE	= 300_000
+	CACHE_DEFAULT_SIZE = 300_000
 
 	// DefaultIdleConns is the default max idle connections for the HTTP client.
-	DefaultIdleConns	= 100
+	DefaultIdleConns = 100
 	// DefaultIdleConnsPerHost is the default max idle connections per host.
 	// This is higher than http.DefaultTransport's value of 2 to reduce
 	// connection churn when sending batches.
-	DefaultIdleConnsPerHost	= 10
+	DefaultIdleConnsPerHost = 10
 )
 ```
-
-
 
 ```go
 const (
 	// HeaderPostHogDistinctID is the HTTP header used to propagate a PostHog distinct ID.
-	HeaderPostHogDistinctID	= "X-PostHog-Distinct-Id"
+	HeaderPostHogDistinctID = "X-PostHog-Distinct-Id"
 	// HeaderPostHogSessionID is the HTTP header used to propagate a PostHog session ID.
-	HeaderPostHogSessionID	= "X-PostHog-Session-Id"
+	HeaderPostHogSessionID = "X-PostHog-Session-Id"
 )
 ```
-
-
 
 ```go
 const (
@@ -1142,14 +1123,8 @@ const (
 	// used when Config.MaxRetryBackoff is zero. Matches posthog-rs and
 	// posthog-python.
 	DefaultMaxRetryBackoff = 30 * time.Second
-
-	// defaultBackoffJitter spreads retries from many clients that failed
-	// together, so they don't all return to the server at the same moment.
-
 )
 ```
-
-
 
 ```go
 const (
@@ -1158,55 +1133,53 @@ const (
 )
 ```
 
-
-
 ```go
 const Version = "1.39.0"
 ```
 
 Version of the client.
 
+### Variables
+
 ```go
 var (
 	// This error is returned by methods of the `Client` interface when they are
 	// called after the client was already closed.
-	ErrClosed	= errors.New("the client was already closed")
+	ErrClosed = errors.New("the client was already closed")
 
 	// This error is used to notify the application that too many requests are
 	// already being sent and no more messages can be accepted.
-	ErrTooManyRequests	= errors.New("too many requests are already in-flight")
+	ErrTooManyRequests = errors.New("too many requests are already in-flight")
 
 	// This error is used to notify the client callbacks that a message send
 	// failed because the JSON representation of a message exceeded the upper
 	// limit.
-	ErrMessageTooBig	= errors.New("the message exceeds the maximum allowed size")
+	ErrMessageTooBig = errors.New("the message exceeds the maximum allowed size")
 
 	// ErrNoSecretKey is returned when a SecretKey is required for the requested
 	// operation but was not configured.
-	ErrNoSecretKey	= errors.New("no SecretKey provided")
+	ErrNoSecretKey = errors.New("no SecretKey provided")
 
 	// ErrNoPersonalAPIKey is a deprecated alias for ErrNoSecretKey. It refers to
 	// the same error value, so errors.Is checks against either name still match.
 	//
 	// Deprecated: use ErrNoSecretKey.
-	ErrNoPersonalAPIKey	= ErrNoSecretKey
+	ErrNoPersonalAPIKey = ErrNoSecretKey
 
 	// ErrNoDistinctID is returned when distinct_id is required for the requested
 	// operation but was not provided.
-	ErrNoDistinctID	= errors.New("no distinct_id provided")
+	ErrNoDistinctID = errors.New("no distinct_id provided")
 
 	// ErrQueueFull is returned by Enqueue/EnqueueWithContext when the in-memory
 	// message queue is full. The message is dropped (not retried) and the drop is
 	// reported only through this returned error, not through Callback.Failure.
-	ErrQueueFull	= errors.New("the message queue is full, the message was dropped")
+	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
 	// ErrSDKDisabled is returned by every method of a disabled client: one built
 	// with Config.Disabled, or with an empty or personal (phx_) project API key.
-	ErrSDKDisabled	= errors.New("posthog SDK is disabled")
+	ErrSDKDisabled = errors.New("posthog SDK is disabled")
 )
 ```
-
-
 
 ```go
 var ErrFlagNotFound = errors.New("feature flag not found")
@@ -1218,16 +1191,7 @@ ErrFlagNotFound is returned when a feature flag does not exist or is disabled. U
 
 ```go
 type FeatureFlagEvaluations struct {
-
-	// errorsWhileComputing and quotaLimited capture response-level error
-	// signals from the /flags request. They are combined with per-flag
-	// errors in the $feature_flag_called event so consumers see the same
-	// granularity the legacy single-flag path emits.
-
-	// unresolved maps each flag with a loaded local definition that neither
-	// local evaluation nor the remote fallback resolved to the reason.
-	// Filtered snapshots leave it empty.
-
+	// contains filtered or unexported fields
 }
 ```
 
@@ -1306,13 +1270,13 @@ Snapshots returned by Only and OnlyAccessed have no unresolved flags.
 ```go
 type APIError struct {
 	// StatusCode is the HTTP status code returned by the PostHog API.
-	StatusCode	int
+	StatusCode int
 	// Message is the error message returned by or derived from the API response.
-	Message	string
+	Message string
 }
 ```
 
-APIError represents an HTTP API error with a status code. This allows classifyError to generate api\_error\_&#123;status&#125; strings.
+APIError represents an HTTP API error with a status code. This allows classifyError to generate api\_error\_{status} strings.
 
 #### `APIError.Error`
 
@@ -1344,21 +1308,21 @@ APIMessage is a wire-format message produced by Message.APIfy and passed to call
 type AliasInApi struct {
 	// Type is the legacy message type sent to the batch API.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
-	Uuid	string	`json:"uuid"`
+	Uuid string `json:"uuid"`
 	// Library is the $lib the event is stored with.
-	Library	string	`json:"library"`
+	Library string `json:"library"`
 	// LibraryVersion is the $lib_version the event is stored with.
-	LibraryVersion	string	`json:"library_version"`
+	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
-	Timestamp	time.Time	`json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 
 	// Properties contains alias-specific event properties.
-	Properties	AliasInApiProperties	`json:"properties"`
+	Properties AliasInApiProperties `json:"properties"`
 
 	// Event is always $create_alias for Alias messages.
-	Event	string	`json:"event"`
+	Event string `json:"event"`
 }
 ```
 
@@ -1368,21 +1332,19 @@ AliasInApi is the wire-format payload produced from an Alias message.
 
 ```go
 type AliasInApiProperties struct {
-
 	// DistinctId is the canonical user distinct ID.
-	DistinctId	string	`json:"distinct_id"`
+	DistinctId string `json:"distinct_id"`
 	// Alias is the alternate distinct ID being linked to DistinctId.
-	Alias	string	`json:"alias"`
+	Alias string `json:"alias"`
 	// Lib is the $lib the event is stored with.
-	Lib	string	`json:"$lib"`
+	Lib string `json:"$lib"`
 	// LibVersion is the $lib_version the event is stored with.
-	LibVersion	string	`json:"$lib_version"`
+	LibVersion string `json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
 	// Omitted entirely when nil (Config.IsServer resolved to false).
-	IsServer	*bool	`json:"$is_server,omitempty"`
+	IsServer *bool `json:"$is_server,omitempty"`
 	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
-	DisableGeoIP	bool	`json:"$geoip_disable,omitempty"`
-
+	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
 }
 ```
 
@@ -1393,8 +1355,6 @@ AliasInApiProperties is the wire-format properties object for an Alias message.
 ```go
 func (ctx AliasInApiProperties) ToProperties() Properties
 ```
-
-
 
 ### `Backoff`
 
@@ -1457,7 +1417,6 @@ NewBackoff creates a Backoff with the provided base duration, exponential factor
 
 ```go
 type Callback interface {
-
 	// Success is called for every message that was successfully sent to the API.
 	Success(APIMessage)
 
@@ -1478,17 +1437,17 @@ Callback methods must return quickly and avoid long blocking operations so they 
 ```go
 type CaptureEventError struct {
 	// EventUUID is the uuid of the rejected event (matches Capture.Uuid etc.).
-	EventUUID	string
+	EventUUID string
 	// Result is the server's per-event directive, e.g. "drop" or "retry".
-	Result	string
+	Result string
 	// Details is the server-supplied explanation, when present (may be empty).
-	Details	string
+	Details string
 	// Exhausted is true when the event was still retryable but the SDK ran out
 	// of attempts, false for a server-directed terminal drop.
-	Exhausted	bool
+	Exhausted bool
 	// Endpoint is the capture path the event was sent to, so one Callback can
 	// tell the analytics and AI lanes apart.
-	Endpoint	string
+	Endpoint string
 }
 ```
 
@@ -1502,8 +1461,6 @@ This error type is produced exclusively on the 200-with-partial-results path —
 func (e *CaptureEventError) Error() string
 ```
 
-
-
 ### `CaptureInApi`
 
 ```go
@@ -1511,30 +1468,30 @@ type CaptureInApi struct {
 	// Type is the legacy message discriminator retained for callbacks.
 	// Deprecated: PostHog ignores this top-level field for capture events, so it
 	// is no longer serialized. Use Event for the captured event name.
-	Type	string	`json:"-"`
+	Type string `json:"-"`
 	// Uuid is the valid event UUID sent to the batch API.
-	Uuid	string	`json:"uuid"`
+	Uuid string `json:"uuid"`
 	// Library is the $lib the event is stored with, for callbacks. It is not
 	// serialized: the wire carries $lib in Properties.
-	Library	string	`json:"-"`
+	Library string `json:"-"`
 	// LibraryVersion is the $lib_version the event is stored with, for
 	// callbacks. It is not serialized: the wire carries $lib_version in
 	// Properties.
-	LibraryVersion	string	`json:"-"`
+	LibraryVersion string `json:"-"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
-	Timestamp	time.Time	`json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 
 	// DistinctId identifies the user or entity for the event.
-	DistinctId	string	`json:"distinct_id"`
+	DistinctId string `json:"distinct_id"`
 	// Event is the captured event name.
-	Event	string	`json:"event"`
+	Event string `json:"event"`
 	// Properties contains event, SDK, system, group, and feature flag properties.
-	Properties	Properties	`json:"properties"`
+	Properties Properties `json:"properties"`
 	// SendFeatureFlags carries the legacy send_feature_flags value for callbacks.
 	// Deprecated: PostHog ignores this top-level field, so it is no longer
 	// serialized. Use Capture.Flags to send the canonical $feature/<key> and
 	// $active_feature_flags properties.
-	SendFeatureFlags	SendFeatureFlagsValue	`json:"-"`
+	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 ```
 
@@ -1545,9 +1502,9 @@ CaptureInApi is the wire-format payload produced from a Capture message.
 ```go
 type CaptureLocalError struct {
 	// Endpoint is the capture path the event was bound for.
-	Endpoint	string
+	Endpoint string
 	// Err is the underlying cause.
-	Err	error
+	Err error
 }
 ```
 
@@ -1561,31 +1518,27 @@ A full in-memory queue is not reported here: Enqueue returns ErrQueueFull to the
 func (e *CaptureLocalError) Error() string
 ```
 
-
-
 #### `CaptureLocalError.Unwrap`
 
 ```go
 func (e *CaptureLocalError) Unwrap() error
 ```
 
-
-
 ### `CaptureRequestError`
 
 ```go
 type CaptureRequestError struct {
 	// StatusCode is the HTTP status, or 0 if the request never got a response.
-	StatusCode	int
+	StatusCode int
 	// Code is the machine-readable error from the response body (may be empty).
-	Code	string
+	Code string
 	// Description is the human-readable error from the response body (may be empty).
-	Description	string
+	Description string
 	// Err is the underlying transport or body-parse error, if any.
-	Err	error
+	Err error
 	// Endpoint is the capture path the request was sent to, so one Callback can
 	// tell the analytics and AI lanes apart.
-	Endpoint	string
+	Endpoint string
 }
 ```
 
@@ -1599,32 +1552,28 @@ This error type covers batch-level failures — transport errors, terminal HTTP 
 func (e *CaptureRequestError) Error() string
 ```
 
-
-
 #### `CaptureRequestError.Unwrap`
 
 ```go
 func (e *CaptureRequestError) Unwrap() error
 ```
 
-
-
 ### `CommonResponseFields`
 
 ```go
 type CommonResponseFields struct {
 	// QuotaLimited lists quota-limited resources returned by the API.
-	QuotaLimited	[]string	`json:"quota_limited"`
+	QuotaLimited []string `json:"quota_limited"`
 	// RequestId is the API request identifier for tracing flag evaluation.
-	RequestId	string	`json:"requestId"`
+	RequestId string `json:"requestId"`
 	// EvaluatedAt is the server evaluation timestamp, when returned.
-	EvaluatedAt	*int64	`json:"evaluatedAt"`
+	EvaluatedAt *int64 `json:"evaluatedAt"`
 	// ErrorsWhileComputingFlags reports whether the server had errors computing any flags.
-	ErrorsWhileComputingFlags	bool	`json:"errorsWhileComputingFlags"`
+	ErrorsWhileComputingFlags bool `json:"errorsWhileComputingFlags"`
 	// MinimalFlagCalledEvents reports whether the server enabled minimal
 	// $feature_flag_called events for this project. The server sends it only
 	// when the gate is on; absence means full events.
-	MinimalFlagCalledEvents	bool	`json:"minimalFlagCalledEvents"`
+	MinimalFlagCalledEvents bool `json:"minimalFlagCalledEvents"`
 }
 ```
 
@@ -1641,17 +1590,17 @@ CompressionMode specifies the compression algorithm for batch payloads.
 ```go
 const (
 	// CompressionNone disables compression (default).
-	CompressionNone	CompressionMode	= 0
+	CompressionNone CompressionMode = 0
 	// CompressionGzip enables GZIP compression for batch payloads.
-	CompressionGzip	CompressionMode	= 1
+	CompressionGzip CompressionMode = 1
 	// CompressionZstd enables Zstandard compression.
-	CompressionZstd	CompressionMode	= 2
+	CompressionZstd CompressionMode = 2
 	// CompressionDeflate enables zlib (RFC 1950) compression, sent as
 	// Content-Encoding: deflate.
-	CompressionDeflate	CompressionMode	= 3
+	CompressionDeflate CompressionMode = 3
 	// CompressionBrotli enables Brotli compression, sent as
 	// Content-Encoding: br.
-	CompressionBrotli	CompressionMode	= 4
+	CompressionBrotli CompressionMode = 4
 )
 ```
 
@@ -1667,16 +1616,15 @@ String returns a human-readable codec name, used in config validation errors and
 
 ```go
 type ConfigError struct {
-
 	// A human-readable message explaining why the configuration field's value
 	// is invalid.
-	Reason	string
+	Reason string
 
 	// The name of the configuration field that was carrying an invalid value.
-	Field	string
+	Field string
 
 	// The value of the configuration field that caused the error.
-	Value	interface{}
+	Value interface{}
 }
 ```
 
@@ -1695,25 +1643,25 @@ Error returns a human-readable configuration error message.
 ```go
 type DebugImage struct {
 	// Type is the image format: "elf" on Linux, "macho" on macOS.
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// DebugID identifies the uploaded symbol set for this image.
-	DebugID	string	`json:"debug_id"`
+	DebugID string `json:"debug_id"`
 	// CodeID is the full code identifier (the complete GNU build ID on ELF).
-	CodeID	string	`json:"code_id,omitempty"`
+	CodeID string `json:"code_id,omitempty"`
 	// ImageAddr is the runtime load address of the image, as hex.
-	ImageAddr	string	`json:"image_addr"`
+	ImageAddr string `json:"image_addr"`
 	// ImageSize is the loaded extent of the image in bytes.
-	ImageSize	uint64	`json:"image_size,omitempty"`
+	ImageSize uint64 `json:"image_size,omitempty"`
 	// ImageVmaddr is the link-time base address of the image, as hex.
-	ImageVmaddr	string	`json:"image_vmaddr,omitempty"`
+	ImageVmaddr string `json:"image_vmaddr,omitempty"`
 	// CodeFile is the path of the binary on disk.
-	CodeFile	string	`json:"code_file,omitempty"`
+	CodeFile string `json:"code_file,omitempty"`
 	// Arch is the processor architecture the image was built for.
-	Arch	string	`json:"arch"`
+	Arch string `json:"arch"`
 }
 ```
 
-DebugImage describes a binary image loaded into the process, sent as the event-level $debug\_images property so PostHog can symbolicate raw frame addresses against debug symbols uploaded with \`posthog-cli symbol-sets upload\`.
+DebugImage describes a binary image loaded into the process, sent as the event-level $debug\_images property so PostHog can symbolicate raw frame addresses against debug symbols uploaded with `posthog-cli symbol-sets upload`.
 
 ### `DebugImageProvider`
 
@@ -1730,15 +1678,15 @@ DebugImageProvider is implemented by stack trace extractors that can also report
 ```go
 type DecideRequestData struct {
 	// ApiKey is the PostHog project API key.
-	ApiKey	string	`json:"api_key"`
+	ApiKey string `json:"api_key"`
 	// DistinctId is the user distinct ID to evaluate flags for.
-	DistinctId	string	`json:"distinct_id"`
+	DistinctId string `json:"distinct_id"`
 	// Groups contains group identifiers for group-targeted flags.
-	Groups	Groups	`json:"groups"`
+	Groups Groups `json:"groups"`
 	// PersonProperties overrides person properties for this evaluation.
-	PersonProperties	Properties	`json:"person_properties"`
+	PersonProperties Properties `json:"person_properties"`
 	// GroupProperties overrides group properties for this evaluation, keyed by group type.
-	GroupProperties	map[string]Properties	`json:"group_properties"`
+	GroupProperties map[string]Properties `json:"group_properties"`
 }
 ```
 
@@ -1749,9 +1697,9 @@ DecideRequestData is the legacy wire-format request body for flag decide calls.
 ```go
 type DecideResponse struct {
 	// FeatureFlags contains evaluated flag values keyed by flag key.
-	FeatureFlags	map[string]interface{}	`json:"featureFlags"`
+	FeatureFlags map[string]interface{} `json:"featureFlags"`
 	// FeatureFlagPayloads contains raw payloads keyed by flag key.
-	FeatureFlagPayloads	map[string]json.RawMessage	`json:"featureFlagPayloads"`
+	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 ```
 
@@ -1800,14 +1748,47 @@ DescriptionExtractor defines the interface for extracting a human-readable descr
 
 Implementations should always return a non-empty string; returning an empty string will prevent the error from being captured.
 
+### `EnqueueClient`
+
+```go
+type EnqueueClient interface {
+	// Enqueue queues a message to be sent by the client when the conditions for a batch
+	// upload are met.
+	// This is the main method you'll be using, a typical flow would look like
+	// this:
+	//
+	//	client, err := posthog.New(apiKey)
+	//	if err != nil {
+	//	    return err
+	//	}
+	//	...
+	//	client.Enqueue(posthog.Capture{ ... })
+	//	...
+	//	client.Close()
+	//
+	// Enqueue returns an error if the message could not be queued, which happens
+	// when the client is closed, the message is invalid, or the in-memory queue
+	// is full (ErrQueueFull) -- in the latter case the message is dropped rather
+	// than blocking the caller. A full-queue drop is reported only through this
+	// returned error, not through Callback.Failure.
+	//
+	// Bulk or backfill workloads that can enqueue faster than the client uploads
+	// should check the returned error for ErrQueueFull and throttle or retry (or
+	// raise Config.MaxQueueSize); otherwise events are dropped, not delayed.
+	Enqueue(Message) error
+}
+```
+
+EnqueueClient is the minimal interface implemented by clients that can queue PostHog messages.
+
 ### `ErrorExtractor`
 
 ```go
 type ErrorExtractor struct {
 	// ErrorKeys are attribute keys to inspect for error values, case-insensitively.
-	ErrorKeys	[]string
+	ErrorKeys []string
 	// Fallback is returned when no matching error attribute is found.
-	Fallback	string
+	Fallback string
 }
 ```
 
@@ -1829,19 +1810,19 @@ ExtractDescription returns the first matching error string from the slog record 
 type ExceptionInApi struct {
 	// Type is the legacy message type sent to the batch API.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
-	Uuid	string	`json:"uuid"`
+	Uuid string `json:"uuid"`
 	// Library is the $lib the event is stored with.
-	Library	string	`json:"library"`
+	Library string `json:"library"`
 	// LibraryVersion is the $lib_version the event is stored with.
-	LibraryVersion	string	`json:"library_version"`
+	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
-	Timestamp	time.Time	`json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 	// Event is always $exception for Exception messages.
-	Event	string	`json:"event"`
+	Event string `json:"event"`
 	// Properties contains built-in and custom exception properties.
-	Properties	ExceptionInApiProperties	`json:"properties"`
+	Properties ExceptionInApiProperties `json:"properties"`
 }
 ```
 
@@ -1851,29 +1832,27 @@ ExceptionInApi is the wire-format payload produced from an Exception message.
 
 ```go
 type ExceptionInApiProperties struct {
-
 	// Lib is the $lib the event is stored with.
-	Lib	string	`json:"$lib"`
+	Lib string `json:"$lib"`
 	// LibVersion is the $lib_version the event is stored with.
-	LibVersion	string	`json:"$lib_version"`
+	LibVersion string `json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
 	// Omitted entirely when nil (Config.IsServer resolved to false).
-	IsServer	*bool	`json:"$is_server,omitempty"`
+	IsServer *bool `json:"$is_server,omitempty"`
 	// DistinctId is the user distinct ID associated with the exception.
-	DistinctId	string	`json:"distinct_id"`
+	DistinctId string `json:"distinct_id"`
 	// DisableGeoIP is sent as $geoip_disable when GeoIP lookup is disabled.
-	DisableGeoIP	bool	`json:"$geoip_disable,omitempty"`
+	DisableGeoIP bool `json:"$geoip_disable,omitempty"`
 	// DebugImages is sent as $debug_images when "native" frames are present.
-	DebugImages	[]DebugImage	`json:"$debug_images,omitempty"`
+	DebugImages []DebugImage `json:"$debug_images,omitempty"`
 	// ExceptionList is sent as $exception_list.
-	ExceptionList	[]ExceptionItem	`json:"$exception_list"`
+	ExceptionList []ExceptionItem `json:"$exception_list"`
 	// ExceptionFingerprint is sent as $exception_fingerprint when provided.
-	ExceptionFingerprint	*string	`json:"$exception_fingerprint,omitempty"`
+	ExceptionFingerprint *string `json:"$exception_fingerprint,omitempty"`
 
 	// Custom is flattened into the wire "properties" on marshal.
 	// Typed fields win on collision.
-	Custom	Properties	`json:"-"`
-
+	Custom Properties `json:"-"`
 }
 ```
 
@@ -1893,20 +1872,18 @@ MarshalJSON lets users add extra keys (via Custom) to the event's JSON output ne
 func (ctx ExceptionInApiProperties) ToProperties() Properties
 ```
 
-
-
 ### `ExceptionItem`
 
 ```go
 type ExceptionItem struct {
 	// Type is rendered as the exception title in the PostHog UI.
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// Value is rendered as the exception description in the PostHog UI.
-	Value	string	`json:"value"`
+	Value string `json:"value"`
 	// Mechanism describes how the exception was produced or handled.
-	Mechanism	*ExceptionMechanism	`json:"mechanism,omitempty"`
+	Mechanism *ExceptionMechanism `json:"mechanism,omitempty"`
 	// Stacktrace contains stack frames for the exception. Use StackTraceExtractor to generate it.
-	Stacktrace	*ExceptionStacktrace	`json:"stacktrace,omitempty"`
+	Stacktrace *ExceptionStacktrace `json:"stacktrace,omitempty"`
 }
 ```
 
@@ -1925,9 +1902,9 @@ Validate checks that the exception item has Type and Value set.
 ```go
 type ExceptionMechanism struct {
 	// Handled reports whether the exception was handled by application code.
-	Handled	*bool	`json:"handled,omitempty"`
+	Handled *bool `json:"handled,omitempty"`
 	// Synthetic reports whether the exception was synthesized by instrumentation.
-	Synthetic	*bool	`json:"synthetic,omitempty"`
+	Synthetic *bool `json:"synthetic,omitempty"`
 }
 ```
 
@@ -1938,9 +1915,9 @@ ExceptionMechanism describes whether an exception was handled or synthesized.
 ```go
 type ExceptionStacktrace struct {
 	// Type is the stack trace representation type. The default extractor uses "raw".
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// Frames is the ordered list of stack frames.
-	Frames	[]StackFrame	`json:"frames"`
+	Frames []StackFrame `json:"frames"`
 }
 ```
 
@@ -1951,20 +1928,20 @@ ExceptionStacktrace is a PostHog-compatible stack trace.
 ```go
 type FeatureFlag struct {
 	// Key is the feature flag key.
-	Key	string	`json:"key"`
+	Key string `json:"key"`
 	// RolloutPercentage is the top-level rollout percentage, when configured.
-	RolloutPercentage	*float64	`json:"rollout_percentage"`
+	RolloutPercentage *float64 `json:"rollout_percentage"`
 	// Active reports whether the flag is active.
-	Active	bool	`json:"active"`
+	Active bool `json:"active"`
 	// Filters contains matching conditions, variants, and payloads.
-	Filters	Filter	`json:"filters"`
+	Filters Filter `json:"filters"`
 	// EnsureExperienceContinuity indicates that the flag requires server-side continuity checks.
-	EnsureExperienceContinuity	*bool	`json:"ensure_experience_continuity"`
+	EnsureExperienceContinuity *bool `json:"ensure_experience_continuity"`
 	// BucketingIdentifier optionally selects the property used for hash bucketing.
-	BucketingIdentifier	*string	`json:"bucketing_identifier"`
+	BucketingIdentifier *string `json:"bucketing_identifier"`
 	// HasExperiment reports whether the flag is linked to an experiment.
 	// Nil when the server does not send it (older deployments).
-	HasExperiment	*bool	`json:"has_experiment"`
+	HasExperiment *bool `json:"has_experiment"`
 }
 ```
 
@@ -1975,13 +1952,13 @@ FeatureFlag is a feature flag definition returned by the local evaluation endpoi
 ```go
 type FeatureFlagCondition struct {
 	// Properties are the targeting rules in this condition group.
-	Properties	[]FlagProperty	`json:"properties"`
+	Properties []FlagProperty `json:"properties"`
 	// RolloutPercentage is the rollout percentage for this condition group.
-	RolloutPercentage	*float64	`json:"rollout_percentage"`
+	RolloutPercentage *float64 `json:"rollout_percentage"`
 	// Variant is the variant key forced by this condition group, when any.
-	Variant	*string	`json:"variant"`
+	Variant *string `json:"variant"`
 	// AggregationGroupTypeIndex identifies the group type for this condition group.
-	AggregationGroupTypeIndex	*uint8	`json:"aggregation_group_type_index"`
+	AggregationGroupTypeIndex *uint8 `json:"aggregation_group_type_index"`
 }
 ```
 
@@ -1992,22 +1969,22 @@ FeatureFlagCondition describes one condition group for a feature flag.
 ```go
 type FeatureFlagPayload struct {
 	// Key is the feature flag key to evaluate. It is required.
-	Key	string
+	Key string
 	// DistinctId is the user distinct ID to evaluate the flag for. It is required.
-	DistinctId	string
+	DistinctId string
 	// DeviceId optionally provides a device_id for remote /flags requests and event deduplication.
-	DeviceId	*string
+	DeviceId *string
 	// Groups supplies group identifiers for group-targeted flags.
-	Groups	Groups
+	Groups Groups
 	// PersonProperties overrides person properties used during flag evaluation.
-	PersonProperties	Properties
+	PersonProperties Properties
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
-	GroupProperties	map[string]Properties
+	GroupProperties map[string]Properties
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
-	OnlyEvaluateLocally	bool
+	OnlyEvaluateLocally bool
 	// SendFeatureFlagEvents controls whether $feature_flag_called is captured.
 	// Nil defaults to true during validation.
-	SendFeatureFlagEvents	*bool
+	SendFeatureFlagEvents *bool
 }
 ```
 
@@ -2018,20 +1995,20 @@ FeatureFlagPayload configures a single legacy feature flag evaluation. It is use
 ```go
 type FeatureFlagPayloadNoKey struct {
 	// DistinctId is the user distinct ID to evaluate flags for. It is required.
-	DistinctId	string
+	DistinctId string
 	// DeviceId optionally provides a device_id for remote /flags requests and event deduplication.
-	DeviceId	*string
+	DeviceId *string
 	// Groups supplies group identifiers for group-targeted flags.
-	Groups	Groups
+	Groups Groups
 	// PersonProperties overrides person properties used during flag evaluation.
-	PersonProperties	Properties
+	PersonProperties Properties
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
-	GroupProperties	map[string]Properties
+	GroupProperties map[string]Properties
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
-	OnlyEvaluateLocally	bool
+	OnlyEvaluateLocally bool
 	// SendFeatureFlagEvents is reserved for parity with single-flag payloads.
 	// Nil defaults to true during validation; GetAllFlags does not currently emit per-flag access events.
-	SendFeatureFlagEvents	*bool
+	SendFeatureFlagEvents *bool
 }
 ```
 
@@ -2042,25 +2019,20 @@ FeatureFlagPayloadNoKey configures legacy evaluation of all flags for one user. 
 ```go
 type FeatureFlagResult struct {
 	// Key is the feature flag key that was evaluated
-	Key	string
+	Key string
 
 	// Enabled indicates whether the feature flag evaluation determined
 	// the flag to be in an enabled state.
-	Enabled	bool
+	Enabled bool
 
 	// RawPayload is the serialized JSON payload associated with the flag variant.
 	// Nil if no payload is configured.
 	// Use GetPayloadAs to unmarshal the payload into a specific type.
-	RawPayload	*string
+	RawPayload *string
 
 	// Variant is the variant key if this is a multivariate flag.
 	// Nil for boolean flags.
-	Variant	*string
-
-	// payloadStore and variantStore hold the actual string values so that
-	// RawPayload/Variant can point into the same allocation as the struct itself,
-	// avoiding separate heap escapes for the *string pointers.
-
+	Variant *string
 }
 ```
 
@@ -2078,24 +2050,10 @@ GetPayloadAs unmarshals the JSON payload into the provided type. Returns an erro
 
 ```go
 type FeatureFlagsPoller struct {
-	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
-	// After the request the channel get closed.
-
-	// ctx covers polling work; cancel aborts it when shutdown outlives its deadline.
-
-	// shutdownCtx is the context handed to the cache provider's Shutdown. Written
-	// before shutdown is closed, read by the polling goroutine after it observes that.
-
-	// state holds all flag-related data using atomic pointer for lock-free reads
-
 	// Logger receives poller warnings and errors.
-	Logger	Logger
+	Logger Logger
 	// Endpoint is the PostHog API host used by the poller.
-	Endpoint	string
-
-	// warnedUnresolvableFlags maps each flag key already warned about as never locally
-	// resolvable to the definition it was warned about at.
-
+	Endpoint string
 }
 ```
 
@@ -2154,15 +2112,15 @@ GetFeatureFlags returns the locally loaded feature flag definitions. It waits fo
 ```go
 type FeatureFlagsResponse struct {
 	// Flags contains feature flag definitions for local evaluation.
-	Flags	[]FeatureFlag	`json:"flags"`
+	Flags []FeatureFlag `json:"flags"`
 	// GroupTypeMapping maps group type indexes to group type names.
-	GroupTypeMapping	*map[string]string	`json:"group_type_mapping"`
+	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
 	// Cohorts contains cohort definitions referenced by local feature flags.
-	Cohorts	map[string]PropertyGroup	`json:"cohorts"`
+	Cohorts map[string]PropertyGroup `json:"cohorts"`
 	// MinimalFlagCalledEvents reports whether the server enabled minimal
 	// $feature_flag_called events for this project. The server sends it only
 	// when the gate is on; absence means full events.
-	MinimalFlagCalledEvents	bool	`json:"minimal_flag_called_events"`
+	MinimalFlagCalledEvents bool `json:"minimal_flag_called_events"`
 }
 ```
 
@@ -2172,16 +2130,15 @@ FeatureFlagsResponse is the wire-format response from the local evaluation endpo
 
 ```go
 type FieldError struct {
-
 	// The human-readable representation of the type of structure that wasn't
 	// initialized properly.
-	Type	string
+	Type string
 
 	// The name of the field that wasn't properly initialized.
-	Name	string
+	Name string
 
 	// The value of the field that wasn't properly initialized.
-	Value	interface{}
+	Value interface{}
 }
 ```
 
@@ -2200,26 +2157,26 @@ Error returns a human-readable field validation error message.
 ```go
 type Filter struct {
 	// AggregationGroupTypeIndex identifies the group type for group-targeted flags.
-	AggregationGroupTypeIndex	*uint8	`json:"aggregation_group_type_index"`
+	AggregationGroupTypeIndex *uint8 `json:"aggregation_group_type_index"`
 	// Groups contains the ordered condition groups to evaluate.
-	Groups	[]FeatureFlagCondition	`json:"groups"`
+	Groups []FeatureFlagCondition `json:"groups"`
 	// EarlyExit, when true, stops local condition evaluation and returns a
 	// definitive disabled result as soon as a condition group matches its
 	// property filters (or has none) but the rollout percentage excludes the
 	// user, instead of falling through to later condition groups.
-	EarlyExit	bool	`json:"early_exit"`
+	EarlyExit bool `json:"early_exit"`
 	// Multivariate contains variant definitions for multivariate flags.
-	Multivariate	*Variants	`json:"multivariate"`
+	Multivariate *Variants `json:"multivariate"`
 	// Holdout contains the experiment holdout configuration, when the flag has one.
-	Holdout	*Holdout	`json:"holdout"`
+	Holdout *Holdout `json:"holdout"`
 	// Payloads maps flag values or variant keys to raw JSON payloads.
-	Payloads	map[string]json.RawMessage	`json:"payloads"`
+	Payloads map[string]json.RawMessage `json:"payloads"`
 	// DecodedPayloads holds pre-decoded string versions of Payloads.
 	// Built once at flag load time to avoid per-evaluation json.Unmarshal / unquoting.
-	DecodedPayloads	map[string]string	`json:"-"`
+	DecodedPayloads map[string]string `json:"-"`
 	// VariantLookupTable is pre-computed at flag load time to avoid per-evaluation
 	// slice allocation for multivariate flags.
-	VariantLookupTable	[]FlagVariantMeta	`json:"-"`
+	VariantLookupTable []FlagVariantMeta `json:"-"`
 }
 ```
 
@@ -2257,17 +2214,17 @@ EXPERIMENTAL: this interface may change in a minor version bump.
 ```go
 type FlagDetail struct {
 	// Key is the feature flag key.
-	Key	string	`json:"key"`
+	Key string `json:"key"`
 	// Enabled reports whether the flag is enabled for the evaluated user.
-	Enabled	bool	`json:"enabled"`
+	Enabled bool `json:"enabled"`
 	// Variant is the matched variant key for multivariate flags, or nil for boolean flags.
-	Variant	*string	`json:"variant"`
+	Variant *string `json:"variant"`
 	// Reason explains why the flag matched or did not match, when provided by the API.
-	Reason	*FlagReason	`json:"reason"`
+	Reason *FlagReason `json:"reason"`
 	// Metadata contains IDs, version, payload, and optional flag description.
-	Metadata	FlagMetadata	`json:"metadata"`
+	Metadata FlagMetadata `json:"metadata"`
 	// Failed is true when the API could not evaluate this flag due to a transient failure.
-	Failed	*bool	`json:"failed,omitempty"`
+	Failed *bool `json:"failed,omitempty"`
 }
 ```
 
@@ -2294,16 +2251,16 @@ NewFlagDetail creates a FlagDetail from a flag key, a bool or string value, and 
 ```go
 type FlagMetadata struct {
 	// ID is the numeric feature flag ID in PostHog.
-	ID	int	`json:"id"`
+	ID int `json:"id"`
 	// Version is the feature flag version evaluated by the API.
-	Version	int	`json:"version"`
+	Version int `json:"version"`
 	// Payload is the raw JSON payload associated with the matched flag value.
-	Payload	json.RawMessage	`json:"payload"`
+	Payload json.RawMessage `json:"payload"`
 	// Description is the feature flag description, when returned by the API.
-	Description	*string	`json:"description,omitempty"`
+	Description *string `json:"description,omitempty"`
 	// HasExperiment reports whether the flag is linked to an experiment.
 	// Nil when the server does not send it (older deployments).
-	HasExperiment	*bool	`json:"has_experiment"`
+	HasExperiment *bool `json:"has_experiment"`
 }
 ```
 
@@ -2314,17 +2271,17 @@ FlagMetadata contains additional information about a flag evaluation.
 ```go
 type FlagProperty struct {
 	// Key is the property key to read.
-	Key	string	`json:"key"`
+	Key string `json:"key"`
 	// Operator is the comparison operator, such as exact, is_not, or regex.
-	Operator	string	`json:"operator"`
+	Operator string `json:"operator"`
 	// Value is the comparison value for Operator.
-	Value	interface{}	`json:"value"`
+	Value interface{} `json:"value"`
 	// Type is the property source. Supported values include "person", "group", "cohort", and "flag".
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// Negation inverts the property match when true.
-	Negation	bool	`json:"negation"`
+	Negation bool `json:"negation"`
 	// DependencyChain tracks feature flag dependencies while evaluating nested flag properties.
-	DependencyChain	[]string	`json:"dependency_chain"`
+	DependencyChain []string `json:"dependency_chain"`
 }
 ```
 
@@ -2335,11 +2292,11 @@ FlagProperty describes one property matcher in a feature flag or cohort conditio
 ```go
 type FlagReason struct {
 	// Code is the machine-readable reason code returned by the API.
-	Code	string	`json:"code"`
+	Code string `json:"code"`
 	// Description is the human-readable reason returned by the API.
-	Description	string	`json:"description"`
+	Description string `json:"description"`
 	// ConditionIndex is the matched condition index, when available.
-	ConditionIndex	*int	`json:"condition_index"`
+	ConditionIndex *int `json:"condition_index"`
 }
 ```
 
@@ -2350,11 +2307,11 @@ FlagReason represents why a flag was enabled or disabled.
 ```go
 type FlagVariant struct {
 	// Key is the stable variant key returned by flag evaluation.
-	Key	string	`json:"key"`
+	Key string `json:"key"`
 	// Name is the display name for the variant.
-	Name	string	`json:"name"`
+	Name string `json:"name"`
 	// RolloutPercentage is the percentage allocated to this variant.
-	RolloutPercentage	*float64	`json:"rollout_percentage"`
+	RolloutPercentage *float64 `json:"rollout_percentage"`
 }
 ```
 
@@ -2365,11 +2322,11 @@ FlagVariant describes one multivariate feature flag variant.
 ```go
 type FlagVariantMeta struct {
 	// ValueMin is the inclusive lower bound of the normalized hash range.
-	ValueMin	float64
+	ValueMin float64
 	// ValueMax is the exclusive upper bound of the normalized hash range.
-	ValueMax	float64
+	ValueMax float64
 	// Key is the variant key for this hash range.
-	Key	string
+	Key string
 }
 ```
 
@@ -2380,21 +2337,21 @@ FlagVariantMeta is a precomputed hash range for a feature flag variant.
 ```go
 type FlagsRequestData struct {
 	// ApiKey is the PostHog project API key.
-	ApiKey	string	`json:"api_key"`
+	ApiKey string `json:"api_key"`
 	// DistinctId is the user distinct ID to evaluate flags for.
-	DistinctId	string	`json:"distinct_id"`
+	DistinctId string `json:"distinct_id"`
 	// DeviceId optionally identifies the device for device-aware flag evaluation.
-	DeviceId	*string	`json:"device_id,omitempty"`
+	DeviceId *string `json:"device_id,omitempty"`
 	// Groups contains group identifiers for group-targeted flags.
-	Groups	Groups	`json:"groups"`
+	Groups Groups `json:"groups"`
 	// PersonProperties overrides person properties for this evaluation.
-	PersonProperties	Properties	`json:"person_properties"`
+	PersonProperties Properties `json:"person_properties"`
 	// GroupProperties overrides group properties for this evaluation, keyed by group type.
-	GroupProperties	map[string]Properties	`json:"group_properties"`
+	GroupProperties map[string]Properties `json:"group_properties"`
 	// DisableGeoIP disables GeoIP enrichment for this flags request.
-	DisableGeoIP	bool	`json:"geoip_disable,omitempty"`
+	DisableGeoIP bool `json:"geoip_disable,omitempty"`
 	// FlagKeysToEvaluate asks the server to evaluate only these flag keys when non-empty.
-	FlagKeysToEvaluate	[]string	`json:"flag_keys_to_evaluate,omitempty"`
+	FlagKeysToEvaluate []string `json:"flag_keys_to_evaluate,omitempty"`
 }
 ```
 
@@ -2408,12 +2365,12 @@ type FlagsResponse struct {
 	CommonResponseFields
 
 	// Flags contains v4-format flag details keyed by flag key.
-	Flags	map[string]FlagDetail	`json:"flags,omitempty"`
+	Flags map[string]FlagDetail `json:"flags,omitempty"`
 
 	// FeatureFlags contains legacy v3 flag values keyed by flag key.
-	FeatureFlags	map[string]interface{}	`json:"featureFlags"`
+	FeatureFlags map[string]interface{} `json:"featureFlags"`
 	// FeatureFlagPayloads contains legacy v3 raw payloads keyed by flag key.
-	FeatureFlagPayloads	map[string]json.RawMessage	`json:"featureFlagPayloads"`
+	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
 }
 ```
 
@@ -2432,20 +2389,20 @@ UnmarshalJSON implements custom unmarshaling to handle both v3 and v4 formats
 ```go
 type GroupIdentifyInApi struct {
 	// Uuid is the valid event UUID sent to the batch API.
-	Uuid	string	`json:"uuid"`
+	Uuid string `json:"uuid"`
 	// Library is the $lib the event is stored with.
-	Library	string	`json:"library"`
+	Library string `json:"library"`
 	// LibraryVersion is the $lib_version the event is stored with.
-	LibraryVersion	string	`json:"library_version"`
+	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
-	Timestamp	time.Time	`json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 
 	// Event is always $groupidentify for GroupIdentify messages.
-	Event	string	`json:"event"`
+	Event string `json:"event"`
 	// DistinctId is the distinct ID the event is sent under.
-	DistinctId	string	`json:"distinct_id"`
+	DistinctId string `json:"distinct_id"`
 	// Properties contains SDK metadata, group identifiers, and $group_set properties.
-	Properties	Properties	`json:"properties"`
+	Properties Properties `json:"properties"`
 }
 ```
 
@@ -2480,9 +2437,9 @@ NewGroups creates an empty Groups map for fluent construction.
 ```go
 type Holdout struct {
 	// ID identifies the holdout. It is rendered into the synthetic variant key.
-	ID	interface{}	`json:"id"`
+	ID interface{} `json:"id"`
 	// ExclusionPercentage is the share of identifiers held out, from 0 to 100.
-	ExclusionPercentage	*float64	`json:"exclusion_percentage"`
+	ExclusionPercentage *float64 `json:"exclusion_percentage"`
 }
 ```
 
@@ -2494,24 +2451,24 @@ Holdout is the experiment holdout configuration attached to a feature flag. Iden
 type IdentifyInApi struct {
 	// Type is the legacy message type sent to the batch API.
 	// Deprecated: this field is ignored by PostHog ingestion and is kept for backwards compatibility.
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
-	Uuid	string	`json:"uuid"`
+	Uuid string `json:"uuid"`
 	// Library is the $lib the event is stored with.
-	Library	string	`json:"library"`
+	Library string `json:"library"`
 	// LibraryVersion is the $lib_version the event is stored with.
-	LibraryVersion	string	`json:"library_version"`
+	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
-	Timestamp	time.Time	`json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 
 	// Event is always $identify for Identify messages.
-	Event	string	`json:"event"`
+	Event string `json:"event"`
 	// DistinctId is the user distinct ID sent to PostHog.
-	DistinctId	string	`json:"distinct_id"`
+	DistinctId string `json:"distinct_id"`
 	// Properties contains SDK metadata and system context.
-	Properties	Properties	`json:"properties"`
+	Properties Properties `json:"properties"`
 	// Set contains the person properties to update.
-	Set	Properties	`json:"$set"`
+	Set Properties `json:"$set"`
 }
 ```
 
@@ -2529,10 +2486,8 @@ InAppDecider reports whether a stack frame should be considered “in-app” (i.
 
 ```go
 type InconclusiveMatchError struct {
-
 	// Reason is why local evaluation could not resolve the flag.
 	Reason UnresolvedFlagReason
-
 }
 ```
 
@@ -2587,19 +2542,11 @@ StdLogger wraps a standard log.Logger as a PostHog Logger. The verbose parameter
 
 ```go
 type Message interface {
-
 	// Validate checks the internal structure of the message. It returns nil when
 	// the message is valid or an error describing the invalid field.
 	Validate() error
 	// APIfy converts the message into its PostHog batch API representation.
 	APIfy() APIMessage
-
-	// apifyEvent converts the message into the capture intermediate event.
-	// Unexported so it does not widen the public surface. The returned properties
-	// are caller-owned; buildEvent may mutate them in place.
-
-	// internal prevents external packages from satisfying Message. Calling it panics.
-
 }
 ```
 
@@ -2619,7 +2566,7 @@ Keys are strings and values are any JSON-serializable value. The SDK sends them 
 
 The options PostHog reads:
 
-```go
+```text
 process_person_profile   boolean
 cookieless_mode          boolean
 disable_skew_correction  boolean
@@ -2676,7 +2623,7 @@ posthog.Capture{
 func (p Properties) Merge(props Properties) Properties
 ```
 
-Merge adds the properties from the provided \`props\` into the receiver \`p\`. If a property in \`props\` already exists in \`p\`, its value will be overwritten.
+Merge adds the properties from the provided `props` into the receiver `p`. If a property in `props` already exists in `p`, its value will be overwritten.
 
 #### `Properties.Set`
 
@@ -2711,13 +2658,13 @@ Note: this ships all attrs to PostHog — make sure none contain sensitive data,
 ```go
 type PropertyGroup struct {
 	// Type is the boolean operator joining Values, such as AND or OR.
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 	// Values contains nested PropertyGroup values or FlagProperty values.
-	Values	[]any	`json:"values"`
+	Values []any `json:"values"`
 	// ParsedValues holds pre-parsed typed values from Values.
 	// Built once at flag load time to avoid reconstructing FlagProperty/PropertyGroup
 	// from map[string]any on every cohort evaluation.
-	ParsedValues	[]parsedPropertyValue	`json:"-"`
+	ParsedValues []parsedPropertyValue `json:"-"`
 }
 ```
 
@@ -2730,22 +2677,22 @@ type RequestContext struct {
 	// DistinctId is the request-scoped user distinct ID. It fills a missing
 	// DistinctId on Capture, Exception and GroupIdentify events. It never changes
 	// the ids of an Identify or an Alias.
-	DistinctId	string
+	DistinctId string
 	// SessionId is the request-scoped PostHog session ID. It is set as the
 	// $session_id property of every event except GroupIdentify before
 	// BeforeSend, unless the event has its own. A $session_id in Properties
 	// wins over it.
-	SessionId	string
+	SessionId string
 	// Properties are request-scoped properties for every event type.
 	// They fill in before BeforeSend, only for keys the event left unset, so
 	// BeforeSend sees them and can change or remove them. They win over
 	// Config.DefaultEventProperties.
-	Properties	Properties
+	Properties Properties
 	// Options are request-scoped capture options for every event type.
 	// They fill in before BeforeSend, only for options the event left missing or
 	// nil, so BeforeSend sees them and can change them. They win over
 	// Config.DefaultEventOptions.
-	Options	Options
+	Options Options
 }
 ```
 
@@ -2802,14 +2749,14 @@ type RequestContextOptions struct {
 	// Any client can set these headers, so they only fill a missing distinct ID or session ID and must
 	// never be used for authentication. When disabled, the middleware still attaches request metadata
 	// to the request context.
-	CaptureTracingHeaders	bool
+	CaptureTracingHeaders bool
 
 	// CapturePanics controls whether NewRequestContextMiddleware captures downstream panics as
 	// PostHog exception events before re-panicking. It defaults to false.
-	CapturePanics	bool
+	CapturePanics bool
 
 	// PanicCaptureClient receives panic exception events when CapturePanics is enabled.
-	PanicCaptureClient	EnqueueClient
+	PanicCaptureClient EnqueueClient
 }
 ```
 
@@ -2819,10 +2766,8 @@ RequestContextOptions configures NewRequestContextMiddleware.
 
 ```go
 type RequiresServerEvaluationError struct {
-
 	// Reason is why local evaluation could not resolve the flag.
 	Reason UnresolvedFlagReason
-
 }
 ```
 
@@ -2865,13 +2810,13 @@ ShouldSend reports the wrapped boolean value.
 ```go
 type SendFeatureFlagsOptions struct {
 	// OnlyEvaluateLocally forces evaluation to use locally loaded flag definitions only.
-	OnlyEvaluateLocally	bool
+	OnlyEvaluateLocally bool
 	// DeviceId provides a device_id for remote flag evaluation requests.
-	DeviceId	*string
+	DeviceId *string
 	// PersonProperties provides explicit person properties for flag evaluation.
-	PersonProperties	Properties
+	PersonProperties Properties
 	// GroupProperties provides explicit group properties for flag evaluation.
-	GroupProperties	map[string]Properties
+	GroupProperties map[string]Properties
 }
 ```
 
@@ -2930,7 +2875,7 @@ type SlogCaptureHandler struct {
 }
 ```
 
-SlogCaptureHandler wraps a slog.Handler and mirrors qualifying records to PostHog error tracking using client.Enqueue(Exception&#123;...&#125;).
+SlogCaptureHandler wraps a slog.Handler and mirrors qualifying records to PostHog error tracking using client.Enqueue(Exception{...}).
 
 #### `SlogCaptureHandler.Enabled`
 
@@ -3033,36 +2978,36 @@ WithStackTraceExtractor sets the StackTraceExtractor used for captured exception
 ```go
 type StackFrame struct {
 	// Filename is the source file path for the frame.
-	Filename	string	`json:"filename"`
+	Filename string `json:"filename"`
 	// LineNo is the one-based source line number.
-	LineNo	int	`json:"lineno"`
+	LineNo int `json:"lineno"`
 	// Function is the fully qualified function name.
-	Function	string	`json:"function"`
+	Function string `json:"function"`
 	// InApp reports whether the frame is considered application code.
-	InApp	bool	`json:"in_app"`
+	InApp bool `json:"in_app"`
 	// Synthetic reports whether the frame was synthesized by instrumentation.
-	Synthetic	bool	`json:"synthetic"`
+	Synthetic bool `json:"synthetic"`
 	// Platform identifies the runtime platform; plain Go frames use "go",
 	// frames with raw addresses for server-side symbolication use "native".
-	Platform	string	`json:"platform"`
+	Platform string `json:"platform"`
 	// Lang is a display-language hint for "native" frames; Go frames use "go".
-	Lang	string	`json:"lang,omitempty"`
+	Lang string `json:"lang,omitempty"`
 	// InstructionAddr is the raw return address for the frame's physical
 	// group, as hex. The server symbolicates it against uploaded debug
 	// symbols.
-	InstructionAddr	string	`json:"instruction_addr,omitempty"`
+	InstructionAddr string `json:"instruction_addr,omitempty"`
 	// SymbolAddr is the start address of the enclosing function, as hex.
-	SymbolAddr	string	`json:"symbol_addr,omitempty"`
+	SymbolAddr string `json:"symbol_addr,omitempty"`
 	// ImageAddr is the load address of the image containing the instruction.
-	ImageAddr	string	`json:"image_addr,omitempty"`
+	ImageAddr string `json:"image_addr,omitempty"`
 	// ClientResolved reports that Function, Filename, and LineNo were
 	// resolved in-process from the Go runtime's symbol table.
-	ClientResolved	bool	`json:"client_resolved,omitempty"`
+	ClientResolved bool `json:"client_resolved,omitempty"`
 	// Inline marks a frame the runtime synthesized for a call inlined into
 	// the preceding physical frame, which carries the same InstructionAddr.
 	// The server resolves the group's address once and either replaces the
 	// whole group with its own expansion or keeps the client frames verbatim.
-	Inline	bool	`json:"inline,omitempty"`
+	Inline bool `json:"inline,omitempty"`
 }
 ```
 
@@ -3088,10 +3033,8 @@ StackTraceExtractor produces a stack trace for the current goroutine to enrich c
 
 ```go
 type Ticker struct {
-
 	// C receives the time for each backoff tick and is closed after Stop.
 	C <-chan time.Time
-
 }
 ```
 
@@ -3117,18 +3060,18 @@ UnresolvedFlagReason explains why local evaluation could not resolve a flag. Exp
 const (
 	// UnresolvedFlagReasonExperienceContinuity means the flag has experience continuity
 	// enabled, which local evaluation never resolves.
-	UnresolvedFlagReasonExperienceContinuity	UnresolvedFlagReason	= "experience_continuity"
+	UnresolvedFlagReasonExperienceContinuity UnresolvedFlagReason = "experience_continuity"
 	// UnresolvedFlagReasonUnsupportedDefinition means the flag uses something local
 	// evaluation does not support, such as a static cohort, an unknown operator, a
 	// malformed value, or a missing or circular flag dependency.
-	UnresolvedFlagReasonUnsupportedDefinition	UnresolvedFlagReason	= "unsupported_definition"
+	UnresolvedFlagReasonUnsupportedDefinition UnresolvedFlagReason = "unsupported_definition"
 	// UnresolvedFlagReasonUnresolvedDependency means a flag this flag depends on has a
 	// loaded definition but local evaluation could not resolve it.
-	UnresolvedFlagReasonUnresolvedDependency	UnresolvedFlagReason	= "unresolved_dependency"
+	UnresolvedFlagReasonUnresolvedDependency UnresolvedFlagReason = "unresolved_dependency"
 	// UnresolvedFlagReasonMissingContext means the call did not pass a property, group
 	// property or device id the flag needs, or passed it in a form local evaluation
 	// cannot use.
-	UnresolvedFlagReasonMissingContext	UnresolvedFlagReason	= "missing_context"
+	UnresolvedFlagReasonMissingContext UnresolvedFlagReason = "missing_context"
 )
 ```
 

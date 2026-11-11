@@ -57,6 +57,8 @@ configuration. An empty project API key still gives a disabled client and a
 nil error, as in 1.x, and a personal (`phx_...`) key now does too. Both log an
 error. A disabled client
 sends nothing, and its methods return default values and `ErrSDKDisabled`.
+Its text is now `posthog SDK is disabled`, so code that compares error strings
+should use `errors.Is(err, posthog.ErrSDKDisabled)` instead.
 Set `Config.Disabled` to build one on purpose, for example in tests.
 
 Integrations follow the same rule. `posthogmcpsdk.NewMiddleware` and
@@ -68,7 +70,7 @@ exports nothing. They still return an error for an invalid `WithHost`.
 
 ## Config
 
-`Config.CaptureMode` is gone. If you opted into v1, delete the field — it is
+`Config.CaptureMode` is gone. If you opted into v1, delete the field. It is
 now the only behavior:
 
 ```go
@@ -88,7 +90,7 @@ The `CaptureMode` type and the `CaptureModeLegacy` / `CaptureModeAnalyticsV1`
 constants are removed with it.
 
 `Client` gained `EnqueueAI`. This only affects code that *implements* the
-interface — a hand-written test mock needs the new method. Callers are
+interface: a hand-written test mock needs the new method. Callers are
 unaffected.
 
 `Alias` gained the `EventProperties` and `Options` maps, and `Backoff` gained
@@ -116,8 +118,7 @@ Neither applies to `EnqueueAI` (see [AI events](#new-ai-events)).
 
 `Validate` now rejects a negative `BatchUploadTimeout`,
 `CaptureAIBatchUploadTimeout`, `MaxRetryBackoff`, `MaxEventBytes`,
-`MaxBatchBytes`, `MaxQueueSize` or `CaptureAIMaxQueueSize`. Only zero selects
-the default.
+`MaxBatchBytes` or `CaptureAIMaxQueueSize`. Only zero selects the default.
 
 ## Groups
 
@@ -135,7 +136,7 @@ groups := posthog.NewGroups().Set("company", companyID) // companyID is an int64
 groups := posthog.NewGroups().Set("company", strconv.FormatInt(companyID, 10))
 ```
 
-v1 bucketed a numeric group key for feature flags by its decimal form, so a key
+1.x bucketed a numeric group key for feature flags by its decimal form, so a key
 converted this way keeps every group in the same rollout bucket and variant.
 
 ## Behavior changes
@@ -148,10 +149,12 @@ unchanged.
 Events are sent to `POST /i/v1/analytics/events` instead of `POST /batch/`.
 
 Check anything that pins the old path: reverse proxies, API gateways, egress
-allowlists, WAF rules, and self-hosted deployments. **The v1 route is only
-served where the deployment enables it**, so confirm your PostHog instance
-serves it before upgrading. PostHog Cloud (`us.i.posthog.com`,
-`eu.i.posthog.com`) does.
+allowlists, WAF rules, and self-hosted deployments. **The v1 routes are only
+served where the deployment enables them**, so confirm your PostHog instance
+serves both `/i/v1/analytics/events` and `/i/v1/ai/events` before upgrading.
+On self-hosted PostHog, a separate capture service serves the AI route, so
+check it too if you use `EnqueueAI`. PostHog Cloud (`us.i.posthog.com`,
+`eu.i.posthog.com`) serves both.
 
 If you send events through your own reverse proxy, update it before you
 upgrade:
@@ -230,7 +233,7 @@ The old endpoint accepted or rejected a whole batch. v1 returns a result for
 each event, and the client only re-sends the events the backend asks it to
 retry.
 
-Three consequences for `Callback`:
+What this means for `Callback`:
 
 - `Failure` can fire on an HTTP **200**, for an individual event the backend
   dropped while accepting the rest of the batch.
@@ -285,9 +288,8 @@ same message from `Failure`, because it fails again and the calls recurse.
 This was also true in 1.x.
 
 Without a `Callback`, the SDK logs one warning each time a request loses
-events, never one per event, for example
-`analytics: 3 event(s) dropped: <cause>; set Config.Callback to inspect failures`.
-For a failed request the
+events, never one per event, for example `analytics: 3 event(s) dropped:
+<cause>; set Config.Callback to inspect failures`. For a failed request the
 cause is the error text, which can include PostHog's error description, as
 1.x logged the response body. Events that still fail after the last retry are
 logged as an error instead, with or without a `Callback`, for example
@@ -353,16 +355,33 @@ value as a property.
 
 ### Event properties
 
-`$lib` and `$lib_version` are no longer sent in properties. SDK identity
-travels in the `PostHog-Sdk-Info` header, which is always
-`posthog-go/<version>`, and the backend sets both properties from it. If you
-set them explicitly, the SDK removes them before it sends the event, so stored
-events always report `posthog-go`. `BeforeSend` still sees the value you set.
+Every event carries `$lib` and `$lib_version` in its properties. By default
+they are `posthog-go` and the SDK version. PostHog stores the values the event
+is sent with.
 
-`Capture.Library` and `Exception.Library` (added in 1.33) are removed. One
-request carries one header, so a per-event library name cannot reach the
-backend. `posthogmcp` events now report `posthog-go`, like every other event.
-Delete the field.
+You can set them in the event, the request context or
+`DefaultEventProperties`. Like any other property, each one comes from the most
+specific place that sets it, so set both in the same place. If no `$lib` is set
+to a non-empty string, the SDK sets both and replaces a `$lib_version` set on
+its own. If `$lib` is `posthog-go` with no version, the SDK adds its version.
+It doesn't add its version to any other `$lib`. `BeforeSend` sees both and can
+change or remove them.
+
+If an event has no `$lib`, PostHog sets both from the `PostHog-Sdk-Info`
+header, `posthog-go/<version>`. In 1.x the default `/batch/` path overwrote a
+`$lib` you set.
+
+`Capture.Library` and `Exception.Library` (added in 1.30.0) are removed. Set
+`$lib` in the event's properties instead. For example,
+`Capture{..., Library: "my-lib"}` becomes
+`Capture{..., Properties: posthog.NewProperties().Set("$lib", "my-lib").Set("$lib_version", "1.2.3")}`.
+In 1.x, `Library` still sent the posthog-go version as `$lib_version`. A
+`$lib` set alone now sends no `$lib_version`, so set `$lib_version` yourself
+to keep a version on those events.
+`posthogmcp` events report `posthog-go-mcp` with the SDK version, unless you
+set `$lib` in the `ToolCall` or `EventContext` properties or the request
+context. `DefaultEventProperties` can't change it, because `posthogmcp` sets
+its pair before the defaults fill.
 
 `$lib_version` now reports the SDK version from a Go test binary too. 1.x
 reported `1.0.0` from any test binary, including your application's own.
@@ -371,8 +390,8 @@ reported `1.0.0` from any test binary, including your application's own.
 before `BeforeSend`, only for keys that the event and the request context left
 unset. A key set to `nil` counts as set, so it keeps the default out.
 `RequestContext.Properties` fill in the same way and win over the defaults. In
-1.x the default value overwrote the event's value, except for an event's
-`$process_person_profile: false`.
+1.x the default value overwrote the event's value, except when the event
+turned person processing off.
 
 `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. When the
 event and a default both set one of them to a map, the default adds only the
@@ -389,10 +408,12 @@ final. The request context's session ID is part of the event's identity, so it
 is set as `$session_id` first, unless the event has its own.
 
 `DefaultEventProperties` now apply to `Exception`, `Identify`, `Alias` and
-`GroupIdentify` events too, not only to `Capture`. For `Identify`, `Alias` and
-`GroupIdentify` they fill the new `EventProperties` field: the properties of
-the event itself, separate from the `$set` or `$group_set` that `Properties`
-sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
+`GroupIdentify` events too, not only to `Capture`. A
+`$process_person_profile: false` there turns person processing off for these
+events too (see [New: event options](#new-event-options)). For `Identify`,
+`Alias` and `GroupIdentify` they fill the new `EventProperties` field: the
+properties of the event itself, separate from the `$set` or `$group_set` that
+`Properties` sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
 `GroupIdentify.EventProperties` merges under `Properties`, which win key by
 key. The `Config.Callback` message for an `Alias` does not include its
 `EventProperties`.
@@ -403,6 +424,10 @@ The values the SDK adds are defaults too. The SDK fills them before
 - `$is_server`, from `Config.IsServer`
 - `$geoip_disable`, from `Config.DisableGeoIP`
 - `$os`, `$os_version`, `$os_distro` and `$go_version`
+- `$lib` and `$lib_version`, `posthog-go` and the SDK version, as a pair. They
+  follow their own rule (see [Event properties](#event-properties)): a `nil`,
+  empty or non-string `$lib` counts as unset, and a `$lib_version` set without
+  a `$lib` is replaced
 - `$feature/<key>` and `$active_feature_flags`, from a `Flags` snapshot or
   `SendFeatureFlags`
 
@@ -412,7 +437,7 @@ All of them fill last, under the event, the request context and
 own `Properties` wins over both.
 
 In 1.x the SDK overwrote the values you set for `$is_server`,
-`$geoip_disable` and the system properties. So a
+`$geoip_disable`, `$lib`, `$lib_version` and the system properties. So a
 `DefaultEventProperties` value of `$geoip_disable: false` now turns GeoIP
 lookup back on for events, even when `Config.DisableGeoIP` is on. Feature flag
 requests still follow `Config.DisableGeoIP`. The `IsServer` and `DisableGeoIP`
@@ -491,19 +516,17 @@ event if a known key has a value it cannot read. That drop reaches
 `invalid_options`. A `BeforeSend` hook can read and change `Options` like
 `Properties`, and `Options` is never nil inside the hook.
 
-The legacy option properties, the `$`-prefixed properties legacy capture reads
-as settings, still work. The SDK removes each one from `properties` and moves
-it into its option:
+Each option replaces a legacy option property:
 
-| Legacy option property | Option |
+| Option | Replaces |
 | --- | --- |
-| `$process_person_profile` | `process_person_profile` |
-| `$cookieless_mode` | `cookieless_mode` |
-| `$ignore_sent_at` | `disable_skew_correction` |
-| `$product_tour_id` | `product_tour_id` |
+| `process_person_profile` | `$process_person_profile` |
+| `cookieless_mode` | `$cookieless_mode` |
+| `disable_skew_correction` | `$ignore_sent_at` |
+| `product_tour_id` | `$product_tour_id` |
 
-When both are set, the option wins. An option set to `nil` counts as not
-set, so the legacy property applies.
+Legacy option properties still work, but an option overrides its legacy
+property. Use options.
 
 Options can also be set for every event and for a request:
 
@@ -514,14 +537,26 @@ Options can also be set for every event and for a request:
   `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
-These layers now reach `Identify`, `Alias` and `GroupIdentify` events, and so
-does a `$process_person_profile` property in `DefaultEventProperties` or
-`RequestContext.Properties`. In 1.x none of them did. PostHog drops an
-`$identify`, `$create_alias` or `$groupidentify` event that has person
-processing off, with an ingestion warning. `Callback` does not report the
-drop, because capture accepts the event. So do not turn person processing off
-in `DefaultEventOptions`, `DefaultEventProperties` or a request context. Set
-it on each message that needs it instead.
+These layers reach `Identify`, `Alias` and `GroupIdentify` events too, and so
+does a legacy `$process_person_profile` property in `DefaultEventProperties` or
+`RequestContext.Properties`. 1.x never sent those values with these messages.
+PostHog drops an `$identify`, `$create_alias` or `$groupidentify` event that
+has person processing off, with an ingestion warning, so it never creates or
+merges a person or updates a group. It keeps a `$set` event but ignores its
+person update. `Callback` does not report the drop, because capture accepts the
+event. To keep these events, set the option on the message, which wins over
+every layer, or set it in `BeforeSend`:
+
+```go
+client.Enqueue(posthog.Identify{
+    DistinctId: "user-123",
+    Properties: posthog.NewProperties().Set("plan", "pro"),
+    Options:    posthog.NewOptions().Set("process_person_profile", true),
+})
+```
+
+A `$process_person_profile` property in the message's `EventProperties` does
+not override `DefaultEventOptions` or `RequestContext.Options`.
 
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
 option that is still missing or `nil`, from these layers in order:
@@ -529,37 +564,39 @@ option that is still missing or `nil`, from these layers in order:
 personless default (below). So a `nil` event option still gets the default.
 `BeforeSend` sees the filled options and can change or remove them. To turn a
 default off for one event, set the option to `false` on the event or in
-`BeforeSend`. To change an option in `BeforeSend`, set it in `Options`: a
-legacy property that the hook adds does not replace an option that is already
-set.
+`BeforeSend`. To change an option in `BeforeSend`, set it in `Options`.
 
 Review your `BeforeSend` hooks for the new message shape. A hook that returns
 a new message must copy `Options`, or the event is sent without them. That
 includes the personless default below, so PostHog would create a person for
 the generated ID.
 
-An option at any layer wins over the matching legacy property at any layer.
-For example, `DefaultEventOptions` with `cookieless_mode: true` wins over an
-event's `$cookieless_mode: false`, and the SDK still removes
-`$cookieless_mode` from the properties. When you move a default to options,
-move the per-event overrides of that key to options too.
-
 When a `Capture` or `Exception` with a request context has no distinct ID, the
-SDK generates
-one and sets the option `process_person_profile: false`, so it does not create
-a person for every generated ID. A default, request-context or event option
-can turn processing back on; a legacy `$process_person_profile` property
-cannot. `posthogmcp` sets the same option on events without an identity, and
-on events whose properties set `$process_person_profile: false`. This covers
-tool calls and the `$mcp_unknown_tool`, `$mcp_input_required` and
-`$mcp_missing_capability` events.
+SDK generates one and sets the option `process_person_profile: false`, so it
+does not create a person for every generated ID. A default, request-context or
+event option can turn processing back on. `posthogmcp` sets the same option on
+events without an identity. This covers tool calls and the
+`$mcp_unknown_tool`, `$mcp_input_required` and `$mcp_missing_capability`
+events.
 
-`posthogmcp.ToolCall` has a new `Options` field, and tool calls also take
+`posthogmcp.ToolCall` has a new `EventOptions` field, and tool calls also take
 `RequestContext.Options`. The call's options override the request context's.
-The other MCP events take the same layers through `EventContext.Options`.
-A call without an identity always gets `process_person_profile: false`, whatever
-its options say. With an identity, a `process_person_profile` option overrides
-a `$process_person_profile: false` property.
+The other MCP events take the same layers through `EventContext.EventOptions`.
+With `posthogmcpsdk`, `WithEventOptions` sets a tool call's `EventOptions`:
+
+```go
+posthogmcpsdk.Instrument(server, analytics,
+    posthogmcpsdk.WithEventOptions(func(
+        context.Context, *mcp.CallToolRequest, *mcp.CallToolResult, error,
+    ) (posthog.Options, error) {
+        return posthog.NewOptions().Set("process_person_profile", false), nil
+    }),
+)
+```
+
+`posthogmcp` sets `process_person_profile: false` on a call without an
+identity, whatever its options say. `BeforeSend` runs after that and can still
+change it, and PostHog receives what the hook returns.
 
 `posthogmcp` events take `RequestContext.Properties` under the call's
 properties with any client, as in 1.x, and `RequestContext.Options` under the
@@ -568,22 +605,24 @@ call's options in the same way. The call's values win, and the context's values 
 the reserved keys, such as `$mcp_*`, `$set` and `$session_id`, from the
 context properties and sanitizes their values first.
 
-Compared with 1.x, which sent these as properties to the `/batch/` endpoint:
+Compared with 1.x, which sent these settings as properties to the `/batch/`
+endpoint:
 
-- PostHog now reads common forms of the value, so
-  `"$process_person_profile": "false"` turns person processing off. 1.x
-  ignored that string.
-- A value PostHog cannot read, such as `"$process_person_profile": "maybe"`,
+- PostHog now reads common forms of an option's value, so
+  `posthog.NewOptions().Set("process_person_profile", "false")` turns person
+  processing off. 1.x ignored the string `"false"` for this setting.
+- A value PostHog cannot read, such as `"maybe"` for `process_person_profile`,
   now drops the event as `invalid_options`. 1.x kept the event and ignored the
-  value, except for `$cookieless_mode`, where any non-boolean value failed the
+  value, except for cookieless mode, where any non-boolean value failed the
   whole batch.
 
 If you used `CaptureModeAnalyticsV1`, note that the SDK no longer converts
-these values or silently removes the ones it cannot read. PostHog validates
+option values or silently removes the ones it cannot read. PostHog validates
 them as described above.
 
-Minimal `$feature_flag_called` events now keep the legacy option properties,
-so they get those options. 1.x removed them from these events.
+Minimal `$feature_flag_called` events keep their options, because the trim
+removes only properties. In 1.x the trim removed these settings, except person
+processing.
 
 ## New: AI events
 
@@ -599,8 +638,10 @@ client.EnqueueAI(posthog.Capture{
 ```
 
 It runs on its own queue, batching and retry state, started on first use.
-Routing is by method: `Enqueue` never reroutes an `$ai_`-prefixed event, so
-existing code keeps sending those as ordinary analytics events. `EnqueueAI`
+Routing is by method: `Enqueue` never reroutes an `$ai_`-prefixed event.
+Send `$ai_` events with `EnqueueAI` or `EnqueueAIWithContext`. PostHog
+accepts `$ai_` events on the analytics endpoint for now, but this is
+temporary. `EnqueueAI`
 accepts every message type and does no routing check of its own: capture
 decides, and returns a per-event drop for an event the AI endpoint does not
 take. `Flush` and `FlushWithContext` also wait for the AI lane once
