@@ -480,3 +480,83 @@ func TestInstrumentKeepsErrorTextOutWhenErrorMessagesAreOff(t *testing.T) {
 		})
 	}
 }
+
+func TestInstrumentEventOptions(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		identified   bool
+		resolved     posthog.Options
+		resolveErr   error
+		panics       bool
+		want         posthog.Options
+		wantReported string
+	}{
+		{
+			name:       "options reach the tool call and its exception",
+			identified: true,
+			resolved:   posthog.Options{"process_person_profile": false, "cookieless_mode": true},
+			want:       posthog.Options{"process_person_profile": false, "cookieless_mode": true},
+		},
+		{
+			name:     "a call without an identity stays personless",
+			resolved: posthog.Options{"process_person_profile": true, "cookieless_mode": true},
+			want:     posthog.Options{"process_person_profile": false, "cookieless_mode": true},
+		},
+		{
+			name:         "a resolver error drops its options and is reported",
+			identified:   true,
+			resolved:     posthog.Options{"process_person_profile": false},
+			resolveErr:   errors.New("options unavailable"),
+			wantReported: "posthogmcpgo: event options resolver: options unavailable",
+		},
+		{
+			name:         "a resolver panic drops its options and is reported",
+			identified:   true,
+			panics:       true,
+			wantReported: "event options resolver panic",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var reported []error
+			var resolvedFor []string
+			opts := []Option{
+				WithEventOptions(func(_ context.Context, req mcp.CallToolRequest, result *mcp.CallToolResult, handlerErr error) (posthog.Options, error) {
+					resolvedFor = append(resolvedFor, fmt.Sprintf("%s isError=%t err=%v", req.Params.Name, result.IsError, handlerErr))
+					if test.panics {
+						panic("boom")
+					}
+					return test.resolved, test.resolveErr
+				}),
+				WithErrorHandler(func(_ context.Context, err error) { reported = append(reported, err) }),
+			}
+			if test.identified {
+				opts = append(opts, WithIdentity(func(context.Context, mcp.CallToolRequest) (Identity, error) {
+					return Identity{DistinctID: "user-123"}, nil
+				}))
+			}
+			queue := &fakeQueue{}
+			c := connectInProcess(t, newInstrumentedServer(queue, weatherTool(),
+				&weatherHandler{result: mcp.NewToolResultError("city not found")}, opts...))
+
+			_, err := callTool(t, c, "weather", map[string]any{"city": "Atlantis"})
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{"weather isError=true err=<nil>"}, resolvedFor)
+			calls := queue.toolCalls()
+			require.Len(t, calls, 1)
+			exceptions := queue.exceptions()
+			require.Len(t, exceptions, 1)
+			if test.wantReported == "" {
+				assert.Empty(t, reported)
+				assert.Equal(t, test.want, calls[0].Options)
+				assert.Equal(t, test.want, exceptions[0].Options)
+				return
+			}
+			require.Len(t, reported, 1)
+			assert.ErrorContains(t, reported[0], test.wantReported)
+			// The call is still captured, without the resolver's options.
+			assert.NotContains(t, calls[0].Options, "process_person_profile")
+			assert.NotContains(t, exceptions[0].Options, "process_person_profile")
+		})
+	}
+}

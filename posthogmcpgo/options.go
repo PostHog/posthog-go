@@ -28,6 +28,15 @@ type PropertiesResolver func(
 	error,
 ) (posthog.Properties, error)
 
+// EventOptionsResolver resolves PostHog capture options, such as
+// process_person_profile, for a completed tool call.
+type EventOptionsResolver func(
+	context.Context,
+	mcp.CallToolRequest,
+	*mcp.CallToolResult,
+	error,
+) (posthog.Options, error)
+
 // ErrorHandler receives instrumentation failures. Its errors and panics never
 // alter the MCP response.
 type ErrorHandler func(context.Context, error)
@@ -39,6 +48,7 @@ type config struct {
 	analytics         *posthogmcp.Analytics
 	identity          IdentityResolver
 	properties        PropertiesResolver
+	eventOptions      EventOptionsResolver
 	errorHandler      ErrorHandler
 	captureParameters bool
 	captureResponses  bool
@@ -101,6 +111,15 @@ func WithCaptureModel(enabled bool) Option {
 // WithProperties configures application-specific event properties.
 func WithProperties(resolver PropertiesResolver) Option {
 	return func(cfg *config) { cfg.properties = resolver }
+}
+
+// WithEventOptions configures application-specific capture options for
+// $mcp_tool_call and its $exception, as posthogmcp.ToolCall.EventOptions. A
+// call without a distinct ID still gets process_person_profile set to false.
+// An error or panic is reported to the ErrorHandler and the call is captured
+// without these options.
+func WithEventOptions(resolver EventOptionsResolver) Option {
+	return func(cfg *config) { cfg.eventOptions = resolver }
 }
 
 // WithServerInfo adds the MCP server name and version to captured tool calls.

@@ -83,11 +83,29 @@ arguments. Middleware given after it sees them removed.
   names one, else from the `llm_model` argument described below.
 
 Use `WithIdentity` to attach a distinct ID, groups, and person properties,
-`WithProperties` to add event properties, and `WithErrorHandler` to see
+`WithProperties` to add event properties, `WithEventOptions` to set capture
+options, such as turning off person processing, and `WithErrorHandler` to see
 instrumentation failures. Analytics errors and panics never change the MCP
 response.
 
-The identity and properties resolvers run from mcp-go's call hooks, so they
+```go
+posthogmcpgo.Instrument(analytics,
+	posthogmcpgo.WithEventOptions(func(
+		context.Context, mcp.CallToolRequest, *mcp.CallToolResult, error,
+	) (posthog.Options, error) {
+		return posthog.NewOptions().Set("process_person_profile", false), nil
+	}),
+)
+```
+
+`WithProperties` and `WithEventOptions` apply to `$mcp_tool_call` and its
+`$exception`. A call without a distinct ID is sent with
+`process_person_profile` set to `false`, though a `BeforeSend` hook on the
+client can still change it. A resolver error or panic goes to
+`WithErrorHandler`, and the call is captured without these options.
+
+The identity, properties and event options resolvers run from mcp-go's call
+hooks, so they
 receive the request's context, not the one your tool handler middleware
 builds. Put request-scoped values such as the authenticated user on the
 context with `server.WithHTTPContextFunc` or `server.WithStdioContextFunc`,

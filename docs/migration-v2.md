@@ -27,6 +27,7 @@ The package name is still `posthog`, so only the import line changes.
 
 Subpackages such as `posthogmcp` move with it, to `github.com/posthog/posthog-go/v2/posthogmcp`.
 The MCP Go SDK adapter is a separate module that moves in lockstep with the core, so import `github.com/posthog/posthog-go/posthogmcpsdk/v2`.
+The mcp-go adapter is one too: import `github.com/posthog/posthog-go/posthogmcpgo/v2`.
 The `otel` bridge imports the core SDK, so it also moves in lockstep with the core: import `github.com/posthog/posthog-go/otel/v2`.
 
 ## Constructors
