@@ -80,3 +80,6 @@ func (c *noopClient) FlushWithContext(context.Context) error {
 func (c *noopClient) CloseWithContext(context.Context) error {
 	return ErrSDKDisabled
 }
+
+// Emails returns an email API that sends nothing and fails with the code client_disabled.
+func (c *noopClient) Emails() Emails { return newDisabledEmailSender() }

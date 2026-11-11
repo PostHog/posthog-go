@@ -375,3 +375,95 @@ func BenchmarkPrepareForSendFinite(b *testing.B) {
 		})
 	}
 }
+
+func TestPrepareNonCaptureFloat32NaNKeepsTheEvent(t *testing.T) {
+	score := float32(math.NaN())
+	messages := []Message{
+		Identify{DistinctId: "user-1", Properties: Properties{"email": "a@b.c", "score": score}},
+		GroupIdentify{Type: "org", Key: "acme", Properties: Properties{"email": "a@b.c", "score": score}},
+		Exception{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"email": "a@b.c", "score": score},
+		},
+	}
+	for _, msg := range messages {
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			data, _, _, err := prepareForSend(msg, nil)
+			require.NoError(t, err)
+			require.True(t, json.Valid(data), "encoder returned nil error but invalid JSON: %s", data)
+			require.Contains(t, string(data), "a@b.c")
+			require.Contains(t, string(data), `"score":null`)
+		})
+	}
+}
+
+type failingEventProperty struct{}
+
+func (*failingEventProperty) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("property marshaler failed")
+}
+
+func TestExceptionIgnoredCustomCollision(t *testing.T) {
+	cycle := map[string]interface{}{}
+	cycle["self"] = cycle
+	messages := []Exception{
+		{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"$lib": &failingEventProperty{}, "kept": "yes"},
+		},
+		{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"$lib": cycle, "kept": "yes"},
+		},
+	}
+	for i, msg := range messages {
+		t.Run(fmt.Sprintf("shadowed %d", i), func(t *testing.T) {
+			data, _, _, err := prepareForSend(msg, nil)
+			require.NoError(t, err)
+			var wire struct {
+				Properties map[string]interface{} `json:"properties"`
+			}
+			require.NoError(t, json.Unmarshal(data, &wire))
+			require.Equal(t, SDKName, wire.Properties["$lib"])
+			require.Equal(t, "yes", wire.Properties["kept"])
+		})
+	}
+
+	dropped := Exception{
+		DistinctId:    "user-1",
+		ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+		Properties:    Properties{"kept": &failingEventProperty{}},
+	}
+	_, _, _, err := prepareForSend(dropped, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "property marshaler failed")
+}
+
+func TestExceptionOmitZero(t *testing.T) {
+	type payload struct {
+		Optional time.Time `json:"optional,omitzero"`
+		Kept     string    `json:"kept"`
+	}
+	for _, value := range []payload{
+		{Kept: "yes"},
+		{Kept: "yes", Optional: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)},
+	} {
+		want, err := json.Marshal(value)
+		require.NoError(t, err)
+		msg := Exception{
+			DistinctId:    "user-1",
+			ExceptionList: []ExceptionItem{{Type: "Error", Value: "boom"}},
+			Properties:    Properties{"payload": value},
+		}
+		data, _, _, err := prepareForSend(msg, nil)
+		require.NoError(t, err)
+		var wire struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		require.NoError(t, json.Unmarshal(data, &wire))
+		require.JSONEq(t, string(want), string(wire.Properties["payload"]))
+	}
+}

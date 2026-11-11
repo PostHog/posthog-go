@@ -755,6 +755,36 @@ func TestGetErrorStringWithRequestErrors(t *testing.T) {
 }
 
 func TestFailedFlagShouldNotReturnValue(t *testing.T) {
+	t.Run("GetAllFlags omits failed flags without a poller", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"flags":{"failed-flag":{"key":"failed-flag","enabled":false,"failed":true},"enabled-flag":{"key":"enabled-flag","enabled":true,"failed":false},"disabled-flag":{"key":"disabled-flag","enabled":false}}}`))
+		}))
+		defer server.Close()
+
+		posthog, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer posthog.Close()
+
+		if posthog.(*client).featureFlagsPoller != nil {
+			t.Fatal("Expected no feature flags poller without a personal API key")
+		}
+		flags, err := posthog.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-123", SendFeatureFlagEvents: Ptr(false)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := flags["failed-flag"]; ok {
+			t.Error("Expected failed flag to be absent")
+		}
+		if value, ok := flags["enabled-flag"]; !ok || value != true {
+			t.Errorf("Expected enabled flag to be true, got %v (present: %v)", value, ok)
+		}
+		if value, ok := flags["disabled-flag"]; !ok || value != false {
+			t.Errorf("Expected disabled flag to be false, got %v (present: %v)", value, ok)
+		}
+	})
+
 	t.Run("flag with failed=true should be treated as missing", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if serveCaptureOK(w, r) {

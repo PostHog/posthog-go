@@ -156,7 +156,7 @@ func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build fu
 	if err != nil {
 		return err
 	}
-	prepared, err := prepareToolCall(call)
+	prepared, err := prepareToolCall(call, a.cfg.captureErrorMessages)
 	if err != nil {
 		return err
 	}
