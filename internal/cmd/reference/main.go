@@ -284,9 +284,10 @@ func markdown(text string) string {
 	return strings.Join(out, "\n\n")
 }
 
-// language tags a code example go when it parses as Go, or looks like Go with placeholders such as
-// NewWithConfig(...). Other examples, such as a list of default values, are text.
+// language tags a code example go when it parses as Go, reading a ... placeholder such as
+// NewWithConfig(...) as an argument. Other examples, such as a list of default values, are text.
 func language(src string) string {
+	src = strings.ReplaceAll(src, "...", "_")
 	if _, err := parser.ParseExpr(src); err == nil {
 		return "go"
 	}
@@ -294,9 +295,6 @@ func language(src string) string {
 		if _, err := parser.ParseFile(token.NewFileSet(), "", fmt.Sprintf(wrap, src), 0); err == nil {
 			return "go"
 		}
-	}
-	if strings.ContainsAny(src, "({") || strings.Contains(src, ":=") {
-		return "go"
 	}
 	return "text"
 }
@@ -364,13 +362,17 @@ func block(decl *ast.GenDecl) string {
 		return true
 	})
 	kept = slices.DeleteFunc(kept, func(c *ast.CommentGroup) bool { return c == nil })
-	// A filtered-out member leaves blank lines where it was, such as right after an interface's brace.
+	// A filtered-out member leaves blank lines where it was, such as right after a brace or parenthesis.
 	lines := strings.Split(source(&printer.CommentedNode{Node: &d, Comments: kept}), "\n")
 	var out []string
 	for i, line := range lines {
 		blank := strings.TrimSpace(line) == ""
-		afterOpen := len(out) > 0 && strings.HasSuffix(out[len(out)-1], "{")
-		beforeClose := i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1]), "}")
+		afterOpen := len(out) > 0 && strings.HasSuffix(out[len(out)-1], "{") || len(out) > 0 && strings.HasSuffix(out[len(out)-1], "(")
+		next := ""
+		if i+1 < len(lines) {
+			next = strings.TrimSpace(lines[i+1])
+		}
+		beforeClose := strings.HasPrefix(next, "}") || strings.HasPrefix(next, ")")
 		if !blank || (!afterOpen && !beforeClose) {
 			out = append(out, line)
 		}
