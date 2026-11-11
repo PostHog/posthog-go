@@ -149,6 +149,29 @@ jobs:
             (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go@v${NEW_VERSION}")
           done
 
+      # The reference headings come from the sdk-specs capabilities.
+      - name: Check out sdk-specs
+        # Best-effort: a failure never blocks the release. Run generate-references.yml to retry.
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: PostHog/sdk-specs
+          path: .sdk-specs
+          persist-credentials: false
+
+      - name: Regenerate SDK reference
+        id: reference
+        # Best-effort: a failure never blocks the release. Run generate-references.yml to retry.
+        continue-on-error: true
+        # Stage the pages, so a new page shows in git status as a file, not as an untracked folder.
+        run: |
+          go run ./internal/cmd/reference --sdk-specs .sdk-specs
+          git add references
+
+      - name: Warn if the SDK reference didn't regenerate
+        if: steps.reference.outcome == 'failure'
+        run: echo "::warning::The SDK reference didn't regenerate. Run generate-references.yml to retry."
+
       - name: Check for version bump changes
         id: check-changes
         run: |
