@@ -13,8 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	posthog "github.com/posthog/posthog-go"
-	"github.com/posthog/posthog-go/posthogmcp"
+	posthog "github.com/posthog/posthog-go/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -174,6 +174,11 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	delete(properties, "$mcp_duration_ms")
 	assert.Regexp(t, generatedSessionID, properties["$session_id"])
 	delete(properties, "$session_id")
+	// MCP events name the MCP integration and the SDK version as their library.
+	assert.Equal(t, "posthog-go-mcp", properties["$lib"])
+	assert.Equal(t, posthog.Version, properties["$lib_version"])
+	delete(properties, "$lib")
+	delete(properties, "$lib_version")
 	assert.JSONEq(t, `{
 		"$groups": {"company": "acme"},
 		"$mcp_client_name": "test-client",

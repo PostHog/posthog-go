@@ -7,7 +7,10 @@
 send.
 
 ```go
-client := posthog.New("phc_project_api_key")
+client, err := posthog.New("phc_project_api_key")
+if err != nil {
+    log.Fatal(err)
+}
 defer client.Close()
 
 s := server.NewMCPServer("weather-server", "1.0.0",

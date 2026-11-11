@@ -7,9 +7,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	posthog "github.com/posthog/posthog-go"
-	"github.com/posthog/posthog-go/posthogmcp"
-	"github.com/posthog/posthog-go/posthogmcpsdk"
+	"github.com/posthog/posthog-go/posthogmcpsdk/v2"
+	posthog "github.com/posthog/posthog-go/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

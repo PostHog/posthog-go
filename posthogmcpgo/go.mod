@@ -1,4 +1,4 @@
-module github.com/posthog/posthog-go/posthogmcpgo
+module github.com/posthog/posthog-go/posthogmcpgo/v2
 
 go 1.25.5
 
@@ -6,8 +6,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.58.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/posthog/posthog-go v1.42.4
-	github.com/posthog/posthog-go/posthogmcpsdk v1.39.0
+	github.com/posthog/posthog-go/posthogmcpsdk/v2 v2.0.0
+	github.com/posthog/posthog-go/v2 v2.0.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -31,6 +31,6 @@ require (
 )
 
 replace (
-	github.com/posthog/posthog-go => ../
-	github.com/posthog/posthog-go/posthogmcpsdk => ../posthogmcpsdk
+	github.com/posthog/posthog-go/posthogmcpsdk/v2 => ../posthogmcpsdk
+	github.com/posthog/posthog-go/v2 => ../
 )

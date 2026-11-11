@@ -13,8 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/posthog/posthog-go/posthogmcp"
-	"github.com/posthog/posthog-go/posthogmcpsdk"
+	"github.com/posthog/posthog-go/posthogmcpsdk/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

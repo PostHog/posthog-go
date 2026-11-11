@@ -12,7 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/posthog/posthog-go/posthogmcp"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 // Instrument returns a server option that adds PostHog tool-call analytics to

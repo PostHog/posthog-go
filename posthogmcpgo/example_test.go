@@ -1,14 +1,19 @@
 package posthogmcpgo_test
 
 import (
+	"log"
+
 	"github.com/mark3labs/mcp-go/server"
-	posthog "github.com/posthog/posthog-go"
-	"github.com/posthog/posthog-go/posthogmcp"
-	"github.com/posthog/posthog-go/posthogmcpgo"
+	"github.com/posthog/posthog-go/posthogmcpgo/v2"
+	posthog "github.com/posthog/posthog-go/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 func ExampleInstrument() {
-	client := posthog.New("phc_project_api_key")
+	client, err := posthog.New("phc_project_api_key")
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer client.Close()
 
 	server.NewMCPServer("weather-server", "1.0.0",
