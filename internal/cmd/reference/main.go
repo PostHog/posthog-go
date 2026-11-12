@@ -93,8 +93,19 @@ func main() {
 		for i, g := range guides {
 			guides[i] = strings.TrimSpace(read(g))
 		}
-		write(id+"-migration.md", "---\ntitle: \""+name+" migration guides\"\nsidebar: Docs\nshowTitle: true\n---", guides)
+		head, guides := migrationPage(guides)
+		write(id+"-migration.md", head, guides)
 	}
+}
+
+// migrationPage titles the page with the guide's H1 when there is one guide, so the page shows one title.
+func migrationPage(guides []string) (string, []string) {
+	title := name + " migration guides"
+	if len(guides) == 1 && strings.HasPrefix(guides[0], "# ") {
+		heading, rest, _ := strings.Cut(guides[0], "\n")
+		title, guides = strings.TrimSpace(heading[2:]), []string{strings.TrimSpace(rest)}
+	}
+	return "---\ntitle: " + strconv.Quote(title) + "\nsidebar: Docs\nshowTitle: true\n---", guides
 }
 
 // load reads docs/capabilities.json: slugs by label, a "utils" list, and a "next" object of the same shape.
