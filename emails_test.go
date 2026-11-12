@@ -279,7 +279,7 @@ func (api *sendAPI) send(to, templateKey string, category json.RawMessage) (int,
 		switch {
 		case transactional && templateCategory != "":
 			return http.StatusBadRequest, mismatch
-		case !leftOut && !transactional && asObject.Key != templateCategory:
+		case !leftOut && !transactional && (asObject.Key != templateCategory || api.categories[templateCategory].Type != asObject.Type):
 			return http.StatusBadRequest, mismatch
 		}
 		api.sent = append(api.sent, sentEmail{To: to, Category: templateCategory})
