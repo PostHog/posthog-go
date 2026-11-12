@@ -939,6 +939,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		evalResult.Value = flagValue
 		evalResult.Err = err
 		evalResult.FlagFailed = combined.flagFailed
+		evalResult.ErrorsWhileComputingFlags = combined.errorsWhileComputingFlags
 		if combined.payload != "" {
 			payloadStr = combined.payload
 			hasPayload = true
