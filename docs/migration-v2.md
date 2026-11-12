@@ -135,9 +135,10 @@ The other packages move with the core:
 | --- | --- |
 | Subpackages such as `posthogmcp` | `github.com/posthog/posthog-go/v2/posthogmcp` |
 | The MCP Go SDK adapter | `github.com/posthog/posthog-go/posthogmcpsdk/v2` |
+| The mcp-go adapter | `github.com/posthog/posthog-go/posthogmcpgo/v2` |
 | The `otel` bridge | `github.com/posthog/posthog-go/otel/v2` |
 
-The MCP Go SDK adapter is a separate module that moves in lockstep with the core.
+The MCP Go SDK adapter and the mcp-go adapter are separate modules that move in lockstep with the core.
 
 The `otel` bridge imports the core SDK, so it also moves in lockstep with the core.
 
@@ -477,10 +478,9 @@ In 1.x.x the SDK sent any value as a property.
 
 Non-finite numbers follow these rules:
 
-- **`float64` values.** A `float64` NaN or infinite property value is sent as `null` and the event is kept, as in 1.36.1 and later.
+- **`float32` and `float64` values.** A NaN or infinite property value is sent as `null` and the event is kept, as in 1.36.1 and later.
 - **Structs.** A struct value that holds one is sent as `null` as a whole.
-- **No second validation.** Unlike 1.36.1 and later, 2.x.x doesn't re-validate each encoded event.
-- **Invalid JSON.** An event whose only non-finite numbers are `float32` values, or whose custom `MarshalJSON` returns invalid JSON, can be sent as invalid JSON. Capture then rejects the whole request it's in.
+- **Invalid JSON.** Each event is checked as JSON before it's queued. A custom `MarshalJSON` that returns invalid JSON fails only its own event, and `Callback.Failure` reports it.
 
 ### Check timestamps
 

@@ -170,6 +170,13 @@ type Client interface {
 	// CloseWithContext gracefully shuts down the client with the provided context.
 	// The context can be used to control the shutdown deadline.
 	CloseWithContext(context.Context) error
+
+	// Emails sends transactional email from PostHog email templates or from
+	// content your code rendered, and reads the status of each email it sent.
+	// It needs Config.SecretKey, a project secret API key with the
+	// transactional_email:write scope. Close waits for email requests in flight, and a
+	// request after Close fails with the code client_closed.
+	Emails() Emails
 }
 
 // preparedMessage bundles a pre-serialized message with the original APIMessage.
@@ -242,6 +249,10 @@ type client struct {
 	// HTTP transport provided in the configuration.
 	http http.Client
 
+	// secretKeyHTTP sends the requests that carry the secret key. See
+	// secretKeyHTTPClient.
+	secretKeyHTTP http.Client
+
 	// A background poller for fetching feature flags
 	featureFlagsPoller *FeatureFlagsPoller
 
@@ -249,6 +260,8 @@ type client struct {
 
 	// Decider for feature flag methods
 	decider decider
+
+	emails *emailSender
 }
 
 type flagUser struct {
@@ -326,6 +339,8 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 		http:                            httpClient,
 		distinctIdsFeatureFlagsReported: reportedCache,
 	}
+	c.secretKeyHTTP = secretKeyHTTPClient(config, c.http)
+	c.emails = newEmailSender(config, c.http.Transport)
 
 	c.decider, err = newFlagsClient(apiKey, config.Endpoint, c.http, config.FeatureFlagRequestTimeout, c.Logger, config.FeatureFlagRequestMaxRetries)
 	if err != nil {
@@ -338,8 +353,8 @@ func NewWithConfig(apiKey string, config Config) (cli Client, err error) {
 			c.key,
 			secretKey,
 			c.Logger,
-			c.Endpoint,
-			c.http,
+			c.Config.secretKeyHost(),
+			c.secretKeyHTTP,
 			c.DefaultFeatureFlagsPollingInterval,
 			c.NextFeatureFlagsPollingTick,
 			c.FeatureFlagRequestTimeout,
@@ -941,7 +956,13 @@ func (c *client) ReloadFeatureFlags() error {
 		c.warnPersonalAPIKeyMissing("ReloadFeatureFlags")
 		return ErrNoSecretKey
 	}
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	c.featureFlagsPoller.ForceReload()
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	return nil
 }
 
@@ -1018,6 +1039,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
+		evalResult.FlagFailed = combined.flagFailed
 		if combined.payload != "" {
 			payloadStr = combined.payload
 			hasPayload = true
@@ -1101,7 +1123,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			return nil, evalResult.Err
 		}
 		if evalResult.FlagFailed {
-			return nil, fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, flagConfig.Key)
+			return nil, errFlagEvaluationFailed(flagConfig.Key)
 		}
 		return nil, fmt.Errorf("%w: '%s' does not exist or is disabled", ErrFlagNotFound, flagConfig.Key)
 	}
@@ -1525,7 +1547,7 @@ func recordFromFlagDetail(detail FlagDetail, minimalFlagCalledEvents bool) evalu
 		HasExperiment:           detail.Metadata.HasExperiment,
 		MinimalFlagCalledEvents: minimalFlagCalledEvents,
 	}
-	if detail.Failed != nil && *detail.Failed {
+	if flagDetailFailed(detail) {
 		record.Enabled = false
 		errStr := FeatureFlagErrorEvaluationFailed
 		record.Error = &errStr
@@ -1560,6 +1582,9 @@ func (c *client) featureFlagEvaluationsHostWithContext(ctx context.Context) feat
 // IsEnabled reports whether the client can still send data. It returns false after Close.
 func (c *client) IsEnabled() bool { return !c.closed.Load() }
 
+// Emails returns the client's transactional email API.
+func (c *client) Emails() Emails { return c.emails }
+
 // Close gracefully shuts down the client, flushing any pending messages.
 // If ShutdownTimeout is set to a positive duration, Close waits up to that
 // duration for in-flight requests to complete. Otherwise, it waits indefinitely.
@@ -1589,6 +1614,7 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 		c.sendMu.Lock()
 		c.closed.Store(true)
 		c.sendMu.Unlock()
+		c.emails.close()
 
 		// Signal every lane's loop to stop and drain
 		close(c.quit)
@@ -1639,6 +1665,11 @@ func (c *client) CloseWithContext(ctx context.Context) error {
 				err = fmt.Errorf("shutdown timeout: %w", ctx.Err())
 				c.Warnf("shutdown timeout exceeded, some messages may be lost")
 			}
+		}
+
+		if emailsErr := c.emails.drain(ctx); emailsErr != nil && err == nil {
+			err = fmt.Errorf("shutdown timeout: %w", emailsErr)
+			c.Warnf("shutdown timeout exceeded, some email requests were aborted")
 		}
 	})
 
@@ -1931,7 +1962,7 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 }
 
 func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
-	baseURL, err := url.JoinPath(c.Endpoint, "api/projects/@current/feature_flags", flagKey, "remote_config")
+	baseURL, err := url.JoinPath(c.Config.secretKeyHost(), "api/projects/@current/feature_flags", flagKey, "remote_config")
 	if err != nil {
 		return "", fmt.Errorf("building URL: %v", err)
 	}
@@ -1960,7 +1991,7 @@ func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "posthog-go/"+Version)
 
-	res, err := c.http.Do(req)
+	res, err := c.secretKeyHTTP.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("sending request: %v", err)
 	}
@@ -2027,7 +2058,7 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceI
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
 		// If the flag failed evaluation due to a transient server error,
 		// don't return the incorrect enabled=false value
-		if flagDetail.Failed != nil && *flagDetail.Failed {
+		if flagDetailFailed(flagDetail) {
 			result.FlagFailed = true
 		} else {
 			result.Value = flagDetail
@@ -2051,5 +2082,10 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 		return map[string]interface{}{}, nil
 	}
 
-	return flagsResponse.FeatureFlags, nil
+	if flagsResponse.FeatureFlags == nil {
+		return map[string]interface{}{}, nil
+	}
+	values := make(map[string]interface{}, len(flagsResponse.FeatureFlags))
+	copyEvaluatedFlagValues(values, flagsResponse)
+	return values, nil
 }

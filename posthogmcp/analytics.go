@@ -13,10 +13,11 @@ type Option func(*config)
 
 type config struct {
 	exceptionAutocapture bool
+	captureErrorMessages bool
 }
 
 func defaultConfig() config {
-	return config{exceptionAutocapture: true}
+	return config{exceptionAutocapture: true, captureErrorMessages: true}
 }
 
 // WithExceptionAutocapture controls whether failed tool calls also enqueue a
@@ -24,6 +25,20 @@ func defaultConfig() config {
 func WithExceptionAutocapture(enabled bool) Option {
 	return func(cfg *config) {
 		cfg.exceptionAutocapture = enabled
+	}
+}
+
+// WithCaptureErrorMessages controls whether a failed tool call's error text is
+// sent as $mcp_error_message and as the $exception value. Tool errors often
+// repeat their arguments, and only credentials are redacted from them. When
+// disabled, both carry "Tool <name> returned an error" instead, and the call is
+// still recorded as a failure with its error type. It does not cover
+// $mcp_response: an IsError result's content, which in posthogmcpsdk includes
+// a typed handler's error and go-sdk's validation errors, is a response, so
+// also disable the adapter's WithCaptureResponses. It is enabled by default.
+func WithCaptureErrorMessages(enabled bool) Option {
+	return func(cfg *config) {
+		cfg.captureErrorMessages = enabled
 	}
 }
 
@@ -60,7 +75,7 @@ func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error {
 	if err != nil {
 		return err
 	}
-	messages, err := buildToolCallMessages(call, a.cfg.exceptionAutocapture)
+	messages, err := buildToolCallMessages(call, a.cfg)
 	if err != nil {
 		return err
 	}

@@ -97,3 +97,42 @@ func TestFlushWaitsForActiveRetry(t *testing.T) {
 	require.NoError(t, <-first)
 	require.NoError(t, f.FlushWithContext(ctx))
 }
+
+func TestFinalAttemptDoesNotWait(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	for name, enqueue := range map[string]func(posthog.Client) error{
+		"analytics": func(c posthog.Client) error {
+			return c.Enqueue(posthog.Capture{DistinctId: "user-123", Event: "Save"})
+		},
+		"ai": func(c posthog.Client) error {
+			return c.EnqueueAI(posthog.Capture{DistinctId: "user-123", Event: "$ai_generation"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			callback := &flushCallbacks{}
+			c, err := posthog.NewWithConfig("test-key", posthog.Config{
+				Endpoint:   server.URL,
+				Interval:   time.Hour,
+				MaxRetries: posthog.Ptr(0),
+				RetryAfter: func(int) time.Duration { return 5 * time.Second },
+				Callback:   callback,
+			})
+			require.NoError(t, err)
+			defer c.Close()
+
+			require.NoError(t, enqueue(c))
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			start := time.Now()
+			require.NoError(t, c.(flushingClient).FlushWithContext(ctx))
+			// One attempt and no retries: waiting for Retry-After or RetryAfter would only delay the failure.
+			require.Less(t, time.Since(start), time.Second)
+			require.EqualValues(t, 1, callback.failed.Load())
+		})
+	}
+}

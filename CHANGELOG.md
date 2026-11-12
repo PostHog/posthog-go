@@ -1,5 +1,100 @@
 ## Unreleased
 
+## 1.42.4
+
+### Patch Changes
+
+- 1b62fef: Cohort `not_in` now excludes members and matches non-members during local feature flag evaluation.
+
+## 1.42.3
+
+### Patch Changes
+
+- 5f936d6: Fall back to server evaluation for unsupported cohort group types and correctly evaluate supported group types.
+- f09dd5c: A /flags result with `failed: true` is no longer reported as a successful disable.
+
+## 1.42.2
+
+### Patch Changes
+
+- f28be34: Identify, group identify, and exception events keep the rest of their properties when a value is NaN or Inf
+
+## 1.42.1
+
+### Patch Changes
+
+- d722122: Stop the legacy `/batch/` sender from sleeping after its last failed attempt, and clamp its `Retry-After` to the same 30s ceiling as analytics v1 capture.
+- 57c652f: Relative date filters in local flag evaluation no longer roll past the end of a shorter month. `1m` on March 31 now resolves to February 28.
+- dfd5ba3: ReloadFeatureFlags returns ErrClosed after the client is closed instead of panicking
+
+## 1.42.0
+
+### Minor Changes
+
+- 761d995: Add `posthogmcp.WithCaptureErrorMessages(false)`, which keeps a failed MCP tool call's error text out of `$mcp_error_message` and the `$exception` event. Tool errors often repeat their arguments, and only credentials are redacted from them. The failure is still recorded with its error type, and both carry `Tool <name> returned an error` instead. It applies to the manual API and to the `posthogmcpsdk` and `posthogmcpgo` adapters. An `IsError` result's content is still part of `$mcp_response`, so turn response capture off too to keep failure text out entirely.
+
+### Patch Changes
+
+- a528b3f: Aligned `posthogmcpsdk` with the sdk-specs MCP spec. The `get_more_tools` virtual tool now advertises `readOnlyHint`, `idempotentHint`, `destructiveHint` and `openWorldHint` as `false`, since it records data, and no longer sets a title. The injected `context` argument has a shorter description that asks for a few words on why the tool is called, described by role. The injected `llm_model` argument is no longer listed as required. This changes your published tool definitions; if your server is listed in the ChatGPT or Claude directories, those platforms may re-review the updated tools.
+
+## 1.41.1
+
+### Patch Changes
+
+- 17365fe: Suppress local-evaluation definition warnings for client-only flags, including definitions loaded from a shared cache, without changing their evaluation behavior.
+
+## 1.41.0
+
+### Minor Changes
+
+- d4ea159: Add `posthogmcpgo`, MCP analytics for servers built on `github.com/mark3labs/mcp-go`. `posthogmcpgo.Instrument` returns one `server.ServerOption` that captures `$mcp_tool_call` events with the same properties as `posthogmcpsdk`, including the agent's intent from an added `context` argument. Tools whose input schema disallows other properties get no added arguments, so servers using `WithInputSchemaValidation` keep working.
+
+## 1.40.1
+
+### Patch Changes
+
+- 8fef83f: Reworded the descriptions of the injected `conversation_id` and `llm_model` arguments and the `get_more_tools` virtual tool so they describe the field instead of instructing the model. This changes your published tool definitions; if your server is listed in the ChatGPT or Claude directories, those platforms may re-review the updated tools.
+
+## 1.40.0
+
+### Minor Changes
+
+- 03e1647: The new `Client.Emails()` sends transactional email from your Go code and reads each email's delivery status.
+  
+  **Breaking for custom clients.** A type that implements `Client` itself now needs an `Emails` method.
+  
+  ```go
+  client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+  if err != nil {
+  	log.Fatal(err)
+  }
+  defer client.Close()
+  
+  result, err := client.Emails().Send(ctx, posthog.CodeEmail{
+  	To:          "user@example.com",
+  	DistinctID:  "user_123",
+  	TemplateKey: "password-reset",
+  	Subject:     "Reset your password",
+  	HTML:        renderedHTML,
+  })
+  if err != nil {
+  	log.Fatal(err)
+  }
+  
+  status, err := client.Emails().Get(ctx, result.ID)
+  fmt.Println(status.Status) // "delivered", "bounced", ...
+  ```
+  
+  You can also send a template made in PostHog with a `TemplateEmail` and its `TemplateID`.
+  
+  You need a project secret API key, the kind that starts with `phs_`. Create one under **Project secret API keys** in your project settings. Set its **Transactional email** scope to Write to send emails, or to Read for a key that only reads statuses. Set it as `SecretKey` in `posthog.Config`. Set `AppHost` to your PostHog app URL when you self-host PostHog or send through a reverse proxy. The client also loads feature flags with this key, so give it **Feature flags: Read** too, or it logs an error each time it polls.
+  
+  PostHog records each email's delivery, opens and clicks on the person with that `DistinctID`. It groups every email with the same `TemplateKey`, so you see their metrics and logs in one place. The SDK retries a request that hits a network error, a rate limit or an outage twice by default. Every send carries an idempotency key, so a retry never sends the email twice. Pass your own `IdempotencyKey`, such as `welcome:user_123`, and your job runner's retries are safe too.
+  
+  A `CodeEmail` also takes `From`, `ReplyTo` and `CaptureEngagement: posthog.Ptr(false)`. Set `MigratedFrom` in `posthog.Config` to tell PostHog which email provider you moved from. A failed call returns an `*EmailError` with PostHog's `Code` and the HTTP `StatusCode`.
+  
+  Docs: [Send transactional emails with Go](https://posthog.com/docs/workflows/transactional-emails/go) and the [transactional email overview](https://posthog.com/docs/workflows/transactional-emails).
+
 ## 1.39.0
 
 ### Minor Changes

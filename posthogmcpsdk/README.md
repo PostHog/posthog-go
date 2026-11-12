@@ -26,8 +26,13 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   `{"request": {"method": "tools/call", "params": {"name": ..., "arguments": ...}}}`,
   and the result as `$mcp_response`. Credentials and binary content are
   redacted. Turn either off with `WithCaptureParameters(false)` or
-  `WithCaptureResponses(false)`. The error text of a failed call is captured
-  either way.
+  `WithCaptureResponses(false)`. Neither covers the error text of a failed
+  call, which tool errors often build from the arguments. To keep it out too,
+  create the recorder with `posthogmcp.New(client,
+  posthogmcp.WithCaptureErrorMessages(false))`: failures are still recorded,
+  with their error type, as `Tool <name> returned an error`.
+  The text of an `IsError` result, including the ones go-sdk builds from a typed handler's error or a failed validation, is also part of `$mcp_response`, so
+  turn responses off as well.
 - The session as `$session_id`, always set. A conversation handle, described
   below, comes first. Next, a transport session ID (streamable HTTP) becomes
   `ses_` plus a hash every PostHog MCP SDK computes the same way, so one
@@ -152,7 +157,7 @@ applies to `$mcp_tool_call` only.
 ## The llm_model argument
 
 MCP has no standard way for a client to say which model is calling, so the
-middleware also adds a required `llm_model` string, asking the agent for its
+middleware also adds an optional `llm_model` string, asking the agent for its
 exact model identifier or `"unknown"`. It is handled like `context`: removed
 before the handler and validation, kept by tools that declare their own, and
 left off `$mcp_parameters`. A model named in the client's `_meta` wins over it.

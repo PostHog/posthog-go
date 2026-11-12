@@ -2,6 +2,7 @@ version: 2
 updates:
   - package-ecosystem: "gomod"
     directory: "/"
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     cooldown:
@@ -12,6 +13,7 @@ updates:
           - "*"
   - package-ecosystem: "gomod"
     directory: "/otel"
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     cooldown:

@@ -375,12 +375,52 @@ func boolProperty(props Properties, key string) bool {
 // capture keys its results by the canonical form.
 func prepareForSend(msg Message, logger Logger) (json.RawMessage, APIMessage, string, error) {
 	apiMsg := msg.APIfy()
+	if exception, ok := msg.(Exception); ok {
+		custom, err := normalizeExceptionCustomProperties(exception)
+		if err != nil {
+			return nil, apiMsg, canonicalUUID(exception.Uuid), err
+		}
+		exception.Properties = custom
+		msg = exception
+	}
 	ev := buildEvent(msg.apifyEvent(), logger)
 	data, err := marshalEventPayload(ev)
 	if err != nil {
 		return nil, apiMsg, canonicalUUID(ev.Uuid), err
 	}
 	return json.RawMessage(data), apiMsg, canonicalUUID(ev.Uuid), nil
+}
+
+// normalizeExceptionCustomProperties prepares an exception's own properties as
+// 1.x encoded them: with encoding/json, which honors omitzero, unlike go-json.
+// Keys the typed fields set in apifyEvent are left out first, because those
+// values are never sent; a failing or cyclic value under one of them must not
+// drop the exception.
+func normalizeExceptionCustomProperties(msg Exception) (Properties, error) {
+	if len(msg.Properties) == 0 {
+		return msg.Properties, nil
+	}
+	custom := make(Properties, len(msg.Properties))
+	for key, value := range msg.Properties {
+		if exceptionTypedKey(msg, key) {
+			continue
+		}
+		custom[key] = value
+	}
+	return normalizeEventPropertiesMode(custom, true)
+}
+
+// exceptionTypedKey reports whether apifyEvent overwrites key with a typed field.
+func exceptionTypedKey(msg Exception, key string) bool {
+	switch key {
+	case "$exception_list":
+		return true
+	case "$exception_fingerprint":
+		return msg.ExceptionFingerprint != nil
+	case "$debug_images":
+		return len(msg.DebugImages) > 0
+	}
+	return false
 }
 
 // apifyEvent builds the intermediate event for a Capture.
