@@ -19,7 +19,9 @@
       },
       "timestamp": "2009-11-10T23:00:00.000Z",
       "uuid": "00000000-0000-0000-0000-000000000002",
-      "options": {}
+      "options": {
+        "process_person_profile": true
+      }
     }
   ]
 }

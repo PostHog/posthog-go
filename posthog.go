@@ -690,6 +690,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 	}
 
 	msg = dereferenceMessage(msg)
+	msg = withIdentifyStylePersonProfile(ctx, msg)
 
 	var ts = c.now()
 

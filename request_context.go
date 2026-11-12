@@ -58,7 +58,8 @@ type RequestContext struct {
 	// Options are request-scoped capture options for every event type.
 	// They fill in before BeforeSend, only for options the event left missing or
 	// nil, so BeforeSend sees them and can change them. They win over
-	// Config.DefaultEventOptions.
+	// Config.DefaultEventOptions. They never set process_person_profile on an
+	// identify-style event; see Options.
 	Options Options
 }
 
@@ -286,15 +287,21 @@ func groupIdentifyDistinctID(ctx context.Context, msg GroupIdentify) string {
 	return groupDistinctID(msg.Type, msg.Key)
 }
 
+// eventDistinctID returns the event's distinct ID, else the request context's,
+// else "". A zero RequestContext stands for a missing one.
+func eventDistinctID(distinctID string, requestContext RequestContext) string {
+	if id := blankAsMissing(distinctID); id != "" {
+		return id
+	}
+	return blankAsMissing(requestContext.DistinctId)
+}
+
 // resolveCaptureContext resolves the event's distinct ID from the event or the
 // request context, and generates a personless one when neither has it.
 func resolveCaptureContext(ctx context.Context, distinctID string, fieldType string) (captureContext, error) {
 	requestContext, hasRequestContext := RequestContextFromContext(ctx)
-	resolvedDistinctID := blankAsMissing(distinctID)
+	resolvedDistinctID := eventDistinctID(distinctID, requestContext)
 	isPersonless := false
-	if resolvedDistinctID == "" && hasRequestContext {
-		resolvedDistinctID = blankAsMissing(requestContext.DistinctId)
-	}
 	if resolvedDistinctID == "" {
 		if !hasRequestContext {
 			return captureContext{}, FieldError{

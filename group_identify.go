@@ -32,7 +32,8 @@ type GroupIdentify struct {
 	// before BeforeSend. A $group_set in them is
 	// merged under Properties, which win key by key.
 	EventProperties Properties
-	// Options are per-event capture options, sent unchanged. See Options.
+	// Options are per-event capture options, sent unchanged, except that
+	// process_person_profile defaults to true. See Options.
 	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left

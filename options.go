@@ -1,5 +1,7 @@
 package posthog
 
+import "context"
+
 // Options holds per-event capture options, such as person profile processing.
 // They are sent in the event's options object, next to its properties, on both
 // Enqueue and EnqueueAI.
@@ -21,6 +23,14 @@ package posthog
 // The legacy properties $process_person_profile, $cookieless_mode,
 // $ignore_sent_at and $product_tour_id still work, but an option overrides its
 // legacy property. Use options.
+//
+// An identify-style event ($identify, $create_alias, $merge_dangerously,
+// $groupidentify, $set or $set_once, sent by Identify, Alias, GroupIdentify or
+// Capture) takes process_person_profile from the call alone: the option, else
+// the legacy property, else true. No default or request-context value reaches
+// it, because with person processing off PostHog drops these events or ignores
+// their person update. A Capture whose distinct ID the SDK generates keeps the
+// personless false instead of true. BeforeSend sees the value and can change it.
 //
 //	posthog.Capture{
 //		DistinctId: "0123456789",
@@ -64,4 +74,64 @@ func fillOptions(options Options, layers ...Options) Options {
 		}
 	}
 	return filled
+}
+
+// identifyStyleEvents are the events that exist to create, link or change a
+// person or group, so they process the person profile unless the call itself
+// says otherwise.
+var identifyStyleEvents = map[string]struct{}{
+	"$identify":          {},
+	"$create_alias":      {},
+	"$merge_dangerously": {},
+	"$groupidentify":     {},
+	"$set":               {},
+	"$set_once":          {},
+}
+
+// withIdentifyStylePersonProfile resolves process_person_profile for an
+// identify-style event from the call alone, before any layer fills and before
+// BeforeSend, so the call's value beats every layer and BeforeSend sees it.
+// It reads the event name at submission, so a BeforeSend rename does not count.
+func withIdentifyStylePersonProfile(ctx context.Context, msg Message) Message {
+	switch m := msg.(type) {
+	case Identify:
+		m.Options, m.EventProperties = callerPersonProfile(m.Options, m.EventProperties, true)
+		return m
+	case Alias:
+		m.Options, m.EventProperties = callerPersonProfile(m.Options, m.EventProperties, true)
+		return m
+	case GroupIdentify:
+		m.Options, m.EventProperties = callerPersonProfile(m.Options, m.EventProperties, true)
+		return m
+	case Capture:
+		if _, ok := identifyStyleEvents[m.Event]; !ok {
+			return m
+		}
+		// Capture generates a personless distinct ID exactly when neither the event
+		// nor the request context has one, and that event keeps the personless default.
+		requestContext, _ := RequestContextFromContext(ctx)
+		hasDistinctID := eventDistinctID(m.DistinctId, requestContext) != ""
+		m.Options, m.Properties = callerPersonProfile(m.Options, m.Properties, hasDistinctID)
+		return m
+	}
+	return msg
+}
+
+// callerPersonProfile returns copies of options and properties with
+// process_person_profile set from the call: the option if set, else the legacy
+// property moved into the option, else true when defaultTrue. A nil value
+// counts as unset. The caller's maps are never written.
+func callerPersonProfile(options Options, properties Properties, defaultTrue bool) (Options, Properties) {
+	if !isNilValue(options[optionProcessPersonProfile]) {
+		return options, properties
+	}
+	if legacy := properties[propertyProcessPersonProfile]; !isNilValue(legacy) {
+		properties = Properties{}.Merge(properties)
+		delete(properties, propertyProcessPersonProfile)
+		return fillOptions(options, Options{optionProcessPersonProfile: legacy}), properties
+	}
+	if !defaultTrue {
+		return options, properties
+	}
+	return fillOptions(options, Options{optionProcessPersonProfile: true}), properties
 }
