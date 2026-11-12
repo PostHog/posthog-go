@@ -32,3 +32,7 @@ func main() {
 	})
 }
 ```
+
+## Events without a distinct ID
+
+`EnqueueWithContext` sends a `Capture` or `Exception` that has no distinct ID as a [personless event](https://posthog.com/docs/data/anonymous-vs-identified-events) when a request context is attached. The SDK generates a UUID as the distinct ID and sets the `process_person_profile` option to `false`. `Enqueue` without a request context still returns an error when `DistinctId` is empty.
