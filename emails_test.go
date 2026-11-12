@@ -205,8 +205,8 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 	}, server.received()[0].Body)
 }
 
-// sendAPI fakes PostHog's code send. A category object creates or updates the
-// project's category by key. For a template_key that names a template in a
+// sendAPI fakes PostHog's code send. A category object creates the project's
+// category when its key is new, and leaves an existing one as it is. For a template_key that names a template in a
 // category, a send without a category follows the template's category, and
 // "transactional" is refused with category_mismatch.
 type sendAPI struct {
@@ -290,11 +290,13 @@ func (api *sendAPI) send(to, templateKey string, category json.RawMessage) (int,
 		if found && existing.Type != asObject.Type {
 			return http.StatusBadRequest, mismatch
 		}
-		existing.Type, existing.Name = asObject.Type, asObject.Name
-		if asObject.Description != nil {
-			existing.Description = *asObject.Description
+		if !found {
+			created := storedCategory{Type: asObject.Type, Name: asObject.Name}
+			if asObject.Description != nil {
+				created.Description = *asObject.Description
+			}
+			api.categories[asObject.Key] = created
 		}
-		api.categories[asObject.Key] = existing
 	}
 	api.sent = append(api.sent, sentEmail{To: to, Category: asObject.Key})
 	return http.StatusAccepted, `{"message_id":"msg_1","replayed":false,"warnings":[]}`
@@ -391,37 +393,27 @@ func TestEmailsSendCodeRefusesACategoryOfAnotherType(t *testing.T) {
 	require.Empty(t, api.sentEmails())
 }
 
-func TestEmailsSendCodeUpdatesItsCategorysDescription(t *testing.T) {
-	tests := []struct {
-		name        string
-		description *string
-		want        string
-	}{
-		{name: "nil keeps it", description: nil, want: "Old news"},
-		{name: "empty clears it", description: Ptr(""), want: ""},
-		{name: "new text replaces it", description: Ptr("Monthly product news"), want: "Monthly product news"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			api := newSendAPI(t, nil, map[string]storedCategory{
-				"newsletter": {Type: "marketing", Name: "News", Description: "Old news"},
-			})
-			client := sendAPIClient(t, api)
-
-			_, err := client.Emails().Send(context.Background(), CodeEmail{
-				To:          "user@example.com",
-				TemplateKey: "monthly-newsletter",
-				Subject:     "What's new",
-				HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
-				Category:    MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: tt.description},
-			})
-
-			require.NoError(t, err)
-			require.Equal(t, map[string]storedCategory{
-				"newsletter": {Type: "marketing", Name: "Newsletter", Description: tt.want},
-			}, api.storedCategories())
+func TestEmailsSendCodeLeavesAnExistingCategoryAsItIs(t *testing.T) {
+	api := newSendAPI(t, nil, nil)
+	client := sendAPIClient(t, api)
+	send := func(name string, description *string) {
+		_, err := client.Emails().Send(context.Background(), CodeEmail{
+			To:          "user@example.com",
+			TemplateKey: "monthly-newsletter",
+			Subject:     "What's new",
+			HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
+			Category:    MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: name, Description: description},
 		})
+		require.NoError(t, err)
 	}
+
+	send("Newsletter", Ptr("Monthly product news"))
+	send("Product news", Ptr(""))
+
+	require.Equal(t, map[string]storedCategory{
+		"newsletter": {Type: "marketing", Name: "Newsletter", Description: "Monthly product news"},
+	}, api.storedCategories())
+	require.Len(t, api.sentEmails(), 2)
 }
 
 func digestEmail(category EmailCategory) CodeEmail {

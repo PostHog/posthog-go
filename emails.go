@@ -72,7 +72,10 @@ type Email interface {
 
 // TemplateEmail sends an email template made transactional in PostHog, by its
 // ID. The template sets its own sender, subject and content, and follows the
-// project's engagement setting.
+// project's engagement setting. PostHog refuses a send of a template in a
+// marketing category with the error code "unsubscribe_link_required" when the
+// template has no {{ unsubscribe_url }} placeholder, and "copies_not_allowed"
+// when it has cc or bcc.
 type TemplateEmail struct {
 	// To is one recipient email address.
 	To string
@@ -167,8 +170,9 @@ const (
 )
 
 // MessageCategory defines a message category in code. The first send with a
-// Key creates the category, and a later send with a new Name or Description
-// updates it.
+// Key creates the category with its Name and Description. A later send with
+// that Key keeps the category's name and description, so change them in
+// PostHog.
 //
 // PostHog refuses a send with the error code "category_mismatch" when the Key
 // exists with another Type or TemplateKey names a template in another
@@ -184,8 +188,7 @@ type MessageCategory struct {
 	// Name is the category's name in the PostHog app, such as "Newsletter".
 	Name string
 	// Description notes which emails belong to the category, such as
-	// Ptr("Monthly product news"). Recipients don't see it. Nil keeps an
-	// existing category's description, and Ptr("") clears it.
+	// Ptr("Monthly product news"). Recipients don't see it.
 	Description *string
 }
 
