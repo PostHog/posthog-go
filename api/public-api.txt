@@ -93,6 +93,8 @@ var (
 
 	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
 )
+var EmailCategoryTransactional = transactionalEmailCategory{}
+
 var ErrFlagNotFound = errors.New("feature flag not found")
 
 
@@ -295,6 +297,7 @@ type CodeEmail struct {
 	From    string
 	ReplyTo []string
 	CaptureEngagement *bool
+	Category EmailCategory
 	DistinctID string
 	IdempotencyKey string
 	MaxRetries *int
@@ -450,6 +453,9 @@ type DescriptionExtractor interface {
 
 
 type Email interface {
+}
+
+type EmailCategory interface {
 }
 
 type EmailError struct {
@@ -902,6 +908,20 @@ type Message interface {
 }
 
 
+type MessageCategory struct {
+	Key  string
+	Type MessageCategoryType
+	Name string
+	Description *string
+}
+
+
+type MessageCategoryType string
+
+const (
+	MessageCategoryMarketing MessageCategoryType = "marketing"
+	MessageCategoryTransactional MessageCategoryType = "transactional"
+)
 type Properties map[string]interface{}
 
 

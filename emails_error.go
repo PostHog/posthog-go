@@ -46,9 +46,10 @@ const (
 // status, or that the client could not tell whether it did. Every error that
 // Emails returns is an *EmailError; read it with errors.As.
 //
-// Branch on Code, PostHog's stable error code such as "recipient_suppressed",
-// or an SDK code such as "network_error" or "missing_app_host". Name is its
-// coarse category. The error never holds the secret key or the request body.
+// Branch on Code, PostHog's stable error code such as "recipient_suppressed"
+// or "category_mismatch", or an SDK code such as "network_error" or
+// "missing_app_host". Name is its coarse category. The error never holds the
+// secret key or the request body.
 type EmailError struct {
 	Name    EmailErrorName
 	Code    string
