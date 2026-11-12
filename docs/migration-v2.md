@@ -54,6 +54,7 @@ Read the checklist first, then the sections that apply to you. Many of these cha
 - [ ] You set a custom `Config.RetryAfter`, or call `DefaultBackoff()` → [Update error handling](#update-error-handling)
 - [ ] You set `$session_id` or `$window_id` to a value that isn't a string → [Check dropped events](#check-dropped-events)
 - [ ] You send `$performance_event`, `float32` values, or types with a custom `MarshalJSON` → [Check dropped events](#check-dropped-events)
+- [ ] You set an option, or a legacy option property like `$process_person_profile`, to a value PostHog can't read, such as `"maybe"` → [Check dropped events](#check-dropped-events)
 - [ ] You read the text of event timestamps → [Check timestamps](#check-timestamps)
 
 **Follow ups**
@@ -467,7 +468,7 @@ PostHog rejects these events one by one inside an otherwise successful batch. Ea
 - Distinct IDs longer than 200 bytes
 - `$performance_event`
 - Properties that aren't a JSON object
-- An event option value PostHog can't read, where `Details` is `invalid_options` (see [Move to event options](#move-to-event-options))
+- An event option value, or a legacy option property value such as `$process_person_profile: "maybe"`, that PostHog can't read, where `Details` is `invalid_options` (see [Move to event options](#move-to-event-options)). 1.x.x sent the legacy property and PostHog ignored the value.
 
 The SDK sends `$session_id` and `$window_id` as top-level fields of the event, because capture reads them there and requires strings. What the SDK sends depends on the value:
 
