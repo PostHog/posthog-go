@@ -25,7 +25,7 @@ Read the checklist first, then the sections that apply to you.
 
 **During your upgrade**
 
-- [ ] You import `github.com/posthog/posthog-go`, `posthogmcp`, `posthogmcpsdk`, or the `otel` bridge → [Change the import path](#change-the-import-path)
+- [ ] You import `github.com/posthog/posthog-go`, `posthogmcp`, `posthogmcpsdk`, `posthogmcpgo`, or the `otel` bridge → [Change the import path](#change-the-import-path)
 - [ ] You call `posthog.New` → [Handle constructor errors](#handle-constructor-errors)
 - [ ] You compare the text of `ErrSDKDisabled` → [Handle constructor errors](#handle-constructor-errors)
 - [ ] You pass a nil `*posthogmcp.Analytics` to `posthogmcpsdk`, or an empty API key to the `otel` bridge → [Handle constructor errors](#handle-constructor-errors)
