@@ -303,6 +303,7 @@ They exist to create, link, or change a person or group, and with person process
 - **Generated distinct IDs.** A `Capture` whose distinct ID the SDK generates gets no `true`. Its `process_person_profile` comes from the layers, then the personless `false` (see [Copy options in BeforeSend](#copy-options-in-beforesend)), unless the call sets the option or the legacy property.
 - **Layered legacy properties.** `BeforeSend` sees the option without a legacy `$process_person_profile` from `DefaultEventProperties` or `RequestContext.Properties`, so a hook that clears `Options` doesn't send a `false` from a layer.
 - **`BeforeSend`.** The hook sees the value and can change it. The SDK checks the event name the call sends, so a `BeforeSend` hook that builds or renames an identify-style event must set the option itself.
+- **Keeping one personless.** To send an identify-style event without person processing, set `process_person_profile` to `false` on the message or in `BeforeSend`, or turn off person processing for the project in PostHog.
 
 ### Check event IDs
 
