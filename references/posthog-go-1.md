@@ -1026,7 +1026,7 @@ const (
 ```
 
 ```go
-const Version = "1.42.4"
+const Version = "1.43.0"
 ```
 
 Version of the client.
@@ -1455,10 +1455,24 @@ type CodeEmail struct {
 	// Without it, PostHog sends from the project's default sender.
 	From    string
 	ReplyTo []string
+	// Sensitive marks an email that carries a login link, a reset token or a
+	// code. PostHog keeps a sensitive email's links unchanged, leaves its
+	// subject off engagement events and keeps its content out of logs. Nil
+	// takes the setting of the saved template whose key is TemplateKey, or
+	// true when no template has that key.
+	Sensitive *bool
+	// Tracking says what PostHog tracks for this email. Nil keeps the
+	// defaults: PostHog counts opens and captures engagement events, and
+	// rewrites links to count clicks only when the email isn't Sensitive. Use
+	// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+	Tracking *EmailTracking
 	// CaptureEngagement says whether PostHog captures the email's engagement
-	// events, such as opens and clicks, as events of the recipient. Nil means
-	// true. A project whose admin turned engagement capture off captures
-	// nothing, whatever the send asks.
+	// events as events of the recipient. Nil means true. A project whose
+	// admin turned engagement capture off captures nothing, whatever the send
+	// asks. PostHog refuses a send that sets both CaptureEngagement and
+	// Tracking.
+	//
+	// Deprecated: Use Tracking with EmailTrackingOptions.Engagement.
 	CaptureEngagement *bool
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
@@ -1777,6 +1791,70 @@ type EmailStatus struct {
 ```
 
 EmailStatus is what happened to an email that Emails.Send queued.
+
+### `EmailTracking`
+
+```go
+type EmailTracking struct {
+	// contains filtered or unexported fields
+}
+```
+
+EmailTracking says what PostHog tracks for a CodeEmail. Make one with EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+
+#### `EmailTracking.MarshalJSON`
+
+```go
+func (t EmailTracking) MarshalJSON() ([]byte, error)
+```
+
+MarshalJSON encodes the tracking as true, false or an object of the kinds that are set.
+
+#### `posthog.EmailTrackingOff`
+
+```go
+func EmailTrackingOff() *EmailTracking
+```
+
+EmailTrackingOff turns off every kind of tracking, including kinds PostHog adds later. PostHog then can't count the email's opens and clicks, and captures no engagement events.
+
+#### `posthog.EmailTrackingOn`
+
+```go
+func EmailTrackingOn() *EmailTracking
+```
+
+EmailTrackingOn tracks opens and clicks and captures engagement events. Use it only when the email's links are safe to send through a redirect.
+
+#### `posthog.EmailTrackingWith`
+
+```go
+func EmailTrackingWith(options EmailTrackingOptions) *EmailTracking
+```
+
+EmailTrackingWith sets each kind of tracking on its own.
+
+### `EmailTrackingOptions`
+
+```go
+type EmailTrackingOptions struct {
+	// Opens says whether PostHog adds its open pixel to count opens. Nil
+	// means true. With Opens false, PostHog counts no clicks, and refuses
+	// Clicks true.
+	Opens *bool `json:"opens,omitempty"`
+	// Clicks says whether PostHog rewrites the email's links to count clicks.
+	// Nil means true when the email isn't Sensitive and false when it is.
+	// Turn it on only when the links are safe to send through a redirect, so
+	// not for a login or password reset link. A link with a data-ph-no-track
+	// attribute is never rewritten.
+	Clicks *bool `json:"clicks,omitempty"`
+	// Engagement says whether PostHog captures the email's engagement events,
+	// such as opens and clicks, as events of the recipient. Nil means true.
+	Engagement *bool `json:"engagement,omitempty"`
+}
+```
+
+EmailTrackingOptions turns each kind of tracking on or off. A nil field keeps its default.
 
 ### `EmailWarning`
 

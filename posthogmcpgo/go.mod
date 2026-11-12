@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.58.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/posthog/posthog-go v1.42.4
+	github.com/posthog/posthog-go v1.43.0
 	github.com/posthog/posthog-go/posthogmcpsdk v1.39.0
 	github.com/stretchr/testify v1.11.1
 )
