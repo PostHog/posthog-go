@@ -559,6 +559,9 @@ legacy `$process_person_profile` property:
 - `BeforeSend` sees the value and can change it. The SDK checks the event name
   the call sends, so a `BeforeSend` hook that builds or renames an
   identify-style event must set the option itself.
+- To send an identify-style event without person processing, set
+  `process_person_profile` to `false` on the message or in `BeforeSend`, or
+  turn off person processing for the project in PostHog.
 
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
 option that is still missing or `nil`, except `process_person_profile` on an
