@@ -72,10 +72,9 @@ type Email interface {
 
 // TemplateEmail sends an email template made transactional in PostHog, by its
 // ID. The template sets its own sender, subject and content, and follows the
-// project's engagement setting. PostHog refuses a send of a template in a
-// marketing category with the error code "unsubscribe_link_required" when the
-// template has no {{ unsubscribe_url }} placeholder, and "copies_not_allowed"
-// when it has cc or bcc.
+// project's engagement setting. A template made in PostHog sends transactional
+// email only: PostHog refuses a send of a template in a marketing category with
+// the error code "marketing_template".
 type TemplateEmail struct {
 	// To is one recipient email address.
 	To string
@@ -100,7 +99,8 @@ type TemplateEmail struct {
 
 // CodeEmail sends content your code rendered, named by a key. PostHog sends
 // it as is and never stores it. To send a React email, render it to HTML in
-// your app and pass the HTML.
+// your app and pass the HTML. PostHog refuses a send whose TemplateKey names a
+// template in a marketing category with the error code "marketing_template".
 type CodeEmail struct {
 	// To is one recipient email address.
 	To string
@@ -124,8 +124,8 @@ type CodeEmail struct {
 	CaptureEngagement *bool
 	// Category is EmailCategoryTransactional or a MessageCategory, which
 	// defines the category in code. Without it, the email follows the
-	// category of the template that TemplateKey names, or is transactional
-	// with no category.
+	// transactional category of the template that TemplateKey names, or is
+	// transactional with no category.
 	Category EmailCategory
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
