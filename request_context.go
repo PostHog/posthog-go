@@ -502,6 +502,11 @@ func remoteIP(r *http.Request) string {
 
 // EnqueueWithContext queues a message and applies any PostHog request context attached to ctx.
 // Use this from HTTP handlers with r.Context() when NewRequestContextMiddleware is installed.
+//
+// A Capture or Exception with no distinct ID, on the message or in the request context, is
+// sent as a personless event when ctx has a request context attached. The SDK generates a
+// UUID as the distinct ID and sets the process_person_profile option to false. Without a
+// request context, an empty DistinctId returns an error, as it does from Enqueue.
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error {
 	return enqueueWithContext(ctx, client, msg)
 }
