@@ -218,13 +218,16 @@ type Config struct {
 	// request context left unset. A key with a nil value counts as set. $set,
 	// $set_once, $groups and $group_set fill one level deep when both values are
 	// maps. BeforeSend sees the filled values and can change or remove them. On
-	// Identify, Alias and GroupIdentify they fill EventProperties.
+	// Identify, Alias and GroupIdentify they fill EventProperties. A
+	// $process_person_profile in them never reaches an identify-style event;
+	// see Options.
 	DefaultEventProperties Properties
 
 	// DefaultEventOptions are added to the options of every Capture, Exception,
 	// Identify, Alias and GroupIdentify event, such as process_person_profile or
 	// cookieless_mode. They never set process_person_profile on an
-	// identify-style event; see Options.
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
 	//
 	// They fill in before BeforeSend, only for options that the event and the
 	// request context left missing or nil. BeforeSend sees the filled options and
@@ -2816,7 +2819,7 @@ product_tour_id          string
 
 The legacy properties $process\_person\_profile, $cookieless\_mode, $ignore\_sent\_at and $product\_tour\_id still work, but an option overrides its legacy property. Use options.
 
-An identify-style event ($identify, $create\_alias, $merge\_dangerously, $groupidentify, $set or $set\_once, sent by Identify, Alias, GroupIdentify or Capture) takes process\_person\_profile from the call alone: the option, else the legacy property, else true. No default or request-context value reaches it, because with person processing off PostHog drops these events or ignores their person update. A Capture whose distinct ID the SDK generates keeps the personless false instead of true. BeforeSend sees the value and can change it.
+An identify-style event ($identify, $create\_alias, $merge\_dangerously, $groupidentify, $set or $set\_once, sent by Identify, Alias, GroupIdentify or Capture) takes process\_person\_profile from the call alone: the option, else the legacy property, else true. Defaults and the request context do not reach it, because with person processing off PostHog drops these events or ignores their person update. The exception is a Capture whose distinct ID the SDK generates: it gets no true, so its value comes from the defaults and the request context, then the personless false. BeforeSend sees the option without a legacy property from a default or the request context, and can change it.
 
 ```go
 posthog.Capture{
@@ -2929,13 +2932,15 @@ type RequestContext struct {
 	// Properties are request-scoped properties for every event type.
 	// They fill in before BeforeSend, only for keys the event left unset, so
 	// BeforeSend sees them and can change or remove them. They win over
-	// Config.DefaultEventProperties.
+	// Config.DefaultEventProperties. A $process_person_profile in them never
+	// reaches an identify-style event; see Options.
 	Properties Properties
 	// Options are request-scoped capture options for every event type.
 	// They fill in before BeforeSend, only for options the event left missing or
 	// nil, so BeforeSend sees them and can change them. They win over
 	// Config.DefaultEventOptions. They never set process_person_profile on an
-	// identify-style event; see Options.
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
 	Options Options
 }
 ```
