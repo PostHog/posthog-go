@@ -139,7 +139,7 @@ Read the docs on [alias](https://posthog.com/docs/product-analytics/identify#ali
 
 Use request context to apply a distinct ID, session ID, and common request properties to capture and exception events inside a `net/http` request. This connects frontend activity to backend events, session replay, error tracking, and feature flag evaluation.
 
-If you use [PostHog JS](https://posthog.com/docs/libraries/js/reference) on the frontend, configure [`tracing_headers`](https://posthog.com/docs/libraries/js/reference#add-tracing-headers) for your Go backend hostname, so browser requests include the session and distinct ID headers. Then wrap your handler with `NewRequestContextMiddleware` and use the context-aware helpers:
+If you use [PostHog JS](https://posthog.com/docs/libraries/js) on the frontend, configure [`tracing_headers`](https://posthog.com/docs/libraries/js/config#tracing-headers) for your Go backend hostname, so browser requests include the session and distinct ID headers. Then wrap your handler with `NewRequestContextMiddleware` and use the context-aware helpers:
 
 ```go
 handler := posthog.NewRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
