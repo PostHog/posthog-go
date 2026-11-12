@@ -12,10 +12,11 @@ You don't need to make every change on the day you upgrade your SDK. Required ch
 
 ## Checklist
 
-Read the checklist first, then the sections that apply to you.
+Read the checklist first, then the sections that apply to you. Many of these changes don't produce a compile error, so check every row even if your code builds unchanged.
 
 **Before you upgrade**
 
+- [ ] You run self-hosted PostHog → [Prepare your proxy](#prepare-your-proxy)
 - [ ] You send events through your own reverse proxy or API gateway → [Prepare your proxy](#prepare-your-proxy)
 - [ ] An egress allowlist or WAF rule pins the `/batch/` path → [Prepare your proxy](#prepare-your-proxy)
 - [ ] A proxy redirects capture requests → [Prepare your proxy](#prepare-your-proxy)
@@ -35,6 +36,7 @@ Read the checklist first, then the sections that apply to you.
 - [ ] You pass a value that isn't a string to `Groups.Set` → [Convert group keys](#convert-group-keys)
 - [ ] You rely on the 500000-byte cap on one event → [Check config values](#check-config-values)
 - [ ] You set a negative timeout, size, or queue value in `Config` → [Check config values](#check-config-values)
+- [ ] You set `Config.Compression`, or something in your path expects the `?compression=` query parameter or the `lz64` or `base64` encodings → [Check config values](#check-config-values)
 - [ ] Your `BeforeSend` hook returns a new message → [Copy options in BeforeSend](#copy-options-in-beforesend)
 - [ ] You send an empty or whitespace-only `DistinctId` or `Alias` → [Fix identity calls](#fix-identity-calls)
 - [ ] You send `Identify`, `Alias`, or `GroupIdentify` with `EnqueueWithContext` → [Fix identity calls](#fix-identity-calls)
@@ -72,7 +74,11 @@ Read the checklist first, then the sections that apply to you.
 
 1.x.x sent `Enqueue` and `EnqueueWithContext` events to `POST /batch/`.
 
-Check anything that pins the old path: reverse proxies, API gateways, egress allowlists, and WAF rules.
+Check anything that pins the old path: reverse proxies, API gateways, egress allowlists, WAF rules, and self-hosted deployments.
+
+The v1 routes are only served where the deployment enables them. Confirm your PostHog instance serves both `/i/v1/analytics/events` and `/i/v1/ai/events` before you upgrade.
+
+On self-hosted PostHog, a separate capture service serves the AI route, so check it too if you use `EnqueueAI`. PostHog Cloud (`us.i.posthog.com`, `eu.i.posthog.com`) serves both.
 
 If you send events through your own reverse proxy, update it before you upgrade:
 
@@ -309,7 +315,7 @@ A `$process_person_profile` property in the message's `EventProperties` doesn't 
 - **Empty values.** An empty `Uuid` gets a generated one.
 - **Invalid values.** The SDK replaces an invalid `Uuid` with a generated one. It logs one warning that doesn't include the value.
 - **`BeforeSend`.** The SDK applies this rule before `BeforeSend`, and again to a `Uuid` that `BeforeSend` sets.
-- **Duplicates.** Each event needs its own uuid. When a request contains the same uuid more than once, capture keeps the first event and drops the later copies. The SDK reports each dropped copy to `Callback.Failure` as a `*CaptureEventError` with `Result` `drop` and `Details` `duplicate_event_uuid`, and never retries it.
+- **Duplicates.** Each event needs its own uuid. When a request contains the same uuid more than once, capture keeps the first event and drops the later copies. The SDK reports each dropped copy to `Callback.Failure` as a `*CaptureEventError` with `Result` `drop` and `Details` `duplicate_event_uuid`, and never retries it. Older capture versions reject the whole request with a `400`, which the SDK reports as a `*CaptureRequestError` with `duplicate_event_uuid`.
 
 ### Check property precedence
 
@@ -441,6 +447,8 @@ Update log-based alerts for these log lines:
 | Default retry waits | No jitter | Up to 25% jitter |
 
 In 2.x.x, other `5xx` statuses are terminal.
+
+A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route, for example an older self-hosted install.
 
 The default waits vary randomly by up to 25% either way, so clients that fail together don't all retry at the same moment.
 
