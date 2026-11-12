@@ -41,7 +41,8 @@ Read the checklist first, then the sections that apply to you. Many of these cha
 - [ ] You send an empty or whitespace-only `DistinctId` or `Alias` → [Fix identity calls](#fix-identity-calls)
 - [ ] You send `Identify`, `Alias`, or `GroupIdentify` with `EnqueueWithContext` → [Fix identity calls](#fix-identity-calls)
 - [ ] You set `GroupIdentify.DistinctId` → [Fix identity calls](#fix-identity-calls)
-- [ ] You turn person processing off in `DefaultEventProperties` or `RequestContext.Properties` and send `Identify`, `Alias`, or `GroupIdentify` → [Fix identity calls](#fix-identity-calls)
+- [ ] You turn person processing off in `DefaultEventOptions`, `DefaultEventProperties`, `RequestContext.Options`, or `RequestContext.Properties` and send `$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set`, or `$set_once` events → [Check identify-style events](#check-identify-style-events)
+- [ ] Your `BeforeSend` hook builds or renames a `$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set`, or `$set_once` event → [Check identify-style events](#check-identify-style-events)
 - [ ] You set `Uuid` yourself, or reuse one `Uuid` for more than one event → [Check event IDs](#check-event-ids)
 - [ ] You expect `DefaultEventProperties` to override an event's properties, including `$set` and `$groups` → [Check property precedence](#check-property-precedence)
 - [ ] You set `$is_server`, `$geoip_disable`, or a system property such as `$os`, and expect the SDK's value to win → [Check property precedence](#check-property-precedence)
@@ -276,7 +277,7 @@ A hook that returns a new message must copy `Options`, or the event is sent with
 - **The personless default.** When a `Capture` or `Exception` with a request context has no distinct ID, the SDK generates one and sets the option `process_person_profile: false`. So it doesn't create a person for every generated ID.
 - **Turn processing back on.** A default, request-context, or event option can turn processing back on.
 - **MCP events.** `posthogmcp` sets the same option on events without an identity. This covers tool calls and the `$mcp_unknown_tool`, `$mcp_input_required`, and `$mcp_missing_capability` events.
-- **Options in the hook.** A `BeforeSend` hook can read and change `Options` like `Properties`, and `Options` is never nil inside the hook. To change an option in `BeforeSend`, set it in `Options`.
+- **Options in the hook.** A `BeforeSend` hook can read and change `Options` like `Properties`, and `Options` is never nil inside the hook. To change an option in `BeforeSend`, set it in `Options`. The SDK checks the event name the call sends, so a hook that builds or renames an identify-style event must set the option itself (see [Check identify-style events](#check-identify-style-events)).
 
 ### Fix identity calls
 
@@ -286,27 +287,22 @@ A hook that returns a new message must copy `Options`, or the event is sent with
 - **Long distinct IDs.** PostHog drops an event whose distinct ID is over 200 UTF-8 bytes, with the per-event result `distinct_id_too_large`. It reaches `Callback.Failure` as a `CaptureEventError`. 1.x.x sent events to legacy capture, which shortened the ID to 200 characters and kept the event.
 - **Group distinct ID.** `GroupIdentify.DistinctId` is sent as the event's distinct ID. If it's empty, the SDK uses the request context's distinct ID, then `$<type>_<key>`. 1.x.x accepted and ignored the field, and sent every `$groupidentify` as `$<type>_<key>`.
 - **Long group IDs.** If `$<type>_<key>` is over 200 bytes, set `DistinctId`, or PostHog drops the event.
-- **Request context values.** `RequestContext.Properties` and `RequestContext.Options` apply to `Identify`, `Alias`, and `GroupIdentify` events sent with `EnqueueWithContext`. In 1.x.x they applied only to `Capture` and `Exception`.
+- **Request context values.** `RequestContext.Properties` and `RequestContext.Options` apply to `Identify`, `Alias`, and `GroupIdentify` events sent with `EnqueueWithContext`. In 1.x.x they applied only to `Capture` and `Exception`. They never set person processing on identify-style events whose distinct ID the SDK didn't generate (see [Check identify-style events](#check-identify-style-events)).
 - **Context session ID.** The context's session ID fills `Identify` and `Alias`, but never `GroupIdentify`. A session's person in PostHog follows the distinct IDs of the session's events. So an event sent under a different distinct ID with the context's session ID can change the person shown for that session.
 - **Context distinct ID.** The context's distinct ID never changes an `Identify` or an `Alias`.
 
-Person processing settings reach `Identify`, `Alias`, and `GroupIdentify` events too. That covers `Config.DefaultEventOptions`, `RequestContext.Options`, and a legacy `$process_person_profile` property in `DefaultEventProperties` or `RequestContext.Properties`. 1.x.x never sent those values with these messages.
+### Check identify-style events
 
-PostHog drops an `$identify`, `$create_alias`, or `$groupidentify` event that has person processing off, with an ingestion warning. It never creates or merges a person or updates a group.
+Identify-style events are `$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set`, and `$set_once`. They're the events that `Identify`, `Alias`, and `GroupIdentify` send, and a `Capture` with one of these names.
 
-PostHog keeps a `$set` event but ignores its person update.
+They exist to create, link, or change a person or group, and with person processing off PostHog drops them or ignores their person update. So they default to `process_person_profile: true` unless the call itself sets the option or the legacy `$process_person_profile` property:
 
-Capture accepts these events, so `Callback` doesn't report the drop. To keep them, set the option on the message, which wins over every layer, or set it in `BeforeSend`:
-
-```go
-client.Enqueue(posthog.Identify{
-    DistinctId: "user-123",
-    Properties: posthog.NewProperties().Set("plan", "pro"),
-    Options:    posthog.NewOptions().Set("process_person_profile", true),
-})
-```
-
-A `$process_person_profile` property in the message's `EventProperties` doesn't override `DefaultEventOptions` or `RequestContext.Options`.
+- **The call's value.** The call's value wins over every layer. A `false` in `DefaultEventOptions`, `RequestContext.Options`, `DefaultEventProperties`, or `RequestContext.Properties` doesn't reach these events, unless the SDK generates the distinct ID (below).
+- **A legacy property on the call.** A legacy `$process_person_profile` in the call's `Properties` (for `Capture`) or `EventProperties` becomes the option before the layers fill, and the property is removed. If the call also sets the option, the option wins.
+- **`nil` values.** A `nil` option or legacy property counts as unset.
+- **Generated distinct IDs.** A `Capture` whose distinct ID the SDK generates gets no `true`. Its `process_person_profile` comes from the layers, then the personless `false` (see [Copy options in BeforeSend](#copy-options-in-beforesend)), unless the call sets the option or the legacy property.
+- **Layered legacy properties.** `BeforeSend` sees the option without a legacy `$process_person_profile` from `DefaultEventProperties` or `RequestContext.Properties`, so a hook that clears `Options` doesn't send a `false` from a layer.
+- **`BeforeSend`.** The hook sees the value and can change it. The SDK checks the event name the call sends, so a `BeforeSend` hook that builds or renames an identify-style event must set the option itself.
 
 ### Check event IDs
 
@@ -335,6 +331,8 @@ An event's properties and options come from five steps, in this order. Steps 2 t
 
 A property key set to `nil` counts as set, so it keeps the default out. An option that's missing or `nil` counts as unset, so a `nil` event option still gets the default.
 
+Steps 2 to 4 don't fill `process_person_profile` on an identify-style event that already defaulted to `true` (see [Check identify-style events](#check-identify-style-events)).
+
 `$lib` and `$lib_version` follow their own rule. A `nil`, empty, or non-string `$lib` counts as unset, and the SDK replaces a `$lib_version` set without a `$lib`.
 
 To turn a default option off for one event, set the option to `false` on the event or in `BeforeSend`.
@@ -348,7 +346,7 @@ These changes follow from this order:
 - **Default properties.** `Config.DefaultEventProperties` fill only the keys that the event and the request context left unset. In 1.x.x the default value overwrote the event's value, except when the event turned person processing off.
 - **Merged maps.** A `$set`, `$set_once`, `$groups`, or `$group_set` default no longer replaces the event's whole map. In 1.x.x it did.
 - **`Capture.Groups`.** It merges into a `$groups` map in `Properties` and wins key by key. In 1.x.x it replaced the map.
-- **Message types.** `DefaultEventProperties` apply to `Exception`, `Identify`, `Alias`, and `GroupIdentify` events. In 1.x.x they applied only to `Capture`. A `$process_person_profile: false` there turns person processing off for these events too (see [Fix identity calls](#fix-identity-calls)).
+- **Message types.** `DefaultEventProperties` apply to `Exception`, `Identify`, `Alias`, and `GroupIdentify` events. In 1.x.x they applied only to `Capture`. A `$process_person_profile: false` there turns person processing off for `Exception` events too, but not for identify-style events (see [Check identify-style events](#check-identify-style-events)).
 - **`EventProperties`.** For `Identify`, `Alias`, and `GroupIdentify`, the defaults fill the new `EventProperties` field. It holds the properties of the event itself, separate from the `$set` or `$group_set` that `Properties` sends.
 - **`$set` in `EventProperties`.** A `$set` in `Identify.EventProperties` or a `$group_set` in `GroupIdentify.EventProperties` merges under `Properties`, which win key by key.
 - **`Alias` callbacks.** The `Config.Callback` message for an `Alias` doesn't include its `EventProperties`.
@@ -535,7 +533,7 @@ You can also set options for every event and for a request:
 - **Every event.** `Config.DefaultEventOptions` applies to every `Capture`, `Exception`, `Identify`, `Alias`, and `GroupIdentify` event, like `Config.DefaultEventProperties`.
 - **One request.** `RequestContext.Options` applies to every event sent with `EnqueueWithContext` or `EnqueueAIWithContext`, like `RequestContext.Properties`. A child context inherits its parent's options.
 
-The event's `Options` come first. Before `BeforeSend`, the SDK fills each option that's still missing or `nil`, from `RequestContext.Options`, then `DefaultEventOptions`, then the SDK's personless default (see [Check property precedence](#check-property-precedence)).
+The event's `Options` come first. Before `BeforeSend`, the SDK fills each option that's still missing or `nil`, from `RequestContext.Options`, then `DefaultEventOptions`, then the SDK's personless default (see [Check property precedence](#check-property-precedence)). It doesn't fill `process_person_profile` on an identify-style event that already defaulted to `true` (see [Check identify-style events](#check-identify-style-events)).
 
 1.x.x sent these settings as properties to the `/batch/` endpoint. Two values behave differently as options:
 
