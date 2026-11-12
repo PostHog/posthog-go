@@ -191,12 +191,13 @@ unchanged.
 
 `RequestContext.Properties` and `RequestContext.Options` now apply to
 `Identify`, `Alias` and `GroupIdentify` events sent with `EnqueueWithContext`,
-not only to `Capture` and `Exception`. The context's session ID fills
-`Identify` and `Alias`, but never `GroupIdentify`. A session's person in
-PostHog follows the distinct IDs of the session's events, so an event sent
-under a different distinct ID with the context's session ID can change the
-person shown for that session. The context's distinct ID never changes an
-`Identify` or an `Alias`.
+not only to `Capture` and `Exception`. They never set person processing on
+identify-style events (see [New: event options](#new-event-options)). The
+context's session ID fills `Identify` and `Alias`, but never `GroupIdentify`.
+A session's person in PostHog follows the distinct IDs of the session's
+events, so an event sent under a different distinct ID with the context's
+session ID can change the person shown for that session. The context's
+distinct ID never changes an `Identify` or an `Alias`.
 
 An empty or whitespace-only `DistinctId` is now treated as missing, so a
 `Capture` or `Exception` sent with a request context gets the context's ID or a
@@ -410,8 +411,9 @@ is set as `$session_id` first, unless the event has its own.
 
 `DefaultEventProperties` now apply to `Exception`, `Identify`, `Alias` and
 `GroupIdentify` events too, not only to `Capture`. A
-`$process_person_profile: false` there turns person processing off for these
-events too (see [New: event options](#new-event-options)). For `Identify`,
+`$process_person_profile: false` there turns person processing off for
+`Exception` events too, but not for identify-style events (see
+[New: event options](#new-event-options)). For `Identify`,
 `Alias` and `GroupIdentify` they fill the new `EventProperties` field: the
 properties of the event itself, separate from the `$set` or `$group_set` that
 `Properties` sends. A `$set` in `Identify.EventProperties` or a `$group_set` in
@@ -537,26 +539,27 @@ Options can also be set for every event and for a request:
   `EnqueueWithContext` or `EnqueueAIWithContext`, like
   `RequestContext.Properties`. A child context inherits its parent's options.
 
-These layers reach `Identify`, `Alias` and `GroupIdentify` events too, and so
-does a legacy `$process_person_profile` property in `DefaultEventProperties` or
-`RequestContext.Properties`. 1.x never sent those values with these messages.
-PostHog drops an `$identify`, `$create_alias` or `$groupidentify` event that
-has person processing off, with an ingestion warning, so it never creates or
-merges a person or updates a group. It keeps a `$set` event but ignores its
-person update. `Callback` does not report the drop, because capture accepts the
-event. To keep these events, set the option on the message, which wins over
-every layer, or set it in `BeforeSend`:
+Identify-style events are `$identify`, `$create_alias`, `$merge_dangerously`,
+`$groupidentify`, `$set` and `$set_once`: the events that `Identify`, `Alias`
+and `GroupIdentify` send, and a `Capture` with one of these names. They exist
+to create, link or change a person or group, and with person processing off
+PostHog drops them or ignores their person update. So they default to
+`process_person_profile: true` unless the call itself sets the option or the
+legacy `$process_person_profile` property:
 
-```go
-client.Enqueue(posthog.Identify{
-    DistinctId: "user-123",
-    Properties: posthog.NewProperties().Set("plan", "pro"),
-    Options:    posthog.NewOptions().Set("process_person_profile", true),
-})
-```
-
-A `$process_person_profile` property in the message's `EventProperties` does
-not override `DefaultEventOptions` or `RequestContext.Options`.
+- The call's value wins over every layer. A `false` in `DefaultEventOptions`,
+  `RequestContext.Options`, `DefaultEventProperties` or
+  `RequestContext.Properties` does not reach these events.
+- A legacy `$process_person_profile` in the call's `Properties` (for `Capture`)
+  or `EventProperties` becomes the option before the layers fill, and the
+  property is removed. If the call also sets the option, the option wins.
+- A `nil` option or legacy property counts as unset.
+- A `Capture` whose distinct ID the SDK generates keeps the personless
+  `process_person_profile: false` (below), unless the call sets the option or
+  the legacy property.
+- `BeforeSend` sees the value and can change it. The SDK checks the event name
+  the call sends, so a `BeforeSend` hook that builds or renames an
+  identify-style event must set the option itself.
 
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
 option that is still missing or `nil`, from these layers in order:

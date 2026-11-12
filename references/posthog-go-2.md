@@ -223,7 +223,8 @@ type Config struct {
 
 	// DefaultEventOptions are added to the options of every Capture, Exception,
 	// Identify, Alias and GroupIdentify event, such as process_person_profile or
-	// cookieless_mode.
+	// cookieless_mode. They never set process_person_profile on an
+	// identify-style event; see Options.
 	//
 	// They fill in before BeforeSend, only for options that the event and the
 	// request context left missing or nil. BeforeSend sees the filled options and
@@ -241,10 +242,10 @@ type Config struct {
 	//
 	// The hook sees the event's own values and the values filled from
 	// RequestContext, DefaultEventProperties, DefaultEventOptions, the
-	// personless process_person_profile option and the SDK: $is_server,
-	// $geoip_disable, system context and feature flag properties. The SDK fills
-	// only keys the caller left unset. Its changes are final. To
-	// change an option, set it in Options.
+	// process_person_profile option the SDK sets on identify-style and
+	// personless events, and the SDK: $is_server, $geoip_disable, system
+	// context and feature flag properties. The SDK fills only keys the caller
+	// left unset. Its changes are final. To change an option, set it in Options.
 	BeforeSend BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
@@ -454,7 +455,8 @@ type Capture struct {
 	// Options are per-event capture options, sent unchanged. See Options. They
 	// win over request-context options, Config.DefaultEventOptions and the
 	// personless default, which fill in before BeforeSend only for options
-	// missing or nil here.
+	// missing or nil here. An identify-style Event, such as $identify,
+	// defaults process_person_profile to true; see Options.
 	Options Options
 	// SendFeatureFlags requests legacy feature flag enrichment on this event.
 	// Deprecated: Prefer Client.EvaluateFlags and pass the returned snapshot via Flags.
@@ -548,7 +550,8 @@ type Identify struct {
 	// then from Config.DefaultEventProperties, before BeforeSend. A $set in them is merged
 	// under Properties, which win key by key.
 	EventProperties Properties
-	// Options are per-event capture options, sent unchanged. See Options.
+	// Options are per-event capture options, sent unchanged, except that
+	// process_person_profile defaults to true. See Options.
 	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
@@ -604,7 +607,8 @@ type Alias struct {
 	// Config.DefaultEventProperties, before BeforeSend. The SDK's alias property wins over an "alias" key in them.
 	// The Config.Callback message does not include them.
 	EventProperties Properties
-	// Options are per-event capture options, sent unchanged. See Options.
+	// Options are per-event capture options, sent unchanged, except that
+	// process_person_profile defaults to true. See Options.
 	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
@@ -907,7 +911,8 @@ type GroupIdentify struct {
 	// before BeforeSend. A $group_set in them is
 	// merged under Properties, which win key by key.
 	EventProperties Properties
-	// Options are per-event capture options, sent unchanged. See Options.
+	// Options are per-event capture options, sent unchanged, except that
+	// process_person_profile defaults to true. See Options.
 	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
@@ -2811,6 +2816,8 @@ product_tour_id          string
 
 The legacy properties $process\_person\_profile, $cookieless\_mode, $ignore\_sent\_at and $product\_tour\_id still work, but an option overrides its legacy property. Use options.
 
+An identify-style event ($identify, $create\_alias, $merge\_dangerously, $groupidentify, $set or $set\_once, sent by Identify, Alias, GroupIdentify or Capture) takes process\_person\_profile from the call alone: the option, else the legacy property, else true. No default or request-context value reaches it, because with person processing off PostHog drops these events or ignores their person update. A Capture whose distinct ID the SDK generates keeps the personless false instead of true. BeforeSend sees the value and can change it.
+
 ```go
 posthog.Capture{
 	DistinctId: "0123456789",
@@ -2927,7 +2934,8 @@ type RequestContext struct {
 	// Options are request-scoped capture options for every event type.
 	// They fill in before BeforeSend, only for options the event left missing or
 	// nil, so BeforeSend sees them and can change them. They win over
-	// Config.DefaultEventOptions.
+	// Config.DefaultEventOptions. They never set process_person_profile on an
+	// identify-style event; see Options.
 	Options Options
 }
 ```
