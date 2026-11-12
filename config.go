@@ -159,13 +159,16 @@ type Config struct {
 	// request context left unset. A key with a nil value counts as set. $set,
 	// $set_once, $groups and $group_set fill one level deep when both values are
 	// maps. BeforeSend sees the filled values and can change or remove them. On
-	// Identify, Alias and GroupIdentify they fill EventProperties.
+	// Identify, Alias and GroupIdentify they fill EventProperties. A
+	// $process_person_profile in them never reaches an identify-style event;
+	// see Options.
 	DefaultEventProperties Properties
 
 	// DefaultEventOptions are added to the options of every Capture, Exception,
 	// Identify, Alias and GroupIdentify event, such as process_person_profile or
 	// cookieless_mode. They never set process_person_profile on an
-	// identify-style event; see Options.
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
 	//
 	// They fill in before BeforeSend, only for options that the event and the
 	// request context left missing or nil. BeforeSend sees the filled options and

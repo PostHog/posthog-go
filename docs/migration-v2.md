@@ -186,7 +186,8 @@ unchanged.
 `RequestContext.Properties` and `RequestContext.Options` now apply to
 `Identify`, `Alias` and `GroupIdentify` events sent with `EnqueueWithContext`,
 not only to `Capture` and `Exception`. They never set person processing on
-identify-style events (see [New: event options](#new-event-options)). The
+identify-style events whose distinct ID the SDK did not generate (see
+[New: event options](#new-event-options)). The
 context's session ID fills `Identify` and `Alias`, but never `GroupIdentify`.
 A session's person in PostHog follows the distinct IDs of the session's
 events, so an event sent under a different distinct ID with the context's
@@ -543,20 +544,26 @@ legacy `$process_person_profile` property:
 
 - The call's value wins over every layer. A `false` in `DefaultEventOptions`,
   `RequestContext.Options`, `DefaultEventProperties` or
-  `RequestContext.Properties` does not reach these events.
+  `RequestContext.Properties` does not reach these events, unless the SDK
+  generates the distinct ID (below).
 - A legacy `$process_person_profile` in the call's `Properties` (for `Capture`)
   or `EventProperties` becomes the option before the layers fill, and the
   property is removed. If the call also sets the option, the option wins.
 - A `nil` option or legacy property counts as unset.
-- A `Capture` whose distinct ID the SDK generates keeps the personless
-  `process_person_profile: false` (below), unless the call sets the option or
-  the legacy property.
+- A `Capture` whose distinct ID the SDK generates gets no `true`. Its
+  `process_person_profile` comes from the layers, then the personless `false`
+  (below), unless the call sets the option or the legacy property.
+- `BeforeSend` sees the option without a legacy `$process_person_profile` from
+  `DefaultEventProperties` or `RequestContext.Properties`, so a hook that clears
+  `Options` does not send a `false` from a layer.
 - `BeforeSend` sees the value and can change it. The SDK checks the event name
   the call sends, so a `BeforeSend` hook that builds or renames an
   identify-style event must set the option itself.
 
 The event's `Options` come first. Before `BeforeSend`, the SDK fills each
-option that is still missing or `nil`, from these layers in order:
+option that is still missing or `nil`, except `process_person_profile` on an
+identify-style event that already defaulted to `true`, from these layers in
+order:
 `RequestContext.Options`, then `DefaultEventOptions`, then the SDK's
 personless default (below). So a `nil` event option still gets the default.
 `BeforeSend` sees the filled options and can change or remove them. To turn a

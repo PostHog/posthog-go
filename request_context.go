@@ -53,13 +53,15 @@ type RequestContext struct {
 	// Properties are request-scoped properties for every event type.
 	// They fill in before BeforeSend, only for keys the event left unset, so
 	// BeforeSend sees them and can change or remove them. They win over
-	// Config.DefaultEventProperties.
+	// Config.DefaultEventProperties. A $process_person_profile in them never
+	// reaches an identify-style event; see Options.
 	Properties Properties
 	// Options are request-scoped capture options for every event type.
 	// They fill in before BeforeSend, only for options the event left missing or
 	// nil, so BeforeSend sees them and can change them. They win over
 	// Config.DefaultEventOptions. They never set process_person_profile on an
-	// identify-style event; see Options.
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
 	Options Options
 }
 

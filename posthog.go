@@ -611,6 +611,7 @@ func dereferenceMessage(msg Message) Message {
 }
 
 func (c *client) processBeforeSend(msg Message) (Message, bool) {
+	msg = withoutShadowedLegacyPersonProfile(msg)
 	if c.BeforeSend == nil {
 		return msg, true
 	}

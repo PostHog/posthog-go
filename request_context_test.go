@@ -818,9 +818,7 @@ func TestIdentifyStylePersonProfile(t *testing.T) {
 		properties        Properties
 		// generatedID sends a Capture with no distinct ID, so the SDK generates a personless one.
 		generatedID bool
-		// moved means the caller's legacy property is the only one, so BeforeSend must not see it.
-		moved bool
-		want  interface{}
+		want        interface{}
 	}{
 		{name: "nothing set and no layer", want: true},
 		{name: "default option false", defaultOptions: optionFalse, want: true},
@@ -829,16 +827,17 @@ func TestIdentifyStylePersonProfile(t *testing.T) {
 		{name: "context legacy property false", contextProperties: legacyFalse, want: true},
 		{name: "caller option false beats layered true", defaultOptions: optionTrue, contextOptions: optionTrue, options: optionFalse, want: false},
 		{name: "caller option true beats layered false", defaultOptions: optionFalse, contextOptions: optionFalse, options: optionTrue, want: true},
-		{name: "caller legacy false with no layer", properties: legacyFalse, moved: true, want: false},
+		{name: "caller legacy false with no layer", properties: legacyFalse, want: false},
 		{name: "caller legacy false beats layered true", defaultOptions: optionTrue, contextOptions: optionTrue, defaultProperties: legacyTrue, properties: legacyFalse, want: false},
 		{name: "caller legacy true beats layered false", defaultOptions: optionFalse, contextOptions: optionFalse, defaultProperties: legacyFalse, properties: legacyTrue, want: true},
 		{name: "caller option beats caller legacy", defaultOptions: optionTrue, options: optionFalse, properties: legacyTrue, want: false},
-		{name: "non-boolean caller legacy is moved unchanged", properties: NewProperties().Set(propertyProcessPersonProfile, "yes"), moved: true, want: "yes"},
+		{name: "non-boolean caller legacy is moved unchanged", properties: NewProperties().Set(propertyProcessPersonProfile, "yes"), want: "yes"},
 		{name: "nil caller option is unset", defaultOptions: optionFalse, options: NewOptions().Set(optionProcessPersonProfile, nil), want: true},
 		{name: "typed-nil caller option is unset", defaultOptions: optionFalse, options: NewOptions().Set(optionProcessPersonProfile, (*bool)(nil)), want: true},
 		{name: "nil caller legacy is unset", defaultOptions: optionFalse, properties: NewProperties().Set(propertyProcessPersonProfile, nil), want: true},
 		{name: "generated distinct ID keeps the personless default", generatedID: true, want: false},
-		{name: "caller legacy true on a generated distinct ID is moved", generatedID: true, properties: legacyTrue, moved: true, want: true},
+		{name: "layered option reaches a generated distinct ID", generatedID: true, defaultOptions: NewOptions().Set(optionProcessPersonProfile, "on"), want: "on"},
+		{name: "caller legacy true on a generated distinct ID is moved", generatedID: true, properties: legacyTrue, want: true},
 	}
 	for _, e := range emitters {
 		for _, tt := range tests {
@@ -877,9 +876,7 @@ func TestIdentifyStylePersonProfile(t *testing.T) {
 
 				hookMsg := awaitTestValue(t, seen)
 				require.Equal(t, tt.want, messageOptions(hookMsg)[optionProcessPersonProfile], "BeforeSend sees the resolved option")
-				if tt.moved {
-					require.NotContains(t, libEventProperties(hookMsg), propertyProcessPersonProfile, "BeforeSend sees the legacy property moved")
-				}
+				require.NotContains(t, libEventProperties(hookMsg), propertyProcessPersonProfile, "BeforeSend sees only the option")
 				event := readSingleBatchEvent(t, body)
 				require.Equal(t, tt.want, requireOptions(t, event)[optionProcessPersonProfile])
 				require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
@@ -972,6 +969,89 @@ func TestIdentifyStylePersonProfileBoundaries(t *testing.T) {
 			require.Equal(t, tt.want, requireOptions(t, readSingleBatchEvent(t, body))[optionProcessPersonProfile])
 		})
 	}
+}
+
+// TestLayeredLegacyPersonProfileUnderAnOption pins that BeforeSend never sees a
+// layered legacy $process_person_profile next to the option on an
+// identify-style event, so a hook that clears Options cannot bring back a
+// layered false. Other events keep the property, as before.
+func TestLayeredLegacyPersonProfileUnderAnOption(t *testing.T) {
+	tests := []struct {
+		name           string
+		msg            Message
+		clearOptions   bool
+		wantHookLegacy interface{}
+		want           interface{}
+	}{
+		{name: "identify hook sees only the option", msg: Identify{DistinctId: "user-1"}, wantHookLegacy: absentProperty{}, want: true},
+		{name: "identify hook that clears options sends no false", msg: Identify{DistinctId: "user-1"}, clearOptions: true, wantHookLegacy: absentProperty{}, want: nil},
+		{name: "group identify hook that clears options sends no false", msg: GroupIdentify{Type: "company", Key: "acme"}, clearOptions: true, wantHookLegacy: absentProperty{}, want: nil},
+		{name: "identify-style capture hook that clears options sends no false", msg: Capture{DistinctId: "user-1", Event: "$set"}, clearOptions: true, wantHookLegacy: absentProperty{}, want: nil},
+		{name: "other event hook sees the layered property", msg: Capture{DistinctId: "user-1", Event: "order completed"}, wantHookLegacy: false, want: true},
+		{name: "other event hook that clears options sends the layered false", msg: Capture{DistinctId: "user-1", Event: "order completed"}, clearOptions: true, wantHookLegacy: false, want: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body, server := mockServer()
+			defer server.Close()
+
+			seenLegacy := make(chan interface{}, 1)
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventOptions:    NewOptions().Set(optionProcessPersonProfile, true),
+				DefaultEventProperties: NewProperties().Set(propertyProcessPersonProfile, false),
+				BeforeSend: func(msg Message) Message {
+					legacy, ok := libEventProperties(msg)[propertyProcessPersonProfile]
+					if !ok {
+						legacy = absentProperty{}
+					}
+					seenLegacy <- legacy
+					if tt.clearOptions {
+						return withMessageOptions(msg, nil)
+					}
+					return msg
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				Properties: NewProperties().Set(propertyProcessPersonProfile, false),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, tt.msg))
+
+			require.Equal(t, tt.wantHookLegacy, awaitTestValue(t, seenLegacy))
+			event := readSingleBatchEvent(t, body)
+			require.Equal(t, tt.want, requireOptions(t, event)[optionProcessPersonProfile])
+			require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
+		})
+	}
+}
+
+// withMessageOptions returns msg with its Options replaced.
+func withMessageOptions(msg Message, options Options) Message {
+	switch m := msg.(type) {
+	case Capture:
+		m.Options = options
+		return m
+	case Identify:
+		m.Options = options
+		return m
+	case Alias:
+		m.Options = options
+		return m
+	case GroupIdentify:
+		m.Options = options
+		return m
+	case Exception:
+		m.Options = options
+		return m
+	}
+	panic(fmt.Sprintf("unexpected message type %T", msg))
 }
 
 func TestEventPropertyLayers(t *testing.T) {
