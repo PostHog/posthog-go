@@ -67,8 +67,10 @@ Read the checklist first, then the sections that apply to you.
 
 | Method | Endpoint |
 | --- | --- |
-| `Enqueue`, `EnqueueWithContext` | `POST /i/v1/analytics/events`. 1.x.x sent to `POST /batch/`. |
+| `Enqueue`, `EnqueueWithContext` | `POST /i/v1/analytics/events` |
 | `EnqueueAI`, `EnqueueAIWithContext` | `/i/v1/ai/events` |
+
+1.x.x sent `Enqueue` and `EnqueueWithContext` events to `POST /batch/`.
 
 Check anything that pins the old path: reverse proxies, API gateways, egress allowlists, and WAF rules.
 
@@ -132,8 +134,12 @@ The other packages move with the core:
 | Package | 2.x.x import path |
 | --- | --- |
 | Subpackages such as `posthogmcp` | `github.com/posthog/posthog-go/v2/posthogmcp` |
-| The MCP Go SDK adapter | `github.com/posthog/posthog-go/posthogmcpsdk/v2`. It's a separate module that moves in lockstep with the core. |
-| The `otel` bridge | `github.com/posthog/posthog-go/otel/v2`. It imports the core SDK, so it also moves in lockstep with the core. |
+| The MCP Go SDK adapter | `github.com/posthog/posthog-go/posthogmcpsdk/v2` |
+| The `otel` bridge | `github.com/posthog/posthog-go/otel/v2` |
+
+The MCP Go SDK adapter is a separate module that moves in lockstep with the core.
+
+The `otel` bridge imports the core SDK, so it also moves in lockstep with the core.
 
 ### Handle constructor errors
 
@@ -168,15 +174,26 @@ Integrations follow the same rule:
 
 2.x.x removes or changes these APIs:
 
-| API | What to do |
+| API | Change |
 | --- | --- |
-| `Config.CaptureMode`, the `CaptureMode` type, and the `CaptureModeLegacy` and `CaptureModeAnalyticsV1` constants | Removed. If you opted into capture v1, delete the field. Capture v1 is the only behavior. |
-| `Capture.Library` and `Exception.Library` (added in 1.30.0) | Removed. Set `$lib` in the event's properties (see [Check SDK identity](#check-sdk-identity)). |
-| `Client` | It has a new `EnqueueAI` method. This only affects code that implements the interface, so a hand-written test mock needs the new method. Callers are unaffected. |
-| `Alias` | It has new `EventProperties` and `Options` maps. You can't compare it with `==` or use it as a map key, so code that does this no longer compiles. |
-| `Backoff` | It has a new function field. You can't compare it with `==` or use it as a map key, so code that does this no longer compiles. |
-| `New` | It returns `(Client, error)` (see [Handle constructor errors](#handle-constructor-errors)). |
-| `Groups` | It's a `map[string]string` (see [Convert group keys](#convert-group-keys)). |
+| `Config.CaptureMode` and the `CaptureMode` type | Removed |
+| The `CaptureModeLegacy` and `CaptureModeAnalyticsV1` constants | Removed |
+| `Capture.Library` and `Exception.Library` (added in 1.30.0) | Removed |
+| `Client` | New `EnqueueAI` method |
+| `Alias` | New `EventProperties` and `Options` maps |
+| `Backoff` | New function field |
+| `New` | Returns `(Client, error)` |
+| `Groups` | A `map[string]string` |
+
+Capture v1 is the only behavior. If you opted into capture v1, delete the `Config.CaptureMode` field.
+
+In place of `Capture.Library` and `Exception.Library`, set `$lib` in the event's properties (see [Check SDK identity](#check-sdk-identity)).
+
+The new `Client` method only affects code that implements the interface, so a hand-written test mock needs the new method. Callers are unaffected.
+
+You can't compare an `Alias` or a `Backoff` with `==` or use it as a map key, so code that does this no longer compiles.
+
+For `New`, see [Handle constructor errors](#handle-constructor-errors). For `Groups`, see [Convert group keys](#convert-group-keys).
 
 Delete `CaptureMode` from your config:
 
@@ -215,11 +232,19 @@ groups := posthog.NewGroups().Set("company", strconv.FormatInt(companyID, 10))
 
 `Config` has three new size and retry fields:
 
-| Field | Default | What it does |
-| --- | --- | --- |
-| `MaxBatchBytes` | 500000 bytes, the request limit 1.x.x applied internally | It targets the combined serialized size of the events in one request, excluding the request envelope. An event larger than `MaxBatchBytes` is sent in a request of its own. |
-| `MaxEventBytes` | No cap | It refuses large events locally with `ErrMessageTooBig`. With it set, `Validate`, and so `NewWithConfig`, rejects a `MaxBatchBytes` below it. |
-| `MaxRetryBackoff` | 30s | It caps `Retry-After` and the default exponential backoff (see [Update error handling](#update-error-handling)). |
+| Field | Default |
+| --- | --- |
+| `MaxBatchBytes` | 500000 bytes |
+| `MaxEventBytes` | No cap |
+| `MaxRetryBackoff` | 30s |
+
+`MaxBatchBytes` targets the combined serialized size of the events in one request, excluding the request envelope. Its default is the request limit 1.x.x applied internally.
+
+An event larger than `MaxBatchBytes` is sent in a request of its own.
+
+`MaxEventBytes` refuses large events locally with `ErrMessageTooBig`. With it set, `Validate`, and so `NewWithConfig`, rejects a `MaxBatchBytes` below it.
+
+`MaxRetryBackoff` caps `Retry-After` and the default exponential backoff (see [Update error handling](#update-error-handling)).
 
 There's no per-event size cap by default. 1.x.x had a 500000-byte cap.
 
@@ -411,8 +436,14 @@ Update log-based alerts for these log lines:
 
 | Behavior | 1.x.x | 2.x.x |
 | --- | --- | --- |
-| Statuses retried | Every `5xx`, but not `404` | `404`, `408`, `429`, `500`, `502`, `503`, and `504`, plus network errors. Other `5xx` statuses are terminal. |
-| Default retry waits | `DefaultBackoff()` had no jitter | The waits vary randomly by up to 25% either way, so clients that fail together don't all retry at the same moment. `DefaultBackoff()` has the same jitter. |
+| Statuses retried | Every `5xx`, but not `404` | `404`, `408`, `429`, `500`, `502`, `503`, `504`, and network errors |
+| Default retry waits | No jitter | Up to 25% jitter |
+
+In 2.x.x, other `5xx` statuses are terminal.
+
+The default waits vary randomly by up to 25% either way, so clients that fail together don't all retry at the same moment.
+
+`DefaultBackoff()` has the same jitter. In 1.x.x it had none.
 
 Billing limits arrive as a terminal `402`.
 
@@ -434,9 +465,13 @@ The SDK sends `$session_id` and `$window_id` as top-level fields of the event, b
 
 | Value | 2.x.x |
 | --- | --- |
-| A value whose JSON form is a string: a `string`, including `""`, a named string type, or a `uuid.UUID` | The SDK sends it as that string. |
-| `nil` | It counts as unset. The SDK drops it without a warning. |
-| Any other value | The SDK drops it. It logs a warning for each drop that names the key and the value's type, never the value. |
+| A value whose JSON form is a string | Sent as that string |
+| `nil` | Dropped, without a warning |
+| Any other value | Dropped, with a warning |
+
+A value whose JSON form is a string is a `string`, including `""`, a named string type, or a `uuid.UUID`.
+
+`nil` counts as unset. For any other value, the SDK logs a warning for each drop that names the key and the value's type, never the value.
 
 In 1.x.x the SDK sent any value as a property.
 
@@ -498,8 +533,14 @@ The event's `Options` come first. Before `BeforeSend`, the SDK fills each option
 
 | Value | 2.x.x | 1.x.x |
 | --- | --- | --- |
-| `posthog.NewOptions().Set("process_person_profile", "false")` | PostHog reads common forms of an option's value, so it turns person processing off. | Ignored the string `"false"` for this setting |
-| A value PostHog can't read, such as `"maybe"` for `process_person_profile` | PostHog drops the event as `invalid_options`. | Kept the event and ignored the value, except for cookieless mode, where any non-boolean value failed the whole batch |
+| The string `"false"` for `process_person_profile` | Person processing off | Ignored |
+| A value PostHog can't read | Event dropped as `invalid_options` | Event kept, value ignored |
+
+PostHog reads common forms of an option's value, so `posthog.NewOptions().Set("process_person_profile", "false")` turns person processing off. 1.x.x ignored the string `"false"` for this setting.
+
+A value PostHog can't read is one such as `"maybe"` for `process_person_profile`. PostHog drops the event as `invalid_options`.
+
+1.x.x kept the event and ignored the value, except for cookieless mode, where any non-boolean value failed the whole batch.
 
 ### Send AI events with EnqueueAI
 
@@ -524,11 +565,17 @@ client.EnqueueAI(posthog.Capture{
 
 Tune the AI lane with these `Config` fields:
 
-| Field | Behavior |
+| Field | In place of |
 | --- | --- |
-| `CaptureAICompression` | It doesn't inherit `Compression`. AI requests are sent uncompressed unless you set it. |
-| `CaptureAIMaxQueueSize` | The AI lane doesn't use `MaxQueueSize`. |
-| `CaptureAIBatchUploadTimeout` | 30s by default, longer than the analytics lane's because AI batches are much larger. The AI lane doesn't use `BatchUploadTimeout`. |
+| `CaptureAICompression` | `Compression` |
+| `CaptureAIMaxQueueSize` | `MaxQueueSize` |
+| `CaptureAIBatchUploadTimeout` | `BatchUploadTimeout` |
+
+`CaptureAICompression` doesn't inherit `Compression`. AI requests are sent uncompressed unless you set it.
+
+The AI lane doesn't use `MaxQueueSize` or `BatchUploadTimeout`.
+
+`CaptureAIBatchUploadTimeout` is 30s by default, longer than the analytics lane's because AI batches are much larger.
 
 The AI lane shares `BatchSize`, `Interval`, `MaxRetries`, `RetryAfter`, `MaxRetryBackoff`, `Callback`, `BeforeSend`, `HistoricalMigration`, `DefaultEventProperties`, and `DefaultEventOptions` with the analytics lane.
 
