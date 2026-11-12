@@ -505,9 +505,10 @@ func remoteIP(r *http.Request) string {
 //
 // A Capture or Exception with no distinct ID, on the message or in the request context, is
 // sent as a personless event by default when ctx has a request context attached and client
-// is an SDK Client. The SDK generates a UUID as the distinct ID and fills an unset
-// process_person_profile option with false. Event options, request-context options and
-// Config.DefaultEventOptions take precedence over this default, and BeforeSend can change it.
+// is a client from New or NewWithConfig. The SDK generates a UUID as the distinct ID and
+// fills an unset process_person_profile option with false. Event options, request-context
+// options and Config.DefaultEventOptions take precedence over this default, and BeforeSend
+// can change it.
 // Without a request context, an empty DistinctId returns an error, as it does from Enqueue.
 // A custom EnqueueClient without EnqueueWithContext receives the message unchanged.
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error {

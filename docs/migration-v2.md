@@ -437,11 +437,11 @@ Update log-based alerts for these log lines:
 - **Lane names.** Capture log lines start with the lane name, `analytics:` or `capture-ai:`, and some of their text changed from 1.x.x.
 - **`Verbose`.** With `Verbose` on, 1.x.x logged every queued message in full. 2.x.x logs batch counts and sizes, not the messages.
 
-2.x.x retries more statuses and adds jitter to retry waits:
+2.x.x changes which statuses it retries and adds jitter to retry waits:
 
 | Behavior | 1.x.x | 2.x.x |
 | --- | --- | --- |
-| Statuses retried | Every `5xx`, but not `404` | `404`, `408`, `429`, `500`, `502`, `503`, `504`, and network errors |
+| Statuses retried | Every `5xx`, `408`, `429`, and network errors, but not `404` | `404`, `408`, `429`, `500`, `502`, `503`, `504`, and network errors |
 | Default retry waits | No jitter | Up to 25% jitter |
 
 In 2.x.x, other `5xx` statuses are terminal.
