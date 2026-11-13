@@ -447,8 +447,6 @@ Update log-based alerts for these log lines:
 
 In 2.x.x, other `5xx` statuses are terminal.
 
-A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route.
-
 The default waits vary randomly by up to 25% either way, so clients that fail together don't all retry at the same moment.
 
 `DefaultBackoff()` has the same jitter. In 1.x.x it had none.
