@@ -77,8 +77,6 @@ Read the checklist first, then the sections that apply to you. Many of these cha
 
 Check anything that pins the old path: reverse proxies, API gateways, egress allowlists, and WAF rules.
 
-PostHog Cloud (`us.i.posthog.com`, `eu.i.posthog.com`) serves both `/i/v1/analytics/events` and `/i/v1/ai/events`. If you self-host PostHog, see the [self-hosting docs](https://posthog.com/docs/self-host).
-
 If you send events through your own reverse proxy, update it before you upgrade:
 
 - **Forward both routes.** Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.
