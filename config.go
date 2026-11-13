@@ -159,12 +159,16 @@ type Config struct {
 	// request context left unset. A key with a nil value counts as set. $set,
 	// $set_once, $groups and $group_set fill one level deep when both values are
 	// maps. BeforeSend sees the filled values and can change or remove them. On
-	// Identify, Alias and GroupIdentify they fill EventProperties.
+	// Identify, Alias and GroupIdentify they fill EventProperties. A
+	// $process_person_profile in them never reaches an identify-style event;
+	// see Options.
 	DefaultEventProperties Properties
 
 	// DefaultEventOptions are added to the options of every Capture, Exception,
 	// Identify, Alias and GroupIdentify event, such as process_person_profile or
-	// cookieless_mode.
+	// cookieless_mode. They never set process_person_profile on an
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
 	//
 	// They fill in before BeforeSend, only for options that the event and the
 	// request context left missing or nil. BeforeSend sees the filled options and
@@ -182,10 +186,10 @@ type Config struct {
 	//
 	// The hook sees the event's own values and the values filled from
 	// RequestContext, DefaultEventProperties, DefaultEventOptions, the
-	// personless process_person_profile option and the SDK: $is_server,
-	// $geoip_disable, system context and feature flag properties. The SDK fills
-	// only keys the caller left unset. Its changes are final. To
-	// change an option, set it in Options.
+	// process_person_profile option the SDK sets on identify-style and
+	// personless events, and the SDK: $is_server, $geoip_disable, system
+	// context and feature flag properties. The SDK fills only keys the caller
+	// left unset. Its changes are final. To change an option, set it in Options.
 	BeforeSend BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.

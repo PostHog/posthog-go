@@ -29,7 +29,8 @@ type Alias struct {
 	// Config.DefaultEventProperties, before BeforeSend. The SDK's alias property wins over an "alias" key in them.
 	// The Config.Callback message does not include them.
 	EventProperties Properties
-	// Options are per-event capture options, sent unchanged. See Options.
+	// Options are per-event capture options, sent unchanged, except that
+	// process_person_profile defaults to true. See Options.
 	Options Options
 	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
 	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left

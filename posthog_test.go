@@ -1465,18 +1465,21 @@ func TestDefaultEventValuesReachEveryMessageType(t *testing.T) {
 		msg            Message
 		personKey      string
 		wantPersonData map[string]interface{}
+		identifyStyle  bool
 	}{
 		{msg: Exception{DistinctId: "user-1", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}, Options: eventOptions()}},
 		{
 			msg:            Identify{DistinctId: "user-1", Properties: NewProperties().Set("email", "user@example.com"), Options: eventOptions()},
 			personKey:      "$set",
 			wantPersonData: map[string]interface{}{"email": "user@example.com"},
+			identifyStyle:  true,
 		},
-		{msg: Alias{DistinctId: "user-1", Alias: "alias-1", Options: eventOptions()}},
+		{msg: Alias{DistinctId: "user-1", Alias: "alias-1", Options: eventOptions()}, identifyStyle: true},
 		{
 			msg:            GroupIdentify{Type: "company", Key: "k", Properties: NewProperties().Set("name", "Example"), Options: eventOptions()},
 			personKey:      "$group_set",
 			wantPersonData: map[string]interface{}{"name": "Example"},
+			identifyStyle:  true,
 		},
 	}
 	for _, tt := range tests {
@@ -1504,7 +1507,11 @@ func TestDefaultEventValuesReachEveryMessageType(t *testing.T) {
 			event := readSingleBatchEvent(t, body)
 			properties := requireProperties(t, event)
 			require.Equal(t, "api", properties["service"])
-			require.Equal(t, map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": false}, requireOptions(t, event))
+			wantOptions := map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": false}
+			if tt.identifyStyle {
+				wantOptions["process_person_profile"] = true
+			}
+			require.Equal(t, wantOptions, requireOptions(t, event))
 			if tt.personKey != "" {
 				require.Equal(t, tt.wantPersonData, properties[tt.personKey])
 			}

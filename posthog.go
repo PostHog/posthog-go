@@ -611,6 +611,7 @@ func dereferenceMessage(msg Message) Message {
 }
 
 func (c *client) processBeforeSend(msg Message) (Message, bool) {
+	msg = withoutShadowedLegacyPersonProfile(msg)
 	if c.BeforeSend == nil {
 		return msg, true
 	}
@@ -690,6 +691,7 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 	}
 
 	msg = dereferenceMessage(msg)
+	msg = withIdentifyStylePersonProfile(ctx, msg)
 
 	var ts = c.now()
 

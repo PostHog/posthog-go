@@ -279,13 +279,14 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 		msg                Message
 		wantSeenProperties []interface{}
 		wantSession        bool
-		wantPersonless     bool
+		// wantPersonProfile is the process_person_profile the hook sees, nil for none.
+		wantPersonProfile interface{}
 	}{
-		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonless: true},
-		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonless: true},
-		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true},
-		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true},
-		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "context_only", "service"}},
+		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: false},
+		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: false},
+		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: true},
+		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: true},
+		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "context_only", "service"}, wantPersonProfile: true},
 	}
 	withSDKValues := func(keys []interface{}) []interface{} {
 		all := NewProperties().Merge(getSystemContext().ToProperties()).
@@ -365,9 +366,9 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 				"disable_skew_correction": true,
 				"product_tour_id":         "context-tour",
 			}
-			if tt.wantPersonless {
+			if tt.wantPersonProfile != nil {
 				wantOptions["seen_options"] = []interface{}{"cookieless_mode", "disable_skew_correction", "process_person_profile", "product_tour_id"}
-				wantOptions["process_person_profile"] = false
+				wantOptions["process_person_profile"] = tt.wantPersonProfile
 			}
 			require.Equal(t, "context", properties["context_only"])
 			if tt.wantSession {
@@ -796,14 +797,21 @@ func TestBeforeSendIsolatesOptionsOnEveryMessageType(t *testing.T) {
 }
 
 func TestBeforeSendGetsNonNilOptionsOnEveryMessageType(t *testing.T) {
-	messages := []Message{
-		Capture{DistinctId: "d", Event: "e"},
-		Identify{DistinctId: "d"},
-		Alias{DistinctId: "d", Alias: "a"},
-		GroupIdentify{Type: "company", Key: "k"},
-		Exception{DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}},
+	hookOnly := map[string]interface{}{"future_option": "hook"}
+	// Identify-style messages also carry the process_person_profile default.
+	withPersonProfile := map[string]interface{}{"future_option": "hook", "process_person_profile": true}
+	tests := []struct {
+		msg         Message
+		wantOptions map[string]interface{}
+	}{
+		{Capture{DistinctId: "d", Event: "e"}, hookOnly},
+		{Identify{DistinctId: "d"}, withPersonProfile},
+		{Alias{DistinctId: "d", Alias: "a"}, withPersonProfile},
+		{GroupIdentify{Type: "company", Key: "k"}, withPersonProfile},
+		{Exception{DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}}, hookOnly},
 	}
-	for _, msg := range messages {
+	for _, tt := range tests {
+		msg := tt.msg
 		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
 			body, server := mockServer()
 			defer server.Close()
@@ -821,7 +829,7 @@ func TestBeforeSendGetsNonNilOptionsOnEveryMessageType(t *testing.T) {
 			defer client.Close()
 
 			require.NoError(t, client.Enqueue(msg))
-			require.Equal(t, map[string]interface{}{"future_option": "hook"}, firstMessage(t, readBatch(t, body))["options"])
+			require.Equal(t, tt.wantOptions, firstMessage(t, readBatch(t, body))["options"])
 		})
 	}
 }

@@ -34,7 +34,9 @@
       "uuid": "00000000-0000-0000-0000-000000000022",
       "distinct_id": "user-22",
       "timestamp": "2025-01-02T03:04:06.000Z",
-      "options": {},
+      "options": {
+        "process_person_profile": true
+      },
       "properties": {
         "$geoip_disable": true,
         "$go_version": "IGNORED",
@@ -55,7 +57,9 @@
       "uuid": "00000000-0000-0000-0000-000000000023",
       "distinct_id": "$company_acme",
       "timestamp": "2025-01-02T03:04:07.000Z",
-      "options": {},
+      "options": {
+        "process_person_profile": true
+      },
       "properties": {
         "$geoip_disable": true,
         "$go_version": "IGNORED",
@@ -81,7 +85,9 @@
       "uuid": "00000000-0000-0000-0000-000000000024",
       "distinct_id": "user-24",
       "timestamp": "2025-01-02T03:04:08.000Z",
-      "options": {},
+      "options": {
+        "process_person_profile": true
+      },
       "properties": {
         "$geoip_disable": true,
         "$go_version": "IGNORED",

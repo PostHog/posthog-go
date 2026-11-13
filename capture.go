@@ -111,7 +111,8 @@ type Capture struct {
 	// Options are per-event capture options, sent unchanged. See Options. They
 	// win over request-context options, Config.DefaultEventOptions and the
 	// personless default, which fill in before BeforeSend only for options
-	// missing or nil here.
+	// missing or nil here. An identify-style Event, such as $identify,
+	// defaults process_person_profile to true; see Options.
 	Options Options
 	// SendFeatureFlags requests legacy feature flag enrichment on this event.
 	// Deprecated: Prefer Client.EvaluateFlags and pass the returned snapshot via Flags.
