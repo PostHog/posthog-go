@@ -1,5 +1,46 @@
 ## Unreleased
 
+## 1.43.0
+
+### Minor Changes
+
+- bf4b209: A `CodeEmail` now takes `Sensitive` and `Tracking`.
+  
+  `Sensitive` marks an email that carries a login link, a reset token or a code. PostHog keeps a sensitive email's links unchanged, leaves its subject off engagement events and keeps its content out of logs. Without it, a code send takes the setting of the saved template whose key matches its `TemplateKey`, or is sensitive when no template has that key, as before.
+  
+  `Tracking` says what PostHog tracks for the email: `posthog.EmailTrackingOn()`, `posthog.EmailTrackingOff()`, or `posthog.EmailTrackingWith(posthog.EmailTrackingOptions{...})` to set `Opens`, `Clicks` and `Engagement` on their own. Without it, PostHog counts opens, captures engagement events, and counts clicks only when the email isn't sensitive. Turn clicks on only when the email's links are safe to send through a redirect. Click tracking needs open tracking.
+  
+  `CaptureEngagement` is deprecated. Use `Tracking` with `EmailTrackingOptions{Engagement: ...}` instead. It still works, but PostHog refuses a send that sets both. The SDK now leaves `capture_engagement` out of the request unless you set it, which PostHog reads the same way.
+  
+  `Sensitive` and `Tracking` need PostHog's API support, which is rolling out. Until it reaches your region, a send that sets either fails with an `*EmailError`.
+
+## 1.42.4
+
+### Patch Changes
+
+- 1b62fef: Cohort `not_in` now excludes members and matches non-members during local feature flag evaluation.
+
+## 1.42.3
+
+### Patch Changes
+
+- 5f936d6: Fall back to server evaluation for unsupported cohort group types and correctly evaluate supported group types.
+- f09dd5c: A /flags result with `failed: true` is no longer reported as a successful disable.
+
+## 1.42.2
+
+### Patch Changes
+
+- f28be34: Identify, group identify, and exception events keep the rest of their properties when a value is NaN or Inf
+
+## 1.42.1
+
+### Patch Changes
+
+- d722122: Stop the legacy `/batch/` sender from sleeping after its last failed attempt, and clamp its `Retry-After` to the same 30s ceiling as analytics v1 capture.
+- 57c652f: Relative date filters in local flag evaluation no longer roll past the end of a shorter month. `1m` on March 31 now resolves to February 28.
+- dfd5ba3: ReloadFeatureFlags returns ErrClosed after the client is closed instead of panicking
+
 ## 1.42.0
 
 ### Minor Changes

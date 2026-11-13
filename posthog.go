@@ -855,7 +855,13 @@ func (c *client) ReloadFeatureFlags() error {
 		c.warnPersonalAPIKeyMissing("ReloadFeatureFlags")
 		return ErrNoSecretKey
 	}
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	c.featureFlagsPoller.ForceReload()
+	if c.closed.Load() {
+		return ErrClosed
+	}
 	return nil
 }
 
@@ -932,6 +938,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		err = combined.err
 		evalResult.Value = flagValue
 		evalResult.Err = err
+		evalResult.FlagFailed = combined.flagFailed
 		if combined.payload != "" {
 			payloadStr = combined.payload
 			hasPayload = true
@@ -1015,7 +1022,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			return nil, evalResult.Err
 		}
 		if evalResult.FlagFailed {
-			return nil, fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, flagConfig.Key)
+			return nil, errFlagEvaluationFailed(flagConfig.Key)
 		}
 		return nil, fmt.Errorf("%w: '%s' does not exist or is disabled", ErrFlagNotFound, flagConfig.Key)
 	}
@@ -1439,7 +1446,7 @@ func recordFromFlagDetail(detail FlagDetail, minimalFlagCalledEvents bool) evalu
 		HasExperiment:           detail.Metadata.HasExperiment,
 		MinimalFlagCalledEvents: minimalFlagCalledEvents,
 	}
-	if detail.Failed != nil && *detail.Failed {
+	if flagDetailFailed(detail) {
 		record.Enabled = false
 		errStr := FeatureFlagErrorEvaluationFailed
 		record.Error = &errStr
@@ -1656,15 +1663,22 @@ func (c *client) send(pb preparedBatch) {
 			return
 		}
 
+		// The last attempt has already failed. Waiting here only delays the
+		// failure callback and any flush that still owns this delivery.
+		if i == c.maxAttempts-1 {
+			break
+		}
+
 		// The batch remains owned by this worker while waiting to retry.
 		// Flush waits for this attempt, not the entire retry budget.
-		if i < c.maxAttempts-1 {
-			c.deferDeliveryRetry(pb.done)
+		c.deferDeliveryRetry(pb.done)
+		var header time.Duration
+		hasHeader := false
+		if httpErr != nil && httpErr.hasRetryAfter {
+			header = httpErr.retryAfter
+			hasHeader = true
 		}
-		retryDelay := c.RetryAfter(i)
-		if httpErr != nil && httpErr.hasRetryAfter && httpErr.retryAfter > retryDelay {
-			retryDelay = httpErr.retryAfter
-		}
+		retryDelay := clampRetryWait(c.RetryAfter(i), header, hasHeader)
 
 		// Wait for retry or shutdown
 		retryTimer := time.NewTimer(retryDelay)
@@ -2083,7 +2097,7 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceI
 	if flagDetail, ok := flagsResponse.Flags[key]; ok {
 		// If the flag failed evaluation due to a transient server error,
 		// don't return the incorrect enabled=false value
-		if flagDetail.Failed != nil && *flagDetail.Failed {
+		if flagDetailFailed(flagDetail) {
 			result.FlagFailed = true
 		} else {
 			result.Value = flagDetail
@@ -2107,5 +2121,10 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 		return emptyFlagValues, nil
 	}
 
-	return flagsResponse.FeatureFlags, nil
+	if flagsResponse.FeatureFlags == nil {
+		return map[string]interface{}{}, nil
+	}
+	values := make(map[string]interface{}, len(flagsResponse.FeatureFlags))
+	copyEvaluatedFlagValues(values, flagsResponse)
+	return values, nil
 }

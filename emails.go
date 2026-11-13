@@ -132,10 +132,24 @@ type CodeEmail struct {
 	// uploaded file in its file storage for its retention period, and a later
 	// send of the same bytes, from any of the project's code, reuses it.
 	Attachments []EmailAttachment
+	// Sensitive marks an email that carries a login link, a reset token or a
+	// code. PostHog keeps a sensitive email's links unchanged, leaves its
+	// subject off engagement events and keeps its content out of logs. Nil
+	// takes the setting of the saved template whose key is TemplateKey, or
+	// true when no template has that key.
+	Sensitive *bool
+	// Tracking says what PostHog tracks for this email. Nil keeps the
+	// defaults: PostHog counts opens and captures engagement events, and
+	// rewrites links to count clicks only when the email isn't Sensitive. Use
+	// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+	Tracking *EmailTracking
 	// CaptureEngagement says whether PostHog captures the email's engagement
-	// events, such as opens and clicks, as events of the recipient. Nil means
-	// true. A project whose admin turned engagement capture off captures
-	// nothing, whatever the send asks.
+	// events as events of the recipient. Nil means true. A project whose
+	// admin turned engagement capture off captures nothing, whatever the send
+	// asks. PostHog refuses a send that sets both CaptureEngagement and
+	// Tracking.
+	//
+	// Deprecated: Use Tracking with EmailTrackingOptions.Engagement.
 	CaptureEngagement *bool
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
@@ -162,6 +176,58 @@ type EmailAttachment struct {
 	// ContentID shows the file inline: the HTML references it as
 	// <img src="cid:logo"> when ContentID is "logo".
 	ContentID string
+}
+
+// EmailTracking says what PostHog tracks for a CodeEmail. Make one with
+// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+type EmailTracking struct {
+	all     *bool
+	options EmailTrackingOptions
+}
+
+// EmailTrackingOptions turns each kind of tracking on or off. A nil field
+// keeps its default.
+type EmailTrackingOptions struct {
+	// Opens says whether PostHog adds its open pixel to count opens. Nil
+	// means true. With Opens false, PostHog counts no clicks, and refuses
+	// Clicks true.
+	Opens *bool `json:"opens,omitempty"`
+	// Clicks says whether PostHog rewrites the email's links to count clicks.
+	// Nil means true when the email isn't Sensitive and false when it is.
+	// Turn it on only when the links are safe to send through a redirect, so
+	// not for a login or password reset link. A link with a data-ph-no-track
+	// attribute is never rewritten.
+	Clicks *bool `json:"clicks,omitempty"`
+	// Engagement says whether PostHog captures the email's engagement events,
+	// such as opens and clicks, as events of the recipient. Nil means true.
+	Engagement *bool `json:"engagement,omitempty"`
+}
+
+// EmailTrackingOn tracks opens and clicks and captures engagement events.
+// Use it only when the email's links are safe to send through a redirect.
+func EmailTrackingOn() *EmailTracking {
+	return &EmailTracking{all: Ptr(true)}
+}
+
+// EmailTrackingOff turns off every kind of tracking, including kinds PostHog
+// adds later. PostHog then can't count the email's opens and clicks, and
+// captures no engagement events.
+func EmailTrackingOff() *EmailTracking {
+	return &EmailTracking{all: Ptr(false)}
+}
+
+// EmailTrackingWith sets each kind of tracking on its own.
+func EmailTrackingWith(options EmailTrackingOptions) *EmailTracking {
+	return &EmailTracking{options: options}
+}
+
+// MarshalJSON encodes the tracking as true, false or an object of the kinds
+// that are set.
+func (t EmailTracking) MarshalJSON() ([]byte, error) {
+	if t.all != nil {
+		return json.Marshal(*t.all)
+	}
+	return json.Marshal(t.options)
 }
 
 // SendEmailResult is an email that PostHog queued.
@@ -215,18 +281,20 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string       `json:"to"`
-	TemplateKey       string       `json:"template_key"`
-	Subject           string       `json:"subject"`
-	HTML              string       `json:"html,omitempty"`
-	Text              string       `json:"text,omitempty"`
-	From              string       `json:"from,omitempty"`
-	ReplyTo           []string     `json:"reply_to,omitempty"`
-	Cc                []string     `json:"cc,omitempty"`
-	Bcc               []string     `json:"bcc,omitempty"`
-	Attachments       []attachment `json:"attachments,omitempty"`
-	CaptureEngagement bool         `json:"capture_engagement"`
-	DistinctID        string       `json:"distinct_id,omitempty"`
+	To                string         `json:"to"`
+	TemplateKey       string         `json:"template_key"`
+	Subject           string         `json:"subject"`
+	HTML              string         `json:"html,omitempty"`
+	Text              string         `json:"text,omitempty"`
+	From              string         `json:"from,omitempty"`
+	ReplyTo           []string       `json:"reply_to,omitempty"`
+	Cc                []string       `json:"cc,omitempty"`
+	Bcc               []string       `json:"bcc,omitempty"`
+	Attachments       []attachment   `json:"attachments,omitempty"`
+	Sensitive         *bool          `json:"sensitive,omitempty"`
+	Tracking          *EmailTracking `json:"tracking,omitempty"`
+	CaptureEngagement *bool          `json:"capture_engagement,omitempty"`
+	DistinctID        string         `json:"distinct_id,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -294,7 +362,9 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		Cc:                e.Cc,
 		Bcc:               e.Bcc,
 		Attachments:       attachments,
-		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
+		Sensitive:         e.Sensitive,
+		Tracking:          e.Tracking,
+		CaptureEngagement: e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
 	})
 	if err != nil {

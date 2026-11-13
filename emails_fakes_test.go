@@ -170,7 +170,7 @@ func sha256Hex(content []byte) string {
 type uploadSlot map[string]interface{}
 
 // codeSendFields are the fields PostHog's code send takes.
-var codeSendFields = []string{"to", "template_key", "subject", "html", "text", "from", "reply_to", "cc", "bcc", "attachments", "capture_engagement", "distinct_id"}
+var codeSendFields = []string{"to", "template_key", "subject", "html", "text", "from", "reply_to", "cc", "bcc", "attachments", "sensitive", "tracking", "capture_engagement", "distinct_id"}
 
 // fieldsBeforeAttachments are the fields a PostHog from before cc, bcc and
 // attachments takes.
