@@ -98,7 +98,7 @@ func prepareToolCall(call ToolCall, captureErrorMessages bool) (preparedToolCall
 
 	intent := strings.TrimSpace(call.Intent)
 	if intent != "" && intent != emptyJSONObject {
-		prepared.intent = truncateUTF8(sanitizeFreeText(truncateUTF8(intent, 2*maxIntentBytes)), maxIntentBytes)
+		prepared.intent = boundedFreeText(intent, maxIntentBytes)
 		prepared.intentSource = call.IntentSource
 		if prepared.intentSource == "" {
 			prepared.intentSource = IntentSourceContextParameter

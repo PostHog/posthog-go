@@ -105,7 +105,7 @@ type MissingCapability struct {
 // $mcp_tool_call or $exception.
 func (a *Analytics) CaptureUnknownTool(ctx context.Context, event UnknownTool) error {
 	return a.captureOptional(ctx, event.toolCall(event.ToolName), func(p preparedToolCall) (posthog.Capture, error) {
-		p.toolName = truncateUTF8(sanitizeFreeText(truncateUTF8(event.ToolName, 2*maxResourceNameBytes)), maxResourceNameBytes)
+		p.toolName = boundedFreeText(event.ToolName, maxResourceNameBytes)
 		return p.buildOptionalEvent(eventUnknownTool, posthog.NewProperties().Set(propertyToolName, p.toolName))
 	})
 }
