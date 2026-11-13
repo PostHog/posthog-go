@@ -11,7 +11,7 @@ SDK usage examples and code snippets live in the official documentation so they 
 
 - [Go library docs](https://posthog.com/docs/libraries/go)
 
-Upgrading from a 1.x release? Read the [v2 migration guide](docs/migration-v2.md).
+Upgrading from posthog-go 1.x.x? Read the [posthog-go 2.0.0 migration guide](docs/migration-v2.md).
 
 ## AI observability
 

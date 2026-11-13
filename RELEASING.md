@@ -22,7 +22,7 @@ The repository ships three Go modules that share one release version:
 | `github.com/posthog/posthog-go/otel/v2` | `otel/vX.Y.Z` |
 | `github.com/posthog/posthog-go/posthogmcpsdk/v2` | `posthogmcpsdk/vX.Y.Z` |
 
-`otel` and `posthogmcpsdk` import the core SDK, so they move in lockstep with `posthog-go`, major version included. Go encodes the major in the import path, so each module's `/vN` suffix must match the core major: a v2+ tag on a `go.mod` without that suffix publishes a version Go refuses to resolve. See [`posthogmcpsdk/README.md`](posthogmcpsdk/README.md) for how CI checks a nested module against the core release it requires.
+`otel` and `posthogmcpsdk` import the core SDK, so they move in lockstep with `posthog-go`, major version included. Go encodes the major in the import path, so each module's `/vN` suffix must match the core major: a tag for 2.0.0 or later on a `go.mod` without that suffix publishes a version Go refuses to resolve. See [`posthogmcpsdk/README.md`](posthogmcpsdk/README.md) for how CI checks a nested module against the core release it requires.
 
 ### 2. Merge the Pull Request
 
