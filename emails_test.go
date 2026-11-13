@@ -91,7 +91,11 @@ func failed(status int, code string) stubReply {
 type emailClientOption func(*Config)
 
 func newEmailClient(t *testing.T, server *emailServer, options ...emailClientOption) Client {
-	config := Config{Endpoint: server.URL, AppHost: server.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
+	return newEmailClientFor(t, server.URL, options...)
+}
+
+func newEmailClientFor(t *testing.T, url string, options ...emailClientOption) Client {
+	config := Config{Endpoint: url, AppHost: url, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
 	for _, option := range options {
 		option(&config)
 	}
@@ -201,6 +205,80 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 		"subject":      "Your digest",
 		"text":         "Plain text only",
 	}, server.received()[0].Body)
+}
+
+func TestEmailsSendCodeCopies(t *testing.T) {
+	// PostHog is briefly unavailable, so the copies must survive the retry.
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.sendFaults = map[int]stubReply{0: failed(http.StatusServiceUnavailable, "delivery_unavailable")}
+	client := newEmailClientFor(t, posthog.URL)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "invoice",
+		Subject:     "Your invoice",
+		HTML:        "<p>Your invoice</p>",
+		Cc:          []string{"manager@example.com"},
+		Bcc:         []string{"audit@example.com", "archive@example.com"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []deliveredEmail{{
+		To: "user@example.com", Subject: "Your invoice",
+		Cc:  []string{"manager@example.com"},
+		Bcc: []string{"audit@example.com", "archive@example.com"},
+	}}, posthog.deliveredEmails())
+}
+
+func TestEmailsSendCodeWithEmptyCopiesReachesAnOlderPostHog(t *testing.T) {
+	// A PostHog from before cc, bcc and attachments refuses those fields even
+	// when empty, so empty lists must not stop the email.
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.takeOnly(fieldsBeforeAttachments)
+	client := newEmailClientFor(t, posthog.URL)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "digest",
+		Subject:     "Your digest",
+		Text:        "Plain text only",
+		ReplyTo:     []string{},
+		Cc:          []string{},
+		Bcc:         []string{},
+		Attachments: []EmailAttachment{},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, posthog.deliveredEmails(), 1)
+}
+
+func TestEmailsSendNamesAFieldTheServerDoesNotTakeYet(t *testing.T) {
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.takeOnly(fieldsBeforeAttachments)
+	client := newEmailClientFor(t, posthog.URL)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Copied</p>",
+		Cc: []string{"manager@example.com"},
+	})
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "cc", emailErr.Field)
+	require.Equal(t, EmailErrorValidation, emailErr.Name)
+	require.Empty(t, posthog.deliveredEmails(), "the email isn't sent without the copy")
+}
+
+func TestEmailsAttachmentErrorNeverHoldsTheContent(t *testing.T) {
+	server := newEmailServer(t)
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Attached</p>",
+		Attachments: []EmailAttachment{{Content: []byte("secret-file-content")}},
+	})
+
+	require.Error(t, err)
+	require.NotContains(t, fmt.Sprintf("%+v %#v", err, requireEmailError(t, err)), "secret-file-content")
 }
 
 func TestEmailsSendCodeTracking(t *testing.T) {
@@ -477,6 +555,26 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 		{name: "no subject", email: code(func(e *CodeEmail) { e.Subject = "" }), code: "invalid_form", field: "Subject"},
 		{name: "no html or text", email: code(func(e *CodeEmail) { e.HTML = "" }), code: "invalid_form", field: "HTML"},
 		{name: "blank reply-to", email: code(func(e *CodeEmail) { e.ReplyTo = []string{"a@example.com", " "} }), code: "invalid_reply_to", field: "ReplyTo"},
+		{name: "blank cc", email: code(func(e *CodeEmail) { e.Cc = []string{""} }), code: "invalid_cc", field: "Cc"},
+		{name: "blank bcc", email: code(func(e *CodeEmail) { e.Bcc = []string{"a@example.com", "\t"} }), code: "invalid_bcc", field: "Bcc"},
+		{name: "attachment without a filename", email: code(func(e *CodeEmail) { e.Attachments = []EmailAttachment{{Content: []byte("hi")}} }), code: "invalid_attachment", field: "Attachments[0].Filename"},
+		{name: "attachment with a blank filename", email: code(func(e *CodeEmail) { e.Attachments = []EmailAttachment{{Filename: " ", Content: []byte("hi")}} }), code: "invalid_attachment", field: "Attachments[0].Filename"},
+		{name: "attachment without content", email: code(func(e *CodeEmail) {
+			e.Attachments = []EmailAttachment{{Filename: "a.txt", Content: []byte("hi")}, {Filename: "b.txt", Content: []byte{}}}
+		}), code: "invalid_attachment", field: "Attachments[1].Content"},
+		{name: "more than 10 attachments", email: code(func(e *CodeEmail) {
+			for i := 0; i < 11; i++ {
+				e.Attachments = append(e.Attachments, EmailAttachment{Filename: fmt.Sprintf("%d.txt", i), Content: []byte{byte(i)}})
+			}
+		}), code: "too_many_attachments", field: "Attachments"},
+		{name: "a 30 MB file", email: code(func(e *CodeEmail) {
+			e.Attachments = []EmailAttachment{{Filename: "scan.pdf", Content: make([]byte, 30_000_000)}}
+		}), code: "message_too_large", field: "Attachments"},
+		{name: "three 10 MB files", email: code(func(e *CodeEmail) {
+			for i := 0; i < 3; i++ {
+				e.Attachments = append(e.Attachments, EmailAttachment{Filename: fmt.Sprintf("%d.pdf", i), Content: make([]byte, 10_000_000)})
+			}
+		}), code: "message_too_large", field: "Attachments"},
 		{name: "code idempotency key", email: code(func(e *CodeEmail) { e.IdempotencyKey = "é" }), code: "invalid_idempotency_key", field: "IdempotencyKey"},
 		{name: "code negative retries", email: code(func(e *CodeEmail) { e.MaxRetries = Ptr(-2) }), code: "invalid_max_retries", field: "MaxRetries"},
 		{name: "more than nine retries", email: template(func(e *TemplateEmail) { e.MaxRetries = Ptr(10) }), code: "invalid_max_retries", field: "MaxRetries"},

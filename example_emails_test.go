@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/posthog/posthog-go"
 )
@@ -55,6 +56,35 @@ func ExampleEmails_code() {
 	var emailErr *posthog.EmailError
 	if errors.As(err, &emailErr) && emailErr.Code == "recipient_suppressed" {
 		fmt.Println("skipped a suppressed recipient:", emailErr.Fix)
+	}
+}
+
+// A receipt with a copy to finance and the PDF attached. Send uploads the PDF
+// to PostHog's file storage unless PostHog already has it, then sends the
+// email.
+func ExampleEmails_attachments() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	receiptPDF, err := os.ReadFile("receipt.pdf")
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = client.Emails().Send(context.Background(), posthog.CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "receipt",
+		Subject:     "Your receipt",
+		HTML:        "<p>Thanks for your order. Your receipt is attached.</p>",
+		Cc:          []string{"finance@example.com"},
+		Attachments: []posthog.EmailAttachment{
+			{Filename: "receipt.pdf", Content: receiptPDF, ContentType: "application/pdf"},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
 }
 
