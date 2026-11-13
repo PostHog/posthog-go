@@ -100,7 +100,7 @@ The project API key moves from an `api_key` body field to an `Authorization: Bea
 
 A capture request follows only `307` and `308` redirects, and only to the same scheme, host, and port as `Endpoint`, at most 5 times. It resends the same body and headers.
 
-Any other redirect fails the batch without a retry. `Callback.Failure` gets a `CaptureRequestError` with the redirect's status.
+Any other redirect fails the batch without a retry. `Callback.Failure` gets a `CaptureRequestError` with the redirect's status. If a proxy redirects capture requests to another host, set `Endpoint` to the final host.
 
 1.x.x followed up to 10 redirects of any kind to any host:
 
@@ -345,7 +345,7 @@ To turn a default option off for one event, set the option to `false` on the eve
 
 `$set`, `$set_once`, `$groups`, and `$group_set` fill one level deep. When the event and a default both set one of them to a map, the default adds only the keys the event left out.
 
-For example, a default `"$set": {"plan": "free", "source": "web"}` and an event `"$set": {"plan": "pro"}` send `{"plan": "pro", "source": "web"}`.
+For example, a default `"$set": {"plan": "free", "source": "web"}` and an event `"$set": {"plan": "pro"}` send `{"plan": "pro", "source": "web"}`. A `$set` in `DefaultEventProperties` or the request context sets those person properties on every event it reaches.
 
 These changes follow from this order:
 
@@ -571,7 +571,7 @@ client.EnqueueAI(posthog.Capture{
 - **Its own lane.** `EnqueueAI` runs on its own queue, batching, and retry state, started on first use.
 - **Routing.** Routing is by method. `Enqueue` never reroutes an `$ai_`-prefixed event.
 - **Message types.** `EnqueueAI` accepts every message type and does no routing check of its own. Capture decides, and returns a per-event drop for an event the AI endpoint doesn't take.
-- **Flushes.** `Flush` and `FlushWithContext` also wait for the AI lane once `EnqueueAI` has started it.
+- **Flushes.** `Flush` and `FlushWithContext` also wait for the AI lane once `EnqueueAI` has started it. `Close` drains both lanes too.
 - **Size limits.** The AI lane's size limits are fixed, because they track the endpoint. The SDK refuses an event over 8 MiB plus 64 KiB of envelope headroom locally, and a batch closes at about 5 MiB. `MaxEventBytes` and `MaxBatchBytes` don't apply to it.
 - **HTTP handlers.** Use `EnqueueAIWithContext` from HTTP handlers, as you would `EnqueueWithContext`. It takes a `Client` rather than an `EnqueueClient`, because only a real client has an AI lane.
 
