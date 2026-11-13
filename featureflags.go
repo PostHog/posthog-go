@@ -290,6 +290,8 @@ type FeatureFlagsPoller struct {
 	// state holds all flag-related data using atomic pointer for lock-free reads
 	state atomic.Pointer[flagsState]
 
+	reportedRejectedKey atomic.Bool
+
 	personalApiKey string
 	projectApiKey  string
 	localEvalUrl   *url.URL
@@ -1229,6 +1231,7 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 
 	// Handle 304 Not Modified - flags haven't changed, skip processing
 	if res.StatusCode == http.StatusNotModified {
+		poller.reportedRejectedKey.Store(false)
 		poller.Logger.Debugf("[FEATURE FLAGS] Flags not modified (304), using cached data")
 		// Update ETag if server returned one (preserve existing if not)
 		if newEtag := res.Header.Get("ETag"); newEtag != "" && currentState != nil {
@@ -1268,6 +1271,11 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 		return
 	}
 
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		poller.reportRejectedKeyOnce(res.Status)
+		return
+	}
+
 	if res.StatusCode != http.StatusOK {
 		poller.Logger.Errorf("Unable to fetch feature flags, status: %s", res.Status)
 		return
@@ -1286,10 +1294,22 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 
 	// Store new ETag from response (clear if server stops sending)
 	poller.applyFlagDefinitions(resBody, decoded, res.Header.Get("ETag"))
+	poller.reportedRejectedKey.Store(false)
 
 	if publish {
 		poller.publishFlagDefinitions(resBody)
 	}
+}
+
+func (poller *FeatureFlagsPoller) reportRejectedKeyOnce(status string) {
+	if poller.reportedRejectedKey.Swap(true) {
+		poller.Logger.Debugf("[FEATURE FLAGS] Flag definitions request rejected again, status: %s", status)
+		return
+	}
+	poller.Logger.Warnf("[FEATURE FLAGS] Your secret key can't load feature flag definitions for local evaluation (status: %s). "+
+		"The key is invalid or lacks the Feature flags: Read scope. Add the scope to the key to evaluate flags locally. "+
+		"This warning won't repeat until definitions load. "+
+		"More information: https://posthog.com/docs/feature-flags/local-evaluation", status)
 }
 
 // getMinimalFlagCalledEvents reports whether the local-evaluation payload
