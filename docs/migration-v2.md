@@ -60,7 +60,7 @@ Read the checklist first, then the sections that apply to you. Many of these cha
 
 - [ ] You set legacy option properties like `$process_person_profile` → [Move to event options](#move-to-event-options)
 - [ ] You send `$ai_` events with `Enqueue` → [Send AI events with EnqueueAI](#send-ai-events-with-enqueueai)
-- [ ] You use `posthogmcp` or `posthogmcpsdk` → [Add MCP event options](#add-mcp-event-options)
+- [ ] You use `posthogmcp`, `posthogmcpsdk`, or `posthogmcpgo` → [Add MCP event options](#add-mcp-event-options)
 
 ## Before you upgrade
 
@@ -463,7 +463,7 @@ PostHog rejects these events one by one inside an otherwise successful batch. Ea
 - Distinct IDs longer than 200 bytes
 - `$performance_event`
 - Properties that aren't a JSON object
-- An event option value, or a legacy option property value such as `$process_person_profile: "maybe"`, that PostHog can't read, where `Details` is `invalid_options` (see [Move to event options](#move-to-event-options)). 1.x.x sent the legacy property and PostHog ignored the value.
+- An event option value, or a legacy option property value such as `$process_person_profile: "maybe"`, that PostHog can't read, where `Details` is `invalid_options` (see [Move to event options](#move-to-event-options)). 1.x.x sent the legacy property and PostHog ignored the value, except for cookieless mode, where any non-boolean value failed the whole batch.
 
 The SDK sends `$session_id` and `$window_id` as top-level fields of the event, because capture reads them there and requires strings. What the SDK sends depends on the value:
 
@@ -599,6 +599,18 @@ With `posthogmcpsdk`, `WithEventOptions` sets a tool call's `EventOptions`:
 posthogmcpsdk.Instrument(server, analytics,
     posthogmcpsdk.WithEventOptions(func(
         context.Context, *mcp.CallToolRequest, *mcp.CallToolResult, error,
+    ) (posthog.Options, error) {
+        return posthog.NewOptions().Set("process_person_profile", false), nil
+    }),
+)
+```
+
+With `posthogmcpgo`, `WithEventOptions` works the same way:
+
+```go
+posthogmcpgo.Instrument(analytics,
+    posthogmcpgo.WithEventOptions(func(
+        context.Context, mcp.CallToolRequest, *mcp.CallToolResult, error,
     ) (posthog.Options, error) {
         return posthog.NewOptions().Set("process_person_profile", false), nil
     }),
