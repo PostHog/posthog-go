@@ -280,18 +280,23 @@ type Config struct {
 	AppHost string
 
 	// AllowInsecureAppHost lets Client.Emails send to an http AppHost, such as
-	// http://localhost:8010 during local development. Email requests carry
-	// SecretKey and the email itself, so over http both travel unencrypted.
+	// http://localhost:8010 during local development, and upload attachments
+	// to an http file storage URL. Email requests carry SecretKey and the
+	// email itself, so over http both travel unencrypted.
 	AllowInsecureAppHost bool
 
-	// EmailRequestTimeout is the timeout of each Client.Emails request. If
-	// zero, it defaults to DefaultEmailRequestTimeout.
+	// EmailRequestTimeout is the timeout of each Client.Emails request to
+	// PostHog. If zero, it defaults to DefaultEmailRequestTimeout. Uploading
+	// an attachment to file storage isn't such a request: each upload may take
+	// up to 15 minutes, the life of its upload URL. Bound a whole Send with
+	// its context.
 	EmailRequestTimeout time.Duration
 
 	// EmailRequestMaxRetries is the number of retries of a Client.Emails
-	// request after its first attempt, 0 to 9. If nil, it defaults to
-	// DefaultEmailRequestMaxRetries. Set Ptr(0) when a job runner already
-	// retries the send, and pass an IdempotencyKey that names the email.
+	// request after its first attempt, and of each attachment upload, 0 to 9.
+	// If nil, it defaults to DefaultEmailRequestMaxRetries. Set Ptr(0) when a
+	// job runner already retries the send, and pass an IdempotencyKey that
+	// names the email.
 	EmailRequestMaxRetries *int
 
 	// MigratedFrom names the email provider your sends moved from, such as
@@ -1026,7 +1031,7 @@ const (
 ```
 
 ```go
-const Version = "1.43.0"
+const Version = "1.44.0"
 ```
 
 Version of the client.
@@ -1455,6 +1460,24 @@ type CodeEmail struct {
 	// Without it, PostHog sends from the project's default sender.
 	From    string
 	ReplyTo []string
+	// Cc are bare addresses, such as "finance@example.com", that get a copy
+	// the other recipients see. At most 10.
+	Cc []string
+	// Bcc are bare addresses that get a copy the other recipients never see.
+	// At most 10.
+	Bcc []string
+	// Attachments are files sent with the email: at most 10, and at most 40 MB
+	// for the whole message after Base64 encoding, which leaves about 29 MB
+	// for the files. Send checks both before any request. It then hashes each
+	// file, uploads the files PostHog doesn't have yet straight to PostHog's
+	// file storage, and sends the email naming them, so the network must
+	// allow uploads to the storage host the upload URL names. A file PostHog
+	// already has isn't uploaded again. PostHog refuses file types that
+	// mailbox providers block, such as .exe. PostHog can't fetch a file from a
+	// path or URL: read the file and pass its bytes. PostHog keeps each
+	// uploaded file in its file storage for its retention period, and a later
+	// send of the same bytes, from any of the project's code, reuses it.
+	Attachments []EmailAttachment
 	// Sensitive marks an email that carries a login link, a reset token or a
 	// code. PostHog keeps a sensitive email's links unchanged, leaves its
 	// subject off engagement events and keeps its content out of logs. Nil
@@ -1487,7 +1510,7 @@ type CodeEmail struct {
 }
 ```
 
-CodeEmail sends content your code rendered, named by a key. PostHog sends it as is and never stores it. To send a React email, render it to HTML in your app and pass the HTML.
+CodeEmail sends content your code rendered, named by a key. PostHog sends the subject and bodies as is and never stores them; it keeps attachments, as Attachments says. To send a React email, render it to HTML in your app and pass the HTML.
 
 ### `CommonResponseFields`
 
@@ -1691,6 +1714,26 @@ type Email interface {
 
 Email is the content of one send: a TemplateEmail or a CodeEmail.
 
+### `EmailAttachment`
+
+```go
+type EmailAttachment struct {
+	// Filename is the name the recipient sees, such as "invoice.pdf", with no
+	// path.
+	Filename string
+	// Content is the file's bytes.
+	Content []byte
+	// ContentType is a MIME type, such as "application/pdf". Without it, the
+	// type follows from Filename.
+	ContentType string
+	// ContentID shows the file inline: the HTML references it as
+	// <img src="cid:logo"> when ContentID is "logo".
+	ContentID string
+}
+```
+
+EmailAttachment is a file sent with a CodeEmail.
+
 ### `EmailError`
 
 ```go
@@ -1698,7 +1741,8 @@ type EmailError struct {
 	Name    EmailErrorName
 	Code    string
 	Message string
-	// StatusCode is the HTTP status when PostHog answered, and 0 otherwise.
+	// StatusCode is the HTTP status when PostHog, or file storage for an
+	// upload, answered, and 0 otherwise.
 	// A network_error keeps the status of an answer that broke off mid-body.
 	StatusCode int
 	Why        string
@@ -1706,8 +1750,8 @@ type EmailError struct {
 	DocsURL    string
 	// Field names the request field the error is about, when there is one.
 	Field string
-	// RetryAfter is how long PostHog asked the client to wait before it sends
-	// again, and 0 when it did not ask.
+	// RetryAfter is how long PostHog, or file storage for an upload, asked the
+	// client to wait before it tries again, and 0 when it did not ask.
 	RetryAfter time.Duration
 }
 ```
@@ -1750,7 +1794,8 @@ const (
 	// EmailErrorInvalidPermission: the secret key lacks the scope.
 	EmailErrorInvalidPermission EmailErrorName = "invalid_permission"
 	// EmailErrorNotFound: no template or email with this ID, or the API is not
-	// enabled for the project.
+	// enabled for the project. On Attachments it can also mean this PostHog
+	// can't take attachments yet; the client can't tell which.
 	EmailErrorNotFound EmailErrorName = "not_found"
 	// EmailErrorConcurrentIdempotentRequests: a send with the same idempotency
 	// key is still in flight.
@@ -1758,11 +1803,17 @@ const (
 	// EmailErrorInvalidIdempotentRequest: the idempotency key was used with
 	// another request.
 	EmailErrorInvalidIdempotentRequest EmailErrorName = "invalid_idempotent_request"
-	// EmailErrorRateLimitExceeded: PostHog rate limited the request.
+	// EmailErrorRateLimitExceeded: PostHog, or file storage for an upload,
+	// rate limited the request.
 	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
 	// EmailErrorMonthlyQuotaExceeded: the project is over its email quota.
 	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
-	// EmailErrorServiceUnavailable: PostHog or the network was unavailable.
+	// EmailErrorDailyQuotaExceeded: the project uploaded as many attachment
+	// bytes as it can today, counted in UTC. Files PostHog already has don't
+	// count, and emails without new attachments still go out.
+	EmailErrorDailyQuotaExceeded EmailErrorName = "daily_quota_exceeded"
+	// EmailErrorServiceUnavailable: PostHog, file storage for an upload, or
+	// the network was unavailable.
 	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
 	// EmailErrorApplication: anything else.
 	EmailErrorApplication EmailErrorName = "application_error"
