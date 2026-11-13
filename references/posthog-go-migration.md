@@ -20,7 +20,6 @@ Read the checklist first, then the sections that apply to you. Many of these cha
 
 **Before you upgrade**
 
-- [ ] You run self-hosted PostHog → [Prepare your proxy](#prepare-your-proxy)
 - [ ] You send events through your own reverse proxy or API gateway → [Prepare your proxy](#prepare-your-proxy)
 - [ ] An egress allowlist or WAF rule pins the `/batch/` path → [Prepare your proxy](#prepare-your-proxy)
 - [ ] A proxy redirects capture requests → [Prepare your proxy](#prepare-your-proxy)
@@ -80,11 +79,7 @@ Read the checklist first, then the sections that apply to you. Many of these cha
 
 1.x.x sent `Enqueue` and `EnqueueWithContext` events to `POST /batch/`.
 
-Check anything that pins the old path: reverse proxies, API gateways, egress allowlists, WAF rules, and self-hosted deployments.
-
-The v1 routes are only served where the deployment enables them. Confirm your PostHog instance serves both `/i/v1/analytics/events` and `/i/v1/ai/events` before you upgrade.
-
-On self-hosted PostHog, a separate capture service serves the AI route, so check it too if you use `EnqueueAI`. PostHog Cloud (`us.i.posthog.com`, `eu.i.posthog.com`) serves both.
+Check anything that pins the old path: reverse proxies, API gateways, egress allowlists, and WAF rules.
 
 If you send events through your own reverse proxy, update it before you upgrade:
 
@@ -191,7 +186,7 @@ Integrations follow the same rule:
 | --- | --- |
 | `Config.CaptureMode` and the `CaptureMode` type | Removed |
 | The `CaptureModeLegacy` and `CaptureModeAnalyticsV1` constants | Removed |
-| `Capture.Library` and `Exception.Library` (added in 1.30.0) | Removed |
+| `Capture.Library` and `Exception.Library` (added in posthog-go 1.30.0) | Removed |
 | `Client` | New `EnqueueAI` method |
 | `Alias` | New `EventProperties` and `Options` maps |
 | `Backoff` | New function field |
@@ -364,7 +359,7 @@ These changes follow from this order:
 - **Minimal flag events.** The server can turn on a minimal `$feature_flag_called` event for flags without an experiment. The SDK trims it to its fixed set of properties before `BeforeSend`. The hook sees only that set, and the properties it adds are sent. In 1.x.x the trim ran after `BeforeSend` and removed them.
 - **Options on minimal flag events.** Minimal `$feature_flag_called` events keep their options, because the trim removes only properties. In 1.x.x the trim removed these settings, except person processing.
 
-`posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and `$span_id` only when neither the event nor the request context sets either key. In 1.37.x each ID filled on its own, so an event that set only `$trace_id` got the active span's `$span_id`.
+`posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and `$span_id` only when neither the event nor the request context sets either key. In posthog-go 1.37.0 and later 1.x.x releases, each ID filled on its own, so an event that set only `$trace_id` got the active span's `$span_id`.
 
 The helper can't see `Config.DefaultEventProperties`. A `$trace_id` or `$span_id` set there doesn't stop the derived pair, which wins over it.
 
@@ -452,7 +447,7 @@ Update log-based alerts for these log lines:
 
 In 2.x.x, other `5xx` statuses are terminal.
 
-A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route, for example an older self-hosted install.
+A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route.
 
 The default waits vary randomly by up to 25% either way, so clients that fail together don't all retry at the same moment.
 
@@ -490,7 +485,7 @@ In 1.x.x the SDK sent any value as a property.
 
 Non-finite numbers follow these rules:
 
-- **`float32` and `float64` values.** A NaN or infinite property value is sent as `null` and the event is kept, as in 1.36.1 and later.
+- **`float32` and `float64` values.** A NaN or infinite property value is sent as `null` and the event is kept, as in posthog-go 1.36.1 and later.
 - **Structs.** A struct value that holds one is sent as `null` as a whole.
 - **Invalid JSON.** Each event is checked as JSON before it's queued. A custom `MarshalJSON` that returns invalid JSON fails only its own event, and `Callback.Failure` reports it.
 

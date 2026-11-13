@@ -80,11 +80,7 @@ func main() {
 		start = strings.ReplaceAll(start, "github.com/posthog/posthog-go", module)
 	}
 	body := append([]string{"## Getting started", nest(start)}, reference(capabilities(*specs), *major <= declared)...)
-	title := fmt.Sprintf("%s %d.x", name, *major)
-	if *major > declared {
-		title += " (experimental)"
-	}
-	write(fmt.Sprintf("%s-%d.md", id, *major), frontMatter(title, body), body)
+	write(fmt.Sprintf("%s-%d.md", id, *major), frontMatter(fmt.Sprintf("%s %d.x", name, *major), body), body)
 	if *major <= declared {
 		write(id+"-reference.md", frontMatter(name, body), body)
 	}

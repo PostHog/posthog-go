@@ -1,5 +1,5 @@
 ---
-title: "PostHog Go SDK 2.x (experimental)"
+title: "PostHog Go SDK 2.x"
 sidebar: Docs
 showTitle: true
 contentMaxWidthClass: max-w-full
