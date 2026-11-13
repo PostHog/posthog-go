@@ -205,6 +205,81 @@ func TestCaptureToolCallRedactsIntentBeforeTruncation(t *testing.T) {
 	assert.Equal(t, prefix+redactedValue, capture.Properties[propertyIntent])
 }
 
+func TestCaptureToolCallBoundsALongIntent(t *testing.T) {
+	prose := strings.Repeat("find the flag docs ", 1_000)
+	cjk := strings.Repeat("请帮我查询", 1_000)
+	for _, test := range []struct {
+		name, intent, want string
+	}{
+		{"prose keeps its start", prose, prose[:maxIntentBytes-len(truncationSuffix)] + truncationSuffix},
+		{"cjk keeps its start", cjk, prefixUTF8(cjk, maxIntentBytes-len(truncationSuffix)) + truncationSuffix},
+		{"binary is judged on the whole text", strings.Repeat("A", largeBinaryGateBytes), binaryRedactedValue},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", DistinctID: "user_1", Intent: test.intent}))
+			assert.Equal(t, test.want, requireCapture(t, client.messages[0]).Properties[propertyIntent])
+		})
+	}
+}
+
+// An identifier cut in half by a pre-scan cut no longer matches its pattern.
+// Each start below shrinks when redacted, so text from past the cut can land
+// inside the kept limit.
+func TestCaptureFreeTextNeverKeepsAnIdentifierSplitByAScanCut(t *testing.T) {
+	const shrinkingUnit = "abcdefghijklmnopqrstuvwxyz@example.com "
+	for _, field := range []struct {
+		name    string
+		limit   int
+		capture func(t *testing.T, text string) string
+	}{
+		{"intent", maxIntentBytes, func(t *testing.T, text string) string {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", DistinctID: "user_1", Intent: text}))
+			return requireCapture(t, client.messages[0]).Properties[propertyIntent].(string)
+		}},
+		{"unknown tool name", maxResourceNameBytes, func(t *testing.T, text string) string {
+			return captureOptional(t, func(a *Analytics) error {
+				return a.CaptureUnknownTool(context.Background(), UnknownTool{ToolName: text})
+			}).Properties[propertyToolName].(string)
+		}},
+	} {
+		for _, identifier := range []struct {
+			name, value string
+			keep        int
+		}{
+			{"posthog token", "phc_" + "Ab3dEf6hIj9lMn2pQr5tUv8xYz1bCd", len("phc_Ab3dEf6hIj9lMn")},
+			{"email", "ada.lovelace@example.com", len("ada.lovelace@example.c")},
+			{"card", "4111 1111 1111 1111", len("4111 1111 1111")},
+			{"ssn", "123-45-6789", len("123-45-67")},
+			{"nanp phone", "(415) 555-0142", len("(415) 555-01")},
+			{"url userinfo", "https://ada:hunter2@example.com/", len("https://ada:hunter2@exa")},
+		} {
+			for _, cut := range []struct {
+				name string
+				at   int
+			}{
+				{"limit", field.limit},
+				{"limit plus margin", field.limit + scanMarginBytes},
+				{"twice the limit", 2 * field.limit},
+			} {
+				t.Run(field.name+"/"+identifier.name+"/"+cut.name, func(t *testing.T) {
+					startLength := cut.at - identifier.keep
+					start := strings.Repeat(shrinkingUnit, startLength/len(shrinkingUnit))
+					start += strings.Repeat(" ", startLength-len(start))
+					text := start + identifier.value + strings.Repeat(" and more", 2*maxIntentBytes)
+
+					got := field.capture(t, text)
+
+					assert.True(t, strings.HasPrefix(got, redactedValue+" "), "the start is kept, redacted")
+					// Half of what precedes the cut, so the cut's exact byte does not matter.
+					assert.NotContains(t, got, identifier.value[:identifier.keep/2])
+				})
+			}
+		}
+	}
+}
+
 func TestCaptureToolCallLeavesNonIntentIdentifiersUntouched(t *testing.T) {
 	raw := "Find orders for alice@example.com from 192.0.2.1"
 	client := &fakeEnqueueClient{}
