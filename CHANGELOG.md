@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.44.1
+
+### Patch Changes
+
+- 63617ab: Preserve response-wide computation errors alongside evaluation_failed in direct flag-read events when remote evaluation uses the local poller fallback.
+
 ## 1.44.0
 
 ### Minor Changes
