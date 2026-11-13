@@ -176,5 +176,5 @@ not do these yet.
 The adapter is tested against mcp-go v0.58.0 and requires Go 1.25.5, mcp-go's
 minimum. It is a separate Go module so that the core `posthog-go` module does
 not depend on mcp-go. Its `go.mod` replaces `posthog-go` and `posthogmcpsdk`
-with their directories in this repository; `posthogmcpsdk` is a test-only
+with their directories in this repository. `posthogmcpsdk` is a test-only
 dependency, used to check that both adapters send the same properties.

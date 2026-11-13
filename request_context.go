@@ -53,12 +53,15 @@ type RequestContext struct {
 	// Properties are request-scoped properties for every event type.
 	// They fill in before BeforeSend, only for keys the event left unset, so
 	// BeforeSend sees them and can change or remove them. They win over
-	// Config.DefaultEventProperties.
+	// Config.DefaultEventProperties. A $process_person_profile in them never
+	// reaches an identify-style event; see Options.
 	Properties Properties
 	// Options are request-scoped capture options for every event type.
 	// They fill in before BeforeSend, only for options the event left missing or
 	// nil, so BeforeSend sees them and can change them. They win over
-	// Config.DefaultEventOptions.
+	// Config.DefaultEventOptions. They never set process_person_profile on an
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
 	Options Options
 }
 
@@ -286,15 +289,21 @@ func groupIdentifyDistinctID(ctx context.Context, msg GroupIdentify) string {
 	return groupDistinctID(msg.Type, msg.Key)
 }
 
+// eventDistinctID returns the event's distinct ID, else the request context's,
+// else "". A zero RequestContext stands for a missing one.
+func eventDistinctID(distinctID string, requestContext RequestContext) string {
+	if id := blankAsMissing(distinctID); id != "" {
+		return id
+	}
+	return blankAsMissing(requestContext.DistinctId)
+}
+
 // resolveCaptureContext resolves the event's distinct ID from the event or the
 // request context, and generates a personless one when neither has it.
 func resolveCaptureContext(ctx context.Context, distinctID string, fieldType string) (captureContext, error) {
 	requestContext, hasRequestContext := RequestContextFromContext(ctx)
-	resolvedDistinctID := blankAsMissing(distinctID)
+	resolvedDistinctID := eventDistinctID(distinctID, requestContext)
 	isPersonless := false
-	if resolvedDistinctID == "" && hasRequestContext {
-		resolvedDistinctID = blankAsMissing(requestContext.DistinctId)
-	}
 	if resolvedDistinctID == "" {
 		if !hasRequestContext {
 			return captureContext{}, FieldError{
@@ -502,6 +511,15 @@ func remoteIP(r *http.Request) string {
 
 // EnqueueWithContext queues a message and applies any PostHog request context attached to ctx.
 // Use this from HTTP handlers with r.Context() when NewRequestContextMiddleware is installed.
+//
+// A Capture or Exception with no distinct ID, on the message or in the request context, is
+// sent as a personless event by default when ctx has a request context attached and client
+// is a client from New or NewWithConfig. The SDK generates a UUID as the distinct ID and
+// fills an unset process_person_profile option with false. Event options, request-context
+// options and Config.DefaultEventOptions take precedence over this default, and BeforeSend
+// can change it.
+// Without a request context, an empty DistinctId returns an error, as it does from Enqueue.
+// A custom EnqueueClient without EnqueueWithContext receives the message unchanged.
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error {
 	return enqueueWithContext(ctx, client, msg)
 }

@@ -777,6 +777,283 @@ func TestPersonProfileOptionLayers(t *testing.T) {
 	}
 }
 
+// TestIdentifyStylePersonProfile pins that an identify-style event takes
+// process_person_profile from the call alone, defaults it to true, and beats
+// every layer, on every emitter that can send one.
+func TestIdentifyStylePersonProfile(t *testing.T) {
+	type emitter struct {
+		name    string
+		capture bool
+		build   func(distinctID string, options Options, properties Properties) Message
+	}
+	emitters := []emitter{
+		{name: "Identify", build: func(_ string, o Options, p Properties) Message {
+			return Identify{DistinctId: "user-1", Options: o, EventProperties: p}
+		}},
+		{name: "Alias", build: func(_ string, o Options, p Properties) Message {
+			return Alias{DistinctId: "user-1", Alias: "alias-1", Options: o, EventProperties: p}
+		}},
+		{name: "GroupIdentify", build: func(_ string, o Options, p Properties) Message {
+			return GroupIdentify{Type: "company", Key: "acme", Options: o, EventProperties: p}
+		}},
+	}
+	for _, event := range []string{"$identify", "$create_alias", "$merge_dangerously", "$groupidentify", "$set", "$set_once"} {
+		event := event
+		emitters = append(emitters, emitter{name: "Capture " + event, capture: true, build: func(distinctID string, o Options, p Properties) Message {
+			return Capture{DistinctId: distinctID, Event: event, Options: o, Properties: p}
+		}})
+	}
+
+	optionFalse := NewOptions().Set(optionProcessPersonProfile, false)
+	optionTrue := NewOptions().Set(optionProcessPersonProfile, true)
+	legacyFalse := NewProperties().Set(propertyProcessPersonProfile, false)
+	legacyTrue := NewProperties().Set(propertyProcessPersonProfile, true)
+	tests := []struct {
+		name              string
+		defaultOptions    Options
+		defaultProperties Properties
+		contextOptions    Options
+		contextProperties Properties
+		options           Options
+		properties        Properties
+		// generatedID sends a Capture with no distinct ID, so the SDK generates a personless one.
+		generatedID bool
+		want        interface{}
+	}{
+		{name: "nothing set and no layer", want: true},
+		{name: "default option false", defaultOptions: optionFalse, want: true},
+		{name: "default legacy property false", defaultProperties: legacyFalse, want: true},
+		{name: "context option false", contextOptions: optionFalse, want: true},
+		{name: "context legacy property false", contextProperties: legacyFalse, want: true},
+		{name: "caller option false beats layered true", defaultOptions: optionTrue, contextOptions: optionTrue, options: optionFalse, want: false},
+		{name: "caller option true beats layered false", defaultOptions: optionFalse, contextOptions: optionFalse, options: optionTrue, want: true},
+		{name: "caller legacy false with no layer", properties: legacyFalse, want: false},
+		{name: "caller legacy false beats layered true", defaultOptions: optionTrue, contextOptions: optionTrue, defaultProperties: legacyTrue, properties: legacyFalse, want: false},
+		{name: "caller legacy true beats layered false", defaultOptions: optionFalse, contextOptions: optionFalse, defaultProperties: legacyFalse, properties: legacyTrue, want: true},
+		{name: "caller option beats caller legacy", defaultOptions: optionTrue, options: optionFalse, properties: legacyTrue, want: false},
+		{name: "non-boolean caller legacy is moved unchanged", properties: NewProperties().Set(propertyProcessPersonProfile, "yes"), want: "yes"},
+		{name: "nil caller option is unset", defaultOptions: optionFalse, options: NewOptions().Set(optionProcessPersonProfile, nil), want: true},
+		{name: "typed-nil caller option is unset", defaultOptions: optionFalse, options: NewOptions().Set(optionProcessPersonProfile, (*bool)(nil)), want: true},
+		{name: "nil caller legacy is unset", defaultOptions: optionFalse, properties: NewProperties().Set(propertyProcessPersonProfile, nil), want: true},
+		{name: "generated distinct ID keeps the personless default", generatedID: true, want: false},
+		{name: "layered option reaches a generated distinct ID", generatedID: true, defaultOptions: NewOptions().Set(optionProcessPersonProfile, "on"), want: "on"},
+		{name: "caller legacy true on a generated distinct ID is moved", generatedID: true, properties: legacyTrue, want: true},
+	}
+	for _, e := range emitters {
+		for _, tt := range tests {
+			if tt.generatedID && !e.capture {
+				// Only Capture can generate a distinct ID.
+				continue
+			}
+			e, tt := e, tt
+			t.Run(e.name+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+				body, server := mockServer()
+				defer server.Close()
+
+				seen := make(chan Message, 1)
+				client, err := NewWithConfig("test-key", Config{
+					Endpoint:               server.URL,
+					BatchSize:              1,
+					now:                    mockTime,
+					DefaultEventOptions:    tt.defaultOptions,
+					DefaultEventProperties: tt.defaultProperties,
+					BeforeSend: func(msg Message) Message {
+						seen <- msg
+						return msg
+					},
+				})
+				require.NoError(t, err)
+				defer client.Close()
+
+				distinctID := "user-1"
+				if tt.generatedID {
+					distinctID = ""
+				}
+				options, properties := cloneMap(tt.options), cloneMap(tt.properties)
+				ctx := WithFreshRequestContext(context.Background(), RequestContext{Options: tt.contextOptions, Properties: tt.contextProperties})
+				require.NoError(t, EnqueueWithContext(ctx, client, e.build(distinctID, options, properties)))
+
+				hookMsg := awaitTestValue(t, seen)
+				require.Equal(t, tt.want, messageOptions(hookMsg)[optionProcessPersonProfile], "BeforeSend sees the resolved option")
+				require.NotContains(t, libEventProperties(hookMsg), propertyProcessPersonProfile, "BeforeSend sees only the option")
+				event := readSingleBatchEvent(t, body)
+				require.Equal(t, tt.want, requireOptions(t, event)[optionProcessPersonProfile])
+				require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
+				require.Equal(t, tt.options, options, "the caller's options are not written")
+				require.Equal(t, tt.properties, properties, "the caller's properties are not written")
+			})
+		}
+	}
+}
+
+// cloneMap returns a shallow copy of m, or nil for nil.
+func cloneMap[M ~map[string]interface{}](m M) M {
+	if m == nil {
+		return nil
+	}
+	clone := make(M, len(m))
+	for k, v := range m {
+		clone[k] = v
+	}
+	return clone
+}
+
+func TestIdentifyStylePersonProfileBoundaries(t *testing.T) {
+	tests := []struct {
+		name           string
+		defaultOptions Options
+		beforeSend     BeforeSendFunc
+		enqueue        func(Client) error
+		want           interface{}
+	}{
+		{
+			name: "BeforeSend can turn the default off",
+			beforeSend: func(msg Message) Message {
+				m := msg.(Identify)
+				m.Options = NewOptions().Set(optionProcessPersonProfile, false)
+				return m
+			},
+			enqueue: func(c Client) error { return c.Enqueue(Identify{DistinctId: "user-1"}) },
+			want:    false,
+		},
+		{
+			name:           "other events keep a layered false",
+			defaultOptions: NewOptions().Set(optionProcessPersonProfile, false),
+			enqueue:        func(c Client) error { return c.Enqueue(Capture{DistinctId: "user-1", Event: "order completed"}) },
+			want:           false,
+		},
+		{
+			name: "a BeforeSend rename to $identify gets no default",
+			beforeSend: func(msg Message) Message {
+				m := msg.(Capture)
+				m.Event = "$identify"
+				return m
+			},
+			enqueue: func(c Client) error { return c.Enqueue(Capture{DistinctId: "user-1", Event: "renamed"}) },
+			want:    nil,
+		},
+		{
+			name: "a BeforeSend rename away from $identify keeps the default",
+			beforeSend: func(msg Message) Message {
+				m := msg.(Capture)
+				m.Event = "renamed"
+				return m
+			},
+			enqueue: func(c Client) error { return c.Enqueue(Capture{DistinctId: "user-1", Event: "$identify"}) },
+			want:    true,
+		},
+		{
+			name:           "the AI lane takes the default too",
+			defaultOptions: NewOptions().Set(optionProcessPersonProfile, false),
+			enqueue:        func(c Client) error { return c.EnqueueAI(Capture{DistinctId: "user-1", Event: "$identify"}) },
+			want:           true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:            server.URL,
+				BatchSize:           1,
+				now:                 mockTime,
+				DefaultEventOptions: tt.defaultOptions,
+				BeforeSend:          tt.beforeSend,
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, tt.enqueue(client))
+			require.Equal(t, tt.want, requireOptions(t, readSingleBatchEvent(t, body))[optionProcessPersonProfile])
+		})
+	}
+}
+
+// TestLayeredLegacyPersonProfileUnderAnOption pins that BeforeSend never sees a
+// layered legacy $process_person_profile next to the option on an
+// identify-style event, so a hook that clears Options cannot bring back a
+// layered false. Other events keep the property, as before.
+func TestLayeredLegacyPersonProfileUnderAnOption(t *testing.T) {
+	tests := []struct {
+		name           string
+		msg            Message
+		clearOptions   bool
+		wantHookLegacy interface{}
+		want           interface{}
+	}{
+		{name: "identify hook sees only the option", msg: Identify{DistinctId: "user-1"}, wantHookLegacy: absentProperty{}, want: true},
+		{name: "identify hook that clears options sends no false", msg: Identify{DistinctId: "user-1"}, clearOptions: true, wantHookLegacy: absentProperty{}, want: nil},
+		{name: "group identify hook that clears options sends no false", msg: GroupIdentify{Type: "company", Key: "acme"}, clearOptions: true, wantHookLegacy: absentProperty{}, want: nil},
+		{name: "identify-style capture hook that clears options sends no false", msg: Capture{DistinctId: "user-1", Event: "$set"}, clearOptions: true, wantHookLegacy: absentProperty{}, want: nil},
+		{name: "other event hook sees the layered property", msg: Capture{DistinctId: "user-1", Event: "order completed"}, wantHookLegacy: false, want: true},
+		{name: "other event hook that clears options sends the layered false", msg: Capture{DistinctId: "user-1", Event: "order completed"}, clearOptions: true, wantHookLegacy: false, want: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body, server := mockServer()
+			defer server.Close()
+
+			seenLegacy := make(chan interface{}, 1)
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventOptions:    NewOptions().Set(optionProcessPersonProfile, true),
+				DefaultEventProperties: NewProperties().Set(propertyProcessPersonProfile, false),
+				BeforeSend: func(msg Message) Message {
+					legacy, ok := libEventProperties(msg)[propertyProcessPersonProfile]
+					if !ok {
+						legacy = absentProperty{}
+					}
+					seenLegacy <- legacy
+					if tt.clearOptions {
+						return withMessageOptions(msg, nil)
+					}
+					return msg
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				Properties: NewProperties().Set(propertyProcessPersonProfile, false),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, tt.msg))
+
+			require.Equal(t, tt.wantHookLegacy, awaitTestValue(t, seenLegacy))
+			event := readSingleBatchEvent(t, body)
+			require.Equal(t, tt.want, requireOptions(t, event)[optionProcessPersonProfile])
+			require.NotContains(t, requireProperties(t, event), propertyProcessPersonProfile)
+		})
+	}
+}
+
+// withMessageOptions returns msg with its Options replaced.
+func withMessageOptions(msg Message, options Options) Message {
+	switch m := msg.(type) {
+	case Capture:
+		m.Options = options
+		return m
+	case Identify:
+		m.Options = options
+		return m
+	case Alias:
+		m.Options = options
+		return m
+	case GroupIdentify:
+		m.Options = options
+		return m
+	case Exception:
+		m.Options = options
+		return m
+	}
+	panic(fmt.Sprintf("unexpected message type %T", msg))
+}
+
 func TestEventPropertyLayers(t *testing.T) {
 	betaFlag := &FeatureFlagEvaluations{flags: map[string]evaluatedFlagRecord{"beta": {Key: "beta", Enabled: true}}}
 	tests := []struct {
@@ -941,7 +1218,7 @@ func TestEnqueueWithContext_IdentityMessagesTakeContextPropertiesAndOptions(t *t
 				DistinctId: "ctx-user",
 				SessionId:  "ctx-session",
 				Properties: NewProperties().Set("shared", "context").Set("context_only", "context"),
-				Options:    NewOptions().Set("process_person_profile", false).Set("cookieless_mode", true),
+				Options:    NewOptions().Set("process_person_profile", false).Set("cookieless_mode", true).Set("disable_skew_correction", true),
 			})
 			require.NoError(t, EnqueueWithContext(ctx, client, tt.msg))
 
@@ -954,10 +1231,12 @@ func TestEnqueueWithContext_IdentityMessagesTakeContextPropertiesAndOptions(t *t
 			require.Equal(t, "context", properties["context_only"])
 			require.Equal(t, "default", properties["default_only"])
 			require.NotContains(t, properties, propertySessionID)
+			// The identify-style process_person_profile default beats the context's false.
 			require.Equal(t, map[string]interface{}{
-				"cookieless_mode":        false,
-				"process_person_profile": false,
-				"product_tour_id":        "tour",
+				"cookieless_mode":         false,
+				"disable_skew_correction": true,
+				"process_person_profile":  true,
+				"product_tour_id":         "tour",
 			}, requireOptions(t, event))
 		})
 	}

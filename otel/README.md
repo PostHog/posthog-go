@@ -2,9 +2,9 @@
 
 `posthogotel` forwards OpenTelemetry AI spans to [PostHog AI observability](https://posthog.com/docs/ai-engineering/observability).
 
-It keeps only spans that follow a known AI semantic convention — a span whose
-name or any attribute key starts with `gen_ai.`, `llm.`, `ai.`, or
-`traceloop.` — and drops every other span. Kept spans go over OTLP/HTTP to the
+It keeps only spans that follow a known AI semantic convention and drops every
+other span. A span follows one when its name or any attribute key starts with
+`gen_ai.`, `llm.`, `ai.`, or `traceloop.`. Kept spans go over OTLP/HTTP to the
 PostHog `/i/v0/ai/otel` endpoint with the project API key as a bearer token.
 
 This is a separate Go module, so the core `posthog-go` SDK does not depend on
@@ -15,8 +15,8 @@ the core SDK for the request context, so its version moves in lockstep with
 ## Usage
 
 `SpanProcessor` is the recommended integration. Register it on the
-`TracerProvider` your application already owns — rather than replacing the
-global provider with a new one — so your resource, sampler, and existing
+`TracerProvider` your application already owns, rather than replacing the
+global provider with a new one, so your resource, sampler, and existing
 exporters are kept and tracers already handed out (such as ADK Go's) route
 through it. Shut down the processor with a fresh context to flush its buffered
 spans without shutting down the application-owned provider.
@@ -108,7 +108,7 @@ See [`example/`](example) for a runnable program.
 
 ## General application spans
 
-Register `NewContextSpanProcessor(client)` on your existing OpenTelemetry tracer provider to add `sessionId` and `posthogDistinctId` to application spans. A nil, disabled (empty API key), or closed client adds no IDs; a custom `posthog.Client` wrapper counts as enabled unless it implements `IsEnabled() bool`. Place it before processors that read attributes in `OnStart`. Keep your existing exporter and sampler.
+Register `NewContextSpanProcessor(client)` on your existing OpenTelemetry tracer provider to add `sessionId` and `posthogDistinctId` to application spans. A nil, disabled (empty API key), or closed client adds no IDs. A custom `posthog.Client` wrapper counts as enabled unless it implements `IsEnabled() bool`. Place it before processors that read attributes in `OnStart`. Keep your existing exporter and sampler.
 
 Use `posthogotel.NewRequestContextMiddleware(client, handler, options...)` for HTTP requests. This wrapper uses the core SDK's header extraction and options. Place it inside the OpenTelemetry HTTP middleware so the request span already exists. It also works outside the OpenTelemetry middleware, because the processor reads context when that middleware starts the span. Pass `r.Context()` when you start child spans.
 

@@ -84,7 +84,7 @@ properties of a tool call, and no `$exception`.
   classified correctly. Invalid arguments for a registered tool are a failed
   call.
 - **`$mcp_input_required`** for each `input_required` round a client of the
-  2026-07-28 revision receives (go-sdk v1.8 and later), with `$mcp_tool_name`,
+  2026-07-28 revision receives (go-sdk v1.8.0 and later), with `$mcp_tool_name`,
   the round's `$mcp_duration_ms`, and `$mcp_input_request_methods`: the method
   of each input request, ordered by request id, duplicates kept, at most 100,
   and `[]` for a round with no input requests. Never the requests or answers.
@@ -227,7 +227,7 @@ collision on an earlier page.
 
 `Instrument` adds receiving middleware, and sending middleware that watches for
 `notifications/tools/list_changed`. Receiving middleware added before it runs
-inside the measured duration; middleware added after it runs outside. To place
+inside the measured duration. Middleware added after it runs outside. To place
 the middleware yourself, install both halves of what `NewMiddleware` returns:
 
 ```go
