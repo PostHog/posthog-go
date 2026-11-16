@@ -387,6 +387,13 @@ func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
 	}
 }
 
+// redactingSet encodes only "plan", like a caller's type that hides a secret.
+type redactingSet map[string]interface{}
+
+func (r redactingSet) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{"plan": r["plan"]})
+}
+
 func TestNestedDefaultsFillOneLevelDeep(t *testing.T) {
 	tests := []struct {
 		msg  Message
@@ -405,6 +412,11 @@ func TestNestedDefaultsFillOneLevelDeep(t *testing.T) {
 				"$set":    map[string]interface{}{"plan": "pro", "source": "default"},
 				"$groups": map[string]interface{}{"company": "posthog", "region": "eu", "team": "core"},
 			},
+		},
+		{
+			// A value with its own encoding is never merged, so the event's value wins whole.
+			msg:  Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set("$set", redactingSet{"plan": "pro", "password": "secret"})},
+			want: map[string]interface{}{"$set": map[string]interface{}{"plan": "pro"}},
 		},
 		{
 			msg:  Identify{DistinctId: "user-1", Properties: NewProperties().Set("plan", "pro")},

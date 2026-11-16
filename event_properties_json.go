@@ -79,6 +79,15 @@ func normalizeEventPropertiesMode(properties Properties, standardJSON bool) (Pro
 	return normalized, nil
 }
 
+// hasCustomEncoding reports whether value encodes itself to JSON or text.
+func hasCustomEncoding(value interface{}) bool {
+	switch value.(type) {
+	case json.Marshaler, json.MarshalerContext, encoding.TextMarshaler:
+		return true
+	}
+	return false
+}
+
 func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool, standardJSON bool) (interface{}, error) {
 	if !v.IsValid() {
 		return nil, nil
@@ -90,8 +99,7 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool, st
 	if v.CanAddr() {
 		value = v.Addr().Interface()
 	}
-	switch value.(type) {
-	case json.Marshaler, json.MarshalerContext, encoding.TextMarshaler:
+	if hasCustomEncoding(value) {
 		return marshalOpaqueEventProperty(value, true, standardJSON)
 	}
 	switch v.Kind() {

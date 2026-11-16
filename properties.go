@@ -115,7 +115,7 @@ func fillProperties(props Properties, layers ...Properties) Properties {
 
 // mergeNestedMaps returns a new map with the keys of base and then the keys of
 // top, so top wins. ok is false when either value is not a non-nil map with
-// string keys.
+// string keys, or encodes itself.
 func mergeNestedMaps(base, top interface{}) (Properties, bool) {
 	baseMap, ok := stringKeyedMap(base)
 	if !ok {
@@ -136,6 +136,11 @@ func mergeNestedMaps(base, top interface{}) (Properties, bool) {
 }
 
 func stringKeyedMap(v interface{}) (map[string]interface{}, bool) {
+	// Merging would copy the map's raw entries and bypass the encoding the
+	// caller chose, which may hide some of them.
+	if hasCustomEncoding(v) {
+		return nil, false
+	}
 	switch m := v.(type) {
 	case Properties:
 		return m, m != nil
