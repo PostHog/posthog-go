@@ -33,8 +33,8 @@ cp -r . "$workdir/pinned"
 cd "$workdir/pinned"
 # Consumers ignore every replace directive, and a sibling-module path such as
 # ../posthogmcpsdk does not exist in this copy.
-go mod edit -json | jq -r '.Replace[]?.Old.Path' | while read -r path; do
-    go mod edit -dropreplace "$path"
+go mod edit -json | jq -r '.Replace[]?.Old | .Path + (if .Version then "@" + .Version else "" end)' | while read -r old; do
+    go mod edit -dropreplace "$old"
 done
 GOFLAGS=-mod=mod go build ./...
 GOFLAGS=-mod=mod go vet ./...

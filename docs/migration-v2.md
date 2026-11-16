@@ -334,7 +334,7 @@ Steps 2 to 4 don't fill `process_person_profile` on an identify-style event that
 
 To turn a default option off for one event, set the option to `false` on the event or in `BeforeSend`.
 
-`$set`, `$set_once`, `$groups`, and `$group_set` fill one level deep. When the event and a default both set one of them to a map, the default adds only the keys the event left out. A map with its own `MarshalJSON` or `MarshalText` is kept whole, so its encoding decides what is sent.
+`$set`, `$set_once`, `$groups`, and `$group_set` fill one level deep. When the event and a default both set one of them to a map, the default adds only the keys the event left out. A map with its own `MarshalJSON` or `MarshalText` is never merged, so its encoding decides what is sent: the event's value wins whole, and on `Identify` a `Properties` map replaces such a `$set` instead of merging into it.
 
 For example, a default `"$set": {"plan": "free", "source": "web"}` and an event `"$set": {"plan": "pro"}` send `{"plan": "pro", "source": "web"}`. A `$set` in `DefaultEventProperties` or the request context sets those person properties on every event it reaches.
 
