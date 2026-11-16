@@ -317,6 +317,11 @@ type CodeEmail struct {
 	Text string
 	From    string
 	ReplyTo []string
+	Cc []string
+	Bcc []string
+	Attachments []EmailAttachment
+	Sensitive *bool
+	Tracking *EmailTracking
 	CaptureEngagement *bool
 	DistinctID string
 	IdempotencyKey string
@@ -489,6 +494,13 @@ type DescriptionExtractor interface {
 type Email interface {
 }
 
+type EmailAttachment struct {
+	Filename string
+	Content []byte
+	ContentType string
+	ContentID string
+}
+
 type EmailError struct {
 	Name    EmailErrorName
 	Code    string
@@ -518,6 +530,7 @@ const (
 	EmailErrorInvalidIdempotentRequest EmailErrorName = "invalid_idempotent_request"
 	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
 	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
+	EmailErrorDailyQuotaExceeded EmailErrorName = "daily_quota_exceeded"
 	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
 	EmailErrorApplication EmailErrorName = "application_error"
 )
@@ -527,6 +540,23 @@ type EmailStatus struct {
 	CreatedAt time.Time
 	StatusAt time.Time
 	Reason string
+}
+
+type EmailTracking struct {
+}
+
+func EmailTrackingOff() *EmailTracking
+
+func EmailTrackingOn() *EmailTracking
+
+func EmailTrackingWith(options EmailTrackingOptions) *EmailTracking
+
+func (t EmailTracking) MarshalJSON() ([]byte, error)
+
+type EmailTrackingOptions struct {
+	Opens *bool `json:"opens,omitempty"`
+	Clicks *bool `json:"clicks,omitempty"`
+	Engagement *bool `json:"engagement,omitempty"`
 }
 
 type EmailWarning struct {

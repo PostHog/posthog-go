@@ -24,7 +24,8 @@ const (
 	// EmailErrorInvalidPermission: the secret key lacks the scope.
 	EmailErrorInvalidPermission EmailErrorName = "invalid_permission"
 	// EmailErrorNotFound: no template or email with this ID, or the API is not
-	// enabled for the project.
+	// enabled for the project. On Attachments it can also mean this PostHog
+	// can't take attachments yet; the client can't tell which.
 	EmailErrorNotFound EmailErrorName = "not_found"
 	// EmailErrorConcurrentIdempotentRequests: a send with the same idempotency
 	// key is still in flight.
@@ -32,11 +33,17 @@ const (
 	// EmailErrorInvalidIdempotentRequest: the idempotency key was used with
 	// another request.
 	EmailErrorInvalidIdempotentRequest EmailErrorName = "invalid_idempotent_request"
-	// EmailErrorRateLimitExceeded: PostHog rate limited the request.
+	// EmailErrorRateLimitExceeded: PostHog, or file storage for an upload,
+	// rate limited the request.
 	EmailErrorRateLimitExceeded EmailErrorName = "rate_limit_exceeded"
 	// EmailErrorMonthlyQuotaExceeded: the project is over its email quota.
 	EmailErrorMonthlyQuotaExceeded EmailErrorName = "monthly_quota_exceeded"
-	// EmailErrorServiceUnavailable: PostHog or the network was unavailable.
+	// EmailErrorDailyQuotaExceeded: the project uploaded as many attachment
+	// bytes as it can today, counted in UTC. Files PostHog already has don't
+	// count, and emails without new attachments still go out.
+	EmailErrorDailyQuotaExceeded EmailErrorName = "daily_quota_exceeded"
+	// EmailErrorServiceUnavailable: PostHog, file storage for an upload, or
+	// the network was unavailable.
 	EmailErrorServiceUnavailable EmailErrorName = "service_unavailable"
 	// EmailErrorApplication: anything else.
 	EmailErrorApplication EmailErrorName = "application_error"
@@ -53,7 +60,8 @@ type EmailError struct {
 	Name    EmailErrorName
 	Code    string
 	Message string
-	// StatusCode is the HTTP status when PostHog answered, and 0 otherwise.
+	// StatusCode is the HTTP status when PostHog, or file storage for an
+	// upload, answered, and 0 otherwise.
 	// A network_error keeps the status of an answer that broke off mid-body.
 	StatusCode int
 	Why        string
@@ -61,8 +69,8 @@ type EmailError struct {
 	DocsURL    string
 	// Field names the request field the error is about, when there is one.
 	Field string
-	// RetryAfter is how long PostHog asked the client to wait before it sends
-	// again, and 0 when it did not ask.
+	// RetryAfter is how long PostHog, or file storage for an upload, asked the
+	// client to wait before it tries again, and 0 when it did not ask.
 	RetryAfter time.Duration
 
 	cause error
@@ -90,8 +98,10 @@ func newEmailError(code, message string, cause error) *EmailError {
 	return &EmailError{Name: emailErrorName(0, code), Code: code, Message: message, cause: cause}
 }
 
+// invalidEmail is an argument the client refuses before any request.
 func invalidEmail(code, field, message string) *EmailError {
 	err := newEmailError(code, message, nil)
+	err.Name = EmailErrorValidation
 	err.Field = field
 	return err
 }
@@ -129,6 +139,9 @@ func emailErrorName(status int, code string) EmailErrorName {
 		if code == "quota_limited" {
 			return EmailErrorMonthlyQuotaExceeded
 		}
+		if code == "upload_quota_exceeded" {
+			return EmailErrorDailyQuotaExceeded
+		}
 		return EmailErrorRateLimitExceeded
 	case http.StatusServiceUnavailable:
 		return EmailErrorServiceUnavailable
@@ -145,13 +158,18 @@ func (e *EmailError) isRetryable() bool {
 	if e.Code == "network_error" {
 		return true
 	}
+	if e.Code == "attachment_upload_failed" {
+		// File storage throttled, timed out or was down; anything else it
+		// refused fails the same way again.
+		return e.Name == EmailErrorRateLimitExceeded || e.Name == EmailErrorServiceUnavailable
+	}
 	switch e.StatusCode {
 	case 0:
 		return false
 	case http.StatusConflict:
 		return e.Code == "idempotency_key_in_flight"
 	case http.StatusTooManyRequests:
-		return e.Code != "quota_limited"
+		return e.Code != "quota_limited" && e.Code != "upload_quota_exceeded"
 	default:
 		return e.StatusCode == http.StatusServiceUnavailable
 	}

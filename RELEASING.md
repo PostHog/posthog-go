@@ -48,7 +48,7 @@ Changesets determines the next version from the committed changeset files:
 - **minor**: backwards-compatible features
 - **major**: breaking changes
 
-During release preparation, the workflow updates `otel/go.mod` and `posthogmcpsdk/go.mod` to require the new core version. This is a minimum requirement: consumers can still select a newer core version. These dependency updates are included in the automated version-bump commit.
+The core SDK, `otel`, `posthogmcpsdk`, and `posthogmcpgo` share a release version. During release preparation, the workflow updates `otel/go.mod`, `posthogmcpsdk/go.mod`, and `posthogmcpgo/go.mod` to require that core version. This is a minimum requirement: consumers can still select a newer core version. These dependency updates are included in the automated version-bump commit.
 
 ## Troubleshooting
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/posthog/posthog-go/v2"
 )
@@ -55,6 +56,78 @@ func ExampleEmails_code() {
 	var emailErr *posthog.EmailError
 	if errors.As(err, &emailErr) && emailErr.Code == "recipient_suppressed" {
 		fmt.Println("skipped a suppressed recipient:", emailErr.Fix)
+	}
+}
+
+// A receipt with a copy to finance and the PDF attached. Send uploads the PDF
+// to PostHog's file storage unless PostHog already has it, then sends the
+// email.
+func ExampleEmails_attachments() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	receiptPDF, err := os.ReadFile("receipt.pdf")
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = client.Emails().Send(context.Background(), posthog.CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "receipt",
+		Subject:     "Your receipt",
+		HTML:        "<p>Thanks for your order. Your receipt is attached.</p>",
+		Cc:          []string{"finance@example.com"},
+		Attachments: []posthog.EmailAttachment{
+			{Filename: "receipt.pdf", Content: receiptPDF, ContentType: "application/pdf"},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+// Mark an email that carries no login link, reset token or code as not
+// sensitive. PostHog then counts its clicks too, as it does for a template
+// send that isn't sensitive.
+func ExampleEmails_sensitive() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = client.Emails().Send(context.Background(), posthog.CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "weekly-digest",
+		Subject:     "Your weekly digest",
+		HTML:        `<p><a href="https://example.com/blog">Read this week's posts</a></p>`,
+		Sensitive:   posthog.Ptr(false),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+// Choose what PostHog tracks, whatever the email's sensitivity. This digest
+// counts clicks but captures no engagement events for the recipient.
+func ExampleEmails_tracking() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = client.Emails().Send(context.Background(), posthog.CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "weekly-digest",
+		Subject:     "Your weekly digest",
+		HTML:        `<p><a href="https://example.com/blog">Read this week's posts</a></p>`,
+		Tracking:    posthog.EmailTrackingWith(posthog.EmailTrackingOptions{Clicks: posthog.Ptr(true), Engagement: posthog.Ptr(false)}),
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
 }
 

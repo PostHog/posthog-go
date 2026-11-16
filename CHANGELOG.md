@@ -1,5 +1,31 @@
 ## Unreleased
 
+## 1.44.1
+
+### Patch Changes
+
+- 63617ab: Preserve response-wide computation errors alongside evaluation_failed in direct flag-read events when remote evaluation uses the local poller fallback.
+
+## 1.44.0
+
+### Minor Changes
+
+- 1484754: A `CodeEmail` takes `Cc`, `Bcc` and `Attachments`. `Cc` and `Bcc` are lists of bare addresses, at most 10 each. An `EmailAttachment` is a `Filename` and its `Content` bytes, with an optional `ContentType` and `ContentID` (to show the file inline as `cid:<ContentID>`). An email carries at most 10 attachments and at most 40 MB after Base64 encoding, counting the bodies (the HTML twice without `Text`, since PostHog derives the text from it) and the encoded subject as PostHog does, about 29 MB of files; `Send` checks both before any request and fails with `too_many_attachments` or `message_too_large`. It then hashes each file with SHA-256, asks PostHog which files it lacks, uploads each file PostHog lacks once, straight to PostHog's file storage without the secret key, over https unless `AllowInsecureAppHost` is set and never through a redirect, and sends the email naming each file by its hash. PostHog keeps uploaded files for its retention period, and a file it already has isn't uploaded again, and an upload URL that expired while earlier files uploaded is asked for again. A failed upload fails with `attachment_upload_failed` and the storage's answer, or with `network_error` when storage can't be reached, naming the attachment in `Field`, and no email is sent; a storage 5xx, 429 or `RequestTimeout` and a network error are retried first, honoring storage's `Retry-After` up to 30 seconds; a longer wait comes back in `EmailError.RetryAfter` for the caller to honor. A refusal of the upload names the attachments in `Field` as `Attachments` or `Attachments[i]`. The day's upload quota running out fails with `upload_quota_exceeded`, named `EmailErrorDailyQuotaExceeded`, and isn't retried. An attachment without a `Filename` or `Content` fails with `invalid_attachment` before any request, and no error holds a file's content or an upload URL. Empty lists are left out of the request. A PostHog version that doesn't take `Cc` or `Bcc` yet refuses the send with an error that names the field, instead of sending without it; one without the upload route, or a project that can't send email from code, answers `not_found` on `Attachments` before any upload, and nothing is sent.
+
+## 1.43.0
+
+### Minor Changes
+
+- bf4b209: A `CodeEmail` now takes `Sensitive` and `Tracking`.
+  
+  `Sensitive` marks an email that carries a login link, a reset token or a code. PostHog keeps a sensitive email's links unchanged, leaves its subject off engagement events and keeps its content out of logs. Without it, a code send takes the setting of the saved template whose key matches its `TemplateKey`, or is sensitive when no template has that key, as before.
+  
+  `Tracking` says what PostHog tracks for the email: `posthog.EmailTrackingOn()`, `posthog.EmailTrackingOff()`, or `posthog.EmailTrackingWith(posthog.EmailTrackingOptions{...})` to set `Opens`, `Clicks` and `Engagement` on their own. Without it, PostHog counts opens, captures engagement events, and counts clicks only when the email isn't sensitive. Turn clicks on only when the email's links are safe to send through a redirect. Click tracking needs open tracking.
+  
+  `CaptureEngagement` is deprecated. Use `Tracking` with `EmailTrackingOptions{Engagement: ...}` instead. It still works, but PostHog refuses a send that sets both. The SDK now leaves `capture_engagement` out of the request unless you set it, which PostHog reads the same way.
+  
+  `Sensitive` and `Tracking` need PostHog's API support, which is rolling out. Until it reaches your region, a send that sets either fails with an `*EmailError`.
+
 ## 1.42.4
 
 ### Patch Changes

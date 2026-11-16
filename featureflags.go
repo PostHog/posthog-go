@@ -1390,7 +1390,8 @@ type flagValueAndPayload struct {
 	minimalFlagCalledEvents bool
 	// flagFailed is set when /flags included the key but could not evaluate it.
 	// The enabled value on that detail is not a decision.
-	flagFailed bool
+	flagFailed                bool
+	errorsWhileComputingFlags bool
 }
 
 // GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
@@ -1429,6 +1430,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 
 	locallyEvaluated := err == nil && result != nil
 	flagFailed := false
+	errorsWhileComputingFlags := false
 	hasExperiment := flag.HasExperiment
 	minimalFlagCalledEvents := state != nil && state.minimalFlagCalledEvents
 
@@ -1447,6 +1449,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		hasExperiment = nil
 		minimalFlagCalledEvents = false
 		if flagsResponse != nil {
+			errorsWhileComputingFlags = flagsResponse.ErrorsWhileComputingFlags
 			minimalFlagCalledEvents = flagsResponse.MinimalFlagCalledEvents
 			if remoteFlagFailed(flagsResponse, flagConfig.Key) {
 				// enabled=false on a failed detail is a placeholder. Leave the
@@ -1470,7 +1473,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		}
 	}
 
-	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents, flagFailed: flagFailed}
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents, flagFailed: flagFailed, errorsWhileComputingFlags: errorsWhileComputingFlags}
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
