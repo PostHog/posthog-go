@@ -278,7 +278,7 @@ type FeatureFlagsPoller struct {
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
 	shutdownDone                    chan bool
-	forceReload                     chan bool
+	forceReload                     chan reloadRequest
 
 	// ctx covers polling work; cancel aborts it when shutdown outlives its deadline.
 	ctx    context.Context
@@ -843,7 +843,7 @@ func newFeatureFlagsPoller(
 		firstFeatureFlagRequestFinished: make(chan bool),
 		shutdown:                        make(chan bool),
 		shutdownDone:                    make(chan bool),
-		forceReload:                     make(chan bool),
+		forceReload:                     make(chan reloadRequest),
 		ctx:                             ctx,
 		cancel:                          cancel,
 		personalApiKey:                  personalApiKey,
@@ -866,7 +866,7 @@ func newFeatureFlagsPoller(
 func (poller *FeatureFlagsPoller) run() {
 	defer close(poller.shutdownDone)
 
-	poller.fetchNewFeatureFlags()
+	_ = poller.fetchNewFeatureFlags()
 	close(poller.firstFeatureFlagRequestFinished)
 
 	for {
@@ -876,11 +876,11 @@ func (poller *FeatureFlagsPoller) run() {
 			timer.Stop()
 			poller.shutdownCacheProvider(poller.shutdownCtx)
 			return
-		case <-poller.forceReload:
+		case req := <-poller.forceReload:
 			timer.Stop()
-			poller.fetchNewFeatureFlags()
+			req.finish(poller.fetchNewFeatureFlags())
 		case <-timer.C:
-			poller.fetchNewFeatureFlags()
+			_ = poller.fetchNewFeatureFlags()
 		}
 	}
 }
@@ -888,24 +888,25 @@ func (poller *FeatureFlagsPoller) run() {
 // fetchNewFeatureFlags refreshes the local feature flag definitions used for local
 // evaluation. These should not be confused with the feature flags fetched from the
 // flags API.
-func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
+func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() error {
 	if poller.shuttingDown() {
-		return
+		return ErrClosed
 	}
 	if poller.cacheProvider == nil {
-		poller.fetchFlagDefinitions(false)
-		return
+		return poller.fetchFlagDefinitions(false)
 	}
 
 	// Cache-only readers must not claim fetch leadership they cannot use.
 	if poller.personalApiKey == "" {
-		poller.loadFlagDefinitionsFromCache()
-		return
+		if poller.loadFlagDefinitionsFromCache() {
+			return nil
+		}
+		return errNoCachedFlagDefinitions
 	}
 
 	shouldFetch, err := poller.cacheProvider.ShouldFetchFlagDefinitions(poller.ctx)
 	if poller.shuttingDown() {
-		return
+		return ErrClosed
 	}
 	if err != nil {
 		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider ShouldFetchFlagDefinitions failed, fetching from the API: %s", err)
@@ -914,18 +915,21 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 	if !shouldFetch {
 		if poller.loadFlagDefinitionsFromCache() {
-			return
+			return nil
 		}
 
-		if poller.shuttingDown() || poller.state.Load() != nil {
-			return
+		if poller.shuttingDown() {
+			return ErrClosed
+		}
+		if poller.state.Load() != nil {
+			return nil
 		}
 
 		// Without definitions local evaluation is impossible, so fetch anyway.
 		poller.Logger.Debugf("[FEATURE FLAGS] No definitions cached or in memory, fetching from the API")
 	}
 
-	poller.fetchFlagDefinitions(shouldFetch)
+	return poller.fetchFlagDefinitions(shouldFetch)
 }
 
 // shuttingDown reports whether polling work was cancelled by a shutdown that
@@ -1198,15 +1202,15 @@ func (poller *FeatureFlagsPoller) shutdownCacheProvider(ctx context.Context) {
 
 // fetchFlagDefinitions fetches the latest feature flag definitions from the PostHog API.
 // When publish is true, a successful response is also stored in the cache provider.
-func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
+func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) error {
 	if poller.shuttingDown() {
-		return
+		return ErrClosed
 	}
 
 	personalApiKey := poller.personalApiKey
 	if personalApiKey == "" {
 		poller.Logger.Warnf("PostHog secret key is not configured; fetching feature flag definitions requires a SecretKey.")
-		return
+		return ErrNoSecretKey
 	}
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
 
@@ -1219,10 +1223,11 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 
 	res, cancel, err := poller.localEvaluationFlags(headers, currentEtag)
 	if err != nil {
-		if !poller.shuttingDown() {
-			poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		if poller.shuttingDown() {
+			return ErrClosed
 		}
-		return
+		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		return fmt.Errorf("fetch feature flag definitions: %w", err)
 	}
 	defer cancel()
 	defer res.Body.Close()
@@ -1250,7 +1255,10 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 		if publish && currentState != nil {
 			poller.publishFlagDefinitions(currentState.definitions)
 		}
-		return
+		if currentState == nil {
+			return errNoCachedFlagDefinitions
+		}
+		return nil
 	}
 
 	// Handle quota limit response (HTTP 402)
@@ -1265,23 +1273,23 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 		poller.state.Store(cleared)
 		poller.warnAboutUnresolvableFlags(cleared)
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
-		return
+		return errFlagDefinitionsQuotaLimited
 	}
 
 	if res.StatusCode != http.StatusOK {
 		poller.Logger.Errorf("Unable to fetch feature flags, status: %s", res.Status)
-		return
+		return fmt.Errorf("fetch feature flag definitions: status %s", res.Status)
 	}
 
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
-		return
+		return fmt.Errorf("read feature flag definitions: %w", err)
 	}
 	decoded, err := decodeFlagDefinitions(resBody)
 	if err != nil {
 		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
-		return
+		return fmt.Errorf("decode feature flag definitions: %w", err)
 	}
 
 	// Store new ETag from response (clear if server stops sending)
@@ -1290,6 +1298,7 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 	if publish {
 		poller.publishFlagDefinitions(resBody)
 	}
+	return nil
 }
 
 // getMinimalFlagCalledEvents reports whether the local-evaluation payload
@@ -3308,7 +3317,38 @@ func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestD
 func (poller *FeatureFlagsPoller) ForceReload() {
 	select {
 	case <-poller.shutdown:
-	case poller.forceReload <- true:
+	case poller.forceReload <- reloadRequest{}:
+	}
+}
+
+// reloadRequest asks the polling goroutine for a reload. When done is set, the
+// goroutine sends the reload's outcome on it; done must be buffered.
+type reloadRequest struct {
+	done chan<- error
+}
+
+func (r reloadRequest) finish(err error) {
+	if r.done != nil {
+		r.done <- err
+	}
+}
+
+// reloadAndWait runs a reload on the polling goroutine and waits for its outcome.
+// If ctx ends first it returns ctx.Err() and the reload still completes.
+func (poller *FeatureFlagsPoller) reloadAndWait(ctx context.Context) error {
+	done := make(chan error, 1)
+	select {
+	case <-poller.shutdown:
+		return ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	case poller.forceReload <- reloadRequest{done: done}:
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

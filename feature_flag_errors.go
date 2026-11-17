@@ -13,6 +13,11 @@ import (
 // Use errors.Is(err, ErrFlagNotFound) to check for this error.
 var ErrFlagNotFound = errors.New("feature flag not found")
 
+var (
+	errNoCachedFlagDefinitions     = errors.New("no feature flag definitions are loaded")
+	errFlagDefinitionsQuotaLimited = errors.New("feature flag definitions are quota limited")
+)
+
 // Feature flag error type constants for the $feature_flag_error property.
 // These values are sent in analytics events to track flag evaluation failures.
 // They should not be changed without considering impact on existing dashboards

@@ -968,6 +968,36 @@ func (c *client) ReloadFeatureFlags() error {
 	return nil
 }
 
+// FlagReloader is implemented by clients that can reload local feature flag
+// definitions and wait for the result. Assert a Client to it:
+//
+//	if r, ok := client.(posthog.FlagReloader); ok {
+//		err := r.ReloadFeatureFlagsWithContext(ctx)
+//	}
+type FlagReloader interface {
+	// ReloadFeatureFlagsWithContext fetches local feature flag definitions now
+	// and returns once they are in use, or with the error that kept them from
+	// loading. ReloadFeatureFlags only schedules the fetch.
+	ReloadFeatureFlagsWithContext(ctx context.Context) error
+}
+
+var _ FlagReloader = (*client)(nil)
+
+// ReloadFeatureFlagsWithContext fetches local feature flag definitions and waits
+// until they are in use. It returns ctx.Err() if ctx ends first; the fetch then
+// still completes in the background. It needs a SecretKey or a
+// FlagDefinitionCacheProvider, like ReloadFeatureFlags.
+func (c *client) ReloadFeatureFlagsWithContext(ctx context.Context) error {
+	if c.featureFlagsPoller == nil {
+		c.warnPersonalAPIKeyMissing("ReloadFeatureFlagsWithContext")
+		return ErrNoSecretKey
+	}
+	if c.closed.Load() {
+		return ErrClosed
+	}
+	return c.featureFlagsPoller.reloadAndWait(ctx)
+}
+
 func (c *client) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
 	// Non-standard: This method historically left `SendFeatureFlagEvents` as nil.
 	// Once `flagConfig.validate()` is called, it sets it to true by default.

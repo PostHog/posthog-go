@@ -840,6 +840,11 @@ type FlagReason struct {
 	ConditionIndex *int `json:"condition_index"`
 }
 
+type FlagReloader interface {
+	ReloadFeatureFlagsWithContext(ctx context.Context) error
+}
+
+
 type FlagVariant struct {
 	Key string `json:"key"`
 	Name string `json:"name"`
