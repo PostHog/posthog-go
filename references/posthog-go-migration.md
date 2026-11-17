@@ -338,7 +338,7 @@ Steps 2 to 4 don't fill `process_person_profile` on an identify-style event that
 
 To turn a default option off for one event, set the option to `false` on the event or in `BeforeSend`.
 
-`$set`, `$set_once`, `$groups`, and `$group_set` fill one level deep. When the event and a default both set one of them to a map, the default adds only the keys the event left out.
+`$set`, `$set_once`, `$groups`, and `$group_set` fill one level deep. When the event and a default both set one of them to a map, the default adds only the keys the event left out. A map with its own `MarshalJSON` or `MarshalText` is never merged, so its encoding decides what is sent: the event's value wins whole, and on `Identify` a `Properties` map replaces such a `$set` instead of merging into it.
 
 For example, a default `"$set": {"plan": "free", "source": "web"}` and an event `"$set": {"plan": "pro"}` send `{"plan": "pro", "source": "web"}`. A `$set` in `DefaultEventProperties` or the request context sets those person properties on every event it reaches.
 
@@ -352,7 +352,7 @@ These changes follow from this order:
 - **`$set` in `EventProperties`.** A `$set` in `Identify.EventProperties` or a `$group_set` in `GroupIdentify.EventProperties` merges under `Properties`, which win key by key.
 - **`Alias` callbacks.** The `Config.Callback` message for an `Alias` doesn't include its `EventProperties`.
 - **SDK values.** A `$is_server`, `$geoip_disable`, `$lib`, `$lib_version`, or system property that you set wins over the SDK's value. In 1.x.x the SDK overwrote it.
-- **GeoIP.** A `DefaultEventProperties` value of `$geoip_disable: false` turns GeoIP lookup back on for events, even when `Config.DisableGeoIP` is on. Feature flag requests still follow `Config.DisableGeoIP`.
+- **GeoIP.** A `DefaultEventProperties` value of `$geoip_disable: false` turns GeoIP lookup back on for events, even when `Config.DisableGeoIP` is on. So does `nil`, on the event, in the request context or in `DefaultEventProperties`: a `nil` property counts as set, so the SDK adds no `true`. Feature flag requests still follow `Config.DisableGeoIP`.
 - **Message fields.** The `IsServer` and `DisableGeoIP` fields of a message report the values left after `BeforeSend`. To change them, set the properties.
 - **Feature flag properties.** A `$feature/<key>` set in the request context or `DefaultEventProperties` wins over the flag value. One set in the event's own `Properties` wins over both.
 - **Feature flag properties and `SendFeatureFlags`.** The only change from 1.x.x is that a `$feature/<key>` set on the event or in the request context wins over `SendFeatureFlags`. A `Flags` snapshot already let them win, and `DefaultEventProperties` already beat the flag values on both paths.
