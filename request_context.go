@@ -35,23 +35,39 @@ const (
 
 type requestContextKey struct{}
 
-// RequestContext carries request-scoped PostHog metadata that is applied to capture and exception events
-// enqueued with EnqueueWithContext.
+// RequestContext carries request-scoped PostHog metadata that is applied to events enqueued with
+// EnqueueWithContext.
 //
-// DistinctId and SessionId usually come from PostHog tracing headers. Properties usually contain safe
+// DistinctId and SessionId usually come from PostHog tracing headers (see WithCaptureTracingHeaders). Properties usually contain safe
 // request metadata such as $current_url, $request_method, $request_path, $user_agent, and $ip.
 type RequestContext struct {
-	// DistinctId is the request-scoped user distinct ID.
+	// DistinctId is the request-scoped user distinct ID. It fills a missing
+	// DistinctId on Capture, Exception and GroupIdentify events. It never changes
+	// the ids of an Identify or an Alias.
 	DistinctId string
-	// SessionId is the request-scoped PostHog session ID.
+	// SessionId is the request-scoped PostHog session ID. It is set as the
+	// $session_id property of every event except GroupIdentify before
+	// BeforeSend, unless the event has its own. A $session_id in Properties
+	// wins over it.
 	SessionId string
-	// Properties are request-scoped properties merged into capture and exception events.
+	// Properties are request-scoped properties for every event type.
+	// They fill in before BeforeSend, only for keys the event left unset, so
+	// BeforeSend sees them and can change or remove them. They win over
+	// Config.DefaultEventProperties. A $process_person_profile in them never
+	// reaches an identify-style event; see Options.
 	Properties Properties
+	// Options are request-scoped capture options for every event type.
+	// They fill in before BeforeSend, only for options the event left missing or
+	// nil, so BeforeSend sees them and can change them. They win over
+	// Config.DefaultEventOptions. They never set process_person_profile on an
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
+	Options Options
 }
 
 // WithRequestContext returns a child context with PostHog request metadata attached. Existing PostHog
 // request context values are inherited: non-empty DistinctId and SessionId override the parent values,
-// and Properties are merged with child properties taking precedence.
+// and Properties and Options are merged with child values taking precedence.
 func WithRequestContext(ctx context.Context, requestContext RequestContext) context.Context {
 	return withRequestContext(ctx, requestContext, false)
 }
@@ -76,6 +92,7 @@ func withRequestContext(ctx context.Context, requestContext RequestContext, fres
 		DistinctId: sanitizeRequestContextValue(base.DistinctId),
 		SessionId:  sanitizeRequestContextValue(base.SessionId),
 		Properties: cloneRequestProperties(base.Properties),
+		Options:    layerOptions(base.Options, requestContext.Options),
 	}
 
 	if distinctID := sanitizeRequestContextValue(requestContext.DistinctId); distinctID != "" {
@@ -112,6 +129,7 @@ func RequestContextFromContext(ctx context.Context) (RequestContext, bool) {
 		DistinctId: sanitizeRequestContextValue(requestContext.DistinctId),
 		SessionId:  sanitizeRequestContextValue(requestContext.SessionId),
 		Properties: cloneRequestProperties(requestContext.Properties),
+		Options:    cloneMessageOptions(requestContext.Options),
 	}, true
 }
 
@@ -119,7 +137,9 @@ func RequestContextFromContext(ctx context.Context) (RequestContext, bool) {
 type RequestContextOptions struct {
 	// CaptureTracingHeaders controls whether X-PostHog-Distinct-Id and X-PostHog-Session-Id
 	// are read into request-scoped analytics context. It defaults to true in NewRequestContextMiddleware.
-	// When disabled, the middleware still attaches request metadata to the request context.
+	// Any client can set these headers, so they only fill a missing distinct ID or session ID and must
+	// never be used for authentication. When disabled, the middleware still attaches request metadata
+	// to the request context.
 	CaptureTracingHeaders bool
 
 	// CapturePanics controls whether NewRequestContextMiddleware captures downstream panics as
@@ -156,7 +176,8 @@ func defaultRequestContextOptions() RequestContextOptions {
 // NewRequestContextMiddleware wraps an http.Handler with PostHog request-context extraction.
 //
 // The middleware always attaches safe request metadata to r.Context(). By default it also reads
-// X-PostHog-Distinct-Id and X-PostHog-Session-Id into request-scoped analytics context. Use
+// X-PostHog-Distinct-Id and X-PostHog-Session-Id into request-scoped analytics context;
+// WithCaptureTracingHeaders(false) turns that off. Use
 // EnqueueWithContext(r.Context(), ...) for captures inside the request so this metadata is applied.
 func NewRequestContextMiddleware(next http.Handler, opts ...RequestContextOption) http.Handler {
 	options := defaultRequestContextOptions()
@@ -231,19 +252,58 @@ func ExtractRequestContext(r *http.Request, captureTracingHeaders bool) RequestC
 	}
 }
 
+// captureContext holds what the request context gives one event. The identity,
+// including the session ID, is resolved first because the event and the
+// personless decision depend on it. fillEvent adds the other properties and the
+// options after SDK enrichment and before BeforeSend.
 type captureContext struct {
 	distinctID                    string
+	sessionID                     interface{}
+	hasSessionID                  bool
 	properties                    Properties
+	options                       Options
 	generatedPersonlessDistinctID bool
 }
 
-func resolveCaptureContext(ctx context.Context, distinctID string, properties Properties, fieldType string) (captureContext, error) {
-	requestContext, hasRequestContext := RequestContextFromContext(ctx)
-	resolvedDistinctID := distinctID
-	isPersonless := false
-	if resolvedDistinctID == "" && hasRequestContext {
-		resolvedDistinctID = requestContext.DistinctId
+// blankAsMissing returns "" for an empty or whitespace-only id, which PostHog
+// would drop as missing, and the id unchanged otherwise.
+func blankAsMissing(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return ""
 	}
+	return id
+}
+
+// groupIdentifyDistinctID picks the $groupidentify distinct ID: the caller's,
+// then the request context's, then "$<type>_<key>". PostHog creates a person
+// for each new distinct ID, so it is never random.
+func groupIdentifyDistinctID(ctx context.Context, msg GroupIdentify) string {
+	if id := blankAsMissing(msg.DistinctId); id != "" {
+		return id
+	}
+	if requestContext, ok := RequestContextFromContext(ctx); ok {
+		if id := blankAsMissing(requestContext.DistinctId); id != "" {
+			return id
+		}
+	}
+	return groupDistinctID(msg.Type, msg.Key)
+}
+
+// eventDistinctID returns the event's distinct ID, else the request context's,
+// else "". A zero RequestContext stands for a missing one.
+func eventDistinctID(distinctID string, requestContext RequestContext) string {
+	if id := blankAsMissing(distinctID); id != "" {
+		return id
+	}
+	return blankAsMissing(requestContext.DistinctId)
+}
+
+// resolveCaptureContext resolves the event's distinct ID from the event or the
+// request context, and generates a personless one when neither has it.
+func resolveCaptureContext(ctx context.Context, distinctID string, fieldType string) (captureContext, error) {
+	requestContext, hasRequestContext := RequestContextFromContext(ctx)
+	resolvedDistinctID := eventDistinctID(distinctID, requestContext)
+	isPersonless := false
 	if resolvedDistinctID == "" {
 		if !hasRequestContext {
 			return captureContext{}, FieldError{
@@ -256,42 +316,92 @@ func resolveCaptureContext(ctx context.Context, distinctID string, properties Pr
 		isPersonless = true
 	}
 
-	resolved := captureContext{
-		distinctID:                    resolvedDistinctID,
-		properties:                    mergeContextProperties(requestContext, properties),
-		generatedPersonlessDistinctID: isPersonless,
-	}
-	if isPersonless {
-		if resolved.properties == nil {
-			resolved.properties = NewProperties()
-		}
-		if _, exists := resolved.properties[propertyProcessPersonProfile]; !exists {
-			resolved.properties[propertyProcessPersonProfile] = false
-		}
+	properties := contextProperties(requestContext)
+	sessionID, hasSessionID := properties[propertySessionID]
+	if hasSessionID {
+		properties = NewProperties().Merge(properties)
+		delete(properties, propertySessionID)
 	}
 
-	return resolved, nil
+	return captureContext{
+		distinctID:                    resolvedDistinctID,
+		sessionID:                     sessionID,
+		hasSessionID:                  hasSessionID,
+		properties:                    properties,
+		options:                       requestContext.Options,
+		generatedPersonlessDistinctID: isPersonless,
+	}, nil
 }
 
-func mergeContextProperties(requestContext RequestContext, explicit Properties) Properties {
-	var merged Properties
-	if len(requestContext.Properties) > 0 {
-		merged = cloneRequestProperties(requestContext.Properties)
+// requestContextLayers returns the request context's properties and options for
+// a message that keeps its own identity: Identify, Alias and GroupIdentify. The
+// session ID is left out when withSession is false, because a session's person
+// follows the distinct ID of the session's events and a group's distinct ID is
+// not that person.
+func requestContextLayers(ctx context.Context, withSession bool) (Properties, Options) {
+	requestContext, ok := RequestContextFromContext(ctx)
+	if !ok {
+		return nil, nil
 	}
+	properties := contextProperties(requestContext)
+	if !withSession {
+		delete(properties, propertySessionID)
+	}
+	return properties, requestContext.Options
+}
+
+// withSessionID returns properties with the request context's session ID when
+// the event has none. A nil session ID is kept, so it still blocks a default.
+// It copies properties instead of writing the caller's map.
+func (cc captureContext) withSessionID(properties Properties) Properties {
+	if !cc.hasSessionID {
+		return properties
+	}
+	if _, exists := properties[propertySessionID]; exists {
+		return properties
+	}
+	return NewProperties().Merge(properties).Set(propertySessionID, cc.sessionID)
+}
+
+// fillEvent fills only the keys that the event left unset. The request context
+// fills first, then the client defaults, then the personless option.
+func (cc captureContext) fillEvent(properties Properties, options Options, defaultProperties Properties, defaultOptions Options) (Properties, Options) {
+	var personless Options
+	if cc.generatedPersonlessDistinctID {
+		// A generated distinct ID would otherwise create a new person for every event.
+		personless = Options{optionProcessPersonProfile: false}
+	}
+	return fillProperties(properties, cc.properties, defaultProperties),
+		fillOptions(options, cc.options, defaultOptions, personless)
+}
+
+// layerOptions merges option maps into a new map, later layers overriding
+// earlier ones. A nil value means unset, so it never replaces an earlier value.
+// It returns nil when no layer sets an option.
+func layerOptions(layers ...Options) Options {
+	var merged Options
+	for _, layer := range layers {
+		for key, value := range layer {
+			if current, set := merged[key]; set && !isNilValue(current) && isNilValue(value) {
+				continue
+			}
+			if merged == nil {
+				merged = NewOptions()
+			}
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+func contextProperties(requestContext RequestContext) Properties {
+	merged := cloneRequestProperties(requestContext.Properties)
 	if requestContext.SessionId != "" {
 		if merged == nil {
 			merged = NewProperties()
 		}
 		if _, exists := merged[propertySessionID]; !exists {
 			merged[propertySessionID] = requestContext.SessionId
-		}
-	}
-	if len(explicit) > 0 {
-		if merged == nil {
-			merged = NewProperties()
-		}
-		for key, value := range explicit {
-			merged[key] = value
 		}
 	}
 	return merged
@@ -401,8 +511,33 @@ func remoteIP(r *http.Request) string {
 
 // EnqueueWithContext queues a message and applies any PostHog request context attached to ctx.
 // Use this from HTTP handlers with r.Context() when NewRequestContextMiddleware is installed.
+//
+// A Capture or Exception with no distinct ID, on the message or in the request context, is
+// sent as a personless event by default when ctx has a request context attached and client
+// is a client from New or NewWithConfig. The SDK generates a UUID as the distinct ID and
+// fills an unset process_person_profile option with false. Event options, request-context
+// options and Config.DefaultEventOptions take precedence over this default, and BeforeSend
+// can change it.
+// Without a request context, an empty DistinctId returns an error, as it does from Enqueue.
+// A custom EnqueueClient without EnqueueWithContext receives the message unchanged.
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error {
 	return enqueueWithContext(ctx, client, msg)
+}
+
+// EnqueueAIWithContext queues a message for the dedicated AI capture endpoint and applies any
+// PostHog request context attached to ctx. It is EnqueueWithContext for the AI lane, and takes
+// the full Client because only a real client has an AI lane -- an AI event must never silently
+// fall back to the analytics endpoint.
+func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error {
+	if client == nil {
+		return fmt.Errorf("posthog: nil enqueue client")
+	}
+	if contextClient, ok := client.(interface {
+		EnqueueAIWithContext(context.Context, Message) error
+	}); ok {
+		return contextClient.EnqueueAIWithContext(ctx, msg)
+	}
+	return client.EnqueueAI(msg)
 }
 
 // EvaluateFlagsWithContext evaluates feature flags and uses the request-scoped distinct ID attached
@@ -410,7 +545,7 @@ func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) 
 // evaluation requires a stable distinct ID and returns ErrNoDistinctID if neither payload nor ctx has one.
 func EvaluateFlagsWithContext(ctx context.Context, client Client, payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
 	if client == nil {
-		return noopFeatureFlagEvaluations, fmt.Errorf("posthog: nil client")
+		return emptyFeatureFlagEvaluations, fmt.Errorf("posthog: nil client")
 	}
 	if contextClient, ok := client.(interface {
 		EvaluateFlagsWithContext(context.Context, EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)

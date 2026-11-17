@@ -12,7 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/posthog/posthog-go/posthogmcp"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 // Instrument returns a server option that adds PostHog tool-call analytics to
@@ -345,6 +345,14 @@ func (in *instrumentation) captureToolCall(
 			call.Properties = properties
 		}
 	}
+	if in.eventOptions != nil {
+		options, err := callEventOptionsResolver(ctx, in.eventOptions, req, result, handlerErr)
+		if err != nil {
+			in.report(ctx, fmt.Errorf("posthogmcpgo: event options resolver: %w", err))
+		} else {
+			call.EventOptions = options
+		}
+	}
 
 	return capture(ctx, func(ctx context.Context) error { return in.analytics.CaptureToolCall(ctx, call) })
 }
@@ -411,6 +419,17 @@ func callPropertiesResolver(
 func capture(ctx context.Context, send func(context.Context) error) (err error) {
 	defer recoverInstrumentationPanic("capture", &err)
 	return send(ctx)
+}
+
+func callEventOptionsResolver(
+	ctx context.Context,
+	resolver EventOptionsResolver,
+	req mcp.CallToolRequest,
+	result *mcp.CallToolResult,
+	handlerErr error,
+) (options map[string]any, err error) {
+	defer recoverInstrumentationPanic("event options resolver", &err)
+	return resolver(ctx, req, result, handlerErr)
 }
 
 func recoverInstrumentationPanic(stage string, err *error) {

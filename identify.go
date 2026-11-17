@@ -24,11 +24,21 @@ type Identify struct {
 	Timestamp time.Time
 	// Properties are sent as the $set person properties for DistinctId.
 	Properties Properties
-	// DisableGeoIP controls whether this identify event disables GeoIP lookup.
-	// Enqueue overwrites it from Config.GetDisableGeoIP.
+	// EventProperties are properties of the $identify event itself, not of the
+	// person. Enqueue fills the keys they leave unset from the request context,
+	// then from Config.DefaultEventProperties, before BeforeSend. A $set in them is merged
+	// under Properties, which win key by key.
+	EventProperties Properties
+	// Options are per-event capture options, sent unchanged, except that
+	// process_person_profile defaults to true. See Options.
+	Options Options
+	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
+	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
+	// after BeforeSend. To change $geoip_disable, set the property.
 	DisableGeoIP bool
-	// IsServer controls whether the event includes the $is_server property.
-	// Enqueue overwrites it from Config.GetIsServer.
+	// IsServer reports whether the event sets $is_server. Enqueue sets it from
+	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
+	// To change $is_server, set the property.
 	IsServer bool
 }
 
@@ -50,9 +60,9 @@ type IdentifyInApi struct {
 	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library string `json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
@@ -69,10 +79,7 @@ type IdentifyInApi struct {
 
 // APIfy converts an Identify message into the PostHog batch API representation.
 func (msg Identify) APIfy() APIMessage {
-	myProperties := Properties{}.
-		Set("$lib", SDKName).
-		Set("$lib_version", getVersion()).
-		Merge(getSystemContext().ToProperties())
+	myProperties := Properties{}
 
 	if msg.IsServer {
 		myProperties.Set("$is_server", true)
@@ -82,12 +89,16 @@ func (msg Identify) APIfy() APIMessage {
 		myProperties.Set(propertyGeoipDisable, true)
 	}
 
+	myProperties.
+		mergeDefaults(msg.EventProperties)
+	library, libraryVersion := fillSDKLib(myProperties)
+
 	apified := IdentifyInApi{
 		Type:           msg.Type,
 		Uuid:           msg.Uuid,
 		Event:          "$identify",
-		Library:        SDKName,
-		LibraryVersion: getVersion(),
+		Library:        library,
+		LibraryVersion: libraryVersion,
 		Timestamp:      msg.Timestamp.UTC(),
 		DistinctId:     msg.DistinctId,
 

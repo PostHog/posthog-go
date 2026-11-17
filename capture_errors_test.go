@@ -10,18 +10,18 @@ import (
 	"testing"
 )
 
-func TestV1DropYieldsCaptureEventError(t *testing.T) {
+func TestDropYieldsCaptureEventError(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
-		details := "billing_limit_exceeded"
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		details := "llm_events_over_quota"
 		m := map[string]eventResult{uuids[0]: {Result: resultDrop, Details: &details}}
 		return http.StatusOK, resultsBody(t, m), ""
 	}}
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -30,14 +30,14 @@ func TestV1DropYieldsCaptureEventError(t *testing.T) {
 	if !errors.As(cb.failures[0].err, &ee) {
 		t.Fatalf("failure err = %T (%v), want *CaptureEventError", cb.failures[0].err, cb.failures[0].err)
 	}
-	if ee.EventUUID != uuidA || ee.Result != resultDrop || ee.Details != "billing_limit_exceeded" || ee.Exhausted {
+	if ee.EventUUID != uuidA || ee.Result != resultDrop || ee.Details != "llm_events_over_quota" || ee.Exhausted {
 		t.Errorf("CaptureEventError = %+v", ee)
 	}
 }
 
-func TestV1ExhaustedRetryYieldsExhaustedEventError(t *testing.T) {
+func TestExhaustedRetryYieldsExhaustedEventError(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{uuids[0]: {Result: resultRetry}}
 		return http.StatusOK, resultsBody(t, m), ""
 	}}
@@ -45,8 +45,8 @@ func TestV1ExhaustedRetryYieldsExhaustedEventError(t *testing.T) {
 	defer ts.Close()
 
 	// maxRetries=0 => a single attempt, so the retry directive is never satisfied.
-	c := newV1TestClient(t, ts.URL, cb, 0, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 0, nil)
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -60,16 +60,16 @@ func TestV1ExhaustedRetryYieldsExhaustedEventError(t *testing.T) {
 	}
 }
 
-func TestV1TerminalStatusYieldsRequestError(t *testing.T) {
+func TestTerminalStatusYieldsRequestError(t *testing.T) {
 	cb := &recordingCallback{}
-	srv := &v1TestServer{respond: func(_ int, _ []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, _ []string) (int, string, string) {
 		return http.StatusBadRequest, `{"error":"invalid_payload","error_description":"bad batch"}`, ""
 	}}
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, nil)
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -83,11 +83,11 @@ func TestV1TerminalStatusYieldsRequestError(t *testing.T) {
 	}
 }
 
-func TestV1TransportErrorUnwraps(t *testing.T) {
+func TestTransportErrorUnwraps(t *testing.T) {
 	cb := &recordingCallback{}
 	// Port 1 is unroutable; the POST fails at the transport layer.
-	c := newV1TestClient(t, "http://127.0.0.1:1", cb, 0, nil)
-	c.sendV1(v1Batch(t, cap1(uuidA)))
+	c := newCaptureTestClient(t, "http://127.0.0.1:1", cb, 0, nil)
+	c.send(c.analytics, captureBatch(t, cap1(uuidA)))
 
 	if s, f := cb.counts(); s != 0 || f != 1 {
 		t.Fatalf("callbacks success=%d failure=%d, want 0/1", s, f)
@@ -104,10 +104,11 @@ func TestV1TransportErrorUnwraps(t *testing.T) {
 	}
 }
 
-// capturingLogger records Debugf format strings for assertions.
+// capturingLogger records Debugf and Warnf messages for assertions.
 type capturingLogger struct {
 	mu     sync.Mutex
 	debugf []string
+	warnf  []string
 }
 
 func (l *capturingLogger) Debugf(f string, a ...interface{}) {
@@ -115,9 +116,19 @@ func (l *capturingLogger) Debugf(f string, a ...interface{}) {
 	l.debugf = append(l.debugf, fmt.Sprintf(f, a...))
 	l.mu.Unlock()
 }
-func (l *capturingLogger) Logf(string, ...interface{})   {}
-func (l *capturingLogger) Warnf(string, ...interface{})  {}
+func (l *capturingLogger) Logf(string, ...interface{}) {}
+func (l *capturingLogger) Warnf(f string, a ...interface{}) {
+	l.mu.Lock()
+	l.warnf = append(l.warnf, fmt.Sprintf(f, a...))
+	l.mu.Unlock()
+}
 func (l *capturingLogger) Errorf(string, ...interface{}) {}
+
+func (l *capturingLogger) warnings() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.warnf...)
+}
 
 func (l *capturingLogger) debugContains(sub string) bool {
 	l.mu.Lock()
@@ -130,10 +141,10 @@ func (l *capturingLogger) debugContains(sub string) bool {
 	return false
 }
 
-func TestV1ResultSummaryLogged(t *testing.T) {
+func TestResultSummaryLogged(t *testing.T) {
 	cb := &recordingCallback{}
 	log := &capturingLogger{}
-	srv := &v1TestServer{respond: func(_ int, uuids []string) (int, string, string) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
 		m := map[string]eventResult{}
 		for _, u := range uuids {
 			m[u] = eventResult{Result: resultOk}
@@ -143,10 +154,10 @@ func TestV1ResultSummaryLogged(t *testing.T) {
 	ts := httptest.NewServer(srv.handler(t))
 	defer ts.Close()
 
-	c := newV1TestClient(t, ts.URL, cb, 9, func(cfg *Config) { cfg.Logger = log })
-	c.sendV1(v1Batch(t, cap1(uuidA), cap1(uuidB)))
+	c := newCaptureTestClient(t, ts.URL, cb, 9, func(cfg *Config) { cfg.Logger = log })
+	c.send(c.analytics, captureBatch(t, cap1(uuidA), cap1(uuidB)))
 
-	if !log.debugContains("capture v1 response request_id=") {
+	if !log.debugContains("capture response request_id=") {
 		t.Errorf("expected a per-response debug summary, got debugf=%v", log.debugf)
 	}
 }

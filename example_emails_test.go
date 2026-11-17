@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/v2"
 )
 
 // A template made transactional in PostHog, sent by its ID. The secret key is

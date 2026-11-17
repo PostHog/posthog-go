@@ -39,55 +39,24 @@ func marshalEventJSON(value interface{}) ([]byte, error) {
 	return data, err
 }
 
+// marshalEventPayload encodes ev with every NaN and Inf property sent as null,
+// as main does. go-json reports a non-finite float64 but writes a float32 one
+// as a bare NaN token, so properties are normalized before every encode and
+// the result is checked as JSON: one bad value must not make the request body
+// invalid JSON, which capture refuses for the whole batch.
+func marshalEventPayload(ev eventPayload) ([]byte, error) {
+	properties, err := normalizeEventProperties(ev.Properties)
+	if err != nil {
+		return nil, err
+	}
+	ev.Properties = properties
+	return marshalEventJSON(ev)
+}
+
 type jsonPropertyVisit struct {
 	typ     reflect.Type
 	pointer uintptr
 	length  int
-}
-
-// normalizeLegacyMessage nulls NaN and Inf in the property bags the legacy
-// batch encoder sends. Capture already did this. Identify, group identify,
-// and exception custom properties go through the same rules so one bad
-// number does not drop the rest of the event.
-func normalizeLegacyMessage(apiMsg APIMessage) (APIMessage, error) {
-	switch msg := apiMsg.(type) {
-	case CaptureInApi:
-		properties, err := normalizeEventProperties(msg.Properties)
-		if err != nil {
-			return nil, err
-		}
-		msg.Properties = properties
-		return msg, nil
-	case IdentifyInApi:
-		set, err := normalizeEventProperties(msg.Set)
-		if err != nil {
-			return nil, err
-		}
-		msg.Set = set
-		return msg, nil
-	case GroupIdentifyInApi:
-		properties, err := normalizeEventProperties(msg.Properties)
-		if err != nil {
-			return nil, err
-		}
-		msg.Properties = properties
-		return msg, nil
-	case ExceptionInApi:
-		// Typed exception fields win on collision and are never sent from Custom.
-		// Normalize only the keys MarshalJSON will keep. A failing or cyclic value
-		// under a shadowed key, such as $lib, must not drop the exception.
-		// Exception custom values are encoded with encoding/json, which honors
-		// omitzero. Pre-encoding them with go-json would send zero fields the
-		// standard encoder omits.
-		custom, err := normalizeEventPropertiesMode(exceptionCustomWithoutShadowedKeys(msg.Properties), true)
-		if err != nil {
-			return nil, err
-		}
-		msg.Properties.Custom = custom
-		return msg, nil
-	default:
-		return apiMsg, nil
-	}
 }
 
 func normalizeEventProperties(properties Properties) (Properties, error) {
@@ -110,6 +79,15 @@ func normalizeEventPropertiesMode(properties Properties, standardJSON bool) (Pro
 	return normalized, nil
 }
 
+// hasCustomEncoding reports whether value encodes itself to JSON or text.
+func hasCustomEncoding(value interface{}) bool {
+	switch value.(type) {
+	case json.Marshaler, json.MarshalerContext, encoding.TextMarshaler:
+		return true
+	}
+	return false
+}
+
 func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool, standardJSON bool) (interface{}, error) {
 	if !v.IsValid() {
 		return nil, nil
@@ -121,8 +99,7 @@ func normalizeEventProperty(v reflect.Value, seen map[jsonPropertyVisit]bool, st
 	if v.CanAddr() {
 		value = v.Addr().Interface()
 	}
-	switch value.(type) {
-	case json.Marshaler, json.MarshalerContext, encoding.TextMarshaler:
+	if hasCustomEncoding(value) {
 		return marshalOpaqueEventProperty(value, true, standardJSON)
 	}
 	switch v.Kind() {
@@ -221,32 +198,4 @@ func marshalOpaqueEventProperty(value interface{}, custom bool, standardJSON boo
 		return stdjson.RawMessage(data), nil
 	}
 	return json.RawMessage(data), nil
-}
-
-// exceptionCustomWithoutShadowedKeys drops custom keys that ExceptionInApiProperties
-// already emits. MarshalJSON skips those keys, so they must be ignored before
-// normalization too.
-func exceptionCustomWithoutShadowedKeys(properties ExceptionInApiProperties) Properties {
-	custom := properties.Custom
-	if len(custom) == 0 {
-		return custom
-	}
-	typed := properties
-	typed.Custom = nil
-	typedBytes, err := json.Marshal(typed)
-	if err != nil {
-		return custom
-	}
-	var reserved map[string]json.RawMessage
-	if err := json.Unmarshal(typedBytes, &reserved); err != nil {
-		return custom
-	}
-	filtered := make(Properties, len(custom))
-	for key, value := range custom {
-		if _, shadowed := reserved[key]; shadowed {
-			continue
-		}
-		filtered[key] = value
-	}
-	return filtered
 }

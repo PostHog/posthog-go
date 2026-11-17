@@ -1,10 +1,13 @@
 package posthog
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -89,7 +92,7 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 				capture.Properties["panic_leaked"] = true
 				panic("boom")
 			},
-			expectLog: "panic in BeforeSend hook for posthog.Capture: boom; dropping message",
+			expectLog: `panic in BeforeSend hook for event "test-event" (string); dropping message`,
 		},
 		{
 			name: "invalid return drops message",
@@ -196,99 +199,297 @@ func TestBeforeSendCaptureHook(t *testing.T) {
 	}
 }
 
-func TestBeforeSendCaptureReceivesDefaultProperties(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		mode CaptureMode
+func TestBeforeSendPanicLogNamesEventNotPanicValue(t *testing.T) {
+	const secret = "user@example.com"
+	exceptionList := []ExceptionItem{{Type: "t", Value: "v"}}
+	tests := []struct {
+		msg       Message
+		wantEvent string
 	}{
-		{name: "legacy", mode: CaptureModeLegacy},
-		{name: "analytics-v1", mode: CaptureModeAnalyticsV1},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			body := make(chan []byte, 1)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				payload, err := io.ReadAll(r.Body)
-				require.NoError(t, err)
-				body <- payload
+		{msg: Capture{DistinctId: "d", Event: "signed_up"}, wantEvent: "signed_up"},
+		{msg: Exception{DistinctId: "d", ExceptionList: exceptionList}, wantEvent: "$exception"},
+		{msg: Identify{DistinctId: "d"}, wantEvent: "$identify"},
+		{msg: Alias{DistinctId: "d", Alias: "a"}, wantEvent: "$create_alias"},
+		{msg: GroupIdentify{Type: "company", Key: "k"}, wantEvent: "$groupidentify"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
 				w.WriteHeader(http.StatusOK)
-				if tt.mode == CaptureModeAnalyticsV1 {
-					_, _ = w.Write([]byte(`{"results":{}}`))
-				}
 			}))
 			defer server.Close()
 
+			var (
+				errorLogs, otherLogs []string
+				loggedMu             sync.Mutex
+			)
 			client, err := NewWithConfig("test-api-key", Config{
-				Endpoint:    server.URL,
-				BatchSize:   1,
-				now:         mockTime,
-				CaptureMode: tt.mode,
-				BeforeSend: func(msg Message) Message {
-					capture := msg.(Capture)
-					capture.Properties["hook_saw_is_server"] = capture.Properties[propertyIsServer]
-					capture.Properties["hook_saw_geoip_disable"] = capture.Properties[propertyGeoipDisable]
-					return capture
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				BeforeSend: func(Message) Message {
+					panic(errors.New(secret))
+				},
+				Logger: testLogger{
+					errorf: func(format string, args ...interface{}) {
+						loggedMu.Lock()
+						errorLogs = append(errorLogs, formatMessage(format, args...))
+						loggedMu.Unlock()
+					},
+					logf: func(format string, args ...interface{}) {
+						loggedMu.Lock()
+						otherLogs = append(otherLogs, formatMessage(format, args...))
+						loggedMu.Unlock()
+					},
 				},
 			})
 			require.NoError(t, err)
 
-			require.NoError(t, client.Enqueue(Capture{
-				DistinctId: "user-123",
-				Event:      "test-event",
-			}))
+			require.NoError(t, client.Enqueue(tt.msg))
 			require.NoError(t, client.Close())
 
-			properties := firstProperties(t, readBatch(t, body))
-			require.Equal(t, true, properties["hook_saw_is_server"])
-			require.Equal(t, true, properties["hook_saw_geoip_disable"])
-			require.Equal(t, true, properties[propertyIsServer])
-			require.Equal(t, true, properties[propertyGeoipDisable])
+			loggedMu.Lock()
+			defer loggedMu.Unlock()
+			want := fmt.Sprintf("panic in BeforeSend hook for event %q (*errors.errorString); dropping message", tt.wantEvent)
+			require.Equal(t, []string{want}, errorLogs)
+			for _, line := range otherLogs {
+				require.NotContains(t, line, secret)
+			}
+			require.Zero(t, requests.Load())
 		})
 	}
 }
 
-func TestBeforeSendCaptureCanRemoveDefaultIsServerProperty(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		mode CaptureMode
+func sortedKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestBeforeSendSeesContextAndDefaultsAndHasFinalSay has the hook write the
+// keys it saw into options, which are sent unchanged, so the wire event shows
+// what the hook saw and that a key it sets wins over the filled-in values.
+func TestBeforeSendSeesContextAndDefaultsAndHasFinalSay(t *testing.T) {
+	exceptionList := []ExceptionItem{{Type: "t", Value: "v"}}
+	tests := []struct {
+		msg                Message
+		wantSeenProperties []interface{}
+		wantSession        bool
+		// wantPersonProfile is the process_person_profile the hook sees, nil for none.
+		wantPersonProfile interface{}
 	}{
-		{name: "legacy", mode: CaptureModeLegacy},
-		{name: "analytics-v1", mode: CaptureModeAnalyticsV1},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			body := make(chan []byte, 1)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				payload, err := io.ReadAll(r.Body)
-				require.NoError(t, err)
-				body <- payload
-				w.WriteHeader(http.StatusOK)
-				if tt.mode == CaptureModeAnalyticsV1 {
-					_, _ = w.Write([]byte(`{"results":{}}`))
-				}
-			}))
+		{msg: Capture{Event: "e"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: false},
+		{msg: Exception{ExceptionList: exceptionList}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: false},
+		{msg: Identify{DistinctId: "user-1"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: true},
+		{msg: Alias{DistinctId: "user-1", Alias: "a"}, wantSeenProperties: []interface{}{propertySessionID, "app", "context_only", "service"}, wantSession: true, wantPersonProfile: true},
+		{msg: GroupIdentify{Type: "company", Key: "k"}, wantSeenProperties: []interface{}{"app", "context_only", "service"}, wantPersonProfile: true},
+	}
+	withSDKValues := func(keys []interface{}) []interface{} {
+		all := NewProperties().Merge(getSystemContext().ToProperties()).
+			Merge(sdkIdentityProperties()).
+			Set(propertyGeoipDisable, true).
+			Set(propertyIsServer, true)
+		for _, key := range keys {
+			all.Set(key.(string), true)
+		}
+		var sorted []interface{}
+		for _, key := range sortedKeys(all) {
+			sorted = append(sorted, key)
+		}
+		return sorted
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
 			defer server.Close()
 
 			client, err := NewWithConfig("test-api-key", Config{
-				Endpoint:    server.URL,
-				BatchSize:   1,
-				now:         mockTime,
-				CaptureMode: tt.mode,
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set("service", "default").Set("app", "default").Set("$go_version", "default"),
+				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
+				BeforeSend: func(msg Message) Message {
+					options := messageOptions(msg)
+					record := func(properties Properties) Properties {
+						options.Set("seen_options", sortedKeys(options)).
+							Set("seen_properties", sortedKeys(properties)).
+							Set("seen_service", properties["service"]).
+							Set("cookieless_mode", false)
+						properties = NewProperties().Merge(properties).Set("service", "hook")
+						delete(properties, "app")
+						delete(properties, "$os")
+						delete(properties, propertyIsServer)
+						return properties
+					}
+					switch m := msg.(type) {
+					case Capture:
+						m.Properties = record(m.Properties)
+						return m
+					case Exception:
+						m.Properties = record(m.Properties)
+						return m
+					case Identify:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					case Alias:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					case GroupIdentify:
+						m.EventProperties = record(m.EventProperties)
+						return m
+					}
+					return msg
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{
+				SessionId:  "session-1",
+				Properties: NewProperties().Set("service", "context").Set("context_only", "context"),
+				Options:    NewOptions().Set("product_tour_id", "context-tour"),
+			})
+			require.NoError(t, EnqueueWithContext(ctx, client, tt.msg))
+
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
+			wantOptions := map[string]interface{}{
+				"seen_options":            []interface{}{"cookieless_mode", "disable_skew_correction", "product_tour_id"},
+				"seen_properties":         withSDKValues(tt.wantSeenProperties),
+				"seen_service":            "context",
+				"cookieless_mode":         false,
+				"disable_skew_correction": true,
+				"product_tour_id":         "context-tour",
+			}
+			if tt.wantPersonProfile != nil {
+				wantOptions["seen_options"] = []interface{}{"cookieless_mode", "disable_skew_correction", "process_person_profile", "product_tour_id"}
+				wantOptions["process_person_profile"] = tt.wantPersonProfile
+			}
+			require.Equal(t, "context", properties["context_only"])
+			if tt.wantSession {
+				require.Equal(t, "session-1", event["session_id"])
+			} else {
+				require.NotContains(t, event, "session_id")
+			}
+			require.Equal(t, wantOptions, requireOptions(t, event))
+			require.Equal(t, "hook", properties["service"])
+			require.NotContains(t, properties, "app")
+			require.Equal(t, "default", properties["$go_version"])
+			require.Equal(t, true, properties[propertyGeoipDisable])
+			require.NotContains(t, properties, "$os")
+			require.NotContains(t, properties, propertyIsServer)
+		})
+	}
+}
+
+// redactingSet encodes only "plan", like a caller's type that hides a secret.
+type redactingSet map[string]interface{}
+
+func (r redactingSet) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{"plan": r["plan"]})
+}
+
+func TestNestedDefaultsFillOneLevelDeep(t *testing.T) {
+	tests := []struct {
+		msg  Message
+		want map[string]interface{}
+	}{
+		{
+			msg: Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set("$set", map[string]interface{}{"plan": "pro"}), Groups: NewGroups().Set("company", "posthog")},
+			want: map[string]interface{}{
+				"$set":    map[string]interface{}{"plan": "pro", "source": "default"},
+				"$groups": map[string]interface{}{"company": "posthog", "team": "core"},
+			},
+		},
+		{
+			msg: Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set("$set", map[string]string{"plan": "pro"}).Set("$groups", map[string]string{"region": "eu"}), Groups: NewGroups().Set("company", "posthog")},
+			want: map[string]interface{}{
+				"$set":    map[string]interface{}{"plan": "pro", "source": "default"},
+				"$groups": map[string]interface{}{"company": "posthog", "region": "eu", "team": "core"},
+			},
+		},
+		{
+			// A value with its own encoding is never merged, so the event's value wins whole.
+			msg:  Capture{DistinctId: "user-1", Event: "e", Properties: NewProperties().Set("$set", redactingSet{"plan": "pro", "password": "secret"})},
+			want: map[string]interface{}{"$set": map[string]interface{}{"plan": "pro"}},
+		},
+		{
+			msg:  Identify{DistinctId: "user-1", Properties: NewProperties().Set("plan", "pro")},
+			want: map[string]interface{}{"$set": map[string]interface{}{"plan": "pro", "source": "default"}},
+		},
+		{
+			msg:  GroupIdentify{Type: "company", Key: "k", Properties: NewProperties().Set("tier", "paid")},
+			want: map[string]interface{}{"$group_set": map[string]interface{}{"tier": "paid", "source": "default"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				now:       mockTime,
+				DefaultEventProperties: NewProperties().
+					Set("$set", map[string]interface{}{"plan": "free", "source": "default"}).
+					Set("$groups", map[string]interface{}{"company": "acme", "team": "core"}).
+					Set("$group_set", map[string]interface{}{"tier": "free", "source": "default"}),
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(tt.msg))
+
+			properties := requireProperties(t, readSingleBatchEvent(t, body))
+			for key, want := range tt.want {
+				require.Equal(t, want, properties[key], key)
+			}
+		})
+	}
+}
+
+func TestBeforeSendCanRemoveEnrichmentProperties(t *testing.T) {
+	for _, removed := range []string{propertyIsServer, propertyGeoipDisable, propertySessionID} {
+		t.Run(removed, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				now:       mockTime,
 				BeforeSend: func(msg Message) Message {
 					capture := msg.(Capture)
-					delete(capture.Properties, propertyIsServer)
+					delete(capture.Properties, removed)
 					return capture
 				},
 			})
 			require.NoError(t, err)
+			defer client.Close()
 
-			require.NoError(t, client.Enqueue(Capture{
+			ctx := WithFreshRequestContext(context.Background(), RequestContext{SessionId: "session-1"})
+			require.NoError(t, EnqueueWithContext(ctx, client, Capture{
 				DistinctId: "user-123",
 				Event:      "test-event",
 			}))
-			require.NoError(t, client.Close())
 
-			properties := firstProperties(t, readBatch(t, body))
-			require.NotContains(t, properties, propertyIsServer)
-			require.Equal(t, true, properties[propertyGeoipDisable])
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
+			require.NotContains(t, properties, removed)
+			if removed == propertySessionID {
+				require.NotContains(t, event, "session_id")
+			}
+			for _, kept := range []string{propertyIsServer, propertyGeoipDisable} {
+				if kept != removed {
+					require.Equal(t, true, properties[kept])
+				}
+			}
 		})
 	}
 }
@@ -327,8 +528,11 @@ func TestBeforeSendDoesNotMutateOriginalProperties(t *testing.T) {
 		Properties: originalProperties,
 	}))
 
+	// Person properties travel in properties.$set on the wire.
 	message := firstMessage(t, readBatch(t, body))
-	set, ok := message["$set"].(map[string]interface{})
+	properties, ok := message["properties"].(map[string]interface{})
+	require.True(t, ok)
+	set, ok := properties["$set"].(map[string]interface{})
 	require.True(t, ok)
 	require.Equal(t, true, set["hook_ran"])
 	require.Nil(t, originalProperties["hook_ran"])
@@ -341,19 +545,13 @@ func TestBeforeSendDoesNotMutateOriginalGroups(t *testing.T) {
 	body, server := mockServer()
 	defer server.Close()
 
-	originalGroups := Groups{
-		"company": "posthog",
-		"nested": map[string]interface{}{
-			"name": "original",
-		},
-	}
+	originalGroups := Groups{"company": "posthog"}
 	client, err := NewWithConfig("test-api-key", Config{
 		Endpoint:  server.URL,
 		BatchSize: 1,
 		BeforeSend: func(msg Message) Message {
 			capture := msg.(Capture)
 			capture.Groups["company"] = "hook"
-			capture.Groups["nested"].(map[string]interface{})["name"] = "hook"
 			return capture
 		},
 	})
@@ -371,7 +569,6 @@ func TestBeforeSendDoesNotMutateOriginalGroups(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "hook", groups["company"])
 	require.Equal(t, "posthog", originalGroups["company"])
-	require.Equal(t, "original", originalGroups["nested"].(map[string]interface{})["name"])
 }
 
 func TestBeforeSendDoesNotMutateOriginalExceptionData(t *testing.T) {
@@ -515,4 +712,205 @@ func containsLog(logs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestBeforeSendCanChangeOptions(t *testing.T) {
+	body, server := mockServer()
+	defer server.Close()
+
+	originalOptions := Options{
+		"cookieless_mode": true,
+		"nested":          map[string]interface{}{"name": "original"},
+		"nested_options":  NewOptions().Set("name", "original"),
+	}
+	client, err := NewWithConfig("test-api-key", Config{
+		Endpoint:  server.URL,
+		BatchSize: 1,
+		BeforeSend: func(msg Message) Message {
+			capture := msg.(Capture)
+			delete(capture.Options, "cookieless_mode")
+			capture.Options["nested"].(map[string]interface{})["name"] = "hook"
+			capture.Options["nested_options"].(Options).Set("name", "hook")
+			capture.Options.Set("product_tour_id", "tour-hook")
+			// A legacy property a hook adds still moves into its option.
+			capture.Properties[propertyProcessPersonProfile] = false
+			return capture
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.Enqueue(Capture{
+		DistinctId: "user-123",
+		Event:      "test-event",
+		Options:    originalOptions,
+	}))
+
+	message := firstMessage(t, readBatch(t, body))
+	require.Equal(t, map[string]interface{}{
+		"nested":                 map[string]interface{}{"name": "hook"},
+		"nested_options":         map[string]interface{}{"name": "hook"},
+		"product_tour_id":        "tour-hook",
+		"process_person_profile": false,
+	}, message["options"])
+	require.NotContains(t, message["properties"], propertyProcessPersonProfile)
+	require.Equal(t, Options{
+		"cookieless_mode": true,
+		"nested":          map[string]interface{}{"name": "original"},
+		"nested_options":  NewOptions().Set("name", "original"),
+	}, originalOptions, "the hook must not change the caller's Options")
+}
+
+func messageOptions(msg Message) Options {
+	switch m := msg.(type) {
+	case Capture:
+		return m.Options
+	case Identify:
+		return m.Options
+	case Alias:
+		return m.Options
+	case GroupIdentify:
+		return m.Options
+	case Exception:
+		return m.Options
+	}
+	panic(fmt.Sprintf("unexpected message type %T", msg))
+}
+
+func TestBeforeSendIsolatesOptionsOnEveryMessageType(t *testing.T) {
+	messages := []func(Options) Message{
+		func(o Options) Message { return Capture{DistinctId: "d", Event: "e", Options: o} },
+		func(o Options) Message { return Identify{DistinctId: "d", Options: o} },
+		func(o Options) Message { return Alias{DistinctId: "d", Alias: "a", Options: o} },
+		func(o Options) Message { return GroupIdentify{Type: "company", Key: "k", Options: o} },
+		func(o Options) Message {
+			return Exception{DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}, Options: o}
+		},
+	}
+	for _, build := range messages {
+		original := Options{"cookieless_mode": true}
+		msg := build(original)
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint: "http://127.0.0.1:0",
+				Logger:   quietTestLogger{t},
+				BeforeSend: func(msg Message) Message {
+					messageOptions(msg)["cookieless_mode"] = false
+					return nil
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(msg))
+			require.Equal(t, Options{"cookieless_mode": true}, original)
+		})
+	}
+}
+
+func TestBeforeSendGetsNonNilOptionsOnEveryMessageType(t *testing.T) {
+	hookOnly := map[string]interface{}{"future_option": "hook"}
+	// Identify-style messages also carry the process_person_profile default.
+	withPersonProfile := map[string]interface{}{"future_option": "hook", "process_person_profile": true}
+	tests := []struct {
+		msg         Message
+		wantOptions map[string]interface{}
+	}{
+		{Capture{DistinctId: "d", Event: "e"}, hookOnly},
+		{Identify{DistinctId: "d"}, withPersonProfile},
+		{Alias{DistinctId: "d", Alias: "a"}, withPersonProfile},
+		{GroupIdentify{Type: "company", Key: "k"}, withPersonProfile},
+		{Exception{DistinctId: "d", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}}, hookOnly},
+	}
+	for _, tt := range tests {
+		msg := tt.msg
+		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			client, err := NewWithConfig("test-api-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				Logger:    quietTestLogger{t},
+				BeforeSend: func(msg Message) Message {
+					messageOptions(msg).Set("future_option", "hook")
+					return msg
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(msg))
+			require.Equal(t, tt.wantOptions, firstMessage(t, readBatch(t, body))["options"])
+		})
+	}
+}
+
+// TestPassThroughBeforeSendKeepsTheWireEventUnchanged pins that enabling a hook
+// that returns its message changes nothing on the wire, on both lanes. A cloned
+// nil value must stay null so a nil option still falls back to its legacy
+// property, and a cloned empty slice must stay [] so it does not.
+func TestPassThroughBeforeSendKeepsTheWireEventUnchanged(t *testing.T) {
+	newCapture := func() Capture {
+		return Capture{
+			Uuid:       "8e0b2c4f-6a5d-4f1e-9c3b-2d7a1e5f9b08",
+			DistinctId: "d",
+			Event:      "e",
+			Timestamp:  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			Options: Options{
+				"process_person_profile":  []interface{}(nil),
+				"cookieless_mode":         map[string]interface{}(nil),
+				"future_option":           map[string]string(nil),
+				"disable_skew_correction": []string{},
+			},
+			Properties: Properties{
+				propertyProcessPersonProfile: false,
+				propertyIgnoreSentAt:         true,
+				"typed_nil_map":              map[string]interface{}(nil),
+				"typed_nil_slice":            []interface{}(nil),
+				"typed_nil_strings":          []string(nil),
+				"empty_strings":              []string{},
+				"empty_bools":                []bool{},
+				"empty_ints":                 []int{},
+				"empty_int64s":               []int64{},
+				"empty_float64s":             []float64{},
+				"$set":                       map[string]interface{}{"tags": []string{}},
+			},
+		}
+	}
+	routes := map[string]func(Client, Capture) error{
+		"Enqueue":   func(c Client, m Capture) error { return c.Enqueue(m) },
+		"EnqueueAI": func(c Client, m Capture) error { return c.EnqueueAI(m) },
+	}
+	for name, enqueue := range routes {
+		t.Run(name, func(t *testing.T) {
+			send := func(hook BeforeSendFunc) map[string]interface{} {
+				body, server := mockServer()
+				defer server.Close()
+				client, err := NewWithConfig("test-api-key", Config{Endpoint: server.URL, BatchSize: 1, BeforeSend: hook})
+				require.NoError(t, err)
+				defer client.Close()
+				require.NoError(t, enqueue(client, newCapture()))
+				return firstMessage(t, readBatch(t, body))
+			}
+
+			withoutHook := send(nil)
+			withHook := send(func(msg Message) Message { return msg })
+
+			require.Equal(t, map[string]interface{}{
+				"process_person_profile":  false,
+				"cookieless_mode":         nil,
+				"future_option":           nil,
+				"disable_skew_correction": []interface{}{},
+			}, withHook["options"])
+			properties := withHook["properties"].(map[string]interface{})
+			require.Nil(t, properties["typed_nil_strings"])
+			for _, key := range []string{"empty_strings", "empty_bools", "empty_ints", "empty_int64s", "empty_float64s"} {
+				require.Equal(t, []interface{}{}, properties[key], key)
+			}
+			require.Equal(t, map[string]interface{}{"tags": []interface{}{}}, properties["$set"])
+			require.Equal(t, withoutHook["options"], withHook["options"])
+			require.Equal(t, withoutHook["properties"], withHook["properties"])
+		})
+	}
 }

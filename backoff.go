@@ -12,45 +12,37 @@ type Backoff struct {
 	factor uint8
 	jitter float64
 	cap    time.Duration
+	random func() float64
 }
 
 // NewBackoff creates a Backoff with the provided base duration, exponential
-// factor, jitter ratio, and maximum cap duration.
+// factor, jitter ratio, and maximum cap duration. A jitter ratio j scales each
+// delay by a uniform random factor in [1-j, 1+j] before the cap applies.
 func NewBackoff(base time.Duration, factor uint8, jitter float64, cap time.Duration) *Backoff {
-	return &Backoff{base, factor, jitter, cap}
+	return &Backoff{base: base, factor: factor, jitter: jitter, cap: cap, random: rand.Float64}
 }
 
-// defaultMaxBackoff is the single ceiling for capture retry waits: it caps the
-// default exponential backoff and clamps a server Retry-After to the same value.
-// Keeps the max retry wait bounded and unifies the default with posthog-rs /
-// posthog-python (all 30s).
-const defaultMaxBackoff = 30 * time.Second
+const (
+	// DefaultMaxRetryBackoff is the default ceiling for a single retry wait,
+	// used when Config.MaxRetryBackoff is zero. Matches posthog-rs and
+	// posthog-python.
+	DefaultMaxRetryBackoff = 30 * time.Second
 
-// clampRetryWait is the wait before another capture attempt. A server
-// Retry-After raises the configured backoff when it is longer, but not past
-// defaultMaxBackoff. The configured backoff itself is left alone.
-func clampRetryWait(configured, header time.Duration, hasHeader bool) time.Duration {
-	if !hasHeader {
-		return configured
-	}
-	clamped := header
-	if clamped > defaultMaxBackoff {
-		clamped = defaultMaxBackoff
-	}
-	if clamped > configured {
-		return clamped
-	}
-	return configured
-}
+	defaultBackoffBase   = 100 * time.Millisecond
+	defaultBackoffFactor = 2
+	// defaultBackoffJitter spreads retries from many clients that failed
+	// together, so they don't all return to the server at the same moment.
+	defaultBackoffJitter = 0.25
+)
 
 // DefaultBackoff creates a Backoff with the SDK's default retry policy:
 //
 //	base: 100 milliseconds
 //	factor: 2
-//	jitter: 0
+//	jitter: 0.25 (each delay is scaled by a random factor in [0.75, 1.25])
 //	cap: 30 seconds
 func DefaultBackoff() *Backoff {
-	return NewBackoff(time.Millisecond*100, 2, 0, defaultMaxBackoff)
+	return NewBackoff(defaultBackoffBase, defaultBackoffFactor, defaultBackoffJitter, DefaultMaxRetryBackoff)
 }
 
 // Duration returns the backoff interval for the given attempt.
@@ -58,13 +50,7 @@ func (b *Backoff) Duration(attempt int) time.Duration {
 	duration := float64(b.base) * math.Pow(float64(b.factor), float64(attempt))
 
 	if b.jitter != 0 {
-		random := rand.Float64()
-		deviation := math.Floor(random * b.jitter * duration)
-		if (int(math.Floor(random*10)) & 1) == 0 {
-			duration = duration - deviation
-		} else {
-			duration = duration + deviation
-		}
+		duration *= 1 + b.jitter*(2*b.random()-1)
 	}
 
 	duration = math.Min(float64(duration), float64(b.cap))

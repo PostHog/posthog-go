@@ -2,19 +2,21 @@
 
 `posthogotel` forwards OpenTelemetry AI spans to [PostHog AI observability](https://posthog.com/docs/ai-engineering/observability).
 
-It keeps only spans that follow a known AI semantic convention — a span whose
-name or any attribute key starts with `gen_ai.`, `llm.`, `ai.`, or
-`traceloop.` — and drops every other span. Kept spans go over OTLP/HTTP to the
+It keeps only spans that follow a known AI semantic convention and drops every
+other span. A span follows one when its name or any attribute key starts with
+`gen_ai.`, `llm.`, `ai.`, or `traceloop.`. Kept spans go over OTLP/HTTP to the
 PostHog `/i/v0/ai/otel` endpoint with the project API key as a bearer token.
 
 This is a separate Go module, so the core `posthog-go` SDK does not depend on
-OpenTelemetry.
+OpenTelemetry. The module is `github.com/posthog/posthog-go/otel/v2`. It imports
+the core SDK for the request context, so its version moves in lockstep with
+`posthog-go`, major version included.
 
 ## Usage
 
 `SpanProcessor` is the recommended integration. Register it on the
-`TracerProvider` your application already owns — rather than replacing the
-global provider with a new one — so your resource, sampler, and existing
+`TracerProvider` your application already owns, rather than replacing the
+global provider with a new one, so your resource, sampler, and existing
 exporters are kept and tracers already handed out (such as ADK Go's) route
 through it. Shut down the processor with a fresh context to flush its buffered
 spans without shutting down the application-owned provider.
@@ -27,7 +29,7 @@ than PostHog US cloud. For a framework that accepts only a span exporter, use
 ## Per-request users and properties
 
 ```go
-import "github.com/posthog/posthog-go"
+import "github.com/posthog/posthog-go/v2"
 
 ctx = posthog.WithRequestContext(ctx, posthog.RequestContext{
     DistinctId: user.ID,
@@ -49,8 +51,8 @@ OpenTelemetry span's `$trace_id` and `$span_id`:
 
 ```go
 import (
-    "github.com/posthog/posthog-go"
-    posthogotel "github.com/posthog/posthog-go/otel"
+    "github.com/posthog/posthog-go/v2"
+    posthogotel "github.com/posthog/posthog-go/otel/v2"
 )
 
 err := posthogotel.EnqueueWithContext(ctx, client, posthog.Exception{
@@ -66,8 +68,10 @@ Pass the context from the application operation that failed. The helper reads an
 valid active span, including spans that are not sampled. It does not require the
 AI span processor or export the span. IDs use lowercase hex with leading zeros.
 
-Event properties override request-context properties, and both override derived
-trace IDs. Missing, invalid, or unreadable span context does not prevent exception
+Event properties override request-context properties. If either sets `$trace_id`
+or `$span_id`, the helper adds neither derived ID, so the active span's IDs never
+mix with IDs you set. Event and request-context IDs fill key by key, so an event
+that sets only `$trace_id` still takes `$span_id` from the request context. Missing, invalid, or unreadable span context does not prevent exception
 capture. The helper copies properties, so reusing an exception does not keep IDs
 from a previous span. Other message types use the core enqueue behavior.
 
@@ -104,7 +108,7 @@ See [`example/`](example) for a runnable program.
 
 ## General application spans
 
-Register `NewContextSpanProcessor(client)` on your existing OpenTelemetry tracer provider to add `sessionId` and `posthogDistinctId` to application spans. A nil, disabled (empty API key), or closed client adds no IDs; a custom `posthog.Client` wrapper counts as enabled unless it implements `IsEnabled() bool`. Place it before processors that read attributes in `OnStart`. Keep your existing exporter and sampler.
+Register `NewContextSpanProcessor(client)` on your existing OpenTelemetry tracer provider to add `sessionId` and `posthogDistinctId` to application spans. A nil, disabled (empty API key), or closed client adds no IDs. A custom `posthog.Client` wrapper counts as enabled unless it implements `IsEnabled() bool`. Place it before processors that read attributes in `OnStart`. Keep your existing exporter and sampler.
 
 Use `posthogotel.NewRequestContextMiddleware(client, handler, options...)` for HTTP requests. This wrapper uses the core SDK's header extraction and options. Place it inside the OpenTelemetry HTTP middleware so the request span already exists. It also works outside the OpenTelemetry middleware, because the processor reads context when that middleware starts the span. Pass `r.Context()` when you start child spans.
 

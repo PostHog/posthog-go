@@ -158,14 +158,25 @@ func TestException_APIfy_WithCustomProperties(t *testing.T) {
 			exception: Exception{
 				DistinctId:    "user-123",
 				Timestamp:     now,
-				Properties:    NewProperties().Set("$lib", "custom-lib").Set("distinct_id", "custom-id"),
+				Properties:    NewProperties().Set("distinct_id", "custom-id"),
 				ExceptionList: exList,
 			},
 			expectKeys: map[string]interface{}{
-				"$lib":        SDKName,
 				"distinct_id": "user-123",
 			},
-			forbiddenValues: []string{"custom-lib", "custom-id"},
+			forbiddenValues: []string{"custom-id"},
+		},
+		"$lib and $lib_version come from properties": {
+			exception: Exception{
+				DistinctId:    "user-123",
+				Timestamp:     now,
+				Properties:    NewProperties().Set("$lib", "custom-lib").Set("$lib_version", "9.9.9"),
+				ExceptionList: exList,
+			},
+			expectKeys: map[string]interface{}{
+				"$lib":         "custom-lib",
+				"$lib_version": "9.9.9",
+			},
 		},
 	}
 

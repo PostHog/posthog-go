@@ -1,19 +1,12 @@
 services:
-  # PostHog Go SDK adapter (capture v0)
+  # PostHog Go SDK adapter
   sdk-adapter:
     build:
       context: ..
       dockerfile: sdk_compliance_adapter/Dockerfile
-    expose:
-      - "8080"
-    networks:
-      - test-network
-
-  # PostHog Go SDK adapter (capture v1)
-  sdk-adapter-v1:
-    build:
-      context: ..
-      dockerfile: sdk_compliance_adapter/Dockerfile.v1
+    environment:
+      # Codec that /init's enable_compression turns on: gzip, deflate, br or zstd.
+      - COMPRESSION=${COMPRESSION:-gzip}
     expose:
       - "8080"
     networks:
@@ -21,7 +14,7 @@ services:
 
   # Test harness
   test-harness:
-    image: ghcr.io/posthog/sdk-test-harness:0.10.0
+    image: ghcr.io/posthog/sdk-test-harness:1.26.0
     command: ["run", "--adapter-url", "http://sdk-adapter:8080", "--mock-url", "http://test-harness:8081"]
     networks:
       - test-network

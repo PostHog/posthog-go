@@ -1593,16 +1593,11 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			}
 		}
 
-		groupKeyStr, ok := groupKeyToString(groupKey)
-		if !ok {
-			return nil, fmt.Errorf("[FEATURE FLAGS] Can't compute group feature flag: %s with a %T group key", flag.Key, groupKey)
-		}
-
 		focusedGroupProperties := groupProperties[groupType]
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groupKeyStr, nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+		return poller.matchFeatureFlagProperties(flag, groupKey, nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
 	} else {
 		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
@@ -1621,24 +1616,6 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			}
 		}
 		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
-	}
-}
-
-// groupKeyToString returns the bucketing ID for a group key. Groups values are
-// free-form, and the flags service accepts a string or a JSON number as a group
-// key, bucketing a number by its JSON form (42 -> "42"). Other types are rejected.
-func groupKeyToString(groupKey interface{}) (string, bool) {
-	switch key := groupKey.(type) {
-	case string:
-		return key, true
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
-		encoded, err := json.Marshal(key)
-		if err != nil {
-			return "", false
-		}
-		return string(encoded), true
-	default:
-		return "", false
 	}
 }
 
@@ -1756,15 +1733,11 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, UnresolvedFlagReasonMissingContext)
 					continue
 				}
-				groupKeyStr, ok := groupKeyToString(groupKey)
-				if !ok {
-					continue
-				}
 				if _, exists := focusedGroupProperties["$group_key"]; !exists {
 					focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 				}
 				effectiveProperties = focusedGroupProperties
-				effectiveBucketingId = groupKeyStr
+				effectiveBucketingId = groupKey
 			}
 		}
 
@@ -3115,10 +3088,18 @@ func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (v
 // holdoutIDToString renders a holdout id for the synthetic variant key. The API
 // sends a number, but a string is accepted too; anything else is unusable.
 func holdoutIDToString(holdoutID interface{}) (string, bool) {
-	if id, ok := holdoutID.(string); ok {
+	switch id := holdoutID.(type) {
+	case string:
 		return id, true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		encoded, err := json.Marshal(id)
+		if err != nil {
+			return "", false
+		}
+		return string(encoded), true
+	default:
+		return "", false
 	}
-	return groupKeyToString(holdoutID)
 }
 
 // GetFeatureFlags returns the locally loaded feature flag definitions.

@@ -134,19 +134,38 @@ jobs:
       - name: Apply changesets and update version
         id: apply-changesets
         run: |
-          pnpm changeset version
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          CURRENT_VERSION=$(grep -oP 'const Version = "\K[^"]+' version.go)
-          sed -i "s/const Version = \"${CURRENT_VERSION}\"/const Version = \"${NEW_VERSION}\"/" version.go
-          echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "New version: $NEW_VERSION"
+          PREV_ROOT=$(node -p "require('./package.json').version")
 
+          pnpm changeset version
+
+          ROOT_VERSION=$(node -p "require('./package.json').version")
+
+          if [ "$ROOT_VERSION" != "$PREV_ROOT" ]; then
+            # Patch from what version.go actually holds, not from package.json,
+            # so drift between the two cannot make this a silent no-op.
+            CURRENT_GO_VERSION=$(grep -oP 'const Version = "\K[^"]+' version.go)
+            sed -i "s/const Version = \"${CURRENT_GO_VERSION}\"/const Version = \"${ROOT_VERSION}\"/" version.go
+            grep -q "const Version = \"${ROOT_VERSION}\"" version.go || {
+              echo "version.go was not updated to ${ROOT_VERSION} (found: ${CURRENT_GO_VERSION})" >&2
+              exit 1
+            }
+            echo "root-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "root-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "new-version=$ROOT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Root: $PREV_ROOT -> $ROOT_VERSION"
+
+      # otel and posthogmcpsdk import the core module and are tagged at its
+      # version, so each must require that exact core release.
       - name: Synchronize nested module core minimums
+        if: steps.apply-changesets.outputs.root-changed == 'true'
         env:
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
         run: |
           for MODULE in otel posthogmcpsdk posthogmcpgo; do
-            (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go@v${NEW_VERSION}")
+            (cd "$MODULE" && go mod edit "-require=github.com/posthog/posthog-go/v2@v${NEW_VERSION}")
           done
 
       # The reference headings come from the sdk-specs capabilities.
@@ -193,26 +212,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
-      # Nested modules require this core version before their tags can be installed.
       - name: Create GitHub release
-        if: steps.commit-version-bump.outputs.commit-hash != ''
+        if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
           NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1} flag && /^##$/{exit} flag; END{if (!flag) print defText}' CHANGELOG.md)
+          # Take the section for this exact version. Matching the first "## "
+          # heading instead picked up the "## Unreleased" placeholder that sits
+          # above it, so every release shipped that as its notes.
+          CHANGELOG_ENTRY=$(awk -v v="## ${NEW_VERSION}" '$0==v{flag=1;next} flag&&/^## /{exit} flag' CHANGELOG.md)
+          if [ -z "$(printf '%s' "$CHANGELOG_ENTRY" | tr -d '[:space:]')" ]; then
+            CHANGELOG_ENTRY="see CHANGELOG.md"
+          fi
           gh release create "v${NEW_VERSION}" --target "$RELEASE_COMMIT" --title "${NEW_VERSION}" --notes "$CHANGELOG_ENTRY"
 
+      # Nested modules require the core version, so its tag goes first.
       - name: Create nested module tags
-        if: steps.commit-version-bump.outputs.commit-hash != ''
+        if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          NEW_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
+          ROOT_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           RELEASE_COMMIT: ${{ steps.commit-version-bump.outputs.commit-hash }}
         run: |
-          for MODULE in otel posthogmcpsdk posthogmcpgo; do
-            TAG="${MODULE}/v${NEW_VERSION}"
+          for TAG in "otel/v${ROOT_VERSION}" "posthogmcpsdk/v${ROOT_VERSION}" "posthogmcpgo/v${ROOT_VERSION}"; do
             EXISTING_SHA=$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)
             if [ -n "$EXISTING_SHA" ]; then
               if [ "$EXISTING_SHA" != "$RELEASE_COMMIT" ]; then
@@ -228,7 +252,7 @@ jobs:
           done
 
       - name: Dispatch posthog upgrade for posthog-go
-        if: steps.commit-version-bump.outputs.commit-hash != ''
+        if: steps.commit-version-bump.outputs.commit-hash != '' && steps.apply-changesets.outputs.root-changed == 'true'
         env:
           PACKAGE_VERSION: ${{ steps.apply-changesets.outputs.new-version }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,514 @@
+package posthog
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
+	"github.com/klauspost/compress/zstd"
+)
+
+// getZstdEncoder returns a shared zstd encoder, lazily initialized on first
+// call. klauspost's EncodeAll is safe for concurrent use and the library
+// recommends reusing one encoder over allocating per call. The init is
+// practically infallible with static options, but returning an error keeps
+// SDK setup graceful (no panic on load).
+var getZstdEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
+	return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+})
+
+// attemptResult is the parsed outcome of a single capture HTTP attempt.
+type attemptResult struct {
+	statusCode    int
+	results       map[string]eventResult
+	retryAfter    time.Duration
+	hasRetryAfter bool
+	// errResp holds the best-effort parsed error body for a non-2xx response.
+	errResp *captureErrorResponse
+}
+
+// newRequestID mints the PostHog-Request-Id. v7 for the same reason makeUUID
+// uses it; the header only has to parse as a UUID.
+func newRequestID() string {
+	if v7, err := uuid.NewV7(); err == nil {
+		return v7.String()
+	}
+	return uuid.New().String()
+}
+
+// captureMaxRedirects is how many redirects one capture request follows.
+const captureMaxRedirects = 5
+
+// errRedirectNotFollowed is the cause of a batch failed by a redirect the lane
+// does not follow. It is terminal, like any other unexpected status.
+var errRedirectNotFollowed = fmt.Errorf("redirect not followed: capture follows only 307 and 308 redirects to the configured host, at most %d times", captureMaxRedirects)
+
+// checkCaptureRedirect follows only 307 and 308 redirects, which resend the
+// same body, and only to the origin of the first request, so events and the
+// API key never go to another host or over a downgraded scheme. Any other
+// redirect is returned to the caller unfollowed.
+func checkCaptureRedirect(req *http.Request, via []*http.Request) error {
+	status := req.Response.StatusCode
+	if (status != http.StatusTemporaryRedirect && status != http.StatusPermanentRedirect) ||
+		len(via) > captureMaxRedirects || !sameOrigin(req.URL, via[0].URL) {
+		return http.ErrUseLastResponse
+	}
+	// net/http drops Authorization when the host differs only in letter case.
+	req.Header.Set("Authorization", via[0].Header.Get("Authorization"))
+	return nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
+
+func isRedirectStatus(code int) bool {
+	return code >= 300 && code <= 399
+}
+
+// isRetryableStatus reports whether a non-2xx capture status should be
+// retried. Billing limits stay terminal as a 402.
+func isRetryableStatus(code int) bool {
+	switch code {
+	case 404, 408, 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
+// send delivers a prepared batch to the capture endpoint with partial
+// retry: only events tagged "retry" in the response are re-sent on subsequent
+// attempts. PostHog-Request-Id and created_at are stable across attempts;
+// PostHog-Attempt increments.
+func (c *client) send(l *lane, pb preparedBatch) {
+	requestId := newRequestID()
+	createdAt := formatWireTimestamp(c.now())
+
+	pendingData := pb.data
+	pendingMsgs := pb.msgs
+	pendingUuids := pb.uuids
+
+	for i := 0; i < c.maxAttempts; i++ {
+		l.beginDeliveryAttempt(pb.done)
+		attempt := i + 1
+		lastAttempt := i == c.maxAttempts-1
+
+		body, err := json.Marshal(eventBatch{
+			CreatedAt:           createdAt,
+			HistoricalMigration: c.HistoricalMigration,
+			Batch:               pendingData,
+		})
+		if err != nil {
+			c.Errorf("%s: marshalling batch wrapper - %s", l.cfg.name, err)
+			c.notifyFailure(pendingMsgs, &CaptureRequestError{Err: err, Endpoint: l.cfg.path})
+			return
+		}
+
+		res, err := c.upload(l, c.ctx, body, requestId, attempt)
+		if err != nil {
+			reqErr := newCaptureRequestError(l, res, err)
+			// A 2xx with an unparseable body or no results object is terminal for this batch -
+			// retrying a malformed success would loop forever.
+			if res != nil && isSuccessStatus(res.statusCode) {
+				c.failBatch(l, pendingMsgs, reqErr)
+				return
+			}
+			// Terminal status whose body read errored: fail fast. reqErr adds
+			// the read error, so callers see why there is no error body.
+			if res != nil && res.statusCode != 0 && !isRetryableStatus(res.statusCode) {
+				c.failBatch(l, pendingMsgs, reqErr)
+				return
+			}
+			// Transport error: retry unless shutting down or exhausted.
+			if c.ctx.Err() != nil {
+				c.Errorf("%s: %d messages dropped: shutdown timeout", l.cfg.name, len(pendingMsgs))
+				c.notifyFailure(pendingMsgs, reqErr)
+				return
+			}
+			if lastAttempt {
+				c.dropMessages(l, pendingMsgs, reqErr)
+				return
+			}
+			l.deferDeliveryRetry(pb.done)
+			if !c.waitBackoff(i, res) {
+				c.failBatch(l, pendingMsgs, reqErr)
+				return
+			}
+			continue
+		}
+
+		if isSuccessStatus(res.statusCode) {
+			c.logResultSummary(requestId, attempt, res.results)
+			nextData, nextMsgs, nextUuids := c.partitionResults(l, res, pendingData, pendingMsgs, pendingUuids)
+			if len(nextUuids) == 0 {
+				return
+			}
+			if lastAttempt {
+				c.Errorf("%s: %d messages dropped after %d attempts", l.cfg.name, len(nextMsgs), c.maxAttempts)
+				for idx, id := range nextUuids {
+					var details string
+					if r, ok := res.results[id]; ok && r.Details != nil {
+						details = *r.Details
+					}
+					c.notifyFailure([]APIMessage{nextMsgs[idx]}, &CaptureEventError{EventUUID: id, Result: resultRetry, Details: details, Exhausted: true, Endpoint: l.cfg.path})
+				}
+				return
+			}
+			pendingData, pendingMsgs, pendingUuids = nextData, nextMsgs, nextUuids
+			l.deferDeliveryRetry(pb.done)
+			if !c.waitBackoff(i, res) {
+				c.failBatch(l, pendingMsgs, &CaptureRequestError{Err: errShutdownDuringBackoff, Endpoint: l.cfg.path})
+				return
+			}
+			continue
+		}
+
+		if isRetryableStatus(res.statusCode) {
+			err := requestError(l, res)
+			if lastAttempt {
+				c.dropMessages(l, pendingMsgs, err)
+				return
+			}
+			l.deferDeliveryRetry(pb.done)
+			if !c.waitBackoff(i, res) {
+				c.failBatch(l, pendingMsgs, err)
+				return
+			}
+			continue
+		}
+
+		// Terminal non-2xx (3xx/400/401/402/413/415/...): no retry.
+		var cause error
+		if isRedirectStatus(res.statusCode) {
+			cause = errRedirectNotFollowed
+		}
+		c.failBatch(l, pendingMsgs, newCaptureRequestError(l, res, cause))
+		return
+	}
+}
+
+// partitionResults splits a 2xx batch by per-event result: terminal events
+// fire their callback now, "retry" events are returned for the next attempt.
+// A uuid absent from the results map is silently dropped (no callback).
+// For a repeated uuid, the first copy in request order takes the result and
+// the next DuplicatesDropped copies fail as dropped duplicates.
+func (c *client) partitionResults(l *lane, res *attemptResult, data []json.RawMessage, msgs []APIMessage, uuids []string) ([]json.RawMessage, []APIMessage, []string) {
+	var nextData []json.RawMessage
+	var nextMsgs []APIMessage
+	var nextUuids []string
+	var dropped int
+	// copiesSeen stays nil unless capture reports dropped duplicates.
+	var copiesSeen map[string]int
+	for idx, id := range uuids {
+		r, ok := res.results[id]
+		if !ok {
+			// Matches posthog-rs: events absent from the results map are treated
+			// as accepted (no retry, no error callback).
+			continue
+		}
+		if r.DuplicatesDropped > 0 {
+			if copiesSeen == nil {
+				copiesSeen = make(map[string]int)
+			}
+			n := copiesSeen[id]
+			copiesSeen[id] = n + 1
+			if n > 0 && n <= r.DuplicatesDropped {
+				dropped++
+				c.notifyFailure([]APIMessage{msgs[idx]}, &CaptureEventError{EventUUID: id, Result: resultDrop, Details: detailsDuplicateEventUUID, Endpoint: l.cfg.path})
+				continue
+			}
+		}
+		switch r.Result {
+		case resultRetry:
+			nextData = append(nextData, data[idx])
+			nextMsgs = append(nextMsgs, msgs[idx])
+			nextUuids = append(nextUuids, id)
+		case resultDrop:
+			dropped++
+			c.notifyFailure([]APIMessage{msgs[idx]}, eventError(l, id, r))
+		default:
+			// ok, warning, and any unrecognized result are terminal success.
+			c.notifySuccess([]APIMessage{msgs[idx]})
+		}
+	}
+	c.warnSilentLoss(l, dropped, "rejected by the capture endpoint")
+	return nextData, nextMsgs, nextUuids
+}
+
+// warnSilentLoss makes an event loss visible to a caller with no Callback. A
+// registered Callback already receives every failure, so the line is emitted
+// only without one. Always one aggregate line per batch, never per event:
+// per-event logging scales with event volume rather than request volume, and
+// event payloads may carry sensitive content.
+func (c *client) warnSilentLoss(l *lane, count int, cause string) {
+	if count == 0 || c.Callback != nil {
+		return
+	}
+	c.Warnf("%s: %d event(s) dropped: %s; set Config.Callback to inspect failures", l.cfg.name, count, cause)
+}
+
+// failBatch delivers a terminal batch failure to the Callback, and without one
+// logs a single aggregate line so the loss is not silent.
+func (c *client) failBatch(l *lane, msgs []APIMessage, err error) {
+	c.warnSilentLoss(l, len(msgs), err.Error())
+	c.notifyFailure(msgs, err)
+}
+
+// retryDelay is the pure delay decision for the next attempt: the configured
+// backoff, raised to the server Retry-After when it is larger (Retry-After is a
+// minimum, not a replacement). The Retry-After is clamped to
+// Config.MaxRetryBackoff so a hostile or buggy header can't park a batch
+// goroutine; the configured backoff itself (Config.RetryAfter) is never
+// truncated.
+func (c *client) retryDelay(attemptIndex int, res *attemptResult) time.Duration {
+	retryDelay := c.RetryAfter(attemptIndex)
+	if res != nil && res.hasRetryAfter {
+		clamped := res.retryAfter
+		if clamped > c.MaxRetryBackoff {
+			clamped = c.MaxRetryBackoff
+		}
+		if clamped > retryDelay {
+			retryDelay = clamped
+		}
+	}
+	return retryDelay
+}
+
+// waitBackoff waits before the next attempt using retryDelay. Returns false if
+// shutdown was requested during the wait.
+func (c *client) waitBackoff(attemptIndex int, res *attemptResult) bool {
+	retryTimer := time.NewTimer(c.retryDelay(attemptIndex, res))
+	select {
+	case <-retryTimer.C:
+		return true
+	case <-c.quit:
+		if !retryTimer.Stop() {
+			<-retryTimer.C
+		}
+		return false
+	case <-c.ctx.Done():
+		if !retryTimer.Stop() {
+			<-retryTimer.C
+		}
+		return false
+	}
+}
+
+// dropMessages logs and notifies failure for events that are abandoned after
+// exhausting all retry attempts. The log carries the last error, so a lasting
+// 404 or 429 is visible without a Callback.
+func (c *client) dropMessages(l *lane, msgs []APIMessage, err error) {
+	c.Errorf("%s: %d messages dropped after %d attempts: %v", l.cfg.name, len(msgs), c.maxAttempts, err)
+	c.notifyFailure(msgs, err)
+}
+
+// compressBody compresses the request body per the configured mode and
+// returns the body plus the Content-Encoding wire token ("" when uncompressed,
+// "br" for brotli). If a configured codec fails, the raw body is returned
+// without a Content-Encoding token plus the compression error so callers can
+// log it while still sending the batch uncompressed. zstd reuses the shared
+// concurrency-safe encoder. Config.Validate rejects unknown modes, so only
+// codecs the backend can decode via Content-Encoding reach here.
+func compressBody(mode CompressionMode, raw []byte) ([]byte, string, error) {
+	switch mode {
+	case CompressionNone:
+		return raw, "", nil
+	case CompressionGzip:
+		body, err := compressGzip(raw)
+		if err != nil {
+			return raw, "", err
+		}
+		return body, "gzip", nil
+	case CompressionDeflate:
+		// zlib (RFC 1950) wraps the deflate stream so it begins with 0x78; the
+		// backend sniffs that byte to route Content-Encoding: deflate to its
+		// zlib decoder, avoiding ambiguity with raw (headerless) deflate.
+		body, err := deflateCompress(raw)
+		if err != nil {
+			return raw, "", err
+		}
+		return body, "deflate", nil
+	case CompressionZstd:
+		enc, err := getZstdEncoder()
+		if err != nil {
+			return raw, "", fmt.Errorf("zstd encoder init: %w", err)
+		}
+		return enc.EncodeAll(raw, make([]byte, 0, len(raw))), "zstd", nil
+	case CompressionBrotli:
+		body, err := brotliCompress(raw)
+		if err != nil {
+			return raw, "", err
+		}
+		return body, "br", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported compression mode %s", mode)
+	}
+}
+
+// upload performs a single capture POST using the lane's own client, which
+// carries that lane's upload timeout.
+func (c *client) upload(l *lane, ctx context.Context, b []byte, requestId string, attempt int) (*attemptResult, error) {
+	body, encoding, err := compressBody(l.cfg.compression, b)
+	if err != nil {
+		if body == nil {
+			c.Errorf("compressing body (%s) - %s", l.cfg.compression, err)
+			return nil, err
+		}
+		c.Warnf("compressing body (%s) failed; sending uncompressed - %s", l.cfg.compression, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", l.url(c.Endpoint), bytes.NewReader(body))
+	if err != nil {
+		c.Errorf("creating request - %s", err)
+		return nil, err
+	}
+
+	sdkInfo := SDKName + "/" + getVersion()
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	req.Header.Set("User-Agent", sdkInfo)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("PostHog-Sdk-Info", sdkInfo)
+	req.Header.Set("PostHog-Attempt", strconv.Itoa(attempt))
+	req.Header.Set("PostHog-Request-Id", requestId)
+	// Sub-second precision: capture corrects clock skew against this header,
+	// so whole seconds would shift every event in the request.
+	req.Header.Set("PostHog-Request-Timestamp", formatWireTimestamp(c.now()))
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
+	}
+
+	res, err := l.http.Do(req)
+	if err != nil {
+		c.Warnf("sending request - %s", err)
+		return nil, err
+	}
+	defer res.Body.Close()
+	return c.report(res)
+}
+
+// report reads and classifies a capture response. For a 2xx it parses the
+// per-uuid results (returning an error if the body is unreadable/malformed or
+// has no results object). For
+// a non-2xx it best-effort parses the error body; classification is left to send.
+func (c *client) report(res *http.Response) (*attemptResult, error) {
+	retryAfter, hasRetryAfter := parseRetryAfter(res.Header.Get("Retry-After"), c.now())
+	result := &attemptResult{statusCode: res.StatusCode, retryAfter: retryAfter, hasRetryAfter: hasRetryAfter}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		c.Errorf("reading capture response %d %s - %s", res.StatusCode, res.Status, err)
+		return result, err
+	}
+
+	if isSuccessStatus(res.StatusCode) {
+		c.debugf("response %s", res.Status)
+		var parsed captureResponse
+		err := json.Unmarshal(body, &parsed)
+		if err == nil && parsed.Results == nil {
+			err = errNoCaptureResults
+		}
+		if err != nil {
+			c.Errorf("parsing capture response body %d - %s", res.StatusCode, err)
+			return result, fmt.Errorf("parsing capture response: %w", err)
+		}
+		result.results = parsed.Results
+		return result, nil
+	}
+
+	c.Logger.Logf("response %d %s – %s", res.StatusCode, res.Status, string(body))
+	var errResp captureErrorResponse
+	if err := json.Unmarshal(body, &errResp); err == nil && (errResp.Error != "" || errResp.ErrorDescription != "") {
+		result.errResp = &errResp
+	}
+	return result, nil
+}
+
+func isSuccessStatus(code int) bool {
+	return code >= 200 && code <= 299
+}
+
+// errNoCaptureResults fails a 2xx whose results key is missing, null, or not an
+// object. Treating it as delivered would hide a capture or proxy bug.
+var errNoCaptureResults = errors.New("no results object")
+
+// errShutdownDuringBackoff is the underlying cause when retries are abandoned
+// because the client is shutting down mid-backoff.
+var errShutdownDuringBackoff = errors.New("shutdown during retry backoff")
+
+// eventError builds the per-event CaptureEventError for a terminal "drop".
+func eventError(l *lane, eventUuid string, r eventResult) error {
+	details := ""
+	if r.Details != nil {
+		details = *r.Details
+	}
+	return &CaptureEventError{EventUUID: eventUuid, Result: r.Result, Details: details, Endpoint: l.cfg.path}
+}
+
+// requestError builds the batch-level CaptureRequestError for a non-2xx response.
+func requestError(l *lane, res *attemptResult) error {
+	return newCaptureRequestError(l, res, nil)
+}
+
+// newCaptureRequestError assembles a *CaptureRequestError from an optional parsed
+// result (status + structured error body) and an optional underlying error.
+func newCaptureRequestError(l *lane, res *attemptResult, underlying error) *CaptureRequestError {
+	e := &CaptureRequestError{Err: underlying, Endpoint: l.cfg.path}
+	if res != nil {
+		e.StatusCode = res.statusCode
+		if res.errResp != nil {
+			e.Code = res.errResp.Error
+			e.Description = res.errResp.ErrorDescription
+		}
+	}
+	return e
+}
+
+// logResultSummary emits a single verbose debug line per 2xx response that
+// tallies per-event directives (ok/warning/drop/retry/other), so operators can
+// debug partial-submission outcomes without diffing the raw response body.
+func (c *client) logResultSummary(requestId string, attempt int, results map[string]eventResult) {
+	var ok, warning, drop, retry, other, duplicates int
+	for _, r := range results {
+		duplicates += r.DuplicatesDropped
+		switch r.Result {
+		case resultOk:
+			ok++
+		case resultWarning:
+			warning++
+		case resultDrop:
+			drop++
+		case resultRetry:
+			retry++
+		default:
+			other++
+		}
+	}
+	c.debugf(
+		"capture response request_id=%s attempt=%d events=%d ok=%d warning=%d drop=%d retry=%d other=%d duplicates_dropped=%d",
+		requestId, attempt, len(results), ok, warning, drop, retry, other, duplicates,
+	)
+}

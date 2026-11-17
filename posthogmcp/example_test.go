@@ -5,16 +5,19 @@ import (
 	"log"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
-	"github.com/posthog/posthog-go/posthogmcp"
+	posthog "github.com/posthog/posthog-go/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 func ExampleAnalytics_CaptureToolCall() {
-	client := posthog.New("phc_project_key")
+	client, err := posthog.New("phc_project_key")
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer client.Close()
 
 	analytics := posthogmcp.New(client)
-	err := analytics.CaptureToolCall(context.Background(), posthogmcp.ToolCall{
+	err = analytics.CaptureToolCall(context.Background(), posthogmcp.ToolCall{
 		ToolName:   "search_docs",
 		DistinctID: "user_123",
 		Duration:   42 * time.Millisecond,

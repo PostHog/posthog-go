@@ -10,7 +10,9 @@
 // send their own events. Parameter or response JSON
 // exceeding 1 MiB after media redaction is replaced with an omission marker.
 //
-// MCP events carry $lib posthog-go-mcp. A client in CaptureModeAnalyticsV1 sends
-// one library name per request, taken from the SDK, so there its MCP events
-// report posthog-go.
+// MCP events carry $lib posthog-go-mcp and $lib_version set to the SDK
+// version. ToolCall.Properties, the EventContext's Properties and the request
+// context's properties can set either one, key by key like other properties,
+// so set both together. A $lib that is not a non-empty string gets the MCP
+// pair. BeforeSend can change either.
 package posthogmcp

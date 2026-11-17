@@ -156,7 +156,7 @@
 
 ### Patch Changes
 
-- 6b734dd: Preserve captured events with non-finite numeric properties by serializing NaN and infinities as null in both capture protocols. Arbitrary structs containing these numbers are replaced with null as a whole property.
+- v2 also sends NaN and infinities as null and keeps the event, but re-encodes only an event whose first encoding fails, so other events cost nothing extra (#394). See `docs/migration-v2.md`.
 
 ## 1.36.0
 

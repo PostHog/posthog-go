@@ -3,6 +3,8 @@ package posthog
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type validatableMessage interface {
@@ -63,5 +65,70 @@ func assertIsServerProperty(t *testing.T, apiMsg APIMessage, wantPresent bool) {
 	}
 	if _, present := props["$is_server"]; present {
 		t.Errorf("$is_server should be absent when IsServer is false, got %v", props["$is_server"])
+	}
+}
+
+// dereferenceMessage has a hand-written arm per message type, and Enqueue falls
+// through to "custom types cannot be enqueued" if one is missing, so cover every
+// arm directly rather than through a fixture.
+func TestDereferenceMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		ptr  Message
+		want Message
+	}{
+		{"alias", &Alias{Alias: "a", DistinctId: "b"}, Alias{Alias: "a", DistinctId: "b"}},
+		{"identify", &Identify{DistinctId: "b"}, Identify{DistinctId: "b"}},
+		{"groupIdentify", &GroupIdentify{Type: "org", Key: "k"}, GroupIdentify{Type: "org", Key: "k"}},
+		{"capture", &Capture{Event: "e", DistinctId: "d"}, Capture{Event: "e", DistinctId: "d"}},
+		{"exception", &Exception{DistinctId: "d"}, Exception{DistinctId: "d"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, dereferenceMessage(tc.ptr))
+		})
+	}
+
+	t.Run("typed nil pointers become nil", func(t *testing.T) {
+		for _, msg := range []Message{
+			(*Alias)(nil), (*Identify)(nil), (*GroupIdentify)(nil), (*Capture)(nil), (*Exception)(nil),
+		} {
+			require.Nil(t, dereferenceMessage(msg))
+		}
+	})
+
+	t.Run("values pass through unchanged", func(t *testing.T) {
+		in := Capture{Event: "e", DistinctId: "d"}
+		require.Equal(t, in, dereferenceMessage(in))
+	})
+}
+
+func TestGeneratedUUIDsAreV7(t *testing.T) {
+	// Time-ordered, matching capture's server-side generation and posthog-rs.
+	// Position 14 of the canonical form holds the version nibble.
+	for name, got := range map[string]string{
+		"event uuid": makeUUID(""),
+		"request id": newRequestID(),
+	} {
+		require.Len(t, got, 36, name)
+		require.Equalf(t, byte('7'), got[14], "%s %q is not version 7", name, got)
+	}
+
+	// A caller-supplied uuid keeps its value, in the canonical form capture
+	// keys per-event results by.
+	require.Equal(t, "00000000-0000-0000-0000-000000000001", makeUUID("00000000-0000-0000-0000-000000000001"))
+	require.Equal(t, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", makeUUID("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"))
+	require.Equal(t, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", makeUUID("a1b2c3d4e5f64a7b8c9d0e1f2a3b4c5d"))
+	require.Equal(t, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", makeUUID("{a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d}"))
+	require.Equal(t, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", makeUUID("URN:UUID:A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"))
+
+	// Malformed delimiters are invalid, so they get a fresh uuid rather than
+	// keeping the embedded one.
+	for _, malformed := range []string{
+		"[a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d]",
+		"(a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d)",
+		"{a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d]",
+	} {
+		require.NotEqualf(t, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", makeUUID(malformed), "%q", malformed)
 	}
 }

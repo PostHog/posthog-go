@@ -59,6 +59,9 @@ jobs:
           go vet ./...
           go test -race -count=1 -timeout=5m ./...
 
+      - name: Build and vet against the pinned posthog-go
+        run: bin/build-against-pinned-core otel
+
   mcp-go-sdk:
     name: MCP Go SDK adapter (Go ${{ matrix.go-version }}, go-sdk ${{ matrix.go-sdk }})
     runs-on: ubuntu-latest
@@ -89,15 +92,8 @@ jobs:
           go vet ./...
           go test -race -count=1 -timeout=5m ./...
 
-      # Consumers ignore go.mod's replace and get the pinned posthog-go release,
-      # so prove the adapter builds against it and not only the checkout.
       - name: Build and vet against the pinned posthog-go
-        run: |
-          cp -r posthogmcpsdk "$RUNNER_TEMP/pinned"
-          cd "$RUNNER_TEMP/pinned"
-          go mod edit -dropreplace github.com/posthog/posthog-go
-          GOFLAGS=-mod=mod go build ./...
-          GOFLAGS=-mod=mod go vet ./...
+        run: bin/build-against-pinned-core posthogmcpsdk
 
   mcp-go:
     name: MCP mcp-go adapter (Go ${{ matrix.go-version }})
@@ -126,12 +122,7 @@ jobs:
       # Consumers ignore go.mod's replace and get the pinned posthog-go release,
       # so prove the adapter builds against it and not only the checkout.
       - name: Build and vet against the pinned posthog-go
-        run: |
-          cp -r posthogmcpgo "$RUNNER_TEMP/pinned"
-          cd "$RUNNER_TEMP/pinned"
-          go mod edit -dropreplace github.com/posthog/posthog-go -dropreplace github.com/posthog/posthog-go/posthogmcpsdk
-          GOFLAGS=-mod=mod go build ./...
-          GOFLAGS=-mod=mod go vet ./...
+        run: bin/build-against-pinned-core posthogmcpgo
 
   public-api:
     name: Public API

@@ -2,7 +2,9 @@ package posthog
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"reflect"
 	"strings"
 
 	json "github.com/goccy/go-json"
@@ -20,10 +22,11 @@ func newSlowBatchServer(t *testing.T, delay time.Duration) (*httptest.Server, *a
 	var received atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(delay)
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
+		received.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	t.Cleanup(server.Close)
 	return server, &received
@@ -42,11 +45,12 @@ func newBatchCounterServer(t *testing.T) (*httptest.Server, *atomic.Int64, *atom
 	var batchCount atomic.Int64
 	var totalMessages atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
 		batchCount.Add(1)
-		totalMessages.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		totalMessages.Add(int64(len(b.Batch)))
+		writeCaptureOK(w, body)
 	}))
 	t.Cleanup(server.Close)
 	return server, &batchCount, &totalMessages
@@ -90,13 +94,14 @@ func TestBatching_LargeEventsTriggerFlush(t *testing.T) {
 	var mu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
 		batchCount.Add(1)
 		mu.Lock()
-		batchSizes = append(batchSizes, len(b.Messages))
+		batchSizes = append(batchSizes, len(b.Batch))
 		mu.Unlock()
-		w.WriteHeader(200)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -121,50 +126,53 @@ func TestBatching_LargeEventsTriggerFlush(t *testing.T) {
 	require.ElementsMatch(t, []int{4, 4, 2}, batchSizes)
 }
 
-// TestBatching_OversizedEventRejected verifies that events >500KB are rejected
-func TestBatching_OversizedEventRejected(t *testing.T) {
+// TestBatching_EventOverBatchTargetShipsAlone verifies that analytics has no
+// per-event cap by default: an event larger than MaxBatchBytes is sent in a
+// request of its own, and the events around it are not held back.
+func TestBatching_EventOverBatchTargetShipsAlone(t *testing.T) {
 	t.Parallel()
 
-	var received atomic.Int64
+	var batchEvents [][]string
+	var mu sync.Mutex
 	var failureCount atomic.Int64
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
-		received.Add(int64(len(b.Messages)))
-		w.WriteHeader(200)
+		body, _ := io.ReadAll(r.Body)
+		var b struct {
+			Batch []struct {
+				Event string `json:"event"`
+			} `json:"batch"`
+		}
+		require.NoError(t, json.Unmarshal(body, &b))
+		var names []string
+		for _, e := range b.Batch {
+			names = append(names, e.Event)
+		}
+		mu.Lock()
+		batchEvents = append(batchEvents, names)
+		mu.Unlock()
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
-	callback := &testCallbackCounter{
-		onFailure: func() { failureCount.Add(1) },
-	}
-
 	client, err := NewWithConfig("test-key", Config{
 		Endpoint: server.URL,
-		Callback: callback,
+		Interval: time.Hour,
+		Callback: &testCallbackCounter{onFailure: func() { failureCount.Add(1) }},
 	})
 	require.NoError(t, err)
 
-	// Create an event with MANY properties to exceed 500KB
-	// Each property is ~50 bytes, need ~10000 properties to hit 500KB
-	oversizedProps := make(Properties, 15000)
-	for i := 0; i < 15000; i++ {
-		oversizedProps[generateDistinctId(i)] = generateDistinctId(i + 100000)
-	}
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "user", Event: "before"}))
+	require.NoError(t, client.Enqueue(Capture{
+		DistinctId: "user", Event: "oversized",
+		Properties: Properties{"payload": strings.Repeat("x", DefaultMaxBatchBytes+200000)},
+	}))
+	require.NoError(t, client.Enqueue(Capture{DistinctId: "user", Event: "after"}))
+	require.NoError(t, client.Close())
 
-	err = client.Enqueue(Capture{
-		DistinctId: "user_1",
-		Event:      "oversized_event",
-		Properties: oversizedProps,
-	})
-	require.NoError(t, err) // Enqueue itself doesn't fail
-
-	client.Close()
-
-	// The oversized event should be rejected via callback
-	require.Equal(t, int64(0), received.Load(), "Oversized event should not be delivered")
-	require.Equal(t, int64(1), failureCount.Load(), "Should have 1 failure callback for oversized event")
+	require.Zero(t, failureCount.Load())
+	// Batches upload concurrently, so only the split is fixed, not the arrival order.
+	require.ElementsMatch(t, [][]string{{"before"}, {"oversized"}, {"after"}}, batchEvents)
 }
 
 // TestBatching_MixedCardinalityBatching verifies correct batching with mixed event sizes
@@ -208,12 +216,13 @@ func TestBatching_BatchCountLimit(t *testing.T) {
 	var mu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var b batch
-		json.NewDecoder(r.Body).Decode(&b)
+		body, _ := io.ReadAll(r.Body)
+		var b eventBatch
+		json.Unmarshal(body, &b)
 		mu.Lock()
-		batchSizes = append(batchSizes, len(b.Messages))
+		batchSizes = append(batchSizes, len(b.Batch))
 		mu.Unlock()
-		w.WriteHeader(200)
+		writeCaptureOK(w, body)
 	}))
 	defer server.Close()
 
@@ -274,39 +283,43 @@ func TestConfigBatchSubmitTimeout(t *testing.T) {
 }
 
 func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
-	c := &client{
-		Config:     Config{BatchSubmitTimeout: 5 * time.Second},
-		batches:    make(chan preparedBatch, 1),
-		deliveries: make(map[*delivery]struct{}),
-	}
-	processed := make(chan preparedBatch, 1)
-	c.capture = batchRecordingCapturer{processed: processed}
-	c.batches <- preparedBatch{}
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultOk}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+	c := newCaptureTestClient(t, ts.URL, nil, 0, func(cfg *Config) {
+		cfg.BatchSubmitTimeout = 5 * time.Second
+	})
+	l := newLane(analyticsLaneConfig(c.Config), 1, c.http.Transport)
+	l.batches <- preparedBatch{}
 	done := make(chan bool, 1)
-	go func() { done <- c.sendBatch(preparedBatch{uuids: []string{"submitted"}}) }()
-	require.Eventually(t, func() bool { return c.inFlight.Load() == 1 }, time.Second, time.Millisecond)
+	go func() { done <- c.sendBatch(l, captureBatch(t, cap1(uuidA))) }()
+	require.Eventually(t, func() bool { return l.inFlight.Load() == 1 }, time.Second, time.Millisecond)
 	select {
 	case <-done:
 		t.Fatal("submission returned before queue space was available")
 	default:
 	}
-	<-c.batches
+	<-l.batches
 	select {
 	case accepted := <-done:
 		require.True(t, accepted)
 	case <-time.After(5 * time.Second):
 		t.Fatal("submission did not resume when queue space became available")
 	}
-	select {
-	case batch := <-processed:
-		require.Equal(t, []string{"submitted"}, batch.uuids)
-	case <-time.After(5 * time.Second):
-		t.Fatal("accepted batch was not processed")
-	}
-	require.Eventually(t, func() bool { return c.inFlight.Load() == 0 }, time.Second, time.Millisecond)
-	c.deliveryMu.Lock()
-	defer c.deliveryMu.Unlock()
-	require.Empty(t, c.deliveries)
+	require.Eventually(t, func() bool {
+		reqs := srv.snapshot()
+		return len(reqs) == 1 && reflect.DeepEqual([]string{uuidA}, reqs[0].uuids)
+	}, 5*time.Second, time.Millisecond, "accepted batch was not processed")
+	require.Eventually(t, func() bool { return l.inFlight.Load() == 0 }, time.Second, time.Millisecond)
+	l.deliveryMu.Lock()
+	defer l.deliveryMu.Unlock()
+	require.Empty(t, l.deliveries)
 }
 
 func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
@@ -318,33 +331,26 @@ func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
 		{"deadline", 10 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &client{
-				Config:     Config{BatchSubmitTimeout: tc.timeout},
+			c := &client{Config: Config{BatchSubmitTimeout: tc.timeout}}
+			l := &lane{
 				batches:    make(chan preparedBatch, 1),
 				deliveries: make(map[*delivery]struct{}),
 			}
-			c.batches <- preparedBatch{uuids: []string{"queued"}}
+			l.batches <- preparedBatch{uuids: []string{"queued"}}
 			done := make(chan bool, 1)
-			go func() { done <- c.sendBatch(preparedBatch{}) }()
+			go func() { done <- c.sendBatch(l, preparedBatch{}) }()
 			select {
 			case accepted := <-done:
 				require.False(t, accepted)
 			case <-time.After(time.Second):
 				t.Fatal("submission blocked beyond its deadline")
 			}
-			require.Zero(t, c.inFlight.Load())
-			require.Empty(t, c.deliveries)
-			require.Equal(t, []string{"queued"}, (<-c.batches).uuids)
+			require.Zero(t, l.inFlight.Load())
+			require.Empty(t, l.deliveries)
+			require.Equal(t, []string{"queued"}, (<-l.batches).uuids)
 		})
 	}
 }
-
-type batchRecordingCapturer struct {
-	capturer
-	processed chan<- preparedBatch
-}
-
-func (c batchRecordingCapturer) send(batch preparedBatch) { c.processed <- batch }
 
 // TestShutdownTimeout_DefaultWaitsForCompletion verifies that with default config
 // (ShutdownTimeout=0), Close() waits indefinitely for in-flight batches to complete.

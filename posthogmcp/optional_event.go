@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 // maxInputRequestMethods bounds $mcp_input_request_methods.
@@ -34,8 +34,13 @@ type EventContext struct {
 	VendorClient    string
 
 	// Properties adds custom event metadata. $mcp_* and identity control keys
-	// are reserved.
+	// are reserved; use the fields above instead, and EventOptions for person
+	// processing.
 	Properties posthog.Properties
+	// EventOptions sets capture options, such as process_person_profile, on
+	// the event, over the RequestContext's. Without a DistinctID,
+	// process_person_profile is set to false, though BeforeSend can change it.
+	EventOptions posthog.Options
 	// Timestamp is the time of the event. When zero, the PostHog client stamps
 	// the time it enqueues the event.
 	Timestamp time.Time
@@ -57,6 +62,7 @@ func (c EventContext) toolCall(toolName string) ToolCall {
 		ClientUserAgent: c.ClientUserAgent,
 		VendorClient:    c.VendorClient,
 		Properties:      c.Properties,
+		EventOptions:    c.EventOptions,
 		Timestamp:       c.Timestamp,
 	}
 }
@@ -146,7 +152,7 @@ func (a *Analytics) CaptureMissingCapability(ctx context.Context, event MissingC
 }
 
 func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build func(preparedToolCall) (posthog.Capture, error)) error {
-	call, err := a.withContext(ctx, call)
+	call, enqueueCtx, err := a.withContext(ctx, call)
 	if err != nil {
 		return err
 	}
@@ -158,7 +164,7 @@ func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build fu
 	if err != nil {
 		return err
 	}
-	return a.enqueue([]namedMessage{{name: capture.Event, message: capture}})
+	return a.enqueue(enqueueCtx, []namedMessage{{name: capture.Event, message: capture}})
 }
 
 // buildOptionalEvent builds an event of specific and the identity every MCP
@@ -167,17 +173,17 @@ func (a *Analytics) captureOptional(ctx context.Context, call ToolCall, build fu
 func (p preparedToolCall) buildOptionalEvent(event string, specific posthog.Properties) (posthog.Capture, error) {
 	p.setIdentityProperties(specific)
 	for _, attempt := range []struct {
-		custom     posthog.Properties
-		includeSet bool
-	}{{p.custom, true}, {nil, true}, {nil, false}} {
-		properties := mergeProperties(specific, attempt.custom)
+		includeCustom bool
+		includeSet    bool
+	}{{true, true}, {false, true}, {false, false}} {
+		properties := mergeProperties(specific, p.customOrLibrary(attempt.includeCustom))
 		applyIdentityProperties(properties, p, attempt.includeSet)
 		capture := posthog.Capture{
 			DistinctId: p.distinctID,
 			Event:      event,
-			Library:    library,
 			Timestamp:  p.call.Timestamp,
 			Properties: properties,
+			Options:    p.options(),
 			Groups:     p.groups,
 		}
 		size, err := messageSize(capture)

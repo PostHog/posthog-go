@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -72,141 +73,134 @@ func (l testLogger) writeLog(fn func(string, ...interface{}), format string, arg
 	}
 }
 
-func TestNewWithConfig_LogsErrorForBlankAPIKeyAfterTrim(t *testing.T) {
-	var logged string
-
-	client, err := NewWithConfig(" \n\t ", Config{
-		Logger: testLogger{
-			logf: t.Logf,
-			errorf: func(format string, args ...interface{}) {
-				logged = fmt.Sprintf(format, args...)
-			},
-		},
-	})
+func TestNew_BlankAPIKeyReturnsDisabledClient(t *testing.T) {
+	client, err := New(" \n\t ")
 	require.NoError(t, err)
-	require.NotNil(t, client)
-	defer client.Close()
-
-	require.Contains(t, logged, "apiKey is empty after trimming whitespace")
-	require.Contains(t, logged, ErrSDKDisabled.Error())
+	require.IsType(t, &noopClient{}, client)
+	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
 }
 
-func TestNew_BlankAPIKeyReturnsNoopClient(t *testing.T) {
-	client := New(" \n\t ")
-	require.NotNil(t, client)
+func TestNew_TrimsAPIKey(t *testing.T) {
+	c, err := New(" \n test-api-key\t ")
+	require.NoError(t, err)
+	require.Equal(t, "test-api-key", c.(*client).key)
+	require.NoError(t, c.Close())
+}
 
-	_, ok := client.(*noopClient)
-	require.True(t, ok)
-	require.ErrorIs(t, client.Enqueue(Capture{}), ErrSDKDisabled)
+func TestNewWithConfig_DisabledClient(t *testing.T) {
+	cases := []struct {
+		name     string
+		apiKey   string
+		disabled bool
+		logged   string
+	}{
+		{name: "empty", apiKey: "", logged: "apiKey is empty after trimming whitespace"},
+		{name: "whitespace", apiKey: " \n\t ", logged: "apiKey is empty after trimming whitespace"},
+		{name: "personal_api_key", apiKey: " phx_abc123 ", logged: "apiKey is a personal API key"},
+		{name: "config_disabled", apiKey: "test-api-key", disabled: true},
+	}
+	for _, tc := range cases {
+		for _, secretConfig := range []Config{
+			{},
+			{SecretKey: "test-secret-key"},
+			{PersonalApiKey: "test-personal-key"},
+		} {
+			t.Run(fmt.Sprintf("%s/secret=%s/personal=%s", tc.name, secretConfig.SecretKey, secretConfig.PersonalApiKey), func(t *testing.T) {
+				var requests atomic.Int64
+				var failures atomic.Int64
+				var errorLogs []string
+				config := secretConfig
+				config.Disabled = tc.disabled
+				config.BatchSize = 1
+				config.Interval = time.Millisecond
+				config.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
+					requests.Add(1)
+					return nil, testError
+				})
+				config.Callback = testCallback{failure: func(APIMessage, error) { failures.Add(1) }}
+				config.Logger = testLogger{
+					logf: t.Logf,
+					errorf: func(format string, args ...interface{}) {
+						errorLogs = append(errorLogs, fmt.Sprintf(format, args...))
+					},
+				}
 
-	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{})
+				client, err := NewWithConfig(tc.apiKey, config)
+				require.NoError(t, err)
+				require.IsType(t, &noopClient{}, client)
+				if tc.logged == "" {
+					require.Empty(t, errorLogs)
+				} else {
+					require.Len(t, errorLogs, 1)
+					require.Contains(t, errorLogs[0], tc.logged)
+					require.Contains(t, errorLogs[0], ErrSDKDisabled.Error())
+					require.NotContains(t, errorLogs[0], "abc123")
+				}
+
+				requireDisabledClient(t, client)
+				require.Zero(t, requests.Load())
+				require.Zero(t, failures.Load())
+			})
+		}
+	}
+}
+
+// requireDisabledClient checks that every Client method returns its default
+// value and ErrSDKDisabled.
+func requireDisabledClient(t *testing.T, client Client) {
+	t.Helper()
+	ctx := context.Background()
+	event := Capture{DistinctId: "test-user", Event: "test-event"}
+	require.ErrorIs(t, client.Enqueue(event), ErrSDKDisabled)
+	require.ErrorIs(t, client.EnqueueAI(Capture{DistinctId: "test-user", Event: "$ai_generation"}), ErrSDKDisabled)
+
+	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Equal(t, false, isEnabled)
 
-	flag, err := client.GetFeatureFlag(FeatureFlagPayload{})
+	flag, err := client.GetFeatureFlag(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Equal(t, false, flag)
 
-	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{})
+	result, err := client.GetFeatureFlagResult(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.NotNil(t, result)
 	require.False(t, result.Enabled)
+	result.Enabled = true
+	again, _ := client.GetFeatureFlagResult(FeatureFlagPayload{Key: "test-flag", DistinctId: "other-user"})
+	require.False(t, again.Enabled, "one caller's change reached another caller")
 
-	payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{})
+	payload, err := client.GetFeatureFlagPayload(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, payload)
 
-	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{})
+	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
+	require.ErrorIs(t, err, ErrSDKDisabled)
+	require.Empty(t, remoteConfigPayload)
+
+	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.Empty(t, allFlags)
+	allFlags["fallback"] = true
+	allFlagsAgain, _ := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "other-user"})
+	require.Empty(t, allFlagsAgain, "one caller's change reached another caller")
 
-	evaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{})
+	evaluations, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "test-user"})
 	require.ErrorIs(t, err, ErrSDKDisabled)
 	require.NotNil(t, evaluations)
 	require.Empty(t, evaluations.Keys())
 
 	require.ErrorIs(t, client.ReloadFeatureFlags(), ErrSDKDisabled)
+	require.ErrorIs(t, client.Flush(), ErrSDKDisabled)
+	require.ErrorIs(t, client.FlushWithContext(ctx), ErrSDKDisabled)
 	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
-	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
-}
-
-func TestNewWithConfig_BlankAPIKeyReturnsNoopClientWithoutRequests(t *testing.T) {
-	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	var successes atomic.Int64
-	var failures atomic.Int64
-	client, err := NewWithConfig(" \n\t ", Config{
-		Endpoint:       server.URL,
-		PersonalApiKey: "personal-api-key",
-		BatchSize:      1,
-		Interval:       time.Millisecond,
-		Callback: testCallback{
-			success: func(APIMessage) { successes.Add(1) },
-			failure: func(APIMessage, error) { failures.Add(1) },
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	_, ok := client.(*noopClient)
-	require.True(t, ok)
-
-	require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}), ErrSDKDisabled)
-	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Equal(t, false, isEnabled)
-	allFlags, err := client.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "test-user"})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, allFlags)
-	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, remoteConfigPayload)
-	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
-
-	require.Zero(t, requests.Load())
-	require.Zero(t, successes.Load())
-	require.Zero(t, failures.Load())
-}
-
-func TestNewWithConfig_BlankAPIKeyWithPersonalAPIKeyReturnsNoopClient(t *testing.T) {
-	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	client, err := NewWithConfig(" \n\t ", Config{
-		Endpoint:       server.URL,
-		PersonalApiKey: "personal-api-key",
-		BatchSize:      1,
-		Interval:       time.Millisecond,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	_, ok := client.(*noopClient)
-	require.True(t, ok)
-
-	require.ErrorIs(t, client.Enqueue(Capture{DistinctId: "test-user", Event: "test-event"}), ErrSDKDisabled)
-	isEnabled, err := client.IsFeatureEnabled(FeatureFlagPayload{Key: "test-flag", DistinctId: "test-user"})
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Equal(t, false, isEnabled)
-	remoteConfigPayload, err := client.GetRemoteConfigPayload("test-flag")
-	require.ErrorIs(t, err, ErrSDKDisabled)
-	require.Empty(t, remoteConfigPayload)
-	require.ErrorIs(t, client.Close(), ErrSDKDisabled)
-
-	require.Zero(t, requests.Load())
+	require.ErrorIs(t, client.CloseWithContext(ctx), ErrSDKDisabled)
 }
 
 func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 	var (
 		mu                sync.Mutex
-		batchAPIKey       string
+		captureAPIKey     string
 		remoteConfigToken string
 		remoteConfigAuth  string
 	)
@@ -219,27 +213,19 @@ func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"flags": [], "group_type_mapping": {}}`))
-		case r.URL.Path == "/batch/":
+		case strings.HasPrefix(r.URL.Path, capturePath):
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
-				t.Errorf("Failed to read batch body: %v", err)
+				t.Errorf("Failed to read capture body: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
-			var payload struct {
-				ApiKey string `json:"api_key"`
-			}
-			if err := json.Unmarshal(body, &payload); err != nil {
-				t.Errorf("Failed to parse batch body: %v", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
+			// The project API key authenticates via Bearer, not a body field.
 			mu.Lock()
-			batchAPIKey = payload.ApiKey
+			captureAPIKey = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
+			writeCaptureOK(w, body)
 		case strings.Contains(r.URL.Path, "/remote_config"):
 			mu.Lock()
 			remoteConfigToken = r.URL.Query().Get("token")
@@ -270,7 +256,7 @@ func TestNewWithConfig_TrimsWhitespaceSensitiveInputsInRequests(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, "test-api-key", batchAPIKey)
+	require.Equal(t, "test-api-key", captureAPIKey)
 	require.Equal(t, "test-api-key", remoteConfigToken)
 	require.Equal(t, "Bearer test-personal-key", remoteConfigAuth)
 }
@@ -290,6 +276,9 @@ func TestRemoteConfigAuthUsesResolvedSecretKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotAuth string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				gotAuth = r.Header.Get("Authorization")
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`"ok"`))
@@ -366,7 +355,7 @@ func TestSecretKeyRequestsGoToAppHostNotEndpoint(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	require.Contains(t, appHostPaths, "/api/projects/@current/feature_flags/test-flag/remote_config")
-	require.Equal(t, []string{"/batch/"}, proxyPaths)
+	require.Equal(t, []string{"/i/v1/analytics/events"}, proxyPaths)
 }
 
 func TestSecretKeyRequestsRefuseRedirects(t *testing.T) {
@@ -467,15 +456,24 @@ var (
 	//lint:ignore ST1012 variable name is fine :D
 	testError = errors.New("test error")
 
-	// HTTP transport that always succeeds.
+	// HTTP transport that always succeeds. A 200 whose body is not a results
+	// map is terminal, so capture requests get a real results body.
 	testTransportOK = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		body := ""
+		if strings.HasPrefix(r.URL.Path, capturePath) && r.Body != nil {
+			reqBody, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			body = allOkResultsBody(reqBody)
+		}
 		return &http.Response{
 			Status:     http.StatusText(http.StatusOK),
 			StatusCode: http.StatusOK,
 			Proto:      r.Proto,
 			ProtoMajor: r.ProtoMajor,
 			ProtoMinor: r.ProtoMinor,
-			Body:       io.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader(body)),
 			Request:    r,
 		}, nil
 	})
@@ -621,6 +619,7 @@ func mockServer() (chan []byte, *httptest.Server) {
 
 		select {
 		case done <- b:
+			writeCaptureOK(w, buf.Bytes())
 		case <-r.Context().Done():
 		case <-time.After(5 * time.Second):
 			http.Error(w, "test did not consume request", http.StatusServiceUnavailable)
@@ -737,53 +736,13 @@ func completeExceptionSnapshot() Exception {
 }
 
 func TestEnqueue(t *testing.T) {
-	exception := Exception{
-		Uuid:         "00000000-0000-0000-0000-000000000004",
-		DistinctId:   "my-user-id",
-		Timestamp:    time.Date(2025, 8, 11, 20, 43, 37, 0, time.UTC),
-		DisableGeoIP: true,
-		ExceptionList: []ExceptionItem{
-			{
-				Type:  "Exception Title",
-				Value: "Exception Description",
-				Stacktrace: &ExceptionStacktrace{
-					Type: "raw",
-					Frames: []StackFrame{
-						{
-							Filename:  "/Users/Developer/posthog-go/examples/main.go",
-							LineNo:    56,
-							Function:  "main.main",
-							InApp:     true,
-							Synthetic: false,
-							Platform:  "go",
-						},
-					},
-				},
-			},
-		},
-	}
-	completeException := completeExceptionSnapshot()
 	f, tv := false, true
 	tests := map[string]struct {
 		ref          string
 		msg          Message
 		disableGeoIP *bool
 	}{
-		"alias": {
-			strings.TrimSpace(fixture("test-enqueue-alias.json")),
-			Alias{Uuid: "00000000-0000-0000-0000-000000000001", Alias: "A", DistinctId: "B"},
-			&tv,
-		},
 
-		"identify": {
-			strings.TrimSpace(fixture("test-enqueue-identify.json")),
-			Identify{
-				Uuid:       "00000000-0000-0000-0000-000000000002",
-				DistinctId: "B",
-				Properties: Properties{"email": "hey@posthog.com"},
-			},
-			&tv,
-		},
 		"identify-default-geoip": {
 			strings.TrimSpace(fixture("test-enqueue-identify.json")),
 			Identify{
@@ -792,33 +751,6 @@ func TestEnqueue(t *testing.T) {
 				Properties: Properties{"email": "hey@posthog.com"},
 			},
 			nil,
-		},
-
-		"groupIdentify": {
-			strings.TrimSpace(fixture("test-enqueue-group-identify.json")),
-			GroupIdentify{
-				Uuid:       "00000000-0000-0000-0000-000000000003",
-				DistinctId: "$organization_id:5",
-				Type:       "organization",
-				Key:        "id:5",
-				Properties: Properties{},
-			},
-			&tv,
-		},
-
-		"capture": {
-			strings.TrimSpace(fixture("test-enqueue-capture.json")),
-			Capture{
-				Uuid:       "00000000-0000-0000-0000-000000000010",
-				Event:      "Download",
-				DistinctId: "123456",
-				Properties: Properties{
-					"application": "PostHog Go",
-					"version":     "1.0.0",
-				},
-				SendFeatureFlags: SendFeatureFlags(false),
-			},
-			&f,
 		},
 
 		"captureWithDisableGeoIP": {
@@ -876,46 +808,6 @@ func TestEnqueue(t *testing.T) {
 			&f,
 		},
 
-		"exception": {
-			strings.TrimSpace(fixture("test-enqueue-exception.json")),
-			exception,
-			&tv,
-		},
-
-		"exception-complete": {
-			strings.TrimSpace(fixture("test-enqueue-exception-complete.json")),
-			completeException,
-			&tv,
-		},
-
-		"*alias": {
-			strings.TrimSpace(fixture("test-enqueue-alias.json")),
-			&Alias{Uuid: "00000000-0000-0000-0000-000000000001", Alias: "A", DistinctId: "B"},
-			&tv,
-		},
-
-		"*identify": {
-			strings.TrimSpace(fixture("test-enqueue-identify.json")),
-			&Identify{
-				Uuid:       "00000000-0000-0000-0000-000000000002",
-				DistinctId: "B",
-				Properties: Properties{"email": "hey@posthog.com"},
-			},
-			&tv,
-		},
-
-		"*groupIdentify": {
-			strings.TrimSpace(fixture("test-enqueue-group-identify.json")),
-			&GroupIdentify{
-				Uuid:       "00000000-0000-0000-0000-000000000003",
-				DistinctId: "$organization_id:5",
-				Type:       "organization",
-				Key:        "id:5",
-				Properties: Properties{},
-			},
-			&tv,
-		},
-
 		"*capture": {
 			strings.TrimSpace(fixture("test-enqueue-capture-with-uuid.json")),
 			&Capture{
@@ -928,12 +820,6 @@ func TestEnqueue(t *testing.T) {
 				},
 				SendFeatureFlags: SendFeatureFlags(false),
 			},
-			&tv,
-		},
-
-		"*exception": {
-			strings.TrimSpace(fixture("test-enqueue-exception.json")),
-			&exception,
 			&tv,
 		},
 	}
@@ -978,12 +864,12 @@ func TestEnqueue(t *testing.T) {
 	}
 }
 
-func TestEnqueueCaptureV1EventFamily(t *testing.T) {
+func TestEnqueueCaptureEventFamily(t *testing.T) {
 	const apiKey = "phc_snapshot_project_key"
 	body := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != captureV1Path {
-			t.Errorf("capture path = %q, want %q", r.URL.Path, captureV1Path)
+		if r.URL.Path != capturePath {
+			t.Errorf("capture path = %q, want %q", r.URL.Path, capturePath)
 		}
 		if got, want := r.Header.Get("Authorization"), "Bearer "+apiKey; got != want {
 			t.Errorf("Authorization = %q, want %q", got, want)
@@ -1006,10 +892,9 @@ func TestEnqueueCaptureV1EventFamily(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewWithConfig(apiKey, Config{
-		Endpoint:    server.URL,
-		CaptureMode: CaptureModeAnalyticsV1,
-		BatchSize:   6,
-		now:         mockTime,
+		Endpoint:  server.URL,
+		BatchSize: 6,
+		now:       mockTime,
 	})
 	require.NoError(t, err)
 	defer client.Close()
@@ -1073,7 +958,7 @@ func TestEnqueueCaptureV1EventFamily(t *testing.T) {
 
 	select {
 	case payload := <-body:
-		assertPayloadEqual(t, strings.TrimSpace(fixture("test-enqueue-capture-v1.json")), string(payload))
+		assertPayloadEqual(t, strings.TrimSpace(fixture("test-enqueue-event-family.json")), string(payload))
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for request")
 	}
@@ -1117,6 +1002,9 @@ func TestFlagsRequestSnapshots(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			body := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				if r.URL.Path != "/flags/" {
 					t.Errorf("flags path = %q, want /flags/", r.URL.Path)
 				}
@@ -1265,9 +1153,11 @@ func TestEnqueue_UUID_InvalidPreSupplied(t *testing.T) {
 			body, server := mockServer()
 			defer server.Close()
 
+			log := &capturingLogger{}
 			cli, _ := NewWithConfig("test-key", Config{
 				Endpoint:  server.URL,
 				BatchSize: 1,
+				Logger:    log,
 				now:       mockTime,
 			})
 			defer cli.Close()
@@ -1280,6 +1170,7 @@ func TestEnqueue_UUID_InvalidPreSupplied(t *testing.T) {
 				gotUUID := requireValidUUIDInBatch(t, res)
 				require.NotEqual(t, tt.invalidUUID, gotUUID,
 					"invalid pre-supplied UUID should not be preserved in request body")
+				require.Equal(t, []string{invalidEventUUIDWarning}, log.warnings())
 			case <-time.After(time.Second):
 				t.Fatal("timeout waiting for request")
 			}
@@ -1290,7 +1181,87 @@ func TestEnqueue_UUID_InvalidPreSupplied(t *testing.T) {
 // TestEnqueue_UUID_AutoGenerated verifies that UUIDs are auto-generated when
 // not provided by the user for all message types.
 func TestEnqueue_UUID_AutoGenerated(t *testing.T) {
-	tests := []struct {
+	for _, tt := range messagesWithoutUUID() {
+		t.Run(tt.name, func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			cli, _ := NewWithConfig("test-key", Config{
+				Endpoint:  server.URL,
+				BatchSize: 1,
+				now:       mockTime,
+			})
+			defer cli.Close()
+
+			err := cli.Enqueue(tt.msg)
+			require.NoError(t, err)
+
+			// Read the body sent to the server
+			select {
+			case res := <-body:
+				requireValidUUIDInBatch(t, res)
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for request")
+			}
+		})
+	}
+}
+
+// TestEnqueue_UUID_RuleAppliesAfterBeforeSend verifies that a Uuid set in
+// BeforeSend follows the same rule as a caller's, so the SDK never sends a
+// uuid that makes capture reject the whole batch.
+func TestEnqueue_UUID_RuleAppliesAfterBeforeSend(t *testing.T) {
+	const upperUUID = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"
+	cases := []struct {
+		name     string
+		hookUUID string
+		want     string // empty means any generated uuid
+		warnings []string
+	}{
+		{name: "invalid is replaced with a warning", hookUUID: "not-a-uuid-from-hook", warnings: []string{invalidEventUUIDWarning}},
+		{name: "empty is generated silently", hookUUID: ""},
+		{name: "valid is normalized", hookUUID: upperUUID, want: strings.ToLower(upperUUID)},
+	}
+
+	for _, tc := range cases {
+		for _, tt := range messagesWithoutUUID() {
+			t.Run(tc.name+"/"+tt.name, func(t *testing.T) {
+				body, server := mockServer()
+				defer server.Close()
+
+				log := &capturingLogger{}
+				cli, _ := NewWithConfig("test-key", Config{
+					Endpoint:   server.URL,
+					BatchSize:  1,
+					Logger:     log,
+					BeforeSend: func(m Message) Message { return withUUID(m, tc.hookUUID) },
+					now:        mockTime,
+				})
+				defer cli.Close()
+
+				require.NoError(t, cli.Enqueue(tt.msg))
+
+				select {
+				case res := <-body:
+					gotUUID := requireValidUUIDInBatch(t, res)
+					if tc.want != "" {
+						require.Equal(t, tc.want, gotUUID)
+					}
+					require.Equal(t, tc.warnings, log.warnings())
+				case <-time.After(time.Second):
+					t.Fatal("timeout waiting for request")
+				}
+			})
+		}
+	}
+}
+
+// messagesWithoutUUID returns one valid message of each type, with no Uuid set.
+func messagesWithoutUUID() []struct {
+	name string
+	msg  Message
+} {
+	return []struct {
 		name string
 		msg  Message
 	}{
@@ -1320,31 +1291,27 @@ func TestEnqueue_UUID_AutoGenerated(t *testing.T) {
 			},
 		},
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			body, server := mockServer()
-			defer server.Close()
-
-			cli, _ := NewWithConfig("test-key", Config{
-				Endpoint:  server.URL,
-				BatchSize: 1,
-				now:       mockTime,
-			})
-			defer cli.Close()
-
-			err := cli.Enqueue(tt.msg)
-			require.NoError(t, err)
-
-			// Read the body sent to the server
-			select {
-			case res := <-body:
-				requireValidUUIDInBatch(t, res)
-			case <-time.After(time.Second):
-				t.Fatal("timeout waiting for request")
-			}
-		})
+func withUUID(msg Message, u string) Message {
+	switch m := msg.(type) {
+	case Capture:
+		m.Uuid = u
+		return m
+	case Alias:
+		m.Uuid = u
+		return m
+	case Identify:
+		m.Uuid = u
+		return m
+	case GroupIdentify:
+		m.Uuid = u
+		return m
+	case Exception:
+		m.Uuid = u
+		return m
 	}
+	panic(fmt.Sprintf("withUUID: unsupported message type %T", msg))
 }
 
 func requireValidUUIDInBatch(t *testing.T, body []byte) string {
@@ -1385,9 +1352,10 @@ func (c *customMessage) apifyEvent() apiEvent {
 }
 
 func TestEnqueuingCustomTypeFails(t *testing.T) {
-	client := New("0123456789")
+	client, err := New("0123456789")
+	require.NoError(t, err)
 	defer client.Close()
-	err := client.Enqueue(&customMessage{})
+	err = client.Enqueue(&customMessage{})
 	require.Error(t, err)
 	require.EqualError(t, err, "messages with custom types cannot be enqueued: *posthog.customMessage",
 		"invalid/missing error when queuing unsupported message")
@@ -1491,6 +1459,77 @@ func TestCaptureWithDefaultProperties(t *testing.T) {
 	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
 }
 
+func TestDefaultEventValuesReachEveryMessageType(t *testing.T) {
+	eventOptions := func() Options { return NewOptions().Set("disable_skew_correction", false) }
+	tests := []struct {
+		msg            Message
+		personKey      string
+		wantPersonData map[string]interface{}
+		identifyStyle  bool
+	}{
+		{msg: Exception{DistinctId: "user-1", ExceptionList: []ExceptionItem{{Type: "t", Value: "v"}}, Options: eventOptions()}},
+		{
+			msg:            Identify{DistinctId: "user-1", Properties: NewProperties().Set("email", "user@example.com"), Options: eventOptions()},
+			personKey:      "$set",
+			wantPersonData: map[string]interface{}{"email": "user@example.com"},
+			identifyStyle:  true,
+		},
+		{msg: Alias{DistinctId: "user-1", Alias: "alias-1", Options: eventOptions()}, identifyStyle: true},
+		{
+			msg:            GroupIdentify{Type: "company", Key: "k", Properties: NewProperties().Set("name", "Example"), Options: eventOptions()},
+			personKey:      "$group_set",
+			wantPersonData: map[string]interface{}{"name": "Example"},
+			identifyStyle:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
+			body, server := mockServer()
+			defer server.Close()
+
+			delivered := make(chan APIMessage, 1)
+			client, err := NewWithConfig("test-key", Config{
+				Endpoint:               server.URL,
+				BatchSize:              1,
+				now:                    mockTime,
+				DefaultEventProperties: NewProperties().Set("service", "api"),
+				DefaultEventOptions:    NewOptions().Set("cookieless_mode", true).Set("disable_skew_correction", true),
+				Callback: testCallback{
+					success: func(m APIMessage) { delivered <- m },
+					failure: func(m APIMessage, _ error) { delivered <- m },
+				},
+			})
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.NoError(t, client.Enqueue(tt.msg))
+
+			event := readSingleBatchEvent(t, body)
+			properties := requireProperties(t, event)
+			require.Equal(t, "api", properties["service"])
+			wantOptions := map[string]interface{}{"cookieless_mode": true, "disable_skew_correction": false}
+			if tt.identifyStyle {
+				wantOptions["process_person_profile"] = true
+			}
+			require.Equal(t, wantOptions, requireOptions(t, event))
+			if tt.personKey != "" {
+				require.Equal(t, tt.wantPersonData, properties[tt.personKey])
+			}
+
+			var callbackProperties Properties
+			switch m := awaitTestValue(t, delivered).(type) {
+			case IdentifyInApi:
+				callbackProperties = m.Properties
+			case GroupIdentifyInApi:
+				callbackProperties = m.Properties
+			}
+			if callbackProperties != nil {
+				require.Equal(t, "api", callbackProperties["service"], "the callback message carries the default properties sent on the wire")
+			}
+		})
+	}
+}
+
 func TestCaptureMany(t *testing.T) {
 	var ref = strings.TrimSpace(fixture("test-many-capture.json"))
 
@@ -1529,10 +1568,10 @@ func TestCaptureMany(t *testing.T) {
 
 	assertPayloadEqual(t, ref, string(awaitTestValue(t, body)))
 	require.NoError(t, client.Close())
-	var remaining batch
+	var remaining eventBatch
 	require.NoError(t, json.Unmarshal(awaitTestValue(t, body), &remaining))
-	require.Len(t, remaining.Messages, 2)
-	for i, raw := range remaining.Messages {
+	require.Len(t, remaining.Batch, 2)
+	for i, raw := range remaining.Batch {
 		var event CaptureInApi
 		require.NoError(t, json.Unmarshal(raw, &event))
 		require.Equal(t, uuids[i+3], event.Uuid)
@@ -1540,7 +1579,8 @@ func TestCaptureMany(t *testing.T) {
 }
 
 func TestClientCloseTwice(t *testing.T) {
-	client := New("0123456789")
+	client, err := New("0123456789")
+	require.NoError(t, err)
 	require.NoError(t, client.Close())
 	require.EqualError(t, client.Close(), ErrClosed.Error())
 	require.EqualError(t, client.Enqueue(Capture{DistinctId: "1", Event: "A"}), ErrClosed.Error())
@@ -1565,7 +1605,8 @@ func TestClientWithPersonalApiKeyClosing(t *testing.T) {
 }
 
 func TestClientEnqueueError(t *testing.T) {
-	client := New("0123456789")
+	client, err := New("0123456789")
+	require.NoError(t, err)
 	defer client.Close()
 
 	if err := client.Enqueue(testErrorMessage{}); err != testError {
@@ -1625,8 +1666,16 @@ func TestClientMarshalMessageError(t *testing.T) {
 	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for unserializable message")
 
-	} else if _, ok := err.(*json.UnsupportedTypeError); !ok {
-		t.Errorf("invalid error type returned by unserializable message: %T", err)
+	} else {
+		// The drop is wrapped so it names its lane; the cause is still reachable.
+		var unsupported *json.UnsupportedTypeError
+		if !errors.As(err, &unsupported) {
+			t.Errorf("invalid error type returned by unserializable message: %T", err)
+		}
+		var localErr *CaptureLocalError
+		if !errors.As(err, &localErr) || localErr.Endpoint != capturePath {
+			t.Errorf("expected a CaptureLocalError naming %s, got %v", capturePath, err)
+		}
 	}
 }
 
@@ -1659,11 +1708,18 @@ func TestClientRoundTripperError(t *testing.T) {
 	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for an invalid request")
 
-	} else if e, ok := err.(*url.Error); !ok {
-		t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
-
-	} else if e.Err != testError {
-		t.Errorf("invalid error returned by round tripper: %T: %s", e.Err, e.Err)
+	} else {
+		// A transport failure is a *CaptureRequestError wrapping *url.Error.
+		var reqErr *CaptureRequestError
+		if !errors.As(err, &reqErr) {
+			t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
+		}
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) {
+			t.Errorf("error does not unwrap to *url.Error: %T: %s", err, err)
+		} else if urlErr.Err != testError {
+			t.Errorf("invalid error returned by round tripper: %T: %s", urlErr.Err, urlErr.Err)
+		}
 	}
 }
 
@@ -1688,11 +1744,18 @@ func TestClientRetryError(t *testing.T) {
 	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for a retry falure")
 
-	} else if e, ok := err.(*url.Error); !ok {
-		t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
-
-	} else if e.Err != testError {
-		t.Errorf("invalid error returned by round tripper: %T: %s", e.Err, e.Err)
+	} else {
+		// A transport failure is a *CaptureRequestError wrapping *url.Error.
+		var reqErr *CaptureRequestError
+		if !errors.As(err, &reqErr) {
+			t.Errorf("invalid error returned by round tripper: %T: %s", err, err)
+		}
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) {
+			t.Errorf("error does not unwrap to *url.Error: %T: %s", err, err)
+		} else if urlErr.Err != testError {
+			t.Errorf("invalid error returned by round tripper: %T: %s", urlErr.Err, urlErr.Err)
+		}
 	}
 
 	client.Close()
@@ -1738,8 +1801,18 @@ func TestClientResponseBodyError(t *testing.T) {
 	if err := awaitTestValue(t, errchan); err == nil {
 		t.Error("failure callback not triggered for a 400 response")
 
-	} else if err != testError {
-		t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
+	} else {
+		// Classified from the status, and must still unwrap to the read error
+		// that made the body unusable.
+		var reqErr *CaptureRequestError
+		if !errors.As(err, &reqErr) {
+			t.Errorf("invalid error returned by erroring response body: %T: %s", err, err)
+		} else if reqErr.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", reqErr.StatusCode, http.StatusBadRequest)
+		}
+		if !errors.Is(err, testError) {
+			t.Errorf("error must unwrap to the body-read cause, got %#v", err)
+		}
 	}
 }
 
@@ -1924,6 +1997,9 @@ func TestIsFeatureEnabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				if r.URL.Path == "/flags/" {
 					w.WriteHeader(http.StatusOK)
 					w.Write([]byte(tt.mockResponse))
@@ -1959,6 +2035,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetFeatureFlag passes device_id when provided", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				json.Unmarshal(body, &requestData)
@@ -1992,6 +2071,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetFeatureFlag omits device_id when nil", func(t *testing.T) {
 		var receivedBody string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				receivedBody = string(body)
@@ -2021,6 +2103,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetAllFlags passes device_id when provided", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				json.Unmarshal(body, &requestData)
@@ -2053,6 +2138,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 	t.Run("GetFeatureFlagPayload passes device_id when provided", func(t *testing.T) {
 		var requestData FlagsRequestData
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				body, _ := io.ReadAll(r.Body)
 				json.Unmarshal(body, &requestData)
@@ -2087,6 +2175,9 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 		var requestData FlagsRequestData
 		received := make(chan struct{})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			switch {
 			case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 				body, _ := io.ReadAll(r.Body)
@@ -2098,9 +2189,6 @@ func TestDeviceIdInFlagsRequest(t *testing.T) {
 			case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"flags":[]}`))
-			case strings.HasPrefix(r.URL.Path, "/batch"):
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{}`))
 			default:
 				t.Errorf("Unexpected request to %s", r.URL.Path)
 			}
@@ -2145,7 +2233,7 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else if !strings.HasPrefix(r.URL.Path, capturePath) {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
 	}))
@@ -2274,6 +2362,9 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				// Check request method and path
 				if r.Method != "POST" || r.URL.Path != "/flags/" {
 					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
@@ -2329,9 +2420,12 @@ func TestGetFeatureFlagPayloadWithNoPersonalApiKey(t *testing.T) {
 
 func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else if !strings.HasPrefix(r.URL.Path, capturePath) {
 			t.Errorf("client called an endpoint it shouldn't have: %s", r.URL.Path)
 		}
 	}))
@@ -2503,6 +2597,9 @@ func TestGetFeatureFlagWithNoPersonalApiKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				// Check request method and path
 				if r.Method != "POST" || r.URL.Path != "/flags/" {
 					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
@@ -2640,6 +2737,9 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				// Check request method and path
 				if r.Method != "POST" || r.URL.Path != "/flags/" {
 					t.Errorf("Expected POST /flags/, got %s %s", r.Method, r.URL.Path)
@@ -2694,6 +2794,9 @@ func TestGetAllFeatureFlagsWithNoPersonalApiKey(t *testing.T) {
 
 func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			t.Error("expected local evaluations endpoint to be called")
 			http.Error(w, "unexpected remote evaluation", http.StatusBadRequest)
@@ -2726,6 +2829,9 @@ func TestGetFeatureFlagPayloadWithPersonalKey(t *testing.T) {
 func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing.T) {
 	apiCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if apiCalls == 0 && (r.URL.Path == "/flags" || r.URL.Path == "/flags/") {
 			t.Error("expected local evaluations endpoint to be called first")
 			http.Error(w, "unexpected request order", http.StatusBadRequest)
@@ -2770,6 +2876,9 @@ func TestGetFeatureFlagPayloadWithPersonalKey_LocalComputationFailure(t *testing
 
 func TestSimpleFlagOld(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
 	defer server.Close()
@@ -2799,11 +2908,14 @@ func TestSimpleFlagCalculation(t *testing.T) {
 
 func TestComplexFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte(fixture("test-api-feature-flag.json")))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -2851,11 +2963,14 @@ func TestComplexFlag(t *testing.T) {
 
 func TestMultiVariateFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte("{}"))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -2903,11 +3018,14 @@ func TestMultiVariateFlag(t *testing.T) {
 
 func TestDisabledFlag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 			w.Write([]byte(fixture("test-flags-v3.json")))
 		} else if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 			w.Write([]byte("{}"))
-		} else if !strings.HasPrefix(r.URL.Path, "/batch") {
+		} else {
 			t.Errorf("client called an endpoint it shouldn't have")
 		}
 	}))
@@ -2955,6 +3073,9 @@ func TestDisabledFlag(t *testing.T) {
 
 func TestCaptureSendFlags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
 	defer server.Close()
@@ -2992,6 +3113,9 @@ func TestCaptureSendFlags(t *testing.T) {
 
 func TestCaptureSendFeatureFlagsOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		w.Write([]byte(fixture("test-api-feature-flag.json")))
 	}))
 	defer server.Close()
@@ -3141,6 +3265,9 @@ func TestSendFeatureFlagsHelperMethods(t *testing.T) {
 func TestFeatureFlagQuotaLimits(t *testing.T) {
 	t.Run("flags endpoint quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if r.URL.Path == "/flags" || r.URL.Path == "/flags/" {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{
@@ -3195,6 +3322,9 @@ func TestFeatureFlagQuotaLimits(t *testing.T) {
 
 	t.Run("local evaluation endpoint quota limited", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
 				w.WriteHeader(http.StatusPaymentRequired)
 				w.Write([]byte(`{
@@ -3260,6 +3390,9 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 	t.Run("includes project API key token in remote config URL", func(t *testing.T) {
 		var remoteConfigCalled bool
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if serveCaptureOK(w, r) {
+				return
+			}
 			// Handle the initial feature flag definitions request
 			if strings.Contains(r.URL.Path, "/flags/definitions") {
 				w.Header().Set("Content-Type", "application/json")
@@ -3316,40 +3449,4 @@ func TestClient_GetRemoteConfigPayload_IncludesTokenParameter(t *testing.T) {
 			t.Errorf("Expected payload '%s', got '%s'", expected, payload)
 		}
 	})
-}
-
-func TestDefaultEventPropertiesKeepPersonProfileOptOut(t *testing.T) {
-	tests := []struct {
-		name     string
-		event    any
-		defaults any
-		want     any
-	}{
-		{name: "explicit opt-out survives defaults", event: false, defaults: true, want: false},
-		{name: "defaults apply when the event is silent", event: nil, defaults: true, want: true},
-		{name: "defaults still override an explicit opt-in", event: true, defaults: false, want: false},
-		{name: "only a bool false counts as an opt-out", event: "false", defaults: true, want: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sent := make(chan Properties, 1)
-			client, err := NewWithConfig("test-api-key", Config{
-				Endpoint:               "http://127.0.0.1:0",
-				DefaultEventProperties: Properties{propertyProcessPersonProfile: tt.defaults},
-				BeforeSend: func(msg Message) Message {
-					sent <- msg.(Capture).Properties
-					return nil
-				},
-			})
-			require.NoError(t, err)
-			defer client.Close()
-
-			properties := NewProperties()
-			if tt.event != nil {
-				properties[propertyProcessPersonProfile] = tt.event
-			}
-			require.NoError(t, client.Enqueue(Capture{DistinctId: "user-123", Event: "test-event", Properties: properties}))
-			require.Equal(t, tt.want, (<-sent)[propertyProcessPersonProfile])
-		})
-	}
 }

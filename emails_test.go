@@ -965,7 +965,7 @@ func TestEmailsGetStopsWhenTheContextEnds(t *testing.T) {
 func TestEmailsSendRefusesANilEmail(t *testing.T) {
 	server := newEmailServer(t)
 	for _, email := range []Email{nil, (*TemplateEmail)(nil), (*CodeEmail)(nil)} {
-		for name, client := range map[string]Client{"enabled": newEmailClient(t, server), "disabled": New("")} {
+		for name, client := range map[string]Client{"enabled": newEmailClient(t, server), "disabled": newDisabledClient(t)} {
 			_, err := client.Emails().Send(context.Background(), email)
 
 			emailErr := requireEmailError(t, err)
@@ -1053,7 +1053,7 @@ func TestEmailsGetChecksTheMessageID(t *testing.T) {
 }
 
 func TestEmailsDisabledClient(t *testing.T) {
-	client := New("")
+	client := newDisabledClient(t)
 
 	_, sendErr := client.Emails().Send(context.Background(), templateEmail())
 	_, getErr := client.Emails().Get(context.Background(), testMessageID)
@@ -1193,4 +1193,12 @@ func (l *recordingLogger) warnings() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]string(nil), l.warns...)
+}
+
+// newDisabledClient returns the disabled client New gives for an empty API key.
+func newDisabledClient(t *testing.T) Client {
+	t.Helper()
+	client, err := New("")
+	require.NoError(t, err)
+	return client
 }

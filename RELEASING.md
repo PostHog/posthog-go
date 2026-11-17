@@ -14,6 +14,17 @@ pnpm changeset
 
 This prompts you to select the version bump (`patch`, `minor`, or `major`) and write a short release summary. Commit the generated file in `.changeset/` with your pull request.
 
+The repository ships four Go modules that share one release version:
+
+| Go module | Tag |
+|---|---|
+| `github.com/posthog/posthog-go/v2` | `vX.Y.Z` |
+| `github.com/posthog/posthog-go/otel/v2` | `otel/vX.Y.Z` |
+| `github.com/posthog/posthog-go/posthogmcpsdk/v2` | `posthogmcpsdk/vX.Y.Z` |
+| `github.com/posthog/posthog-go/posthogmcpgo/v2` | `posthogmcpgo/vX.Y.Z` |
+
+`otel` and `posthogmcpsdk` import the core SDK, so they move in lockstep with `posthog-go`, major version included. Go encodes the major in the import path, so each module's `/vN` suffix must match the core major: a tag for 2.0.0 or later on a `go.mod` without that suffix publishes a version Go refuses to resolve. See [`posthogmcpsdk/README.md`](posthogmcpsdk/README.md) for how CI checks a nested module against the core release it requires.
+
 ### 2. Merge the Pull Request
 
 After review, merge the PR to `main`. No GitHub release label is required.

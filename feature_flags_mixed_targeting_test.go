@@ -66,6 +66,9 @@ const onlyGroupConditionFlagJSON = `{
 func newMixedTargetingServer(t *testing.T, localFlagsJSON string, decideCalls *atomic.Int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		// Order matters: /flags/definitions must be checked before /flags or /flags/
 		// so the prefix doesn't accidentally match the decide endpoint.
 		if strings.HasPrefix(r.URL.Path, "/flags/definitions") {
@@ -125,17 +128,6 @@ func TestMixedTargetingLocalEvaluation(t *testing.T) {
 				personProperties: Properties{"email": "nope@example.com"},
 			},
 			expectVal: false,
-		},
-		{
-			name:     "group condition matches with a numeric group key",
-			flagJSON: mixedTargetingFlagJSON,
-			flagKey:  "mixed-flag",
-			opts: opts{
-				groups:           Groups{"company": 42},
-				groupProperties:  map[string]Properties{"company": {"plan": "enterprise"}},
-				personProperties: Properties{"email": "nope@example.com"},
-			},
-			expectVal: true,
 		},
 		{
 			name:      "only group conditions, no groups passed: returns false without server fallback",

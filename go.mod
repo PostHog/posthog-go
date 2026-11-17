@@ -1,4 +1,4 @@
-module github.com/posthog/posthog-go
+module github.com/posthog/posthog-go/v2
 
 go 1.21
 

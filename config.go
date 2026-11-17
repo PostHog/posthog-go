@@ -17,23 +17,21 @@ type CompressionMode uint8
 const (
 	// CompressionNone disables compression (default).
 	CompressionNone CompressionMode = 0
-	// CompressionGzip enables GZIP compression for batch payloads. Valid on
-	// both capture modes.
+	// CompressionGzip enables GZIP compression for batch payloads.
 	CompressionGzip CompressionMode = 1
-	// CompressionZstd enables Zstandard compression. Requires
-	// CaptureModeAnalyticsV1 (the legacy /batch/ endpoint cannot decode it).
+	// CompressionZstd enables Zstandard compression.
 	CompressionZstd CompressionMode = 2
 	// CompressionDeflate enables zlib (RFC 1950) compression, sent as
-	// Content-Encoding: deflate. Requires CaptureModeAnalyticsV1.
+	// Content-Encoding: deflate.
 	CompressionDeflate CompressionMode = 3
 	// CompressionBrotli enables Brotli compression, sent as
-	// Content-Encoding: br. Requires CaptureModeAnalyticsV1.
+	// Content-Encoding: br.
 	CompressionBrotli CompressionMode = 4
 )
 
 // String returns a human-readable codec name, used in config validation
 // errors and debug logs. It is not the on-the-wire Content-Encoding token
-// (brotli's token is "br"); see compressV1Body for wire tokens.
+// (brotli's token is "br"); see compressBody for wire tokens.
 func (m CompressionMode) String() string {
 	switch m {
 	case CompressionNone:
@@ -50,18 +48,6 @@ func (m CompressionMode) String() string {
 		return fmt.Sprintf("CompressionMode(%d)", uint8(m))
 	}
 }
-
-// CaptureMode selects the capture wire protocol used for event ingestion.
-type CaptureMode uint8
-
-const (
-	// CaptureModeLegacy sends events to the legacy POST /batch/ endpoint. This
-	// is the default, so upgrading is transparent to existing callers.
-	CaptureModeLegacy CaptureMode = 0
-	// CaptureModeAnalyticsV1 opts into POST /i/v1/analytics/events (Bearer auth,
-	// per-event results, partial retry).
-	CaptureModeAnalyticsV1 CaptureMode = 1
-)
 
 // Config carries configuration options used when constructing a Client with NewWithConfig.
 //
@@ -89,9 +75,16 @@ type Config struct {
 	// Deprecated: use SecretKey instead.
 	PersonalApiKey string
 
+	// Disabled makes NewWithConfig return a client that sends nothing: its
+	// methods return default values and ErrSDKDisabled. Use it in tests and
+	// local development.
+	Disabled bool
+
 	// DisableGeoIP controls whether event and feature flag requests include
 	// $geoip_disable/geoip_disable. Nil defaults to true because this SDK usually
-	// runs server-side; set Ptr(false) to allow GeoIP lookup.
+	// runs server-side; set Ptr(false) to allow GeoIP lookup. On events it is a
+	// default: a $geoip_disable value in the event, the RequestContext or
+	// DefaultEventProperties wins.
 	DisableGeoIP *bool
 
 	// IsServer controls whether events include the $is_server property.
@@ -101,7 +94,9 @@ type Config struct {
 	//
 	// Set Ptr(false) when using posthog-go as a CLI or client so the event is
 	// not flagged as server-side and the device OS is attributed normally. When
-	// resolved to false, $is_server is omitted from every event entirely.
+	// resolved to false, the SDK does not add $is_server. Like DisableGeoIP, it
+	// is a default: a $is_server value in the event, the RequestContext or
+	// DefaultEventProperties wins.
 	//
 	//	// CLI/client usage
 	//	config := posthog.Config{IsServer: posthog.Ptr(false)}
@@ -155,24 +150,84 @@ type Config struct {
 	// operations. If nil, the client logs to os.Stderr with the standard logger.
 	Logger Logger
 
-	// DefaultEventProperties are merged into every Capture event before sending.
-	// They are useful for common metadata like service name or app version. On key
-	// conflicts, values from DefaultEventProperties overwrite event properties,
-	// except that an explicit $process_person_profile=false remains false.
+	// DefaultEventProperties are added to the event properties of every Capture,
+	// Exception, Identify, Alias and GroupIdentify event. They are useful for
+	// common metadata like service name or app version. They never go into the
+	// $set or $group_set person and group properties.
+	//
+	// They fill in before BeforeSend, only for keys that the event and the
+	// request context left unset. A key with a nil value counts as set. $set,
+	// $set_once, $groups and $group_set fill one level deep when both values are
+	// maps. BeforeSend sees the filled values and can change or remove them. On
+	// Identify, Alias and GroupIdentify they fill EventProperties. A
+	// $process_person_profile in them never reaches an identify-style event;
+	// see Options.
 	DefaultEventProperties Properties
 
+	// DefaultEventOptions are added to the options of every Capture, Exception,
+	// Identify, Alias and GroupIdentify event, such as process_person_profile or
+	// cookieless_mode. They never set process_person_profile on an
+	// identify-style event whose distinct ID the SDK did not generate; see
+	// Options.
+	//
+	// They fill in before BeforeSend, only for options that the event and the
+	// request context left missing or nil. BeforeSend sees the filled options and
+	// can change them. Set an option to false on the event to turn a default off.
+	// They win over the personless default.
+	DefaultEventOptions Options
+
 	// Callback receives success or failure notifications for messages sent to the
-	// PostHog batch API.
+	// PostHog capture API. The message for an Alias does not include its
+	// EventProperties or the DefaultEventProperties filled into them.
 	Callback Callback
 
 	// BeforeSend is called after SDK enrichment and before messages are serialized.
 	// Return the message to send a modified version, or nil to drop it.
+	//
+	// The hook sees the event's own values and the values filled from
+	// RequestContext, DefaultEventProperties, DefaultEventOptions, the
+	// process_person_profile option the SDK sets on identify-style and
+	// personless events, and the SDK: $is_server, $geoip_disable, system
+	// context and feature flag properties. The SDK fills only keys the caller
+	// left unset. Its changes are final. To change an option, set it in Options.
 	BeforeSend BeforeSendFunc
 
 	// BatchSize is the maximum number of messages sent in one batch API call.
 	// Messages are sent when BatchSize is reached or when Interval fires. If zero,
-	// it defaults to DefaultBatchSize. The API still enforces a 500KB request limit.
+	// it defaults to DefaultBatchSize. MaxBatchBytes targets the combined event size.
 	BatchSize int
+
+	// MaxEventBytes optionally caps the serialized size of a single event. A
+	// larger event is rejected through Callback.Failure with ErrMessageTooBig
+	// rather than being sent. Zero disables the SDK's per-event cap. Backend
+	// request limits still apply; events processed within those limits can be
+	// rejected individually.
+	MaxEventBytes int
+
+	// MaxBatchBytes bounds the combined serialized size of the events in one
+	// capture request, independently of BatchSize, which bounds event count. A
+	// batch is flushed early when the next event would exceed it. The request
+	// envelope adds a small fixed overhead on top, so it is a target rather than
+	// a hard wire limit. An event larger than MaxBatchBytes is sent alone.
+	// When MaxEventBytes is set, MaxBatchBytes must be at least MaxEventBytes.
+	// If zero, it defaults to DefaultMaxBatchBytes.
+	MaxBatchBytes int
+
+	// CaptureAICompression selects the compression mode for EnqueueAI request
+	// bodies, independently of Compression. If zero, AI bodies are sent
+	// uncompressed. CompressionZstd is a good choice: AI events are large JSON.
+	CaptureAICompression CompressionMode
+
+	// CaptureAIBatchUploadTimeout is the timeout for uploading one AI batch. AI
+	// events are far larger than analytics events, so the lane gets its own
+	// budget. If zero, it defaults to DefaultCaptureAIBatchUploadTimeout.
+	CaptureAIBatchUploadTimeout time.Duration
+
+	// CaptureAIMaxQueueSize is the maximum number of AI messages buffered in
+	// memory. It is lower than MaxQueueSize by default because AI events can be
+	// multi-megabyte, so the same count would pin far more memory. If zero, it
+	// defaults to DefaultCaptureAIMaxQueueSize.
+	CaptureAIMaxQueueSize int
 
 	// MaxQueueSize is the maximum number of messages buffered in memory waiting to
 	// be batched and sent. If zero, it defaults to DefaultMaxQueueSize. It is
@@ -190,18 +245,26 @@ type Config struct {
 	Verbose bool
 
 	// RetryAfter returns the delay before retrying a failed batch upload. The int
-	// argument is the retry attempt number. If nil, DefaultBackoff().Duration is used.
+	// argument is the retry attempt number. If nil, the SDK uses DefaultBackoff's
+	// policy (with ±25% jitter), capped at MaxRetryBackoff. A custom RetryAfter
+	// is used as given, with no jitter added.
 	RetryAfter func(int) time.Duration
 
 	// MaxRetries is the maximum number of retries after the first send attempt.
 	// It must be in [0,9]. If nil, it defaults to 3 retries (4 total attempts).
 	MaxRetries *int
 
+	// MaxRetryBackoff caps how long a single retry waits. It bounds the default
+	// exponential backoff and clamps a server Retry-After to the same value, so
+	// a large or hostile header cannot park a batch. If zero, it defaults to
+	// DefaultMaxRetryBackoff. A custom RetryAfter is used as given.
+	MaxRetryBackoff time.Duration
+
 	// ShutdownTimeout is the maximum time Close waits for in-flight messages to be
 	// sent. If zero or negative, Close waits indefinitely for backward compatibility.
 	ShutdownTimeout time.Duration
 
-	// BatchUploadTimeout is the timeout for uploading one batch to the /batch/
+	// BatchUploadTimeout is the timeout for uploading one batch to the capture
 	// endpoint. If zero, it defaults to DefaultBatchUploadTimeout.
 	BatchUploadTimeout time.Duration
 
@@ -217,14 +280,9 @@ type Config struct {
 	MaxEnqueuedRequests int
 
 	// Compression selects the compression mode for batch payloads. CompressionGzip
-	// compresses payloads and adds the appropriate headers/query params. If zero,
+	// compresses payloads and sets the matching Content-Encoding header. If zero,
 	// it defaults to CompressionNone.
 	Compression CompressionMode
-
-	// CaptureMode selects the capture wire protocol. It defaults to
-	// CaptureModeLegacy (POST /batch/). Set CaptureModeAnalyticsV1 to opt into
-	// POST /i/v1/analytics/events.
-	CaptureMode CaptureMode
 
 	// AppHost is the PostHog app host that Client.Emails sends to, such as
 	// https://posthog.example.com for a self-hosted instance. If empty, a
@@ -304,12 +362,12 @@ const (
 
 	// DefaultMaxAttempts is the total number of capture delivery attempts (1
 	// initial + retries) used when Config.MaxRetries is unset or out of range.
-	// Chosen to match the cross-SDK Capture V1 parity standard (posthog-rs
-	// defaults to the same envelope). Applies to both the v0 and v1 send paths.
+	// Chosen to match the cross-SDK capture parity standard (posthog-rs
+	// defaults to the same envelope).
 	DefaultMaxAttempts = 4
 
 	// DefaultBatchUploadTimeout is the default timeout for uploading batched
-	// events to the /batch/ endpoint.
+	// events to the capture endpoint.
 	DefaultBatchUploadTimeout = 10 * time.Second
 
 	// DefaultBatchSubmitTimeout is the default timeout for submitting batches
@@ -320,6 +378,20 @@ const (
 	// DefaultMaxEnqueuedRequests is the default maximum number of batches that
 	// can be queued for sending.
 	DefaultMaxEnqueuedRequests = 1000
+
+	// DefaultMaxBatchBytes is the default maximum serialized size of one capture
+	// request, used when Config.MaxBatchBytes is zero.
+	DefaultMaxBatchBytes = 500000
+
+	// DefaultCaptureAIBatchUploadTimeout is the default AI-lane upload timeout,
+	// used when Config.CaptureAIBatchUploadTimeout is zero. Larger than
+	// DefaultBatchUploadTimeout because AI batches are far bigger.
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
+
+	// DefaultCaptureAIMaxQueueSize is the default AI-lane queue capacity, used
+	// when Config.CaptureAIMaxQueueSize is zero. Lower than DefaultMaxQueueSize
+	// because AI events can be multi-megabyte.
+	DefaultCaptureAIMaxQueueSize = 1000
 
 	// DefaultMaxQueueSize is the default in-memory message queue capacity used when
 	// Config.MaxQueueSize is zero. It matches the posthog-python, posthog-rs, and
@@ -422,32 +494,69 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	switch c.Compression {
-	case CompressionNone, CompressionGzip:
-		// Valid on both legacy and v1 capture modes.
-	case CompressionZstd, CompressionDeflate, CompressionBrotli:
-		// Only the v1 endpoint decodes these; the legacy /batch/ endpoint
-		// understands gzip/lz64/base64 only, so reject them up front.
-		if c.CaptureMode != CaptureModeAnalyticsV1 {
+	// Both lanes compress independently, so both settings are checked here: an
+	// unvalidated codec fails inside compressBody on every upload, silently
+	// losing that lane's events without ever making a request.
+	for _, m := range []struct {
+		field string
+		mode  CompressionMode
+	}{
+		{"Compression", c.Compression},
+		{"CaptureAICompression", c.CaptureAICompression},
+	} {
+		switch m.mode {
+		case CompressionNone, CompressionGzip, CompressionZstd, CompressionDeflate, CompressionBrotli:
+			// All codecs the capture endpoint decodes.
+		default:
 			return ConfigError{
-				Reason: c.Compression.String() + " compression requires CaptureModeAnalyticsV1",
-				Field:  "Compression",
-				Value:  c.Compression,
+				Reason: "invalid compression mode",
+				Field:  m.field,
+				Value:  m.mode,
 			}
-		}
-	default:
-		return ConfigError{
-			Reason: "invalid compression mode",
-			Field:  "Compression",
-			Value:  c.Compression,
 		}
 	}
 
-	if c.CaptureMode > CaptureModeAnalyticsV1 {
+	// Negative values are a caller mistake, not a request for the default: only
+	// zero selects one.
+	for _, f := range []struct {
+		field string
+		value int
+	}{
+		{"MaxEventBytes", c.MaxEventBytes},
+		{"MaxBatchBytes", c.MaxBatchBytes},
+		{"MaxQueueSize", c.MaxQueueSize},
+		{"CaptureAIMaxQueueSize", c.CaptureAIMaxQueueSize},
+	} {
+		if f.value < 0 {
+			return ConfigError{Reason: "must not be negative", Field: f.field, Value: f.value}
+		}
+	}
+	for _, f := range []struct {
+		field string
+		value time.Duration
+	}{
+		{"MaxRetryBackoff", c.MaxRetryBackoff},
+		{"BatchUploadTimeout", c.BatchUploadTimeout},
+		{"CaptureAIBatchUploadTimeout", c.CaptureAIBatchUploadTimeout},
+	} {
+		if f.value < 0 {
+			return ConfigError{Reason: "must not be negative", Field: f.field, Value: f.value}
+		}
+	}
+
+	// A capped event must fit in one request, so the per-event ceiling cannot
+	// exceed the request ceiling -- otherwise an event between the two is
+	// accepted and then sent alone in a request that breaks MaxBatchBytes.
+	// Compares effective values because makeConfig applies defaults after this.
+	maxEventBytes, maxBatchBytes := c.MaxEventBytes, c.MaxBatchBytes
+	if maxBatchBytes <= 0 {
+		maxBatchBytes = DefaultMaxBatchBytes
+	}
+	if maxEventBytes > 0 && maxBatchBytes < maxEventBytes {
 		return ConfigError{
-			Reason: "invalid capture mode",
-			Field:  "CaptureMode",
-			Value:  c.CaptureMode,
+			Reason: "MaxBatchBytes must be at least MaxEventBytes so a single event fits in one request",
+			Field:  "MaxBatchBytes",
+			Value:  maxBatchBytes,
 		}
 	}
 
@@ -539,8 +648,24 @@ func makeConfig(c Config) Config {
 		c.MaxQueueSize = c.BatchSize
 	}
 
+	if c.CaptureAIBatchUploadTimeout == 0 {
+		c.CaptureAIBatchUploadTimeout = DefaultCaptureAIBatchUploadTimeout
+	}
+
+	if c.CaptureAIMaxQueueSize <= 0 {
+		c.CaptureAIMaxQueueSize = DefaultCaptureAIMaxQueueSize
+	}
+
+	if c.MaxBatchBytes <= 0 {
+		c.MaxBatchBytes = DefaultMaxBatchBytes
+	}
+
+	if c.MaxRetryBackoff <= 0 {
+		c.MaxRetryBackoff = DefaultMaxRetryBackoff
+	}
+
 	if c.RetryAfter == nil {
-		c.RetryAfter = DefaultBackoff().Duration
+		c.RetryAfter = NewBackoff(defaultBackoffBase, defaultBackoffFactor, defaultBackoffJitter, c.MaxRetryBackoff).Duration
 	}
 
 	if c.now == nil {
@@ -574,13 +699,6 @@ func makeConfig(c Config) Config {
 
 	if c.EmailRequestMaxRetries == nil {
 		c.EmailRequestMaxRetries = Ptr(DefaultEmailRequestMaxRetries)
-	}
-
-	if c.GetDisableGeoIP() {
-		if c.DefaultEventProperties == nil {
-			c.DefaultEventProperties = NewProperties()
-		}
-		c.DefaultEventProperties.Set(propertyGeoipDisable, true)
 	}
 
 	return c

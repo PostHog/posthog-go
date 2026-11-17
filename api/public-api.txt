@@ -3,13 +3,16 @@
 # Public API scope: importable non-main packages in this module, excluding examples, cmd, and SDK compliance adapter packages.
 # Doc comments are intentionally excluded so documentation-only edits do not change this snapshot.
 
-## github.com/posthog/posthog-go
+## github.com/posthog/posthog-go/v2
 
-package posthog // import "github.com/posthog/posthog-go"
+package posthog // import "github.com/posthog/posthog-go/v2"
 
 
 CONSTANTS
 
+const (
+	DefaultMaxRetryBackoff = 30 * time.Second
+)
 const (
 	SDKName = "posthog-go"
 
@@ -30,6 +33,12 @@ const (
 	DefaultBatchSubmitTimeout = 100 * time.Millisecond
 
 	DefaultMaxEnqueuedRequests = 1000
+
+	DefaultMaxBatchBytes = 500000
+
+	DefaultCaptureAIBatchUploadTimeout = 30 * time.Second
+
+	DefaultCaptureAIMaxQueueSize = 1000
 
 	DefaultMaxQueueSize = 10000
 
@@ -91,14 +100,17 @@ var (
 
 	ErrQueueFull = errors.New("the message queue is full, the message was dropped")
 
-	ErrSDKDisabled = errors.New("posthog SDK is disabled because project API key is missing")
+	ErrSDKDisabled = errors.New("posthog SDK is disabled")
 )
 var ErrFlagNotFound = errors.New("feature flag not found")
 
 
 FUNCTIONS
 
+func EnqueueAIWithContext(ctx context.Context, client Client, msg Message) error
+
 func EnqueueWithContext(ctx context.Context, client EnqueueClient, msg Message) error
+
 
 func NewRequestContextMiddleware(next http.Handler, opts ...RequestContextOption) http.Handler
 
@@ -132,6 +144,8 @@ type Alias struct {
 	Alias string
 	DistinctId string
 	Timestamp time.Time
+	EventProperties Properties
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
 }
@@ -198,10 +212,10 @@ type Capture struct {
 	Timestamp time.Time
 	Properties Properties
 	Groups Groups
+	Options Options
 	SendFeatureFlags SendFeatureFlagsValue
 	Flags *FeatureFlagEvaluations
 	IsServer bool
-	Library string
 
 }
 
@@ -214,6 +228,7 @@ type CaptureEventError struct {
 	Result string
 	Details string
 	Exhausted bool
+	Endpoint string
 }
 
 
@@ -232,17 +247,22 @@ type CaptureInApi struct {
 	SendFeatureFlags SendFeatureFlagsValue `json:"-"`
 }
 
-type CaptureMode uint8
+type CaptureLocalError struct {
+	Endpoint string
+	Err error
+}
 
-const (
-	CaptureModeLegacy CaptureMode = 0
-	CaptureModeAnalyticsV1 CaptureMode = 1
-)
+
+func (e *CaptureLocalError) Error() string
+
+func (e *CaptureLocalError) Unwrap() error
+
 type CaptureRequestError struct {
 	StatusCode int
 	Code string
 	Description string
 	Err error
+	Endpoint string
 }
 
 
@@ -252,6 +272,8 @@ func (e *CaptureRequestError) Unwrap() error
 
 type Client interface {
 	EnqueueClient
+
+	EnqueueAI(Message) error
 
 	Flush() error
 
@@ -280,10 +302,11 @@ type Client interface {
 	Emails() Emails
 }
 
-func New(apiKey string) Client
+func New(apiKey string) (Client, error)
 
 
 func NewWithConfig(apiKey string, config Config) (cli Client, err error)
+
 
 
 type CodeEmail struct {
@@ -332,6 +355,8 @@ type Config struct {
 
 	PersonalApiKey string
 
+	Disabled bool
+
 	DisableGeoIP *bool
 
 	IsServer *bool
@@ -356,11 +381,23 @@ type Config struct {
 
 	DefaultEventProperties Properties
 
+	DefaultEventOptions Options
+
 	Callback Callback
 
 	BeforeSend BeforeSendFunc
 
 	BatchSize int
+
+	MaxEventBytes int
+
+	MaxBatchBytes int
+
+	CaptureAICompression CompressionMode
+
+	CaptureAIBatchUploadTimeout time.Duration
+
+	CaptureAIMaxQueueSize int
 
 	MaxQueueSize int
 
@@ -369,6 +406,8 @@ type Config struct {
 	RetryAfter func(int) time.Duration
 
 	MaxRetries *int
+
+	MaxRetryBackoff time.Duration
 
 	ShutdownTimeout time.Duration
 
@@ -379,8 +418,6 @@ type Config struct {
 	MaxEnqueuedRequests int
 
 	Compression CompressionMode
-
-	CaptureMode CaptureMode
 
 	AppHost string
 
@@ -567,9 +604,9 @@ type Exception struct {
 	DebugImages []DebugImage
 	Timestamp time.Time
 	Properties Properties
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
-	Library string
 
 	ExceptionList []ExceptionItem
 	ExceptionFingerprint *string
@@ -845,6 +882,8 @@ type GroupIdentify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	EventProperties Properties
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
 }
@@ -864,11 +903,11 @@ type GroupIdentifyInApi struct {
 	Properties Properties `json:"properties"`
 }
 
-type Groups map[string]interface{}
+type Groups map[string]string
 
 func NewGroups() Groups
 
-func (p Groups) Set(name string, value interface{}) Groups
+func (p Groups) Set(name string, value string) Groups
 
 type Holdout struct {
 	ID interface{} `json:"id"`
@@ -882,6 +921,8 @@ type Identify struct {
 	DistinctId string
 	Timestamp time.Time
 	Properties Properties
+	EventProperties Properties
+	Options Options
 	DisableGeoIP bool
 	IsServer bool
 }
@@ -932,6 +973,18 @@ type Message interface {
 }
 
 
+type Options map[string]interface{}
+
+
+
+
+
+
+
+func NewOptions() Options
+
+func (o Options) Set(name string, value interface{}) Options
+
 type Properties map[string]interface{}
 
 
@@ -955,6 +1008,7 @@ type RequestContext struct {
 	DistinctId string
 	SessionId string
 	Properties Properties
+	Options Options
 }
 
 
@@ -1095,14 +1149,14 @@ type Variants struct {
 }
 
 
-## github.com/posthog/posthog-go/extras
+## github.com/posthog/posthog-go/v2/extras
 
-package extras // import "github.com/posthog/posthog-go/extras"
+package extras // import "github.com/posthog/posthog-go/v2/extras"
 
 
-## github.com/posthog/posthog-go/posthogmcp
+## github.com/posthog/posthog-go/v2/posthogmcp
 
-package posthogmcp // import "github.com/posthog/posthog-go/posthogmcp"
+package posthogmcp // import "github.com/posthog/posthog-go/v2/posthogmcp"
 
 Package posthogmcp builds and enqueues canonical PostHog analytics events for
 Model Context Protocol activity without depending on a particular MCP framework.
@@ -1116,9 +1170,11 @@ Analytics.CaptureInputRequired, and Analytics.CaptureMissingCapability send
 their own events. Parameter or response JSON exceeding 1 MiB after media
 redaction is replaced with an omission marker.
 
-MCP events carry $lib posthog-go-mcp. A client in CaptureModeAnalyticsV1 sends
-one library name per request, taken from the SDK, so there its MCP events report
-posthog-go.
+MCP events carry $lib posthog-go-mcp and $lib_version set to the SDK version.
+ToolCall.Properties, the EventContext's Properties and the request context's
+properties can set either one, key by key like other properties, so set both
+together. A $lib that is not a non-empty string gets the MCP pair. BeforeSend
+can change either.
 
 TYPES
 
@@ -1152,6 +1208,7 @@ type EventContext struct {
 	VendorClient    string
 
 	Properties posthog.Properties
+	EventOptions posthog.Options
 	Timestamp time.Time
 }
 
@@ -1222,6 +1279,7 @@ type ToolCall struct {
 	ErrorType string
 
 	Properties posthog.Properties
+	EventOptions posthog.Options
 	Timestamp time.Time
 }
 
