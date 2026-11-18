@@ -1273,7 +1273,7 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) error {
 		poller.state.Store(cleared)
 		poller.warnAboutUnresolvableFlags(cleared)
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
-		return errFlagDefinitionsQuotaLimited
+		return ErrFlagDefinitionsQuotaLimited
 	}
 
 	if res.StatusCode != http.StatusOK {

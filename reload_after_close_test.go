@@ -134,7 +134,7 @@ func TestReloadFeatureFlagsWithContextReportsFailedLoads(t *testing.T) {
 	require.ErrorContains(t, reloader.ReloadFeatureFlagsWithContext(context.Background()), "status 500")
 
 	responses.status.Store(http.StatusPaymentRequired)
-	require.ErrorIs(t, reloader.ReloadFeatureFlagsWithContext(context.Background()), errFlagDefinitionsQuotaLimited)
+	require.ErrorIs(t, reloader.ReloadFeatureFlagsWithContext(context.Background()), ErrFlagDefinitionsQuotaLimited)
 }
 
 func TestReloadFeatureFlagsWithContextStopsWaitingWhenTheContextEnds(t *testing.T) {

@@ -13,10 +13,13 @@ import (
 // Use errors.Is(err, ErrFlagNotFound) to check for this error.
 var ErrFlagNotFound = errors.New("feature flag not found")
 
-var (
-	errNoCachedFlagDefinitions     = errors.New("no feature flag definitions are loaded")
-	errFlagDefinitionsQuotaLimited = errors.New("feature flag definitions are quota limited")
-)
+var errNoCachedFlagDefinitions = errors.New("no feature flag definitions are loaded")
+
+// ErrFlagDefinitionsQuotaLimited is returned by ReloadFeatureFlagsWithContext when
+// PostHog answers the definitions request as quota limited; local flag definitions
+// are cleared until a later reload succeeds.
+// Use errors.Is(err, ErrFlagDefinitionsQuotaLimited) to check for this error.
+var ErrFlagDefinitionsQuotaLimited = errors.New("feature flag definitions are quota limited")
 
 // Feature flag error type constants for the $feature_flag_error property.
 // These values are sent in analytics events to track flag evaluation failures.
