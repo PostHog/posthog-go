@@ -322,7 +322,7 @@ func TestFlagDefinitionCacheUnusableDefinitionsKeepTheLoadedOnes(t *testing.T) {
 	provider.cached = json.RawMessage(malformedMultivariateDefinitions)
 	provider.mu.Unlock()
 
-	require.NotPanics(t, poller.fetchNewFeatureFlags)
+	require.NotPanics(t, func() { _ = poller.fetchNewFeatureFlags() })
 
 	require.Equal(t, 1, requests(), "warm definitions are kept, so there is nothing to recover")
 	state := poller.state.Load()
@@ -339,7 +339,7 @@ func TestFlagDefinitionCacheUnusableDefinitionsFetchWithoutWarmState(t *testing.
 	server, requests := definitionsServer(t, serveDefinitions(cachedFlagDefinitions))
 
 	poller := newCachingTestPoller(t, server.URL, provider)
-	require.NotPanics(t, poller.fetchNewFeatureFlags)
+	require.NotPanics(t, func() { _ = poller.fetchNewFeatureFlags() })
 
 	require.Equal(t, 1, requests())
 	state := poller.state.Load()

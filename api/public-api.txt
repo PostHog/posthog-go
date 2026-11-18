@@ -102,6 +102,8 @@ var (
 
 	ErrSDKDisabled = errors.New("posthog SDK is disabled")
 )
+var ErrFlagDefinitionsQuotaLimited = errors.New("feature flag definitions are quota limited")
+
 var ErrFlagNotFound = errors.New("feature flag not found")
 
 
@@ -839,6 +841,11 @@ type FlagReason struct {
 	Description string `json:"description"`
 	ConditionIndex *int `json:"condition_index"`
 }
+
+type FlagReloader interface {
+	ReloadFeatureFlagsWithContext(ctx context.Context) error
+}
+
 
 type FlagVariant struct {
 	Key string `json:"key"`
