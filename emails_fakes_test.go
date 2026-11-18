@@ -261,9 +261,9 @@ func (p *fakePostHog) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method != http.MethodPost:
 		answer(w, http.StatusMethodNotAllowed, map[string]interface{}{"type": "invalid_request", "code": "method_not_allowed"})
-	case r.URL.Path == emailUploadsPath && !p.withoutUploadRoute:
+	case r.URL.Path == "/api/messaging/attachments/uploads/" && !p.withoutUploadRoute:
 		p.authorized(w, r, func() { p.answerUploads(w, body) })
-	case r.URL.Path == emailSendPath:
+	case r.URL.Path == "/api/messaging/send/email/":
 		p.authorized(w, r, func() { p.send(w, body) })
 	default:
 		answer(w, http.StatusNotFound, map[string]interface{}{"type": "invalid_request", "code": "not_found", "detail": "Endpoint not found.", "attr": nil})

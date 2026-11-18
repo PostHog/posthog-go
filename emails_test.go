@@ -135,7 +135,7 @@ func TestEmailsSendTemplate(t *testing.T) {
 	requests := server.received()
 	require.Len(t, requests, 1)
 	require.Equal(t, http.MethodPost, requests[0].Method)
-	require.Equal(t, "/api/projects/@current/messaging/send/email/", requests[0].Path)
+	require.Equal(t, "/api/messaging/send/email/", requests[0].Path)
 	require.Equal(t, map[string]interface{}{
 		"template_id":  testTemplateID,
 		"to":           "user@example.com",
@@ -487,7 +487,7 @@ func TestEmailsAppHost(t *testing.T) {
 			_, err = client.Emails().Send(context.Background(), templateEmail())
 
 			require.NoError(t, err)
-			require.Equal(t, tt.want+"/api/projects/@current/messaging/send/email/", gotURL)
+			require.Equal(t, tt.want+"/api/messaging/send/email/", gotURL)
 		})
 	}
 }
@@ -998,7 +998,7 @@ func TestEmailsGet(t *testing.T) {
 	requests := server.received()
 	require.Len(t, requests, 1)
 	require.Equal(t, http.MethodGet, requests[0].Method)
-	require.Equal(t, "/api/projects/@current/messaging/emails/"+testMessageID+"/", requests[0].Path)
+	require.Equal(t, "/api/messaging/emails/"+testMessageID+"/", requests[0].Path)
 	require.Equal(t, "Bearer phs_test", requests[0].Header.Get("Authorization"))
 	require.Empty(t, requests[0].Header.Get("Idempotency-Key"))
 	require.Empty(t, requests[0].Header.Get("Content-Type"))

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	emailUploadsPath = "/api/projects/@current/messaging/attachments/uploads/"
+	emailUploadsPath = "/api/messaging/attachments/uploads/"
 	// maxEmailAttachments and maxEmailMessageBytes are PostHog's limits on one
 	// email: 10 files, and 40 MB for the message after Base64 encoding.
 	maxEmailAttachments  = 10
