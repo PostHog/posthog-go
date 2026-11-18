@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	emailSendPath      = "/api/projects/@current/messaging/send/email/"
-	emailStatusPath    = "/api/projects/@current/messaging/emails/"
+	emailSendPath      = "/api/messaging/send/email/"
+	emailStatusPath    = "/api/messaging/emails/"
 	maxEmailRetryDelay = 30 * time.Second
 	maxEmailRetries    = 9
 	maxEmailReplyBytes = 1 << 20
