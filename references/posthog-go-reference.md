@@ -1198,7 +1198,7 @@ const (
 ```
 
 ```go
-const Version = "2.0.0"
+const Version = "2.1.0"
 ```
 
 Version of the client.
@@ -1244,6 +1244,12 @@ var (
 	ErrSDKDisabled = errors.New("posthog SDK is disabled")
 )
 ```
+
+```go
+var ErrFlagDefinitionsQuotaLimited = errors.New("feature flag definitions are quota limited")
+```
+
+ErrFlagDefinitionsQuotaLimited is returned by ReloadFeatureFlagsWithContext when PostHog answers the definitions request as quota limited; local flag definitions are cleared until a later reload succeeds. Use errors.Is(err, ErrFlagDefinitionsQuotaLimited) to check for this error.
 
 ```go
 var ErrFlagNotFound = errors.New("feature flag not found")
@@ -2676,6 +2682,25 @@ type FlagReason struct {
 ```
 
 FlagReason represents why a flag was enabled or disabled.
+
+### `FlagReloader`
+
+```go
+type FlagReloader interface {
+	// ReloadFeatureFlagsWithContext fetches local feature flag definitions now
+	// and returns once they are in use, or with the error that kept them from
+	// loading. ReloadFeatureFlags only schedules the fetch.
+	ReloadFeatureFlagsWithContext(ctx context.Context) error
+}
+```
+
+FlagReloader is implemented by clients that can reload local feature flag definitions and wait for the result. Assert a Client to it:
+
+```go
+if r, ok := client.(posthog.FlagReloader); ok {
+	err := r.ReloadFeatureFlagsWithContext(ctx)
+}
+```
 
 ### `FlagVariant`
 

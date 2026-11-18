@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 2.1.0
+
+### Minor Changes
+
+- b17c59b: Add `ReloadFeatureFlagsWithContext`, which fetches local feature flag definitions and returns once they are in use, or with the error that kept them from loading. Reach it through the new `FlagReloader` interface (`client.(posthog.FlagReloader)`), so implementations and mocks of `Client` are unaffected. A quota-limited definitions response returns `ErrFlagDefinitionsQuotaLimited`. `ReloadFeatureFlags` still only schedules the fetch.
+
 ## 2.0.0
 
 ### Major Changes
