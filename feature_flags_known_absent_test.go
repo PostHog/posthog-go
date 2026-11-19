@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	json "github.com/goccy/go-json"
 	"github.com/stretchr/testify/require"
@@ -317,14 +318,18 @@ func TestKnownAbsentRemoteBody(t *testing.T) {
 				}
 
 				require.NoError(t, call(c, person, groupKeys))
+				require.NoError(t, call(c, nil, map[string][]string{"organization": {"tier"}, "project": nil, "team": {}}))
 				require.NoError(t, call(c, nil, nil))
 				require.NoError(t, call(c, []string{}, map[string][]string{}))
+				require.NoError(t, call(c, nil, map[string][]string{"project": nil}))
 
 				requests := server.requests()
-				require.Len(t, requests, 3)
+				require.Len(t, requests, 5)
 				require.JSONEq(t, `["plan"]`, string(requests[0]["person_property_keys_known_absent"]))
 				require.JSONEq(t, `{"organization": ["tier"]}`, string(requests[0]["group_property_keys_known_absent"]))
-				for _, request := range requests[1:] {
+				require.NotContains(t, requests[1], "person_property_keys_known_absent")
+				require.JSONEq(t, `{"organization": ["tier"]}`, string(requests[1]["group_property_keys_known_absent"]), "empty group lists are left out")
+				for _, request := range requests[2:] {
 					require.NotContains(t, request, "person_property_keys_known_absent")
 					require.NotContains(t, request, "group_property_keys_known_absent")
 				}
@@ -369,6 +374,21 @@ func TestKnownAbsentLimitValidation(t *testing.T) {
 			_, err := c.(*client).getFeatureVariantsWithOptions("user-1", nil, nil, nil, &SendFeatureFlagsOptions{PersonPropertyKeysKnownAbsent: person, GroupPropertyKeysKnownAbsent: groups})
 			return err
 		},
+		"FeatureFlagsPoller.GetFeatureFlag": func(c Client, person []string, groups map[string][]string) error {
+			_, _, err := c.(*client).featureFlagsPoller.GetFeatureFlag(FeatureFlagPayload{Key: "profile-incomplete", DistinctId: "user-1", PersonPropertyKeysKnownAbsent: person, GroupPropertyKeysKnownAbsent: groups})
+			return err
+		},
+		"FeatureFlagsPoller.GetFeatureFlagPayload": func(c Client, person []string, groups map[string][]string) error {
+			_, err := c.(*client).featureFlagsPoller.GetFeatureFlagPayload(FeatureFlagPayload{Key: "profile-incomplete", DistinctId: "user-1", PersonPropertyKeysKnownAbsent: person, GroupPropertyKeysKnownAbsent: groups})
+			return err
+		},
+		"FeatureFlagsPoller.GetFeatureFlagWithPayload": func(c Client, person []string, groups map[string][]string) error {
+			return c.(*client).featureFlagsPoller.GetFeatureFlagWithPayload(FeatureFlagPayload{Key: "profile-incomplete", DistinctId: "user-1", PersonPropertyKeysKnownAbsent: person, GroupPropertyKeysKnownAbsent: groups}).err
+		},
+		"FeatureFlagsPoller.GetAllFlags": func(c Client, person []string, groups map[string][]string) error {
+			_, err := c.(*client).featureFlagsPoller.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: "user-1", PersonPropertyKeysKnownAbsent: person, GroupPropertyKeysKnownAbsent: groups})
+			return err
+		},
 	}
 
 	for name, call := range apis {
@@ -401,4 +421,27 @@ func TestKnownAbsentLimitValidation(t *testing.T) {
 			require.Len(t, sent, maxKnownAbsentPropertyKeys, "lists are sent without truncation or deduplication")
 		})
 	}
+}
+
+func TestKnownAbsentCaptureOverLimitSendsEventWithoutFlags(t *testing.T) {
+	definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, unknownOperatorFilter)))
+	server := newKnownAbsentServer(t, definitions)
+	c, capture, _ := newEvalClient(t, server.server, func(cfg *Config) { cfg.PersonalApiKey = "personal-key" })
+	waitForFlagDefinitions(t, c)
+
+	tooMany := make([]string, maxKnownAbsentPropertyKeys+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("key-%d", i)
+	}
+	require.NoError(t, c.Enqueue(Capture{
+		Event:            "signed_up",
+		DistinctId:       "user-1",
+		SendFeatureFlags: &SendFeatureFlagsOptions{PersonPropertyKeysKnownAbsent: tooMany},
+	}))
+
+	events := waitForEventCount(capture, 1, 5*time.Second)
+	require.Len(t, events, 1)
+	require.Equal(t, "signed_up", events[0].Event)
+	require.NotContains(t, events[0].Properties, "$feature/profile-incomplete")
+	require.Empty(t, server.requests(), "an over-limit list must not reach /flags")
 }

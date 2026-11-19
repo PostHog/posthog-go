@@ -43,19 +43,21 @@ func newKnownAbsentPropertyKeys(personKeys []string, groupKeys map[string][]stri
 			knownAbsent.person[key] = struct{}{}
 		}
 	}
-	if len(groupKeys) > 0 {
-		knownAbsent.groupKeys = groupKeys
-		knownAbsent.groups = make(map[string]propertyKeySet, len(groupKeys))
-		for groupType, keys := range groupKeys {
-			if len(keys) == 0 {
-				continue
-			}
-			set := make(propertyKeySet, len(keys))
-			for _, key := range keys {
-				set[key] = struct{}{}
-			}
-			knownAbsent.groups[groupType] = set
+	for groupType, keys := range groupKeys {
+		// /flags rejects a null group list, so empty lists are left out of the body too.
+		if len(keys) == 0 {
+			continue
 		}
+		if knownAbsent.groups == nil {
+			knownAbsent.groupKeys = make(map[string][]string, len(groupKeys))
+			knownAbsent.groups = make(map[string]propertyKeySet, len(groupKeys))
+		}
+		knownAbsent.groupKeys[groupType] = keys
+		set := make(propertyKeySet, len(keys))
+		for _, key := range keys {
+			set[key] = struct{}{}
+		}
+		knownAbsent.groups[groupType] = set
 	}
 	return knownAbsent
 }

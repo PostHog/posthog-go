@@ -1314,6 +1314,9 @@ func (poller *FeatureFlagsPoller) getMinimalFlagCalledEvents() bool {
 // It returns the flag value, whether that value was locally evaluated, and an error.
 // If local evaluation is inconclusive and OnlyEvaluateLocally is false, it falls back to /flags.
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return nil, false, err
+	}
 	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
 	knownAbsent := flagConfig.knownAbsentPropertyKeys()
 
@@ -1352,6 +1355,9 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 // GetFeatureFlagPayload returns the payload for the evaluated flag value.
 // It tries local payloads first and falls back to the remote API unless OnlyEvaluateLocally is true.
 func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return "", err
+	}
 	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
 	knownAbsent := flagConfig.knownAbsentPropertyKeys()
 
@@ -1412,6 +1418,9 @@ type flagValueAndPayload struct {
 // and payload. This avoids the double evaluation that would happen when calling
 // GetFeatureFlag and GetFeatureFlagPayload separately.
 func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFlagPayload) flagValueAndPayload {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return flagValueAndPayload{err: err}
+	}
 	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
 	knownAbsent := flagConfig.knownAbsentPropertyKeys()
 
@@ -1510,6 +1519,9 @@ func (poller *FeatureFlagsPoller) getFeatureFlagWithState(flagConfig FeatureFlag
 // GetAllFlags evaluates every available flag for the configured user.
 // Values are bools for boolean flags or strings for multivariate variants.
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return nil, err
+	}
 	state, err := poller.getLoadedState()
 	if err != nil {
 		return nil, err

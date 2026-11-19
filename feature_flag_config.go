@@ -18,11 +18,12 @@ type FeatureFlagPayload struct {
 	GroupProperties map[string]Properties
 	// PersonPropertyKeysKnownAbsent lists person property keys the caller knows the person
 	// does not have. Local evaluation treats a listed key as absent even when
-	// PersonProperties has a value for it: is_not_set and the negated operators (is_not,
-	// not_icontains, not_starts_with, not_ends_with, not_regex) match, and every other
-	// operator does not, without a remote fallback. Keys starting with
-	// __posthog_person_metadata__ are ignored. Remote /flags requests send the list as
-	// person_property_keys_known_absent. At most 1000 keys, counting duplicates;
+	// PersonProperties has a value for it. For a supported operator with a valid filter
+	// value, is_not_set and the negated operators (is_not, not_icontains, not_starts_with,
+	// not_ends_with, not_regex) match, and every other operator does not, without a remote
+	// fallback. An unsupported operator stays unresolved and can still fall back to /flags.
+	// Keys starting with __posthog_person_metadata__ are ignored. Remote /flags requests
+	// send the list as person_property_keys_known_absent. At most 1000 keys, counting duplicates;
 	// a longer list fails validation with a ConfigError and nothing is evaluated.
 	PersonPropertyKeysKnownAbsent []string
 	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys the caller
@@ -93,11 +94,12 @@ type FeatureFlagPayloadNoKey struct {
 	GroupProperties map[string]Properties
 	// PersonPropertyKeysKnownAbsent lists person property keys the caller knows the person
 	// does not have. Local evaluation treats a listed key as absent even when
-	// PersonProperties has a value for it: is_not_set and the negated operators (is_not,
-	// not_icontains, not_starts_with, not_ends_with, not_regex) match, and every other
-	// operator does not, without a remote fallback. Keys starting with
-	// __posthog_person_metadata__ are ignored. Remote /flags requests send the list as
-	// person_property_keys_known_absent. At most 1000 keys, counting duplicates;
+	// PersonProperties has a value for it. For a supported operator with a valid filter
+	// value, is_not_set and the negated operators (is_not, not_icontains, not_starts_with,
+	// not_ends_with, not_regex) match, and every other operator does not, without a remote
+	// fallback. An unsupported operator stays unresolved and can still fall back to /flags.
+	// Keys starting with __posthog_person_metadata__ are ignored. Remote /flags requests
+	// send the list as person_property_keys_known_absent. At most 1000 keys, counting duplicates;
 	// a longer list fails validation with a ConfigError and nothing is evaluated.
 	PersonPropertyKeysKnownAbsent []string
 	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys the caller
