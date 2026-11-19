@@ -86,7 +86,7 @@ func TestCohortFlagDependencyGroupContext(t *testing.T) {
 						if _, exists := evaluations.flags["target"]; exists {
 							t.Error("EvaluateFlags must omit target")
 						}
-						captured, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, properties, config.GroupProperties, true)
+						captured, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, properties, config.GroupProperties, nil, true)
 						if _, exists := captured["target"]; err != nil || exists {
 							t.Errorf("capture flags=%v err=%v; must omit target", captured, err)
 						}
@@ -104,7 +104,7 @@ func TestCohortFlagDependencyGroupContext(t *testing.T) {
 							cache["dep"] = false
 						}
 						for i := 0; i < 2; i++ {
-							got, err := poller.matchCohort(FlagProperty{Value: "c"}, properties, cohorts, state.flagsByKey, cache, "person", nil, nil, state)
+							got, err := poller.matchCohort(FlagProperty{Value: "c"}, properties, nil, cohorts, state.flagsByKey, cache, "person", nil, nil, state)
 							if aggregation == "person" {
 								if err != nil || got != want {
 									t.Errorf("cohort=%v err=%v; want %v", got, err, want)
@@ -180,7 +180,7 @@ func TestGroupContextPersonFlagDependency(t *testing.T) {
 						for _, cached := range []interface{}{nil, false, true} {
 							cache := map[string]interface{}{"dep": cached}
 							for i := 0; i < 2; i++ {
-								got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], cohorts, state.flagsByKey, cache, "acme", nil, &groupIndex, state)
+								got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], nil, cohorts, state.flagsByKey, cache, "acme", nil, &groupIndex, state)
 								if !isServerEvalError(err) {
 									t.Errorf("cohort=%v err=%v cached=%v; must require server evaluation", got, err, cached)
 								}

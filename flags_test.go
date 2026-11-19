@@ -72,7 +72,7 @@ func TestMakeFlagsRequestRetriesTransientErrorsThenSucceeds(t *testing.T) {
 			}
 			client.retryAfter = func(int) time.Duration { return 0 }
 
-			res, err := client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+			res, err := client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 			if err != nil {
 				t.Fatalf("makeFlagsRequest returned error: %v", err)
 			}
@@ -111,7 +111,7 @@ func TestMakeFlagsRequestRetriesHTTP502And504ThenSucceeds(t *testing.T) {
 			}
 			client.retryAfter = func(int) time.Duration { return 0 }
 
-			res, err := client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+			res, err := client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 			if err != nil {
 				t.Fatalf("makeFlagsRequest returned error: %v", err)
 			}
@@ -144,7 +144,7 @@ func TestMakeFlagsRequestRetriesHTTP502And504UntilExhausted(t *testing.T) {
 			}
 			client.retryAfter = func(int) time.Duration { return 0 }
 
-			_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+			_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 			if err == nil {
 				t.Fatal("expected an error")
 			}
@@ -187,7 +187,7 @@ func TestMakeFlagsRequestRetriesTransientErrorUntilExhausted(t *testing.T) {
 	}
 	client.retryAfter = func(int) time.Duration { return 0 }
 
-	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -214,7 +214,7 @@ func TestMakeFlagsRequestDoesNotRetryUnknownError(t *testing.T) {
 	}
 	client.retryAfter = func(int) time.Duration { return 0 }
 
-	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 	if !errors.Is(err, unknownErr) {
 		t.Fatalf("expected unknown error, got %v", err)
 	}
@@ -237,7 +237,7 @@ func TestMakeFlagsRequestDoesNotRetryWhenConfiguredMaxRetriesIsZero(t *testing.T
 	}
 	client.retryAfter = func(int) time.Duration { return 0 }
 
-	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -260,7 +260,7 @@ func TestMakeFlagsRequestDoesNotRetryConnectionRefused(t *testing.T) {
 	}
 	client.retryAfter = func(int) time.Duration { return 0 }
 
-	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+	_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -288,7 +288,7 @@ func TestMakeFlagsRequestDoesNotRetryHTTPStatusErrors(t *testing.T) {
 			}
 			client.retryAfter = func(int) time.Duration { return 0 }
 
-			_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, false, nil)
+			_, err = client.makeFlagsRequest("user-1", nil, nil, nil, nil, nil, false, nil)
 			if err == nil {
 				t.Fatal("expected an error")
 			}

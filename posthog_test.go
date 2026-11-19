@@ -1029,6 +1029,7 @@ func TestFlagsRequestSnapshots(t *testing.T) {
 				test.groups,
 				test.personProperties,
 				test.groupProperties,
+				nil,
 				test.disableGeoIP,
 				test.flagKeys,
 			)

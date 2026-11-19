@@ -35,7 +35,7 @@ func holdoutFlag(holdout *Holdout) FeatureFlag {
 
 func evaluateLocally(t *testing.T, poller *FeatureFlagsPoller, flag FeatureFlag, distinctId string) interface{} {
 	t.Helper()
-	value, err := poller.computeFlagLocally(flag, distinctId, nil, nil, nil, nil, nil)
+	value, err := poller.computeFlagLocally(flag, distinctId, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	return value
 }
@@ -142,7 +142,7 @@ func TestHoldoutUsesFlagLevelGroupIdentity(t *testing.T) {
 
 	// The group key is held out even though the distinct id is not.
 	value, err := poller.computeFlagLocally(
-		flag, "user-5", nil, Groups{"organization": "user-1"}, nil, nil, nil, state,
+		flag, "user-5", nil, Groups{"organization": "user-1"}, nil, nil, nil, nil, state,
 	)
 	require.NoError(t, err)
 	require.Equal(t, "holdout-727", value)
@@ -154,7 +154,7 @@ func TestHoldoutUsesDeviceIdentityForDeviceBucketedFlags(t *testing.T) {
 	flag.BucketingIdentifier = stringPtr(bucketingIdentifierDevice)
 
 	// The device id is held out even though the distinct id is not.
-	value, err := poller.computeFlagLocally(flag, "user-5", stringPtr("user-1"), nil, nil, nil, nil)
+	value, err := poller.computeFlagLocally(flag, "user-5", stringPtr("user-1"), nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "holdout-727", value)
 }
@@ -175,7 +175,7 @@ func TestHoldoutMissingDeviceIsInconclusive(t *testing.T) {
 	// "user-1" is held out by its distinct id; that must not substitute for a missing device id.
 	for name, deviceId := range map[string]*string{"nil": nil, "empty": stringPtr("")} {
 		t.Run(name, func(t *testing.T) {
-			value, err := poller.computeFlagLocally(flag, "user-1", deviceId, nil, nil, nil, nil)
+			value, err := poller.computeFlagLocally(flag, "user-1", deviceId, nil, nil, nil, nil, nil)
 			var inconclusive *InconclusiveMatchError
 			require.ErrorAs(t, err, &inconclusive)
 			require.Nil(t, value)
@@ -207,7 +207,7 @@ func TestHoldoutMissingDeviceStillEvaluatesWhenNoIdentityNeeded(t *testing.T) {
 			groups:     map[string]string{"0": "organization"},
 		}
 		value, err := poller.computeFlagLocally(
-			flag, "user-5", nil, Groups{"organization": "user-1"}, nil, nil, nil, state,
+			flag, "user-5", nil, Groups{"organization": "user-1"}, nil, nil, nil, nil, state,
 		)
 		require.NoError(t, err)
 		require.Equal(t, "holdout-727", value)
@@ -239,11 +239,11 @@ func TestHoldoutValueIsVisibleToDependentFlags(t *testing.T) {
 		groups:     map[string]string{},
 	}
 
-	checkoutValue, err := poller.computeFlagLocally(checkout, "user-1", nil, nil, nil, nil, nil, state)
+	checkoutValue, err := poller.computeFlagLocally(checkout, "user-1", nil, nil, nil, nil, nil, nil, state)
 	require.NoError(t, err)
 	require.Equal(t, "holdout-727", checkoutValue)
 
-	dependentValue, err := poller.computeFlagLocally(dependent, "user-1", nil, nil, nil, nil, nil, state)
+	dependentValue, err := poller.computeFlagLocally(dependent, "user-1", nil, nil, nil, nil, nil, nil, state)
 	require.NoError(t, err)
 	require.Equal(t, true, dependentValue)
 }

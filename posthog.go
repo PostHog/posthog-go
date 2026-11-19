@@ -1086,7 +1086,7 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 		c.debugf("getting feature flag from flags endpoint")
 		locallyEvaluated = false
 		remoteResult := c.getFeatureFlagFromRemote(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
-			flagConfig.PersonProperties, flagConfig.GroupProperties)
+			flagConfig.PersonProperties, flagConfig.GroupProperties, flagConfig.knownAbsentPropertyKeys())
 		evalResult = *remoteResult
 		flagValue = evalResult.Value
 		err = evalResult.Err
@@ -1304,7 +1304,7 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 		// if there's no poller, get the feature flags from the flags endpoint
 		c.debugf("getting all feature flags from flags endpoint")
 		flagsValue, err = c.getAllFeatureFlagsFromRemote(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
-			flagConfig.PersonProperties, flagConfig.GroupProperties)
+			flagConfig.PersonProperties, flagConfig.GroupProperties, flagConfig.knownAbsentPropertyKeys())
 	}
 
 	// Check context after operation
@@ -1328,6 +1328,13 @@ type EvaluateFlagsPayload struct {
 	PersonProperties Properties
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
 	GroupProperties map[string]Properties
+	// PersonPropertyKeysKnownAbsent lists person property keys known to be absent.
+	// See FeatureFlagPayload.PersonPropertyKeysKnownAbsent; an invalid list makes
+	// EvaluateFlags return a ConfigError without evaluating flags.
+	PersonPropertyKeysKnownAbsent []string
+	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys known to be absent.
+	// See FeatureFlagPayload.GroupPropertyKeysKnownAbsent.
+	GroupPropertyKeysKnownAbsent map[string][]string
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests. Flags
 	// that cannot be resolved from loaded local definitions are omitted, and
 	// FeatureFlagEvaluations.UnresolvedFlags lists them with a reason.
@@ -1369,6 +1376,10 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 		c.Warnf("EvaluateFlags called without a DistinctId")
 		return emptyFeatureFlagEvaluations, ErrNoDistinctID
 	}
+	if err := validateKnownAbsentPropertyKeys(payload.PersonPropertyKeysKnownAbsent, payload.GroupPropertyKeysKnownAbsent); err != nil {
+		return emptyFeatureFlagEvaluations, err
+	}
+	knownAbsent := newKnownAbsentPropertyKeys(payload.PersonPropertyKeysKnownAbsent, payload.GroupPropertyKeysKnownAbsent)
 
 	if payload.Groups == nil {
 		payload.Groups = Groups{}
@@ -1403,7 +1414,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 	fallbackToRemote := true
 
 	if c.featureFlagsPoller != nil {
-		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, unresolved, payload)
+		fallbackToRemote = c.populateLocalEvaluations(records, locallyEvaluated, unresolved, payload, knownAbsent)
 	} else if payload.OnlyEvaluateLocally {
 		c.warnPersonalAPIKeyMissing("EvaluateFlags")
 		return emptyFeatureFlagEvaluations, ErrNoSecretKey
@@ -1424,6 +1435,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 			payload.Groups,
 			payload.PersonProperties,
 			payload.GroupProperties,
+			knownAbsent,
 			disableGeoIP,
 			payload.FlagKeys,
 		)
@@ -1482,7 +1494,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 // fill in the rest. The local-evaluation loop here mirrors
 // FeatureFlagsPoller.GetAllFlags but stores the rich record needed to power
 // $feature_flag_called events with locally_evaluated=true.
-func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord, locallyEvaluated map[string]struct{}, unresolved map[string]UnresolvedFlagReason, payload EvaluateFlagsPayload) bool {
+func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord, locallyEvaluated map[string]struct{}, unresolved map[string]UnresolvedFlagReason, payload EvaluateFlagsPayload, knownAbsent *knownAbsentPropertyKeys) bool {
 	poller := c.featureFlagsPoller
 	state, err := poller.getLoadedState()
 	if err != nil {
@@ -1519,6 +1531,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 			payload.Groups,
 			payload.PersonProperties,
 			payload.GroupProperties,
+			knownAbsent,
 			cohorts,
 			state,
 		)
@@ -1983,15 +1996,20 @@ func (c *client) getFeatureVariantsWithOptions(distinctId string, groups Groups,
 	}
 
 	var deviceId *string
+	var knownAbsent *knownAbsentPropertyKeys
 	onlyEvaluateLocally := false
 	if options != nil {
+		if err := validateKnownAbsentPropertyKeys(options.PersonPropertyKeysKnownAbsent, options.GroupPropertyKeysKnownAbsent); err != nil {
+			return nil, err
+		}
 		deviceId = options.DeviceId
 		onlyEvaluateLocally = options.OnlyEvaluateLocally
+		knownAbsent = newKnownAbsentPropertyKeys(options.PersonPropertyKeysKnownAbsent, options.GroupPropertyKeysKnownAbsent)
 	}
 
 	// Prefer local evaluation and only fall back to a remote /flags request for flags
 	// that can't be computed locally. OnlyEvaluateLocally keeps this strictly local.
-	return c.featureFlagsPoller.getFeatureFlagVariantsWithFallback(distinctId, deviceId, groups, personProperties, groupProperties, onlyEvaluateLocally)
+	return c.featureFlagsPoller.getFeatureFlagVariantsWithFallback(distinctId, deviceId, groups, personProperties, groupProperties, knownAbsent, onlyEvaluateLocally)
 }
 
 func (c *client) makeRemoteConfigRequest(flagKey string) (string, error) {
@@ -2061,13 +2079,13 @@ func (c *client) isFeatureFlagsQuotaLimited(flagsResponse *FlagsResponse) bool {
 }
 
 func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties,
-	groupProperties map[string]Properties) *featureFlagEvaluationResult {
+	groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys) *featureFlagEvaluationResult {
 
 	result := &featureFlagEvaluationResult{
 		Value: nil,
 	}
 
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP(), nil)
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, knownAbsent, c.GetDisableGeoIP(), nil)
 
 	if err != nil {
 		result.Err = err
@@ -2105,8 +2123,8 @@ func (c *client) getFeatureFlagFromRemote(key string, distinctId string, deviceI
 	return result
 }
 
-func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, error) {
-	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP(), nil)
+func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys) (map[string]interface{}, error) {
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, knownAbsent, c.GetDisableGeoIP(), nil)
 	if err != nil {
 		return nil, err
 	}

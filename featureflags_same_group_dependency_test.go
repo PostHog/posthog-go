@@ -99,7 +99,7 @@ func TestSameGroupFlagDependency(t *testing.T) {
 						if _, exists := evaluations.flags["target"]; !exists {
 							t.Error("EvaluateFlags omitted same-group target")
 						}
-						captured, err := poller.getFeatureFlagVariantsWithFallback(person, nil, config.Groups, config.PersonProperties, config.GroupProperties, true)
+						captured, err := poller.getFeatureFlagVariantsWithFallback(person, nil, config.Groups, config.PersonProperties, config.GroupProperties, nil, true)
 						if err != nil || captured["target"] != want {
 							t.Errorf("capture=%v err=%v; want target=%v", captured, err, want)
 						}
@@ -158,7 +158,7 @@ func TestGroupFlagDependencyRejectsDifferentAggregationBeforeCache(t *testing.T)
 					for _, cached := range []interface{}{nil, false, true} {
 						cache := map[string]interface{}{"dep": cached}
 						for i := 0; i < 2; i++ {
-							got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], cohorts, state.flagsByKey, cache, "acme", nil, &company, state)
+							got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], nil, cohorts, state.flagsByKey, cache, "acme", nil, &company, state)
 							if !isServerEvalError(err) {
 								t.Errorf("negated cohort=%v err=%v cached=%v; must require server", got, err, cached)
 							}
