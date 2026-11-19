@@ -485,6 +485,38 @@ func isSecretWord(word string) bool {
 	return word != "" && looksLikeSecret(word)
 }
 
+// boundedFreeText is sanitizeFreeText cut to limit, at a cost that follows the
+// limit rather than the input. Text past limit plus a margin is cut before the
+// passes run, so it is redacted twice, cut there and cut at limit, and only
+// their common prefix is kept: a match split by the cut at limit is redacted in
+// the first result and raw in the second, and one split by the margin cut lies
+// past the end of the second, so neither reaches the event. Cutting once and
+// keeping the first limit bytes would let redactions that shrink the start pull
+// a split match into what is kept.
+func boundedFreeText(value string, limit int) string {
+	if len(value) <= limit+scanMarginBytes {
+		return truncateUTF8(sanitizeFreeText(value), limit)
+	}
+	if isBinaryBlob(value) {
+		return binaryRedactedValue
+	}
+	withMargin := sanitizeFreeText(prefixUTF8(value, limit+scanMarginBytes))
+	atLimit := sanitizeFreeText(prefixUTF8(value, limit))
+	return truncateUTF8(commonPrefix(withMargin, atLimit)+truncationSuffix, limit)
+}
+
+func commonPrefix(a, b string) string {
+	end := 0
+	for end < len(a) {
+		_, size := utf8.DecodeRuneInString(a[end:])
+		if !strings.HasPrefix(b[end:], a[end:end+size]) {
+			break
+		}
+		end += size
+	}
+	return a[:end]
+}
+
 // sanitizeFreeText sanitizes agent-narrated text such as the intent, in an
 // order where each step protects the next. The binary gate runs first, because
 // a redaction spliced into a base64 blob stops it looking like base64.

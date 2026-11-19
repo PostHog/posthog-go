@@ -59,6 +59,7 @@ const (
 	maxMetadataBytes      = 256
 	maxReturnedErrorBytes = 512
 	largeBinaryGateBytes  = 10_240
+	scanMarginBytes       = 1_024
 )
 
 const (
