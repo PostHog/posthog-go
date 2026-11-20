@@ -218,6 +218,19 @@ func TestKnownAbsentCohortLeafAppliesBeforeNegation(t *testing.T) {
 	requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
 }
 
+func TestKnownAbsentCohortLeafChecksOperatorSupportFirst(t *testing.T) {
+	for _, negation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("negation=%t", negation), func(t *testing.T) {
+			definitions := `{"flags": [` +
+				flagDefinition("plan-range", flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`)) +
+				fmt.Sprintf(`], "group_type_mapping": {}, "cohorts": {"1": {"type": "AND", "values": [{"type": "AND", "values": [{"key": "plan", "type": "person", "operator": "not_between", "value": [1, 2], "negation": %t}]}]}}}`, negation)
+
+			_, err := computeKnownAbsentFlag(t, definitions, "plan-range", nil, nil, nil, newKnownAbsentPropertyKeys([]string{"plan"}, nil))
+			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+		})
+	}
+}
+
 func TestKnownAbsentFlagDependencyUsesTheSameListing(t *testing.T) {
 	definitions := knownAbsentDefinitions(
 		flagDefinition("profile-incomplete", flagCondition(100, `{"key": "plan", "type": "person", "operator": "is_not_set"}`)),
