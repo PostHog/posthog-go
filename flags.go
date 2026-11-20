@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -479,4 +480,23 @@ func unquoteJSONString(data []byte) string {
 		}
 	}
 	return string(buf)
+}
+
+// errMalformedFlagPayload reports a flag payload that is present but is not
+// valid JSON, so it cannot be decoded by the caller.
+var errMalformedFlagPayload = errors.New("feature flag payload is not valid JSON")
+
+// decodePayload returns the payload string for a raw JSON payload, or ("", nil)
+// when the flag carries no payload. A payload that is present but is not valid
+// JSON returns errMalformedFlagPayload: the payload getters report no payload
+// and log, rather than handing back a string the caller cannot decode.
+func decodePayload(raw json.RawMessage) (string, error) {
+	payload := rawMessageToString(raw)
+	if payload == "" {
+		return "", nil
+	}
+	if strings.TrimSpace(payload) == "" || !json.Valid([]byte(payload)) {
+		return "", errMalformedFlagPayload
+	}
+	return payload, nil
 }

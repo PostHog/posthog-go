@@ -179,7 +179,7 @@ func TestFlags(t *testing.T) {
 			}{
 				{name: "GetFeatureFlagPayload", flagKey: "enabled-flag", expected: `{"foo": 1}`},
 				{name: "GetFeatureFlagPayload", flagKey: "disabled-flag", expected: ""}, // Incorrectly returns "" for disabled flags
-				{name: "GetFeatureFlagPayload", flagKey: "multi-variate-flag", expected: "this is the payload"},
+				{name: "GetFeatureFlagPayload", flagKey: "multi-variate-flag", expected: `"this is the payload"`},
 				{name: "GetFeatureFlagPayload", flagKey: "non-existent-flag", expected: ""}, // Incorrectly returns "" for non-existent flags
 			}
 
@@ -702,7 +702,7 @@ func TestGetFeatureFlagResult(t *testing.T) {
 				t.Error("Expected Enabled to be true for multivariate flag")
 			}
 
-			if result.RawPayload == nil || *result.RawPayload != "this is the payload" {
+			if result.RawPayload == nil || *result.RawPayload != `"this is the payload"` {
 				t.Errorf("Expected RawPayload to be 'this is the payload', got: %v", result.RawPayload)
 			}
 

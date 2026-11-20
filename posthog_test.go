@@ -3011,7 +3011,7 @@ func TestMultiVariateFlag(t *testing.T) {
 		},
 	)
 
-	if err != nil || payload != "this is the payload" {
+	if err != nil || payload != `"this is the payload"` {
 		t.Errorf("flag listed in /flags/ response should have value 'this is the payload'")
 	}
 }
