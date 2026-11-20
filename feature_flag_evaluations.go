@@ -112,8 +112,9 @@ func (e *FeatureFlagEvaluations) GetFlag(key string) interface{} {
 }
 
 // GetFlagPayload returns the raw JSON payload string for the flag, or "" if
-// no payload is configured or the flag is unknown. Unlike IsEnabled and
-// GetFlag, it does not record an access and does not fire an event.
+// no payload is configured, the configured payload is not valid JSON, or the
+// flag is unknown. Unlike IsEnabled and GetFlag, it does not record an access
+// and does not fire an event.
 func (e *FeatureFlagEvaluations) GetFlagPayload(key string) string {
 	if e == nil {
 		return ""

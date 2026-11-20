@@ -61,7 +61,7 @@ func TestPropertyMatchingVersionDefinitions(t *testing.T) {
 		for _, row := range rows {
 			for _, operator := range []string{"exact", "is_not"} {
 				t.Run(version+"/"+row.name+"/"+operator, func(t *testing.T) {
-					body := fmt.Sprintf(`{"flags":[{"key":"test","active":true,"filters":{"groups":[{"properties":[{"key":"value","type":"person","operator":%q,"value":%s}]}],"payloads":{"true":"on","false":"off"}}}]%s}`, operator, row.filter, version)
+					body := fmt.Sprintf(`{"flags":[{"key":"test","active":true,"filters":{"groups":[{"properties":[{"key":"value","type":"person","operator":%q,"value":%s}]}],"payloads":{"true":"\"on\"","false":"\"off\""}}}]%s}`, operator, row.filter, version)
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if r.URL.Path != "/flags/definitions" {
 							t.Errorf("unexpected remote request: %s", r.URL.Path)
@@ -92,9 +92,9 @@ func TestPropertyMatchingVersionDefinitions(t *testing.T) {
 						t.Fatalf("got %v local=%v err=%v; want %v", got, local, err, want)
 					}
 					full := poller.GetFeatureFlagWithPayload(config)
-					payload := "off"
+					payload := `"off"`
 					if want {
-						payload = "on"
+						payload = `"on"`
 					}
 					if full.err != nil || !full.locallyEvaluated || full.value != want || full.payload != payload {
 						t.Errorf("full result: %+v; want %v/%s", full, want, payload)
@@ -295,9 +295,9 @@ func TestPropertyMatchingVersionSnapshotPinned(t *testing.T) {
 			condition := &flag.Filters.Groups[j]
 			condition.Properties = append([]FlagProperty{{Key: "gate", Value: "go", Operator: "exact"}}, condition.Properties...)
 		}
-		flag.Filters.Payloads = map[string]json.RawMessage{"true": json.RawMessage(`"on"`), "false": json.RawMessage(`"off"`)}
+		flag.Filters.Payloads = map[string]json.RawMessage{"true": json.RawMessage(`"\"on\""`), "false": json.RawMessage(`"\"off\""`)}
 	}
-	preDecodePayloads(definitions.Flags)
+	preDecodePayloads(definitions.Flags, nil)
 	legacy := &flagsState{featureFlags: definitions.Flags, flagsByKey: buildFlagsByKey(definitions.Flags), groups: *definitions.GroupTypeMapping, cohorts: preParseCohortValues(definitions.Cohorts), propertyMatchingVersion: 1}
 	// A changed group mapping and missing cohorts/dependency index make accidental
 	// re-reads of any component of the snapshot observable, not just the version.
@@ -318,12 +318,12 @@ func TestPropertyMatchingVersionSnapshotPinned(t *testing.T) {
 				}
 			case "payload":
 				got, err := poller.GetFeatureFlagPayload(config)
-				if err != nil || got != "on" {
+				if err != nil || got != `"on"` {
 					t.Errorf("got %v err=%v", got, err)
 				}
 			case "full":
 				got := poller.GetFeatureFlagWithPayload(config)
-				if got.err != nil || !got.locallyEvaluated || got.value != true || got.payload != "on" {
+				if got.err != nil || !got.locallyEvaluated || got.value != true || got.payload != `"on"` {
 					t.Errorf("got %+v", got)
 				}
 			case "evaluations":

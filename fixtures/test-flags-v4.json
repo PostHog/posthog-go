@@ -67,7 +67,7 @@
       "metadata": {
         "id": 4,
         "version": 42,
-        "payload": "this is the payload"
+        "payload": "\"this is the payload\""
       }
     },
     "simple-flag": {
@@ -126,7 +126,7 @@
       "metadata": {
         "id": 8,
         "version": 1,
-        "payload": "this is a string"
+        "payload": "\"this is a string\""
       }
     },
     "continuation-flag": {
