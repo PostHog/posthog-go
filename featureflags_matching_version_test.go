@@ -199,7 +199,7 @@ func TestPropertyMatchingVersionReloadAndPropagation(t *testing.T) {
 			assertMatchingVersionFlags(t, all, err, step.want)
 			assertMatchingVersionEvaluations(t, poller, config, step.want)
 			for _, onlyLocal := range []bool{false, true} {
-				captured, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, config.PersonProperties, config.GroupProperties, onlyLocal)
+				captured, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, config.PersonProperties, config.GroupProperties, nil, onlyLocal)
 				assertMatchingVersionFlags(t, captured, err, step.want)
 			}
 			// Raw cohort hydration compatibility path must agree with pre-parsed cache.
@@ -207,7 +207,7 @@ func TestPropertyMatchingVersionReloadAndPropagation(t *testing.T) {
 			if err := json.Unmarshal([]byte(fmt.Sprintf(matchingVersionDefinitions, "")), &raw); err != nil {
 				t.Fatal(err)
 			}
-			got, err := poller.matchCohort(FlagProperty{Value: "outer"}, config.PersonProperties, raw.Cohorts, state.flagsByKey, map[string]interface{}{}, "person", nil, nil, state)
+			got, err := poller.matchCohort(FlagProperty{Value: "outer"}, config.PersonProperties, nil, raw.Cohorts, state.flagsByKey, map[string]interface{}{}, "person", nil, nil, state)
 			if err != nil || got != step.want {
 				t.Errorf("raw cohort got %v err=%v", got, err)
 			}
@@ -332,7 +332,7 @@ func TestPropertyMatchingVersionSnapshotPinned(t *testing.T) {
 				got, err := poller.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: config.DistinctId, PersonProperties: properties, Groups: config.Groups, GroupProperties: config.GroupProperties, OnlyEvaluateLocally: true})
 				assertMatchingVersionFlags(t, got, err, true)
 			default:
-				got, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, properties, config.GroupProperties, api == "capture local")
+				got, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, properties, config.GroupProperties, nil, api == "capture local")
 				assertMatchingVersionFlags(t, got, err, true)
 			}
 			if swaps == 0 || poller.state.Load() != replacement {

@@ -1876,7 +1876,7 @@ func TestFailedRemoteFlagIsNotADecision(t *testing.T) {
 	_, hasCheckout := flags["checkout"]
 	require.False(t, hasCheckout)
 
-	capturedFlags, err := posthog.(*client).featureFlagsPoller.getFeatureFlagVariantsWithFallback("user-1", nil, nil, nil, nil, false)
+	capturedFlags, err := posthog.(*client).featureFlagsPoller.getFeatureFlagVariantsWithFallback("user-1", nil, nil, nil, nil, nil, false)
 	require.NoError(t, err)
 	require.Equal(t, true, capturedFlags["beta-ui"])
 	require.NotContains(t, capturedFlags, "checkout")

@@ -652,7 +652,7 @@ func TestRepeatedReferenceToMissingDependencyKeepsReason(t *testing.T) {
 	property := FlagProperty{Key: "gone", Type: "flag", Operator: "flag_evaluates_to", Value: true, DependencyChain: []string{"gone"}}
 	cache := map[string]interface{}{}
 	for i := 0; i < 2; i++ {
-		_, err := poller.evaluateFlagDependency(property, state.flagsByKey, cache, "user-123", nil, nil, state.cohorts, nil, state)
+		_, err := poller.evaluateFlagDependency(property, state.flagsByKey, cache, "user-123", nil, nil, nil, state.cohorts, nil, state)
 		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
 	}
 }

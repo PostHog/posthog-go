@@ -97,7 +97,7 @@ func computeDefinedFlag(t *testing.T, definitions, key string, personProperties 
 	state := poller.state.Load()
 	flag, ok := state.flagsByKey[key]
 	require.True(t, ok, "no definition for %s", key)
-	return poller.computeFlagLocally(flag, "user-123", nil, Groups{}, personProperties, nil, state.cohorts, state)
+	return poller.computeFlagLocally(flag, "user-123", nil, Groups{}, personProperties, nil, nil, state.cohorts, state)
 }
 
 func requireUnresolvedReason(t *testing.T, err error, want UnresolvedFlagReason) {

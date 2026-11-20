@@ -135,13 +135,13 @@ func TestMatchPropertyGroupRawAndParsedParity(t *testing.T) {
 	poller := &FeatureFlagsPoller{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rawResult, rawErr := poller.matchPropertyGroup(tt.group, tt.properties, nil, nil, nil, "distinct-id", nil, nil)
+			rawResult, rawErr := poller.matchPropertyGroup(tt.group, tt.properties, nil, nil, nil, nil, "distinct-id", nil, nil)
 			require.Equal(t, tt.want, rawResult)
 			require.Equal(t, tt.wantErr, rawErr)
 
 			parsedGroup := preParsePG(tt.group)
 			require.NotEmpty(t, parsedGroup.ParsedValues)
-			parsedResult, parsedErr := poller.matchPropertyGroup(parsedGroup, tt.properties, nil, nil, nil, "distinct-id", nil, nil)
+			parsedResult, parsedErr := poller.matchPropertyGroup(parsedGroup, tt.properties, nil, nil, nil, nil, "distinct-id", nil, nil)
 			require.Equal(t, rawResult, parsedResult)
 			require.Equal(t, rawErr, parsedErr)
 		})
@@ -187,7 +187,7 @@ func TestMatchPropertyGroupTypes(t *testing.T) {
 					group = preParsePG(group)
 					localCohorts = preParseCohortValues(cohorts)
 				}
-				got, err := poller.matchPropertyGroup(group, Properties{"email": "user@x"}, localCohorts, nil, nil, "user", nil, nil)
+				got, err := poller.matchPropertyGroup(group, Properties{"email": "user@x"}, nil, localCohorts, nil, nil, "user", nil, nil)
 				if tt.wantUnresolved {
 					requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
 				} else {

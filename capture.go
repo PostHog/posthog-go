@@ -24,6 +24,13 @@ type SendFeatureFlagsOptions struct {
 	PersonProperties Properties
 	// GroupProperties provides explicit group properties for flag evaluation.
 	GroupProperties map[string]Properties
+	// PersonPropertyKeysKnownAbsent lists person property keys known to be absent.
+	// See FeatureFlagPayload.PersonPropertyKeysKnownAbsent. A list over the limit is
+	// logged as an error, and the event is sent without feature flag properties.
+	PersonPropertyKeysKnownAbsent []string
+	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys known to be absent.
+	// See FeatureFlagPayload.GroupPropertyKeysKnownAbsent.
+	GroupPropertyKeysKnownAbsent map[string][]string
 }
 
 // ShouldSend reports true when opts is non-nil.

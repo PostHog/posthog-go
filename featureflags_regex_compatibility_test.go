@@ -157,7 +157,7 @@ func TestRegexCompatibilityLocal(t *testing.T) {
 // Only the remote request is stubbed; property matching and the public fallback gate are real.
 type regexCompatibilityDecider struct{ calls int }
 
-func (d *regexCompatibilityDecider) makeFlagsRequest(string, *string, Groups, Properties, map[string]Properties, bool, []string) (*FlagsResponse, error) {
+func (d *regexCompatibilityDecider) makeFlagsRequest(string, *string, Groups, Properties, map[string]Properties, *knownAbsentPropertyKeys, bool, []string) (*FlagsResponse, error) {
 	d.calls++
 	return &FlagsResponse{FeatureFlags: map[string]interface{}{"regex-flag": "remote-sentinel"}}, nil
 }

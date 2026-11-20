@@ -16,6 +16,20 @@ type FeatureFlagPayload struct {
 	PersonProperties Properties
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
 	GroupProperties map[string]Properties
+	// PersonPropertyKeysKnownAbsent lists person property keys the caller knows the person
+	// does not have. Local evaluation treats a listed key as absent even when
+	// PersonProperties has a value for it. For a supported operator with a valid filter
+	// value, is_not_set and the negated operators (is_not, not_icontains, not_starts_with,
+	// not_ends_with, not_regex) match, and every other operator does not, without a remote
+	// fallback. An unsupported operator stays unresolved and can still fall back to /flags.
+	// Keys starting with __posthog_person_metadata__ are ignored. Remote /flags requests
+	// send the list as person_property_keys_known_absent. At most 1000 keys, counting duplicates;
+	// a longer list fails validation with a ConfigError and nothing is evaluated.
+	PersonPropertyKeysKnownAbsent []string
+	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys the caller
+	// knows the group does not have. A key applies only to its own group type and
+	// otherwise follows PersonPropertyKeysKnownAbsent. At most 1000 keys per group type.
+	GroupPropertyKeysKnownAbsent map[string][]string
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
 	OnlyEvaluateLocally bool
 	// SendFeatureFlagEvents controls whether $feature_flag_called is captured.
@@ -35,7 +49,14 @@ func (c *FeatureFlagPayload) validate() error {
 		}
 	}
 
-	return validateFeatureFlagBase(c.DistinctId, &c.SendFeatureFlagEvents)
+	if err := validateFeatureFlagBase(c.DistinctId, &c.SendFeatureFlagEvents); err != nil {
+		return err
+	}
+	return validateKnownAbsentPropertyKeys(c.PersonPropertyKeysKnownAbsent, c.GroupPropertyKeysKnownAbsent)
+}
+
+func (c *FeatureFlagPayload) knownAbsentPropertyKeys() *knownAbsentPropertyKeys {
+	return newKnownAbsentPropertyKeys(c.PersonPropertyKeysKnownAbsent, c.GroupPropertyKeysKnownAbsent)
 }
 
 func validateFeatureFlagBase(distinctId string, sendFeatureFlagEvents **bool) error {
@@ -71,6 +92,20 @@ type FeatureFlagPayloadNoKey struct {
 	PersonProperties Properties
 	// GroupProperties overrides group properties used during flag evaluation, keyed by group type.
 	GroupProperties map[string]Properties
+	// PersonPropertyKeysKnownAbsent lists person property keys the caller knows the person
+	// does not have. Local evaluation treats a listed key as absent even when
+	// PersonProperties has a value for it. For a supported operator with a valid filter
+	// value, is_not_set and the negated operators (is_not, not_icontains, not_starts_with,
+	// not_ends_with, not_regex) match, and every other operator does not, without a remote
+	// fallback. An unsupported operator stays unresolved and can still fall back to /flags.
+	// Keys starting with __posthog_person_metadata__ are ignored. Remote /flags requests
+	// send the list as person_property_keys_known_absent. At most 1000 keys, counting duplicates;
+	// a longer list fails validation with a ConfigError and nothing is evaluated.
+	PersonPropertyKeysKnownAbsent []string
+	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys the caller
+	// knows the group does not have. A key applies only to its own group type and
+	// otherwise follows PersonPropertyKeysKnownAbsent. At most 1000 keys per group type.
+	GroupPropertyKeysKnownAbsent map[string][]string
 	// OnlyEvaluateLocally prevents fallback to remote /flags requests.
 	OnlyEvaluateLocally bool
 	// SendFeatureFlagEvents is reserved for parity with single-flag payloads.
@@ -79,5 +114,12 @@ type FeatureFlagPayloadNoKey struct {
 }
 
 func (c *FeatureFlagPayloadNoKey) validate() error {
-	return validateFeatureFlagBase(c.DistinctId, &c.SendFeatureFlagEvents)
+	if err := validateFeatureFlagBase(c.DistinctId, &c.SendFeatureFlagEvents); err != nil {
+		return err
+	}
+	return validateKnownAbsentPropertyKeys(c.PersonPropertyKeysKnownAbsent, c.GroupPropertyKeysKnownAbsent)
+}
+
+func (c *FeatureFlagPayloadNoKey) knownAbsentPropertyKeys() *knownAbsentPropertyKeys {
+	return newKnownAbsentPropertyKeys(c.PersonPropertyKeysKnownAbsent, c.GroupPropertyKeysKnownAbsent)
 }

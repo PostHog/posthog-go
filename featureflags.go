@@ -660,6 +660,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	distinctId string,
 	deviceId *string,
 	properties Properties,
+	knownAbsent propertyKeySet,
 	cohorts map[string]PropertyGroup,
 	aggregationGroupTypeIndex *uint8,
 	snapshots ...*flagsState,
@@ -700,7 +701,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 				return false, &InconclusiveMatchError{msg: "Flag dependency has experience continuity enabled", Reason: UnresolvedFlagReasonUnresolvedDependency}
 			}
 			// Recursively evaluate the dependency
-			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, knownAbsent, cohorts, flagsByKey, evaluationCache, nil, nil, nil, state)
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
@@ -1313,7 +1314,11 @@ func (poller *FeatureFlagsPoller) getMinimalFlagCalledEvents() bool {
 // It returns the flag value, whether that value was locally evaluated, and an error.
 // If local evaluation is inconclusive and OnlyEvaluateLocally is false, it falls back to /flags.
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return nil, false, err
+	}
 	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
+	knownAbsent := flagConfig.knownAbsentPropertyKeys()
 
 	var result interface{}
 	locallyEvaluated := false
@@ -1326,6 +1331,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
+			knownAbsent,
 			state.cohorts,
 			state,
 		)
@@ -1337,7 +1343,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 	}
 
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties, knownAbsent)
 		if err != nil {
 			return nil, locallyEvaluated, err
 		}
@@ -1349,7 +1355,11 @@ func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) 
 // GetFeatureFlagPayload returns the payload for the evaluated flag value.
 // It tries local payloads first and falls back to the remote API unless OnlyEvaluateLocally is true.
 func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return "", err
+	}
 	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
+	knownAbsent := flagConfig.knownAbsentPropertyKeys()
 
 	var variant interface{}
 
@@ -1361,6 +1371,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
+			knownAbsent,
 			state.cohorts,
 			state,
 		)
@@ -1374,7 +1385,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPa
 	}
 
 	if (variant == nil || err != nil) && !flagConfig.OnlyEvaluateLocally {
-		result, err := poller.getFeatureFlagPayload(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		result, err := poller.getFeatureFlagPayload(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties, knownAbsent)
 		if err != nil {
 			return "", err
 		}
@@ -1407,7 +1418,11 @@ type flagValueAndPayload struct {
 // and payload. This avoids the double evaluation that would happen when calling
 // GetFeatureFlag and GetFeatureFlagPayload separately.
 func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFlagPayload) flagValueAndPayload {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return flagValueAndPayload{err: err}
+	}
 	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
+	knownAbsent := flagConfig.knownAbsentPropertyKeys()
 
 	var result interface{}
 
@@ -1419,6 +1434,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
+			knownAbsent,
 			state.cohorts,
 			state,
 		)
@@ -1445,7 +1461,7 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 
 	// Fall back to remote evaluation if local didn't produce a result
 	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
-		flagsResponse, remoteErr := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		flagsResponse, remoteErr := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties, knownAbsent)
 		if remoteErr != nil {
 			return flagValueAndPayload{value: nil, err: remoteErr}
 		}
@@ -1503,6 +1519,9 @@ func (poller *FeatureFlagsPoller) getFeatureFlagWithState(flagConfig FeatureFlag
 // GetAllFlags evaluates every available flag for the configured user.
 // Values are bools for boolean flags or strings for multivariate variants.
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+	if err := validateKnownAbsentPropertyKeys(flagConfig.PersonPropertyKeysKnownAbsent, flagConfig.GroupPropertyKeysKnownAbsent); err != nil {
+		return nil, err
+	}
 	state, err := poller.getLoadedState()
 	if err != nil {
 		return nil, err
@@ -1510,6 +1529,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 	featureFlags := state.featureFlags
 	fallbackToDecide := false
 	cohorts := state.cohorts
+	knownAbsent := flagConfig.knownAbsentPropertyKeys()
 
 	// Pre-size response map to avoid rehashing as flags are added
 	response := make(map[string]interface{}, len(featureFlags))
@@ -1525,6 +1545,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 				flagConfig.Groups,
 				flagConfig.PersonProperties,
 				flagConfig.GroupProperties,
+				knownAbsent,
 				cohorts,
 				state,
 			)
@@ -1544,6 +1565,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 			flagConfig.Groups,
 			flagConfig.PersonProperties,
 			flagConfig.GroupProperties,
+			knownAbsent,
 		)
 
 		if err != nil {
@@ -1561,6 +1583,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	groups Groups,
 	personProperties Properties,
 	groupProperties map[string]Properties,
+	knownAbsent *knownAbsentPropertyKeys,
 	cohorts map[string]PropertyGroup,
 	snapshots ...*flagsState,
 ) (interface{}, error) {
@@ -1606,7 +1629,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groupKey, nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+		return poller.matchFeatureFlagProperties(flag, groupKey, nil, focusedGroupProperties, knownAbsent.groupSet(groupType), cohorts, flagsByKey, evaluationCache, groups, groupProperties, knownAbsent, state)
 	} else {
 		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
@@ -1624,7 +1647,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 				}
 			}
 		}
-		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, knownAbsent.personSet(), cohorts, flagsByKey, evaluationCache, groups, groupProperties, knownAbsent, state)
 	}
 }
 
@@ -1684,11 +1707,13 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	distinctId string,
 	deviceId *string,
 	properties Properties,
+	propertiesKnownAbsent propertyKeySet,
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
 	groups Groups,
 	groupProperties map[string]Properties,
+	knownAbsent *knownAbsentPropertyKeys,
 	snapshots ...*flagsState,
 ) (interface{}, error) {
 	state := poller.evaluationState(snapshots)
@@ -1723,6 +1748,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 		}
 
 		effectiveProperties := properties
+		effectiveKnownAbsent := propertiesKnownAbsent
 		effectiveBucketingId := bucketingId
 
 		// Mixed-override path: condition-level aggregation differs from flag-level.
@@ -1738,7 +1764,9 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 					continue
 				}
 				focusedGroupProperties, hasProps := groupProperties[groupType]
-				if !hasProps {
+				focusedKnownAbsent := knownAbsent.groupSet(groupType)
+				// Keys listed as known absent are context, so they stand in for missing group properties.
+				if !hasProps && len(focusedKnownAbsent) == 0 {
 					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, UnresolvedFlagReasonMissingContext)
 					continue
 				}
@@ -1746,11 +1774,12 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 					focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 				}
 				effectiveProperties = focusedGroupProperties
+				effectiveKnownAbsent = focusedKnownAbsent
 				effectiveBucketingId = groupKey
 			}
 		}
 
-		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache, state)
+		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, effectiveKnownAbsent, cohorts, flagsByKey, evaluationCache, state)
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
@@ -1840,6 +1869,7 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	deviceId *string,
 	condition FeatureFlagCondition,
 	properties Properties,
+	knownAbsent propertyKeySet,
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
@@ -1868,11 +1898,11 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 		var serverEvaluationErr *RequiresServerEvaluationError
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, aggregationGroupTypeIndex, state)
+				isMatch, err = poller.matchCohort(prop, properties, knownAbsent, cohorts, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, aggregationGroupTypeIndex, state)
 			} else if prop.Type == "flag" {
-				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, cohorts, aggregationGroupTypeIndex, state)
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, knownAbsent, cohorts, aggregationGroupTypeIndex, state)
 			} else {
-				isMatch, err = matchProperty(prop, properties, state.propertyMatchingVersion)
+				isMatch, err = matchPropertyWithKnownAbsent(prop, properties, knownAbsent, state.propertyMatchingVersion)
 			}
 
 			if err != nil {
@@ -1928,6 +1958,35 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 }
 
 func matchProperty(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {
+	return matchPropertyWithKnownAbsent(property, properties, nil, matchingVersions...)
+}
+
+// matchPropertyWithKnownAbsent matches property like matchProperty, except that a key in
+// knownAbsent is absent even when properties has a value for it. Known absence never
+// hides a persons-table field read by a person_metadata filter.
+func matchPropertyWithKnownAbsent(property FlagProperty, properties Properties, knownAbsent propertyKeySet, matchingVersions ...int) (bool, error) {
+	if _, listed := knownAbsent[property.Key]; listed && property.Type != "person_metadata" {
+		// An unsupported operator or unusable filter value stays inconclusive.
+		if filterErr := filterDefinitionError(property, matchingVersions...); filterErr != nil {
+			return false, filterErr
+		}
+		// A malformed condition value keeps the result it has for a present value.
+		switch property.Operator {
+		case "regex", "not_regex":
+			if _, regexErr := getOrCompileRegex(valueToString(property.Value)); regexErr != nil {
+				return false, nil
+			}
+		case "gt", "gte", "lt", "lte":
+			if _, numberErr := interfaceToFloat(property.Value); numberErr != nil {
+				return false, errors.New("value 1 is not orderable")
+			}
+		case "is_date_before", "is_date_after":
+			if _, dateErr := validateDates(property.Value); dateErr != nil {
+				return false, dateErr
+			}
+		}
+		return knownAbsentPropertyMatch(property.Operator), nil
+	}
 	matched, err := matchPropertyValue(property, properties, matchingVersions...)
 	// An unusable filter outranks missing context, so check the filter before blaming the context.
 	if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok && inconclusiveErr.Reason == UnresolvedFlagReasonMissingContext {
@@ -3372,8 +3431,8 @@ func (poller *FeatureFlagsPoller) shutdownPoller(ctx context.Context) {
 // a given distinctId, groups, personProperties, and groupProperties.
 // This makes a request to the flags endpoint and returns the response.
 // This is used in fallback scenarios where we can't compute the flag locally.
-func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
-	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP, nil)
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys) (*FlagsResponse, error) {
+	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, knownAbsent, poller.disableGeoIP, nil)
 }
 
 // getFeatureFlagVariantsWithFallback evaluates all feature flags for capture enrichment,
@@ -3389,7 +3448,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, devi
 // The returned map includes flags that resolved to false; the caller attaches a
 // $feature/<key> property for each entry and excludes false-valued flags from
 // $active_feature_flags, matching the other SDKs.
-func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (map[string]interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys, onlyEvaluateLocally bool) (map[string]interface{}, error) {
 	var state *flagsState
 	if onlyEvaluateLocally {
 		var err error
@@ -3419,6 +3478,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 			groups,
 			personProperties,
 			groupProperties,
+			knownAbsent,
 			cohorts,
 			state,
 		)
@@ -3435,7 +3495,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 	}
 
 	if fallbackToDecide && !onlyEvaluateLocally {
-		flagsResponse, remoteErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+		flagsResponse, remoteErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties, knownAbsent)
 		if remoteErr != nil {
 			return nil, remoteErr
 		}
@@ -3445,10 +3505,10 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 	return result, nil
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys) (interface{}, error) {
 	var result interface{} = false
 
-	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties, knownAbsent)
 
 	if variantErr != nil {
 		return false, variantErr
@@ -3466,8 +3526,8 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId s
 	return result, nil
 }
 
-func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
-	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys) (string, error) {
+	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties, knownAbsent)
 	if err != nil {
 		return "", err
 	}
