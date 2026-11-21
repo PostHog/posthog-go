@@ -790,6 +790,7 @@ type Filter struct {
 	EarlyExit bool `json:"early_exit"`
 	Multivariate *Variants `json:"multivariate"`
 	Holdout *Holdout `json:"holdout"`
+	FeatureEnrollment bool `json:"feature_enrollment"`
 	Payloads map[string]json.RawMessage `json:"payloads"`
 	DecodedPayloads map[string]string `json:"-"`
 	VariantLookupTable []FlagVariantMeta `json:"-"`

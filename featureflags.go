@@ -351,6 +351,10 @@ type Filter struct {
 	Multivariate *Variants `json:"multivariate"`
 	// Holdout contains the experiment holdout configuration, when the flag has one.
 	Holdout *Holdout `json:"holdout"`
+	// FeatureEnrollment marks an early-access feature flag. The person's opt-in, stored in
+	// the person property `$feature_enrollment/<flag key>`, decides the flag before
+	// holdouts and release conditions.
+	FeatureEnrollment bool `json:"feature_enrollment"`
 	// Payloads maps flag values or variant keys to raw JSON payloads.
 	Payloads map[string]json.RawMessage `json:"payloads"`
 	// DecodedPayloads holds pre-decoded string versions of Payloads.
@@ -700,7 +704,13 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 				return false, &InconclusiveMatchError{msg: "Flag dependency has experience continuity enabled", Reason: UnresolvedFlagReasonUnresolvedDependency}
 			}
 			// Recursively evaluate the dependency
-			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
+			var result interface{}
+			var err error
+			if depFlag.Filters.FeatureEnrollment {
+				result, err = matchDependencyFeatureEnrollment(depFlag, properties)
+			} else {
+				result, err = poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
+			}
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
@@ -1115,6 +1125,41 @@ func canonicalJSON(raw json.RawMessage) json.RawMessage {
 	return canonical
 }
 
+// matchFeatureEnrollment returns an early-access feature flag's value from the person's
+// enrollment: true or "true" is enrolled, and any other value that was passed, nil
+// included, is opted out. Without the enrollment property the flag can't be resolved locally.
+func matchFeatureEnrollment(flag FeatureFlag, personProperties Properties) (bool, error) {
+	enrollmentKey := "$feature_enrollment/" + flag.Key
+	value, ok := personProperties[enrollmentKey]
+	if !ok {
+		return false, &InconclusiveMatchError{
+			msg:    fmt.Sprintf("Flag has feature enrollment and '%s' was not passed", enrollmentKey),
+			Reason: UnresolvedFlagReasonMissingContext,
+		}
+	}
+	switch enrollment := value.(type) {
+	case bool:
+		return enrollment, nil
+	case string:
+		return enrollment == "true", nil
+	default:
+		return false, nil
+	}
+}
+
+// matchDependencyFeatureEnrollment evaluates an early-access flag reached as a dependency.
+// A dependency reuses the caller's properties, which are the person's only for a
+// person-aggregated flag, so a group-aggregated enrollment flag can't be read here.
+func matchDependencyFeatureEnrollment(flag FeatureFlag, properties Properties) (bool, error) {
+	if flag.Filters.AggregationGroupTypeIndex != nil {
+		return false, &InconclusiveMatchError{
+			msg:    "Group flag dependency has feature enrollment, which reads person properties",
+			Reason: UnresolvedFlagReasonUnsupportedDefinition,
+		}
+	}
+	return matchFeatureEnrollment(flag, properties)
+}
+
 // definitionUnresolvedReason returns the unresolved reason that comes from the flag's
 // definition alone, so it is known when definitions load. It matches the reason local
 // evaluation reports for the same cause.
@@ -1124,6 +1169,10 @@ func definitionUnresolvedReason(flag FeatureFlag, flagsByKey map[string]FeatureF
 	}
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return UnresolvedFlagReasonExperienceContinuity
+	}
+	// Enrollment decides the flag before its group aggregation and release conditions are read.
+	if flag.Filters.FeatureEnrollment {
+		return ""
 	}
 	// A filter in any condition that cannot be checked locally whatever the call passes
 	// makes the definition unsupported.
@@ -1571,6 +1620,16 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 
 	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
 		return nil, &InconclusiveMatchError{msg: "Flag has experience continuity enabled", Reason: UnresolvedFlagReasonExperienceContinuity}
+	}
+
+	// Enrollment is a person property, so it is read from the person properties on
+	// group-aggregated flags too, before the group key is required.
+	if flag.Filters.FeatureEnrollment {
+		enrolled, err := matchFeatureEnrollment(flag, personProperties)
+		if err != nil {
+			return nil, err
+		}
+		return enrolled, nil
 	}
 
 	// Use pre-built flagsByKey index (built once when flags are fetched, not per evaluation)
