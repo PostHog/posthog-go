@@ -286,10 +286,13 @@ const (
 //
 // PostHog refuses a send with the error code "categories_not_enabled" when
 // code-send categories are unavailable for the project (and HTTP 400 on an
-// older server), "category_mismatch" when the Key exists with another Type
-// or TemplateKey names a template in another transactional category,
-// "marketing_template" when TemplateKey names a template in a marketing
-// category, "too_many_categories" when the project can't take another
+// older server), "category_mismatch" when the Key exists with another Type,
+// when TemplateKey names a template in another transactional category, or
+// when TemplateKey names an existing saved template with no category and the
+// send passes a MessageCategory (marketing callers should use a different
+// TemplateKey; transactional callers can omit Category or pass
+// EmailCategoryTransactional), "marketing_template" when TemplateKey names a
+// template in a marketing category, "too_many_categories" when the project can't take another
 // category, "unsubscribe_link_required" when a marketing send's HTML has no
 // clickable href="{{ unsubscribe_url }}" link (or its Text has no
 // {{ unsubscribe_url }} placeholder when there is no HTML),

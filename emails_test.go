@@ -209,6 +209,7 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 
 var (
 	htmlCommentPattern          = regexp.MustCompile(`(?s)<!--.*?-->`)
+	htmlTemplatePattern         = regexp.MustCompile(`(?is)<template\b[^>]*>.*?</template>`)
 	htmlClickableUnsubPattern   = regexp.MustCompile(`<(?i:a)\s+(?:(?:[^>"']|"[^"]*"|'[^']*')*\s+)?(?i:href)\s*=\s*(?:"\s*\{\{\s*unsubscribe_url\s*\}\}(?:[?#][^"]*)?\s*"|'\s*\{\{\s*unsubscribe_url\s*\}\}(?:[?#][^']*)?\s*')`)
 	textUnsubPlaceholderPattern = regexp.MustCompile(`\{\{\s*unsubscribe_url\s*\}\}`)
 )
@@ -318,8 +319,9 @@ func parseCategoryWire(rawFields map[string]json.RawMessage) (leftOut, transacti
 
 func hasClickableUnsubscribeLink(htmlBody, textBody string) bool {
 	if htmlBody != "" {
-		withoutComments := htmlCommentPattern.ReplaceAllString(htmlBody, "")
-		return htmlClickableUnsubPattern.MatchString(withoutComments)
+		visible := htmlCommentPattern.ReplaceAllString(htmlBody, "")
+		visible = htmlTemplatePattern.ReplaceAllString(visible, "")
+		return htmlClickableUnsubPattern.MatchString(visible)
 	}
 	return textUnsubPlaceholderPattern.MatchString(textBody)
 }
@@ -453,17 +455,22 @@ func TestEmailsSendCodeCreatesItsCategory(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newSendAPI(t, nil, nil)
 			client := sendAPIClient(t, api)
+			const html = `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`
 
 			_, err := client.Emails().Send(context.Background(), CodeEmail{
 				To:          "user@example.com",
 				TemplateKey: "monthly-newsletter",
 				Subject:     "What's new",
-				HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
+				HTML:        html,
 				Category:    tt.category,
 			})
 
 			require.NoError(t, err)
-			require.JSONEq(t, tt.wantWireJSON, string(api.lastRawBody()["category"]))
+			rawBody := api.lastRawBody()
+			require.JSONEq(t, tt.wantWireJSON, string(rawBody["category"]))
+			var sentHTML string
+			require.NoError(t, json.Unmarshal(rawBody["html"], &sentHTML))
+			require.Equal(t, html, sentHTML)
 			require.Equal(t, map[string]storedCategory{tt.key: tt.want}, api.storedCategories())
 			require.Equal(t, []sentEmail{{To: "user@example.com", Category: tt.key}}, api.sentEmails())
 		})
@@ -524,6 +531,7 @@ func TestEmailsSendCodeRefusesTransactionalForATemplateInACategory(t *testing.T)
 	emailErr := requireEmailError(t, err)
 	require.Equal(t, "category_mismatch", emailErr.Code)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
+	require.Equal(t, `"transactional"`, string(api.lastRawBody()["category"]))
 	require.Empty(t, api.sentEmails())
 }
 
@@ -543,7 +551,13 @@ func TestEmailsSendCodeMarketingDoesNotRetryOptedOut(t *testing.T) {
 	require.Equal(t, "recipient_opted_out", emailErr.Code)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
 	require.Equal(t, http.StatusUnprocessableEntity, emailErr.StatusCode)
-	require.Len(t, server.received(), 1)
+	received := server.received()
+	require.Len(t, received, 1)
+	require.Equal(t, map[string]interface{}{
+		"key":  "newsletter",
+		"type": "marketing",
+		"name": "Newsletter",
+	}, received[0].Body["category"])
 }
 
 func TestEmailsSendCodeCopies(t *testing.T) {
