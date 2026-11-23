@@ -352,15 +352,37 @@ func TestStateIsIsolatedPerTestID(t *testing.T) {
 }
 
 func TestOnlyInitRegistersTestIDs(t *testing.T) {
-	stateHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/state?test_id=t-unknown", nil))
-	flushHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/flush?test_id=t-unknown", nil))
-	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-unknown", nil))
+	registered := func() bool {
+		statesMu.Lock()
+		defer statesMu.Unlock()
+		_, ok := states["t-unknown"]
+		return ok
+	}
 
-	statesMu.Lock()
-	_, kept := states["t-unknown"]
-	statesMu.Unlock()
-	if kept {
-		t.Fatal("requests other than /init must not register a test_id")
+	stateHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/state?test_id=t-unknown", nil))
+	if registered() {
+		t.Fatal("/state must not register a test_id")
+	}
+	flushHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/flush?test_id=t-unknown", nil))
+	if registered() {
+		t.Fatal("/flush must not register a test_id")
+	}
+}
+
+func TestInitClosesClientWhenResetRemovedItsState(t *testing.T) {
+	state, testID := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-init-race", nil), true)
+	takeState(httptest.NewRequest(http.MethodPost, "/reset?test_id=t-init-race", nil))
+
+	client, err := posthog.NewWithConfig("phc_test", posthog.Config{Endpoint: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if publishClient(state, testID, client, &posthog.Config{}, "phc_test", "http://127.0.0.1:1") {
+		t.Fatal("publishClient must refuse a state that /reset already removed")
+	}
+	if state.client != nil {
+		t.Fatal("a refused client must not be stored on the removed state")
 	}
 }
 
@@ -376,9 +398,9 @@ func TestOnlyOneResetTakesAState(t *testing.T) {
 }
 
 func TestOutboundRequestsCarryTestIDHeader(t *testing.T) {
-	var got []string
+	headers := make(chan string, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = append(got, r.Header.Get(testIDHeader))
+		headers <- r.Header.Get(testIDHeader)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -401,6 +423,7 @@ func TestOutboundRequestsCarryTestIDHeader(t *testing.T) {
 	}
 	resp.Body.Close()
 
+	got := []string{<-headers, <-headers}
 	if want := []string{"t-capture", "t-flags"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("%s headers = %v, want %v", testIDHeader, got, want)
 	}

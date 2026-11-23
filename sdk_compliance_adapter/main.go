@@ -577,15 +577,34 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state.mu.Lock()
-	state.client = client
-	state.config = &config
-	state.apiKey = req.APIKey
-	state.host = validatedHost
-	state.testID = testID
-	state.mu.Unlock()
+	if !publishClient(state, testID, client, &config, req.APIKey, validatedHost) {
+		client.Close()
+		http.Error(w, "test_id was reset during /init", http.StatusConflict)
+		return
+	}
 
 	jsonResponse(w, map[string]bool{"success": true})
+}
+
+// publishClient stores the new client on state. For a test_id it holds statesMu
+// so a concurrent /reset either sees and closes this client or has already
+// removed state, in which case it returns false and the caller closes client.
+func publishClient(state *AdapterState, testID string, client posthog.Client, config *posthog.Config, apiKey, host string) bool {
+	if testID != "" {
+		statesMu.Lock()
+		defer statesMu.Unlock()
+		if states[testID] != state {
+			return false
+		}
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.client = client
+	state.config = config
+	state.apiKey = apiKey
+	state.host = host
+	state.testID = testID
+	return true
 }
 
 func captureHandler(w http.ResponseWriter, r *http.Request) {
