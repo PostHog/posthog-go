@@ -198,7 +198,10 @@ var (
 	states       = map[string]*AdapterState{}
 )
 
-func stateFor(r *http.Request) (*AdapterState, string) {
+// stateFor returns the state for the request's test_id. Only /init registers a
+// new test_id. Other requests for an unknown test_id get an empty state that is
+// not kept, so they report "SDK not initialized" without growing the registry.
+func stateFor(r *http.Request, register bool) (*AdapterState, string) {
 	testID := r.URL.Query().Get("test_id")
 	if testID == "" {
 		return defaultState, ""
@@ -208,18 +211,25 @@ func stateFor(r *http.Request) (*AdapterState, string) {
 	s, ok := states[testID]
 	if !ok {
 		s = newAdapterState()
-		states[testID] = s
+		if register {
+			states[testID] = s
+		}
 	}
 	return s, testID
 }
 
-func forgetState(testID string) {
+// takeState removes and returns the state for the request's test_id in one
+// step, so a reset cannot remove a state that a later /init registered.
+func takeState(r *http.Request) *AdapterState {
+	testID := r.URL.Query().Get("test_id")
 	if testID == "" {
-		return
+		return defaultState
 	}
 	statesMu.Lock()
+	defer statesMu.Unlock()
+	s := states[testID]
 	delete(states, testID)
-	statesMu.Unlock()
+	return s
 }
 
 // clearDiagnostics empties what /state reports from the SDK's own error and log
@@ -498,7 +508,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host must be the SDK harness mock URL", http.StatusBadRequest)
 		return
 	}
-	state, testID := stateFor(r)
+	state, testID := stateFor(r, true)
 
 	state.mu.Lock()
 	oldClient := state.client
@@ -594,7 +604,7 @@ func handleCapture(w http.ResponseWriter, r *http.Request, enqueue func(posthog.
 		return
 	}
 
-	state, _ := stateFor(r)
+	state, _ := stateFor(r, false)
 	state.mu.Lock()
 	client := state.client
 	state.mu.Unlock()
@@ -689,7 +699,7 @@ func buildCaptureWithPadding(req CaptureRequest) (posthog.Capture, error) {
 }
 
 func flushHandler(w http.ResponseWriter, r *http.Request) {
-	state, _ := stateFor(r)
+	state, _ := stateFor(r, false)
 	state.mu.Lock()
 	if state.client == nil {
 		state.mu.Unlock()
@@ -732,7 +742,7 @@ func waitForPendingEvents(state *AdapterState) int {
 }
 
 func stateHandler(w http.ResponseWriter, r *http.Request) {
-	state, _ := stateFor(r)
+	state, _ := stateFor(r, false)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
@@ -773,7 +783,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	req.Key = sanitizeForLog(req.Key)
 	req.DistinctID = sanitizeForLog(req.DistinctID)
 
-	state, _ := stateFor(r)
+	state, _ := stateFor(r, false)
 	state.mu.Lock()
 	client := state.client
 	state.mu.Unlock()
@@ -926,8 +936,11 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 }
 
 func resetHandler(w http.ResponseWriter, r *http.Request) {
-	state, testID := stateFor(r)
-	forgetState(testID)
+	state := takeState(r)
+	if state == nil {
+		jsonResponse(w, map[string]bool{"success": true})
+		return
+	}
 	state.mu.Lock()
 	oldClient := state.client
 	state.client = nil

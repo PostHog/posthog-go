@@ -326,10 +326,13 @@ func TestHealthDeclaresParallelSupport(t *testing.T) {
 }
 
 func TestStateIsIsolatedPerTestID(t *testing.T) {
-	stateA, idA := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-a", nil))
-	stateB, idB := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-b", nil))
-	again, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
-	global, idGlobal := stateFor(httptest.NewRequest(http.MethodGet, "/state", nil))
+	stateA, idA := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-a", nil), true)
+	stateB, idB := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-b", nil), true)
+	again, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil), false)
+	global, idGlobal := stateFor(httptest.NewRequest(http.MethodGet, "/state", nil), false)
+	defer func() {
+		takeState(httptest.NewRequest(http.MethodPost, "/reset?test_id=t-b", nil))
+	}()
 
 	if idA != "t-a" || idB != "t-b" || idGlobal != "" {
 		t.Fatalf("test ids = %q, %q, %q", idA, idB, idGlobal)
@@ -342,12 +345,34 @@ func TestStateIsIsolatedPerTestID(t *testing.T) {
 	}
 
 	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-a", nil))
-	afterReset, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
+	afterReset, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil), false)
 	if afterReset == stateA {
 		t.Fatal("/reset must drop the state for its test_id")
 	}
-	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-a", nil))
-	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-b", nil))
+}
+
+func TestOnlyInitRegistersTestIDs(t *testing.T) {
+	stateHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/state?test_id=t-unknown", nil))
+	flushHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/flush?test_id=t-unknown", nil))
+	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-unknown", nil))
+
+	statesMu.Lock()
+	_, kept := states["t-unknown"]
+	statesMu.Unlock()
+	if kept {
+		t.Fatal("requests other than /init must not register a test_id")
+	}
+}
+
+func TestOnlyOneResetTakesAState(t *testing.T) {
+	registered, _ := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-race", nil), true)
+	reset := httptest.NewRequest(http.MethodPost, "/reset?test_id=t-race", nil)
+	if took := takeState(reset); took != registered {
+		t.Fatal("the first reset must take the registered state")
+	}
+	if took := takeState(reset); took != nil {
+		t.Fatal("an overlapping reset must not take any state")
+	}
 }
 
 func TestOutboundRequestsCarryTestIDHeader(t *testing.T) {
