@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -90,7 +91,11 @@ func failed(status int, code string) stubReply {
 type emailClientOption func(*Config)
 
 func newEmailClient(t *testing.T, server *emailServer, options ...emailClientOption) Client {
-	config := Config{Endpoint: server.URL, AppHost: server.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
+	return newEmailClientFor(t, server.URL, options...)
+}
+
+func newEmailClientFor(t *testing.T, url string, options ...emailClientOption) Client {
+	config := Config{Endpoint: url, AppHost: url, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}}
 	for _, option := range options {
 		option(&config)
 	}
@@ -130,7 +135,7 @@ func TestEmailsSendTemplate(t *testing.T) {
 	requests := server.received()
 	require.Len(t, requests, 1)
 	require.Equal(t, http.MethodPost, requests[0].Method)
-	require.Equal(t, "/api/projects/@current/messaging/send/email/", requests[0].Path)
+	require.Equal(t, "/api/messaging/send/email/", requests[0].Path)
 	require.Equal(t, map[string]interface{}{
 		"template_id":  testTemplateID,
 		"to":           "user@example.com",
@@ -170,15 +175,14 @@ func TestEmailsSendCode(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, map[string]interface{}{
-		"to":                 "user@example.com",
-		"template_key":       "password-reset",
-		"subject":            "Reset your password",
-		"html":               "<p>Reset & go</p>",
-		"text":               "Reset and go",
-		"from":               "Acme <security@example.com>",
-		"reply_to":           []interface{}{"support@example.com"},
-		"capture_engagement": true,
-		"distinct_id":        "user_123",
+		"to":           "user@example.com",
+		"template_key": "password-reset",
+		"subject":      "Reset your password",
+		"html":         "<p>Reset & go</p>",
+		"text":         "Reset and go",
+		"from":         "Acme <security@example.com>",
+		"reply_to":     []interface{}{"support@example.com"},
+		"distinct_id":  "user_123",
 	}, server.received()[0].Body)
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
 }
@@ -188,20 +192,18 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 	client := newEmailClient(t, server)
 
 	_, err := client.Emails().Send(context.Background(), CodeEmail{
-		To:                "user@example.com",
-		TemplateKey:       "digest",
-		Subject:           "Your digest",
-		Text:              "Plain text only",
-		CaptureEngagement: Ptr(false),
+		To:          "user@example.com",
+		TemplateKey: "digest",
+		Subject:     "Your digest",
+		Text:        "Plain text only",
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, map[string]interface{}{
-		"to":                 "user@example.com",
-		"template_key":       "digest",
-		"subject":            "Your digest",
-		"text":               "Plain text only",
-		"capture_engagement": false,
+		"to":           "user@example.com",
+		"template_key": "digest",
+		"subject":      "Your digest",
+		"text":         "Plain text only",
 	}, server.received()[0].Body)
 }
 
@@ -475,6 +477,203 @@ func TestEmailsSendCodeRefusesATemplateInAMarketingCategory(t *testing.T) {
 	require.Empty(t, api.sentEmails())
 }
 
+func TestEmailsSendCodeCopies(t *testing.T) {
+	// PostHog is briefly unavailable, so the copies must survive the retry.
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.sendFaults = map[int]stubReply{0: failed(http.StatusServiceUnavailable, "delivery_unavailable")}
+	client := newEmailClientFor(t, posthog.URL)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "invoice",
+		Subject:     "Your invoice",
+		HTML:        "<p>Your invoice</p>",
+		Cc:          []string{"manager@example.com"},
+		Bcc:         []string{"audit@example.com", "archive@example.com"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []deliveredEmail{{
+		To: "user@example.com", Subject: "Your invoice",
+		Cc:  []string{"manager@example.com"},
+		Bcc: []string{"audit@example.com", "archive@example.com"},
+	}}, posthog.deliveredEmails())
+}
+
+func TestEmailsSendCodeWithEmptyCopiesReachesAnOlderPostHog(t *testing.T) {
+	// A PostHog from before cc, bcc and attachments refuses those fields even
+	// when empty, so empty lists must not stop the email.
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.takeOnly(fieldsBeforeAttachments)
+	client := newEmailClientFor(t, posthog.URL)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "digest",
+		Subject:     "Your digest",
+		Text:        "Plain text only",
+		ReplyTo:     []string{},
+		Cc:          []string{},
+		Bcc:         []string{},
+		Attachments: []EmailAttachment{},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, posthog.deliveredEmails(), 1)
+}
+
+func TestEmailsSendNamesAFieldTheServerDoesNotTakeYet(t *testing.T) {
+	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+	posthog.takeOnly(fieldsBeforeAttachments)
+	client := newEmailClientFor(t, posthog.URL)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Copied</p>",
+		Cc: []string{"manager@example.com"},
+	})
+
+	emailErr := requireEmailError(t, err)
+	require.Equal(t, "cc", emailErr.Field)
+	require.Equal(t, EmailErrorValidation, emailErr.Name)
+	require.Empty(t, posthog.deliveredEmails(), "the email isn't sent without the copy")
+}
+
+func TestEmailsAttachmentErrorNeverHoldsTheContent(t *testing.T) {
+	server := newEmailServer(t)
+	client := newEmailClient(t, server)
+
+	_, err := client.Emails().Send(context.Background(), CodeEmail{
+		To: "user@example.com", TemplateKey: "invoice", Subject: "Your invoice", HTML: "<p>Attached</p>",
+		Attachments: []EmailAttachment{{Content: []byte("secret-file-content")}},
+	})
+
+	require.Error(t, err)
+	require.NotContains(t, fmt.Sprintf("%+v %#v", err, requireEmailError(t, err)), "secret-file-content")
+}
+
+func TestEmailsSendCodeTracking(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tracking *EmailTracking
+		want     interface{}
+	}{
+		{name: "on", tracking: EmailTrackingOn(), want: true},
+		{name: "off", tracking: EmailTrackingOff(), want: false},
+		{
+			name:     "one kind",
+			tracking: EmailTrackingWith(EmailTrackingOptions{Clicks: Ptr(true)}),
+			want:     map[string]interface{}{"clicks": true},
+		},
+		{
+			name:     "every kind",
+			tracking: EmailTrackingWith(EmailTrackingOptions{Opens: Ptr(true), Clicks: Ptr(false), Engagement: Ptr(false)}),
+			want:     map[string]interface{}{"opens": true, "clicks": false, "engagement": false},
+		},
+		{
+			name:     "opens off",
+			tracking: EmailTrackingWith(EmailTrackingOptions{Opens: Ptr(false), Engagement: Ptr(true)}),
+			want:     map[string]interface{}{"opens": false, "engagement": true},
+		},
+		{
+			name:     "no kind",
+			tracking: EmailTrackingWith(EmailTrackingOptions{}),
+			want:     map[string]interface{}{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:          "user@example.com",
+				TemplateKey: "digest",
+				Subject:     "Your digest",
+				Text:        "Plain text only",
+				Tracking:    tc.tracking,
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, map[string]interface{}{
+				"to":           "user@example.com",
+				"template_key": "digest",
+				"subject":      "Your digest",
+				"text":         "Plain text only",
+				"tracking":     tc.want,
+			}, server.received()[0].Body)
+		})
+	}
+}
+
+func TestEmailsSendCodeSensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sensitive bool
+		tracking  *EmailTracking
+		want      map[string]interface{}
+	}{
+		{name: "sensitive", sensitive: true, want: map[string]interface{}{"sensitive": true}},
+		{name: "not sensitive", sensitive: false, want: map[string]interface{}{"sensitive": false}},
+		{
+			name:      "not sensitive with clicks off",
+			sensitive: false,
+			tracking:  EmailTrackingWith(EmailTrackingOptions{Clicks: Ptr(false)}),
+			want:      map[string]interface{}{"sensitive": false, "tracking": map[string]interface{}{"clicks": false}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:          "user@example.com",
+				TemplateKey: "digest",
+				Subject:     "Your digest",
+				Text:        "Plain text only",
+				Sensitive:   Ptr(tc.sensitive),
+				Tracking:    tc.tracking,
+			})
+
+			require.NoError(t, err)
+			want := map[string]interface{}{
+				"to":           "user@example.com",
+				"template_key": "digest",
+				"subject":      "Your digest",
+				"text":         "Plain text only",
+			}
+			for key, value := range tc.want {
+				want[key] = value
+			}
+			require.Equal(t, want, server.received()[0].Body)
+		})
+	}
+}
+
+func TestEmailsSendCodeDeprecatedCaptureEngagement(t *testing.T) {
+	for _, capture := range []bool{false, true} {
+		t.Run(strconv.FormatBool(capture), func(t *testing.T) {
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Send(context.Background(), CodeEmail{
+				To:                "user@example.com",
+				TemplateKey:       "digest",
+				Subject:           "Your digest",
+				Text:              "Plain text only",
+				CaptureEngagement: Ptr(capture),
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, map[string]interface{}{
+				"to":                 "user@example.com",
+				"template_key":       "digest",
+				"subject":            "Your digest",
+				"text":               "Plain text only",
+				"capture_engagement": capture,
+			}, server.received()[0].Body)
+		})
+	}
+}
+
 func TestEmailsSendHeaders(t *testing.T) {
 	server := newEmailServer(t, accepted("msg_1"))
 	client := newEmailClient(t, server, func(c *Config) {
@@ -558,7 +757,7 @@ func TestEmailsAppHost(t *testing.T) {
 			_, err = client.Emails().Send(context.Background(), templateEmail())
 
 			require.NoError(t, err)
-			require.Equal(t, tt.want+"/api/projects/@current/messaging/send/email/", gotURL)
+			require.Equal(t, tt.want+"/api/messaging/send/email/", gotURL)
 		})
 	}
 }
@@ -626,6 +825,26 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 		{name: "no subject", email: code(func(e *CodeEmail) { e.Subject = "" }), code: "invalid_form", field: "Subject"},
 		{name: "no html or text", email: code(func(e *CodeEmail) { e.HTML = "" }), code: "invalid_form", field: "HTML"},
 		{name: "blank reply-to", email: code(func(e *CodeEmail) { e.ReplyTo = []string{"a@example.com", " "} }), code: "invalid_reply_to", field: "ReplyTo"},
+		{name: "blank cc", email: code(func(e *CodeEmail) { e.Cc = []string{""} }), code: "invalid_cc", field: "Cc"},
+		{name: "blank bcc", email: code(func(e *CodeEmail) { e.Bcc = []string{"a@example.com", "\t"} }), code: "invalid_bcc", field: "Bcc"},
+		{name: "attachment without a filename", email: code(func(e *CodeEmail) { e.Attachments = []EmailAttachment{{Content: []byte("hi")}} }), code: "invalid_attachment", field: "Attachments[0].Filename"},
+		{name: "attachment with a blank filename", email: code(func(e *CodeEmail) { e.Attachments = []EmailAttachment{{Filename: " ", Content: []byte("hi")}} }), code: "invalid_attachment", field: "Attachments[0].Filename"},
+		{name: "attachment without content", email: code(func(e *CodeEmail) {
+			e.Attachments = []EmailAttachment{{Filename: "a.txt", Content: []byte("hi")}, {Filename: "b.txt", Content: []byte{}}}
+		}), code: "invalid_attachment", field: "Attachments[1].Content"},
+		{name: "more than 10 attachments", email: code(func(e *CodeEmail) {
+			for i := 0; i < 11; i++ {
+				e.Attachments = append(e.Attachments, EmailAttachment{Filename: fmt.Sprintf("%d.txt", i), Content: []byte{byte(i)}})
+			}
+		}), code: "too_many_attachments", field: "Attachments"},
+		{name: "a 30 MB file", email: code(func(e *CodeEmail) {
+			e.Attachments = []EmailAttachment{{Filename: "scan.pdf", Content: make([]byte, 30_000_000)}}
+		}), code: "message_too_large", field: "Attachments"},
+		{name: "three 10 MB files", email: code(func(e *CodeEmail) {
+			for i := 0; i < 3; i++ {
+				e.Attachments = append(e.Attachments, EmailAttachment{Filename: fmt.Sprintf("%d.pdf", i), Content: make([]byte, 10_000_000)})
+			}
+		}), code: "message_too_large", field: "Attachments"},
 		{name: "category without a key", email: code(func(e *CodeEmail) {
 			e.Category = MessageCategory{Key: " ", Type: MessageCategoryMarketing, Name: "Newsletter"}
 		}), code: "invalid_category", field: "Category.Key"},
@@ -1030,7 +1249,7 @@ func TestEmailsGetStopsWhenTheContextEnds(t *testing.T) {
 func TestEmailsSendRefusesANilEmail(t *testing.T) {
 	server := newEmailServer(t)
 	for _, email := range []Email{nil, (*TemplateEmail)(nil), (*CodeEmail)(nil)} {
-		for name, client := range map[string]Client{"enabled": newEmailClient(t, server), "disabled": New("")} {
+		for name, client := range map[string]Client{"enabled": newEmailClient(t, server), "disabled": newDisabledClient(t)} {
 			_, err := client.Emails().Send(context.Background(), email)
 
 			emailErr := requireEmailError(t, err)
@@ -1063,7 +1282,7 @@ func TestEmailsGet(t *testing.T) {
 	requests := server.received()
 	require.Len(t, requests, 1)
 	require.Equal(t, http.MethodGet, requests[0].Method)
-	require.Equal(t, "/api/projects/@current/messaging/emails/"+testMessageID+"/", requests[0].Path)
+	require.Equal(t, "/api/messaging/emails/"+testMessageID+"/", requests[0].Path)
 	require.Equal(t, "Bearer phs_test", requests[0].Header.Get("Authorization"))
 	require.Empty(t, requests[0].Header.Get("Idempotency-Key"))
 	require.Empty(t, requests[0].Header.Get("Content-Type"))
@@ -1118,7 +1337,7 @@ func TestEmailsGetChecksTheMessageID(t *testing.T) {
 }
 
 func TestEmailsDisabledClient(t *testing.T) {
-	client := New("")
+	client := newDisabledClient(t)
 
 	_, sendErr := client.Emails().Send(context.Background(), templateEmail())
 	_, getErr := client.Emails().Get(context.Background(), testMessageID)
@@ -1258,4 +1477,12 @@ func (l *recordingLogger) warnings() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]string(nil), l.warns...)
+}
+
+// newDisabledClient returns the disabled client New gives for an empty API key.
+func newDisabledClient(t *testing.T) Client {
+	t.Helper()
+	client, err := New("")
+	require.NoError(t, err)
+	return client
 }

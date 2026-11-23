@@ -84,6 +84,37 @@ func (f FlagDetail) GetValue() interface{} {
 	return f.Enabled
 }
 
+// flagDetailFailed reports a v4 flag the server could not evaluate.
+// enabled is then a placeholder, not a decision.
+func flagDetailFailed(detail FlagDetail) bool {
+	return detail.Failed != nil && *detail.Failed
+}
+
+// remoteFlagFailed reports whether the /flags payload marks key as failed.
+// v3 responses have no per-flag failed bit, so they are never failed here.
+func remoteFlagFailed(resp *FlagsResponse, key string) bool {
+	if resp == nil {
+		return false
+	}
+	detail, ok := resp.Flags[key]
+	return ok && flagDetailFailed(detail)
+}
+
+func copyEvaluatedFlagValues(dst map[string]interface{}, resp *FlagsResponse) {
+	if resp == nil {
+		return
+	}
+	for key, value := range resp.FeatureFlags {
+		if !remoteFlagFailed(resp, key) {
+			dst[key] = value
+		}
+	}
+}
+
+func errFlagEvaluationFailed(key string) error {
+	return fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, key)
+}
+
 // NewFlagDetail creates a FlagDetail from a flag key, a bool or string value,
 // and an optional raw JSON payload. String values are treated as enabled variants;
 // bool values are treated as boolean flag results.

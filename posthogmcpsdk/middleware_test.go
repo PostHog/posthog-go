@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +19,8 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	posthog "github.com/posthog/posthog-go"
-	"github.com/posthog/posthog-go/posthogmcp"
+	posthog "github.com/posthog/posthog-go/v2"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -143,8 +145,11 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 	received.Meta = nil // go-sdk v1.8+ stamps serverInfo on the way out, after the middleware
 	assert.JSONEq(t, jsonString(t, &received), jsonString(t, properties["$mcp_response"]))
 	delete(properties, "$mcp_response")
+	assert.Equal(t, posthog.Version, properties["$lib_version"])
+	delete(properties, "$lib_version")
 	assert.JSONEq(t, `{
 		"$groups": {"company": "acme"},
+		"$lib": "posthog-go-mcp",
 		"$mcp_client_name": "test-client",
 		"$mcp_client_version": "2.0.0",
 		"$mcp_intent": "Checking the weather before a trip",
@@ -653,7 +658,7 @@ func TestInstrumentIntentFallback(t *testing.T) {
 	}
 }
 
-func TestInstrumentIntentFallbackIsForToolCallsOnly(t *testing.T) {
+func TestInstrumentIntentFallbackAndEventOptionsAreForToolCallsOnly(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		tool      string
@@ -663,7 +668,7 @@ func TestInstrumentIntentFallbackIsForToolCallsOnly(t *testing.T) {
 		{name: "the missing-capability tool", tool: "get_more_tools", wantEvent: "$mcp_missing_capability"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var calls int
+			var calls, optionCalls int
 			queue := &fakeQueue{}
 			server := newServer()
 			Instrument(server, posthogmcp.New(queue),
@@ -671,6 +676,10 @@ func TestInstrumentIntentFallbackIsForToolCallsOnly(t *testing.T) {
 				WithIntentFallback(func(context.Context, *mcpsdk.CallToolRequest) (string, error) {
 					calls++
 					return "inferred", nil
+				}),
+				WithEventOptions(func(context.Context, *mcpsdk.CallToolRequest, *mcpsdk.CallToolResult, error) (posthog.Options, error) {
+					optionCalls++
+					return posthog.Options{"cookieless_mode": true}, nil
 				}),
 			)
 			addWeatherTool(server, nil)
@@ -686,11 +695,191 @@ func TestInstrumentIntentFallbackIsForToolCallsOnly(t *testing.T) {
 			}
 
 			assert.Zero(t, calls)
+			assert.Zero(t, optionCalls)
 			assert.Empty(t, queue.toolCalls())
 			require.Len(t, queue.captures(test.wantEvent), 1)
 			assert.NotEqual(t, "inferred", queue.captures(test.wantEvent)[0].Properties["$mcp_intent_source"])
+			assert.Equal(t, posthog.Options{"process_person_profile": false}, queue.captures(test.wantEvent)[0].Options)
 		})
 	}
+}
+
+// withRequestContext installs receiving middleware outside instrumentation
+// that attaches requestContext to every request.
+func withRequestContext(server *mcpsdk.Server, requestContext posthog.RequestContext) {
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			return next(posthog.WithRequestContext(ctx, requestContext), method, req)
+		}
+	})
+}
+
+func TestInstrumentEventOptions(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		identified     bool
+		requestOptions posthog.Options
+		resolved       posthog.Options
+		resolveErr     error
+		want           posthog.Options
+		wantReported   []string
+	}{
+		{
+			name:       "options reach the tool call and its exception",
+			identified: true,
+			resolved:   posthog.Options{"process_person_profile": false, "cookieless_mode": true},
+			want:       posthog.Options{"process_person_profile": false, "cookieless_mode": true},
+		},
+		{
+			name:     "a call without an identity stays personless",
+			resolved: posthog.Options{"process_person_profile": true, "cookieless_mode": true},
+			want:     posthog.Options{"process_person_profile": false, "cookieless_mode": true},
+		},
+		{
+			name:           "options win over the request context's and a nil option keeps it",
+			identified:     true,
+			requestOptions: posthog.Options{"process_person_profile": false, "cookieless_mode": true},
+			resolved:       posthog.Options{"process_person_profile": true, "cookieless_mode": nil},
+			want:           posthog.Options{"process_person_profile": true, "cookieless_mode": true},
+		},
+		{
+			name:           "a resolver error drops its options and is reported",
+			identified:     true,
+			requestOptions: posthog.Options{"cookieless_mode": true},
+			resolved:       posthog.Options{"process_person_profile": false},
+			resolveErr:     errors.New("options unavailable"),
+			want:           posthog.Options{"cookieless_mode": true},
+			wantReported:   []string{"posthogmcpsdk: event options resolver: options unavailable"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var reported []string
+			var resolvedFor []string
+			queue := &fakeQueue{}
+			server := newServer()
+			opts := []Option{
+				WithEventOptions(func(
+					_ context.Context,
+					req *mcpsdk.CallToolRequest,
+					result *mcpsdk.CallToolResult,
+					handlerErr error,
+				) (posthog.Options, error) {
+					resolvedFor = append(resolvedFor, fmt.Sprintf("%s isError=%t err=%v", req.Params.Name, result.IsError, handlerErr))
+					return test.resolved, test.resolveErr
+				}),
+				WithErrorHandler(func(_ context.Context, err error) { reported = append(reported, err.Error()) }),
+			}
+			if test.identified {
+				opts = append(opts, WithIdentity(func(context.Context, *mcpsdk.CallToolRequest) (Identity, error) {
+					return Identity{DistinctID: "user-123"}, nil
+				}))
+			}
+			Instrument(server, posthogmcp.New(queue), opts...)
+			if test.requestOptions != nil {
+				withRequestContext(server, posthog.RequestContext{Options: test.requestOptions})
+			}
+			addWeatherTool(server, errors.New("forecast unavailable"))
+
+			_, err := connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+				Name:      "weather",
+				Arguments: map[string]any{"city": "Melbourne"},
+			})
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{"weather isError=true err=<nil>"}, resolvedFor)
+			captures := queue.toolCalls()
+			require.Len(t, captures, 1)
+			assert.Equal(t, test.want, captures[0].Options)
+			exceptions := queue.exceptions()
+			require.Len(t, exceptions, 1)
+			assert.Equal(t, test.want, exceptions[0].Options)
+			assert.Equal(t, test.wantReported, reported)
+		})
+	}
+}
+
+// captureEndpoint is a PostHog capture endpoint that accepts every event and
+// hands each request body to the returned channel.
+func captureEndpoint(t *testing.T) (string, <-chan []byte) {
+	t.Helper()
+	payloads := make(chan []byte, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read capture request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		payloads <- body
+		var request struct {
+			Batch []struct {
+				UUID string `json:"uuid"`
+			} `json:"batch"`
+		}
+		results := map[string]any{}
+		if json.Unmarshal(body, &request) == nil {
+			for _, event := range request.Batch {
+				results[event.UUID] = map[string]string{"result": "ok"}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	t.Cleanup(server.Close)
+	return server.URL, payloads
+}
+
+func TestInstrumentEventOptionsBeforeSendHasTheLastWord(t *testing.T) {
+	endpoint, payloads := captureEndpoint(t)
+	hooked := make(chan posthog.Options, 1)
+	client, err := posthog.NewWithConfig("test-key", posthog.Config{
+		Endpoint:  endpoint,
+		BatchSize: 1,
+		BeforeSend: func(msg posthog.Message) posthog.Message {
+			capture := msg.(posthog.Capture)
+			hooked <- maps.Clone(capture.Options)
+			capture.Options["process_person_profile"] = true
+			return capture
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	server := newServer()
+	Instrument(server, posthogmcp.New(client), WithEventOptions(func(
+		context.Context,
+		*mcpsdk.CallToolRequest,
+		*mcpsdk.CallToolResult,
+		error,
+	) (posthog.Options, error) {
+		return posthog.Options{"process_person_profile": true, "cookieless_mode": true}, nil
+	}))
+	addWeatherTool(server, nil)
+
+	_, err = connectInMemory(t, server).CallTool(t.Context(), &mcpsdk.CallToolParams{
+		Name:      "weather",
+		Arguments: map[string]any{"city": "Melbourne"},
+	})
+	require.NoError(t, err)
+
+	var body []byte
+	select {
+	case body = <-payloads:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the capture request")
+	}
+	var payload struct {
+		Batch []struct {
+			Event   string         `json:"event"`
+			Options map[string]any `json:"options"`
+		} `json:"batch"`
+	}
+	require.NoError(t, json.Unmarshal(body, &payload))
+	require.Len(t, payload.Batch, 1)
+	assert.Equal(t, "$mcp_tool_call", payload.Batch[0].Event)
+	assert.Equal(t, posthog.Options{"process_person_profile": false, "cookieless_mode": true}, <-hooked,
+		"BeforeSend sees the personless default for a call without an identity")
+	assert.Equal(t, map[string]any{"process_person_profile": true, "cookieless_mode": true}, payload.Batch[0].Options,
+		"PostHog receives what BeforeSend returns")
 }
 
 func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
@@ -704,6 +893,14 @@ func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
 		error,
 	) (posthog.Properties, error) {
 		panic("properties panic")
+	})
+	panickingEventOptions := WithEventOptions(func(
+		context.Context,
+		*mcpsdk.CallToolRequest,
+		*mcpsdk.CallToolResult,
+		error,
+	) (posthog.Options, error) {
+		panic("event options panic")
 	})
 	panickingInnerListing := func(server *mcpsdk.Server) {
 		server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
@@ -735,10 +932,11 @@ func TestInstrumentationFailuresDoNotChangeResponse(t *testing.T) {
 		{
 			name:  "resolver failures",
 			queue: &fakeQueue{},
-			opts:  []Option{failingIdentity, panickingProperties},
+			opts:  []Option{failingIdentity, panickingProperties, panickingEventOptions},
 			wantReported: []string{
 				"posthogmcpsdk: identity resolver: identity unavailable",
 				"posthogmcpsdk: properties resolver: properties resolver panic (string)",
+				"posthogmcpsdk: event options resolver: event options resolver panic (string)",
 			},
 		},
 		{
@@ -1279,18 +1477,50 @@ func TestInstrumentRelearnsAToolReplacedWhileNoSessionIsConnected(t *testing.T) 
 	assert.Equal(t, "own context: Planning a trip", result.Content[0].(*mcpsdk.TextContent).Text)
 }
 
-func TestNilAnalyticsPanicsAtConstruction(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		install func()
-	}{
-		{name: "NewMiddleware", install: func() { NewMiddleware(nil) }},
-		{name: "Instrument", install: func() { Instrument(newServer(), nil) }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			assert.PanicsWithValue(t, "posthogmcpsdk: analytics must not be nil", test.install)
-		})
+func TestNilAnalyticsPassesThrough(t *testing.T) {
+	var logged strings.Builder
+	orig := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	server := newServer()
+	require.NotPanics(t, func() { Instrument(server, nil) })
+	assert.Equal(t, 1, strings.Count(logged.String(), "\n"), "want exactly one log line, got %q", logged.String())
+	assert.Contains(t, logged.String(), errNilAnalytics.Error())
+
+	addWeatherTool(server, nil)
+	client := connectInMemory(t, server)
+	listed, err := client.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.Len(t, listed.Tools, 1)
+	assert.NotContains(t, jsonString(t, listed.Tools[0].InputSchema), `"context"`, "a disabled middleware must not change tool schemas")
+	result, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
+	require.NoError(t, err)
+	require.False(t, result.IsError, toolResultText(result))
+	assert.JSONEq(t, `{"temperature":21}`, jsonString(t, result.StructuredContent))
+	assert.Equal(t, 1, strings.Count(logged.String(), "\n"), "requests must not log again, got %q", logged.String())
+}
+
+func TestNilAnalyticsReturnsHandlerResultsUntouched(t *testing.T) {
+	var reported []error
+	m := NewMiddleware(nil, WithErrorHandler(func(_ context.Context, err error) { reported = append(reported, err) }))
+	assert.Equal(t, []error{errNilAnalytics}, reported)
+
+	wantResult := &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "ok"}}}
+	wantErr := errors.New("downstream failed")
+	var calls int
+	next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+		calls++
+		return wantResult, wantErr
 	}
+	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Name: "weather"}}
+	for _, handler := range []mcpsdk.MethodHandler{m.Receiving(next), m.Sending(next)} {
+		result, err := handler(t.Context(), methodCallTool, req)
+		assert.Same(t, wantResult, result)
+		assert.Same(t, wantErr, err)
+	}
+	assert.Equal(t, 2, calls)
+	assert.Len(t, reported, 1, "handling requests must not report again")
 }
 
 func TestToolResultText(t *testing.T) {

@@ -3,13 +3,8 @@ package posthog
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
-	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	gojson "github.com/goccy/go-json"
 	"github.com/stretchr/testify/require"
@@ -55,76 +50,42 @@ func TestNativeArrayMarshalerSemantics(t *testing.T) {
 }
 
 func TestCaptureArrayMarshalerPrivacy(t *testing.T) {
-	for _, mode := range []CaptureMode{CaptureModeLegacy, CaptureModeAnalyticsV1} {
-		for _, number := range []float64{42.5, math.NaN(), math.Inf(1), math.Inf(-1)} {
-			t.Run(fmt.Sprintf("%d/%v", mode, number), func(t *testing.T) {
-				props, want := arrayMarshalerProperties()
-				before, _ := arrayMarshalerProperties()
-				props["number"] = number
-				var mu sync.Mutex
-				var events []map[string]interface{}
-				var wireBodies []string
-				cb := &recordingCallback{}
-				c, err := NewWithConfig("test-key", Config{
-					Endpoint: "http://posthog.test", CaptureMode: mode, Callback: cb, Logger: quietTestLogger{t}, BatchSize: 100, Interval: time.Hour,
-					Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-						body, err := io.ReadAll(r.Body)
-						if err != nil {
-							return nil, err
-						}
-						var envelope struct {
-							Batch []map[string]interface{} `json:"batch"`
-						}
-						if err := json.Unmarshal(body, &envelope); err != nil {
-							return nil, err
-						}
-						mu.Lock()
-						events = append(events, envelope.Batch...)
-						wireBodies = append(wireBodies, string(body))
-						mu.Unlock()
-						response := `{}`
-						if mode == CaptureModeAnalyticsV1 {
-							response = allOkResultsBody(body)
-						}
-						return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
-					}),
-				})
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = c.Close() })
-				require.NoError(t, c.Enqueue(Capture{Event: "array", DistinctId: "user", Properties: props}))
-				require.NoError(t, c.Enqueue(Capture{Event: "healthy", DistinctId: "user", Properties: Properties{"finite": 7}}))
-				require.NoError(t, c.Close())
-				successes, failures := cb.counts()
-				require.Zero(t, failures)
-				require.Equal(t, 2, successes)
-				mu.Lock()
-				defer mu.Unlock()
-				require.NotEmpty(t, wireBodies)
-				for _, body := range wireBodies {
-					require.NotContains(t, body, "private fixture marker")
-				}
-				require.Len(t, events, 2)
-				require.Equal(t, "array", events[0]["event"])
-				require.Equal(t, "healthy", events[1]["event"])
-				got := events[0]["properties"].(map[string]interface{})
-				for key, value := range want {
-					require.Contains(t, got, key)
-					require.Equal(t, value, got[key], key)
-					require.Equal(t, before[key], props[key], "caller property %s", key)
-				}
-				require.Contains(t, got, "number")
-				if math.IsNaN(number) || math.IsInf(number, 0) {
-					require.Nil(t, got["number"])
-				} else {
-					require.Equal(t, number, got["number"])
-				}
-				if math.IsNaN(number) {
-					require.True(t, math.IsNaN(props["number"].(float64)))
-				} else {
-					require.Equal(t, number, props["number"])
-				}
-				require.Equal(t, float64(7), events[1]["properties"].(map[string]interface{})["finite"])
-			})
-		}
+	for _, number := range []float64{42.5, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		t.Run(fmt.Sprint(number), func(t *testing.T) {
+			props, want := arrayMarshalerProperties()
+			before, _ := arrayMarshalerProperties()
+			props["number"] = number
+			events, bodies, cb := captureWire(t,
+				Capture{Event: "array", DistinctId: "user", Properties: props},
+				Capture{Event: "healthy", DistinctId: "user", Properties: Properties{"finite": 7}})
+			successes, failures := cb.counts()
+			require.Zero(t, failures)
+			require.Equal(t, 2, successes)
+			require.NotEmpty(t, bodies)
+			for _, body := range bodies {
+				require.NotContains(t, body, "private fixture marker")
+			}
+			require.Len(t, events, 2)
+			require.Equal(t, "array", events[0]["event"])
+			require.Equal(t, "healthy", events[1]["event"])
+			got := events[0]["properties"].(map[string]interface{})
+			for key, value := range want {
+				require.Contains(t, got, key)
+				require.Equal(t, value, got[key], key)
+				require.Equal(t, before[key], props[key], "caller property %s", key)
+			}
+			require.Contains(t, got, "number")
+			if math.IsNaN(number) || math.IsInf(number, 0) {
+				require.Nil(t, got["number"])
+			} else {
+				require.Equal(t, number, got["number"])
+			}
+			if math.IsNaN(number) {
+				require.True(t, math.IsNaN(props["number"].(float64)))
+			} else {
+				require.Equal(t, number, props["number"])
+			}
+			require.Equal(t, float64(7), events[1]["properties"].(map[string]interface{})["finite"])
+		})
 	}
 }

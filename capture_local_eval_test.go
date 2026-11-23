@@ -26,6 +26,9 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 	t.Helper()
 	s := &captureLocalEvalServer{}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			if definitionsFixture == "" {
@@ -36,9 +39,6 @@ func newCaptureLocalEvalServer(t *testing.T, definitionsFixture, decideResponse 
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			s.decideCalls.Add(1)
 			w.Write([]byte(decideResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}
@@ -76,6 +76,7 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 		definitions     string // "" => definitions endpoint fails to load
 		decideResponse  string
 		sendFlags       SendFeatureFlagsValue
+		properties      Properties
 		wantDecideCalls int32
 		wantProps       map[string]interface{}
 		wantAbsent      []string
@@ -94,6 +95,19 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 			},
 			// … but excluded from $active_feature_flags.
 			wantActiveFlags: []string{"beta-feature"},
+		},
+		{
+			name:            "a flag property the caller set wins",
+			definitions:     validDefs,
+			decideResponse:  unusedDecide,
+			sendFlags:       SendFeatureFlags(true),
+			properties:      NewProperties().Set("$feature/beta-feature", "caller").Set("$active_feature_flags", "caller"),
+			wantDecideCalls: 0,
+			wantProps: map[string]interface{}{
+				"$feature/beta-feature":     "caller",
+				"$feature/disabled-feature": false,
+				"$active_feature_flags":     "caller",
+			},
 		},
 		{
 			name:            "falls back to remote for an uncomputable flag",
@@ -162,6 +176,7 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 			if err := client.Enqueue(Capture{
 				Event:            "test_event",
 				DistinctId:       "distinct-id",
+				Properties:       tt.properties,
 				SendFeatureFlags: tt.sendFlags,
 			}); err != nil {
 				t.Fatal(err)
@@ -225,15 +240,15 @@ func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, 
 	t.Helper()
 	var decideCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCaptureOK(w, r) {
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/flags/definitions"):
 			w.Write([]byte(definitions))
 		case r.URL.Path == "/flags" || r.URL.Path == "/flags/":
 			decideCalls.Add(1)
 			w.Write([]byte(flagsResponse))
-		case strings.HasPrefix(r.URL.Path, "/batch"):
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
 		default:
 			t.Errorf("unexpected request to %s", r.URL.Path)
 		}

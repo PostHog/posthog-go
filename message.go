@@ -3,7 +3,6 @@ package posthog
 import (
 	"time"
 
-	json "github.com/goccy/go-json"
 	"github.com/google/uuid"
 )
 
@@ -31,12 +30,13 @@ type Callback interface {
 // message is dropped.
 //
 // The SDK passes an isolated copy of SDK-owned mutable fields where practical:
-// Properties and Groups clone common JSON-like maps and slices, and Exception
-// clones its exception list, stack traces, mechanisms, fingerprint, and debug
-// images. Arbitrary
-// reference values stored inside Properties or Groups (for example, pointers or
-// custom mutable structs held as interface{} values) are not deep-cloned and can
-// still share state with the caller.
+// Properties, Groups and Options clone common JSON-like maps and slices, and
+// Exception clones its exception list, stack traces, mechanisms, fingerprint,
+// and debug images. Arbitrary reference values stored inside Properties,
+// Groups or Options (for example, pointers or custom mutable structs held as
+// interface{} values) are not deep-cloned and can still share state with the
+// caller. Options is never nil inside the hook, so the hook can call Set
+// directly.
 type BeforeSendFunc func(Message) Message
 
 // Message represents a PostHog object that can be queued with Client.Enqueue.
@@ -52,9 +52,9 @@ type Message interface {
 	// APIfy converts the message into its PostHog batch API representation.
 	APIfy() APIMessage
 
-	// apifyEvent converts the message into the capture-v1 intermediate event.
+	// apifyEvent converts the message into the capture intermediate event.
 	// Unexported so it does not widen the public surface. The returned properties
-	// are caller-owned; buildV1Event may mutate them in place.
+	// are caller-owned; buildEvent may mutate them in place.
 	apifyEvent() apiEvent
 
 	// internal prevents external packages from satisfying Message. Calling it panics.
@@ -71,22 +71,58 @@ func makeTimestamp(t time.Time, def time.Time) time.Time {
 	return t.UTC()
 }
 
-// makeUUID returns the UUID passed as first argument if non-empty and valid,
-// otherwise generates and returns a new random UUID (v4).
+// makeUUID returns the UUID passed as first argument in canonical form if
+// non-empty and valid, otherwise generates and returns a new UUID.
 func makeUUID(u string) string {
-	if u != "" && uuid.Validate(u) == nil {
-		return u
+	if canonical, ok := parseUUID(u); ok {
+		return canonical
+	}
+	// v7 is time-ordered, matching what capture generates server-side when a
+	// client omits the uuid, and what posthog-rs sends. Falls back to v4 if the
+	// clock-based path fails rather than failing the event.
+	if v7, err := uuid.NewV7(); err == nil {
+		return v7.String()
 	}
 	return uuid.New().String()
 }
 
-// batch represents objects sent to the /batch/ endpoint with pre-serialized messages.
-// Messages are pre-serialized as json.RawMessage for efficient batch building -
-// json.Marshal embeds them directly without re-encoding.
-type batch struct {
-	ApiKey              string            `json:"api_key"`
-	HistoricalMigration bool              `json:"historical_migration,omitempty"`
-	Messages            []json.RawMessage `json:"batch"`
+const invalidEventUUIDWarning = "event Uuid is not a valid UUID; sending the event with a generated UUID"
+
+// resolveEventUUID applies the event uuid rule. A valid uuid is normalized and
+// an empty one is generated silently. An invalid one is replaced, and the
+// warning omits the value because callers can put their own data in the field.
+func resolveEventUUID(u string, logger Logger) string {
+	if canonical, ok := parseUUID(u); ok {
+		return canonical
+	}
+	if u != "" && logger != nil {
+		logger.Warnf(invalidEventUUIDWarning)
+	}
+	return makeUUID("")
+}
+
+// canonicalUUID returns u in the lowercase hyphenated form the capture
+// endpoint keys per-event results by. A value that does not parse is returned
+// unchanged; capture rejects its whole batch anyway.
+func canonicalUUID(u string) string {
+	if canonical, ok := parseUUID(u); ok {
+		return canonical
+	}
+	return u
+}
+
+// parseUUID returns the canonical form of a valid uuid. uuid.Parse alone
+// accepts a 38-byte value with any outer characters, such as "[...]", so
+// uuid.Validate runs first to require genuine braces.
+func parseUUID(u string) (string, bool) {
+	if u == "" || uuid.Validate(u) != nil {
+		return "", false
+	}
+	parsed, err := uuid.Parse(u)
+	if err != nil {
+		return "", false
+	}
+	return parsed.String(), true
 }
 
 // APIMessage is a wire-format message produced by Message.APIfy and passed to callbacks.
@@ -95,30 +131,3 @@ type batch struct {
 // ingestion uses event plus properties such as $lib, $lib_version,
 // $feature/<key>, and $active_feature_flags instead.
 type APIMessage interface{}
-
-// prepareForSend creates the API message and serializes it to JSON.
-// Returns pre-serialized JSON for efficient batch building, the original
-// APIMessage for callbacks, and any serialization error.
-// Size is derived from len(json.RawMessage) when needed - O(1) operation.
-func prepareForSend(msg Message) (json.RawMessage, APIMessage, error) {
-	apiMsg := msg.APIfy()
-	wire := apiMsg
-	if capture, ok := apiMsg.(CaptureInApi); ok {
-		properties, err := normalizeEventProperties(capture.Properties)
-		if err != nil {
-			return nil, apiMsg, err
-		}
-		capture.Properties = properties
-		wire = capture
-	}
-	data, err := marshalEventJSON(wire)
-	if err != nil {
-		return nil, apiMsg, err
-	}
-	return json.RawMessage(data), apiMsg, nil
-}
-
-const (
-	maxBatchBytes   = 500000
-	maxMessageBytes = 500000
-)

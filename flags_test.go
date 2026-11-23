@@ -91,6 +91,9 @@ func TestMakeFlagsRequestRetriesHTTP502And504ThenSucceeds(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				call := calls.Add(1)
 				if call == 1 {
 					w.WriteHeader(status)
@@ -127,6 +130,9 @@ func TestMakeFlagsRequestRetriesHTTP502And504UntilExhausted(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				calls.Add(1)
 				w.WriteHeader(status)
 			}))
@@ -268,6 +274,9 @@ func TestMakeFlagsRequestDoesNotRetryHTTPStatusErrors(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCaptureOK(w, r) {
+					return
+				}
 				calls.Add(1)
 				w.WriteHeader(status)
 			}))

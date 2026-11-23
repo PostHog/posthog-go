@@ -1,9 +1,9 @@
-module github.com/posthog/posthog-go/otel
+module github.com/posthog/posthog-go/otel/v2
 
 go 1.25.0
 
 require (
-	github.com/posthog/posthog-go v1.42.0
+	github.com/posthog/posthog-go/v2 v2.1.1
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
@@ -37,4 +37,4 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 )
 
-replace github.com/posthog/posthog-go => ../
+replace github.com/posthog/posthog-go/v2 => ../

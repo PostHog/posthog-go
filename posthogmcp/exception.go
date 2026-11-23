@@ -6,7 +6,7 @@ package posthogmcp
 import (
 	"errors"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 // captureStage says what a $mcp_tool_call keeps: nested values are cut to depth
@@ -53,11 +53,7 @@ func (p preparedToolCall) buildCapture() (posthog.Capture, error) {
 }
 
 func (p preparedToolCall) captureAt(base posthog.Properties, stage captureStage) posthog.Capture {
-	var custom posthog.Properties
-	if stage.custom {
-		custom = p.custom
-	}
-	properties := mergeProperties(base, custom)
+	properties := mergeProperties(base, p.customOrLibrary(stage.custom))
 	limitProperty(properties, propertyResponse, stage.response, stage.depth)
 	limitProperty(properties, propertyParameters, stage.parameters, stage.depth)
 	applyIdentityProperties(properties, p, stage.set)
@@ -66,8 +62,8 @@ func (p preparedToolCall) captureAt(base posthog.Properties, stage captureStage)
 		Event:      eventToolCall,
 		Timestamp:  p.call.Timestamp,
 		Properties: properties,
+		Options:    p.options(),
 		Groups:     p.groups,
-		Library:    library,
 	}
 }
 
@@ -110,17 +106,13 @@ func (p preparedToolCall) buildException() (posthog.Exception, error) {
 	setStringProperty(base, propertyProtocolVersion, truncateUTF8(p.call.ProtocolVersion, maxMetadataBytes))
 
 	build := func(includeCustom bool) posthog.Exception {
-		var custom posthog.Properties
-		if includeCustom {
-			custom = p.custom
-		}
-		properties := mergeProperties(base, custom)
+		properties := mergeProperties(base, p.customOrLibrary(includeCustom))
 		applyIdentityProperties(properties, p, false)
 		return posthog.Exception{
 			DistinctId: p.distinctID,
 			Timestamp:  p.call.Timestamp,
 			Properties: properties,
-			Library:    library,
+			Options:    p.options(),
 			ExceptionList: []posthog.ExceptionItem{
 				item,
 			},

@@ -1,5 +1,141 @@
 ## Unreleased
 
+## 2.1.1
+
+### Patch Changes
+
+- 80e5df4: Send transactional emails, attachment uploads and email status reads through `/api/messaging/` instead of `/api/projects/@current/messaging/`. PostHog takes the project from the project secret key, and the `@current` routes are going away. Needs PostHog Cloud, or a self-hosted PostHog from 2026-11-18 or later. Older self-hosted versions answer these calls with a 404.
+
+## 2.1.0
+
+### Minor Changes
+
+- b17c59b: Add `ReloadFeatureFlagsWithContext`, which fetches local feature flag definitions and returns once they are in use, or with the error that kept them from loading. Reach it through the new `FlagReloader` interface (`client.(posthog.FlagReloader)`), so implementations and mocks of `Client` are unaffected. A quota-limited definitions response returns `ErrFlagDefinitionsQuotaLimited`. `ReloadFeatureFlags` still only schedules the fetch.
+
+## 2.0.0
+
+### Major Changes
+
+- fc05013: Add `Client.EnqueueAI`, which sends to PostHog's dedicated AI capture endpoint on an isolated lane with its own queue, batching, retry state, compression, upload timeout and size limits. `Flush` and `FlushWithContext` also wait for the AI lane once it has started. See `docs/migration-v2.md`.
+- fc05013: Capture requests follow only `307` and `308` redirects to the same scheme, host and port as `Endpoint`, at most 5 times, with the same body and headers. Any other redirect fails the batch without a retry, with a `CaptureRequestError` that carries the redirect's status. In posthog-go 1.x.x the SDK followed up to 10 redirects of any kind to any host. See `docs/migration-v2.md`.
+- fc05013: Capture v1 is now the only capture path. The legacy `/batch/` pipeline and the `Config.CaptureMode` switch that selected between them are removed.
+  
+  See [the migration guide](docs/migration-v2.md) for the full details.
+  
+  ### Breaking changes
+  
+  - `Config.CaptureMode`, the `CaptureMode` type, and `CaptureModeLegacy`/`CaptureModeAnalyticsV1` are removed. Delete the field. There is nothing to opt into.
+  - `CompressionZstd`, `CompressionDeflate` and `CompressionBrotli` are now valid unconditionally. Configurations that previously failed validation with "requires CaptureModeAnalyticsV1" now succeed.
+  
+  ### Behavior changes
+  
+  These apply to every caller on upgrade, and none of them produce a compile error.
+  
+  - **Events go to `POST /i/v1/analytics/events` instead of `POST /batch/`.** Reverse proxies and egress allowlists pinned to `/batch/` must be updated.
+  - **Authentication moves from the request body to `Authorization: Bearer`.** The project API key is no longer sent as an `api_key` body field.
+  - **Delivery results are per event, not per batch.** Only the events the backend asks to retry are re-sent, and `Callback.Failure` can now fire on an HTTP 200 for an individual event that was dropped. Failures carry typed `*CaptureEventError`, `*CaptureRequestError` and `*CaptureLocalError` values.
+  - **Retries changed.** Capture retries `404`, `408`, `429`, `500`, `502`, `503` and `504`, plus network errors. `404` is now retried, and other `5xx` statuses are now terminal. Billing limits arrive as a terminal `402`. `Retry-After` is honoured but clamped to `Config.MaxRetryBackoff` (default 30s).
+  - **`$lib` and `$lib_version` are sent as they are when the event is sent.** Every event carries them, `posthog-go` and the SDK version by default. A `$lib` or `$lib_version` you set in the event, the request context or `DefaultEventProperties` wins key by key, like any other property, so set both in the same place. When no non-empty string `$lib` is set, the SDK sets both. It adds only its version when `$lib` is `posthog-go`. `BeforeSend` sees both and can change or remove them. PostHog uses the `PostHog-Sdk-Info` header only for events without a `$lib`. In posthog-go 1.x.x the default `/batch/` path overwrote a `$lib` you set.
+  - **Values you set now win over the values the SDK adds.** `$is_server`, `$geoip_disable`, `$os`, `$os_version`, `$os_distro` and `$go_version` fill only keys the event, the request context and `DefaultEventProperties` left unset, before `BeforeSend`. The `$feature/<key>` and `$active_feature_flags` properties from a `Flags` snapshot or `SendFeatureFlags` fill the same way, under the event, the request context and `DefaultEventProperties`. Previously the SDK overwrote the values you set for `$is_server`, `$geoip_disable` and the system properties. For flag properties, only `SendFeatureFlags` overwrote a value set on the event or in the request context, and `DefaultEventProperties` already beat the flag values. A `$geoip_disable: false` default now turns GeoIP lookup back on for events, even with `Config.DisableGeoIP` on.
+  - **Compression is stricter.** `gzip`, `deflate`, `br` and `zstd` are accepted via `Content-Encoding`. The legacy `lz64`/`base64` encodings and the `?compression=` query parameter are gone.
+  - **Some invalid events are now rejected individually** rather than failing the batch: event names and distinct IDs over 200 bytes, and `$performance_event`.
+- fc05013: Make New return (Client, error), like NewWithConfig. Both constructors return a nil client and an error only for invalid configuration. An empty or personal (phx_) project API key gives a disabled client and a nil error, and logs an error. Add Config.Disabled to build a disabled client for tests and local development. posthogmcpsdk.NewMiddleware and Instrument no longer panic on nil analytics. They report one error and pass every request through unchanged.
+- fc05013: Add an `Options` field to every message type for per-event capture options, such as `process_person_profile`. The SDK sends options unchanged and PostHog validates them, on both `Enqueue` and `EnqueueAI`. Legacy option properties still work, but an option overrides its legacy property. Use options. See `docs/migration-v2.md`.
+- fc05013: `Groups` is now `map[string]string`, and `Groups.Set` takes a string value. Convert a numeric group ID with `strconv.FormatInt`, which keeps its feature flag bucketing. See [the migration guide](docs/migration-v2.md#convert-group-keys).
+- fc05013: Minimal `$feature_flag_called` events are trimmed to their fixed set of properties before `BeforeSend`, so the hook sees the trimmed set and the properties it adds are sent. In posthog-go 1.x.x the trim ran after `BeforeSend` and removed them. See `docs/migration-v2.md`.
+- fc05013: Add `Config.DefaultEventOptions` and `RequestContext.Options`, so capture options can be set for every event and for a request. Request-context values, `Config.DefaultEventProperties` and `Config.DefaultEventOptions` now fill only keys the event left unset, before `BeforeSend`. In posthog-go 1.x.x a default property overwrote the event's value. `BeforeSend` sees the filled values and can change or remove them. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep when both values are maps (a value with its own `MarshalJSON` or `MarshalText` is kept whole), and `Capture.Groups` merges into a `$groups` map key by key. A `nil` option counts as unset, so the default still fills it. `DefaultEventProperties` and `DefaultEventOptions` now also apply to `Exception`, `Identify`, `Alias` and `GroupIdentify` events, but they do not set `process_person_profile` on identify-style events (`$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set` and `$set_once`) whose distinct ID the SDK did not generate. Those default to `true` unless the message sets it. `Identify`, `Alias` and `GroupIdentify` gain an `EventProperties` field for the event's own properties, which the defaults fill. The SDK's personless default and `posthogmcp`'s person opt-out are now sent as the `process_person_profile` option. A default, request-context or event option can override the personless default. `posthogmcp.ToolCall` and `posthogmcp.EventContext` gain an `EventOptions` field, and every `posthogmcp` event takes `RequestContext.Options`. `posthogmcp` events take the sanitized request-context properties and options under the call's own, with any client. Minimal `$feature_flag_called` events keep their options. See `docs/migration-v2.md`.
+- fc05013: `posthogotel.EnqueueWithContext` adds the active span's `$trace_id` and `$span_id` only when neither the event nor the request context sets either key. In posthog-go 1.37.0 and later 1.x.x releases, each derived ID filled on its own, so an event that set only `$trace_id` got the active span's `$span_id`.
+- fc05013: The `otel` bridge is now the `github.com/posthog/posthog-go/otel/v2` module and is released with the core SDK at the same version. Update its import path to `github.com/posthog/posthog-go/otel/v2`.
+- fc05013: Capture size limits are now configurable, and generated UUIDs are version 7.
+  
+  - `Config.MaxBatchBytes` replaces the private 500KB request constant and defaults to `DefaultMaxBatchBytes` (500000, unchanged). `BatchSize` still bounds event count. An event larger than `MaxBatchBytes` is sent alone.
+  
+  - Analytics events have no per-event size cap by default. In posthog-go 1.x.x an event over 500KB was refused with `ErrMessageTooBig`, although PostHog accepts larger events. Within PostHog's request limits, PostHog now drops an oversized event on its own and reports it per event. The optional `Config.MaxEventBytes` refuses larger events locally, and `NewWithConfig` then rejects a `MaxBatchBytes` below it.
+  
+  - Event UUIDs and `PostHog-Request-Id` are now UUIDv7, which is time-ordered and matches what capture generates server-side. A caller-supplied `Uuid` is kept, normalized to the lowercase hyphenated form.
+  
+  - Fixed the SDK reporting version `1.0.0` from any Go test binary, including an application's own. It probed `flag.Lookup("test.v")`, so events captured during a customer's tests were recorded against the wrong `$lib_version`.
+- fc05013: Remove `Capture.Library` and `Exception.Library`. Set `$lib` in the event's `Properties` instead, and set `$lib_version` with it: the SDK adds its own version only to its own `$lib`. `posthogmcp` events report `posthog-go-mcp` with the SDK version. See `docs/migration-v2.md`.
+- fc05013: `RequestContext.Properties` and `RequestContext.Options` now also apply to `Identify`, `Alias` and `GroupIdentify`, but they do not set `process_person_profile` on identify-style events (`$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set` and `$set_once`) whose distinct ID the SDK did not generate. Those default to `true` unless the message sets it. The context session ID fills `Identify` and `Alias` but never `GroupIdentify`. `GroupIdentify.DistinctId` is now sent, falling back to the request context's distinct ID, then `$<type>_<key>`. An empty or whitespace-only distinct ID is treated as missing.
+- fc05013: Capture v1 requires `$session_id` and `$window_id` to be strings. The SDK sends a value whose JSON form is a string, such as a `string` (including `""`), a named string type or a `uuid.UUID`. It drops any other value and logs a warning that names the key and the value's type, never the value. A `nil` value drops without a warning. In posthog-go 1.x.x any value was sent as a property. See `docs/migration-v2.md`.
+
+### Minor Changes
+
+- fc05013: Add `Config.MaxRetryBackoff` to cap how long a single capture retry waits. It bounds the default exponential backoff and clamps a server `Retry-After` to the same value. A custom `Config.RetryAfter` is still used as given. Defaults to `DefaultMaxRetryBackoff` (30s), which was previously a hard-coded constant.
+- fc05013: Add `posthogmcpsdk.WithEventOptions`, which sets capture options, such as `process_person_profile`, on `$mcp_tool_call` and its `$exception` through `posthogmcp.ToolCall.EventOptions`. The options override the request context's. A call without a distinct ID is still sent with `process_person_profile` set to `false`, and `BeforeSend` can still change it. A resolver error or panic goes to the error handler, and the call is captured without these options. See `docs/migration-v2.md`.
+- fc05013: NewExporter and NewSpanProcessor no longer return an error for an empty or personal (phx_) API key. They log one error and return an exporter or processor that exports nothing, so a missing key never stops the application. An invalid WithHost still returns an error.
+- fc05013: `posthogmcpgo` moves to `github.com/posthog/posthog-go/posthogmcpgo/v2` with posthog-go 2.0.0, and adds `posthogmcpgo.WithEventOptions`, which works like `posthogmcpsdk.WithEventOptions`. Its events report `$lib` `posthog-go-mcp` with the SDK version, like the other MCP adapters. See `docs/migration-v2.md`.
+
+### Patch Changes
+
+- fc05013: The error logged when an AI event is over the size limit now names the event, as other capture log lines do. It still never includes the event's content.
+- fc05013: Keep empty typed slices (`[]string{}`, `[]bool{}`, `[]int{}`, `[]int64{}`, `[]float64{}`) as `[]` when a `BeforeSend` hook is set. The hook's copy of the message used to send them as `null`.
+- fc05013: The error logged when a `BeforeSend` hook panics now names the event and the panic's type. It no longer includes the panic value, which can carry the event data the hook was removing.
+- fc05013: Report per-event capture results for event uuids sent in a non-canonical form, such as uppercase or without hyphens. A caller-supplied `Uuid` is now normalized to the lowercase hyphenated form. Previously a `drop` or `retry` result for such an event was silently ignored, because the capture endpoint keys its results by the canonical form.
+- fc05013: A 2xx capture response whose `results` is missing, `null` or not an object now fails the whole batch: it is not resent, and each event reaches `Callback.Failure` with a `*CaptureRequestError`, as an unparseable body already did. Before, those events were treated as delivered and no callback fired. `{"results": {}}` is still a valid response.
+- fc05013: Capture retries HTTP `404` and `429` like `408` and `500`, `502`, `503`, `504`, with the same backoff and `Retry-After` handling.
+- fc05013: Report each copy of a repeated event uuid that capture dropped to `Callback.Failure` as a `*CaptureEventError` with `Result` `drop` and `Details` `duplicate_event_uuid`, instead of giving it the first copy's result.
+- fc05013: An invalid event `Uuid` is still replaced with a generated one, and the SDK now logs one warning when it does. The warning names the rule and not the value, because callers can put their own data in the field. An empty `Uuid` is generated without a warning. The same rule now applies to a `Uuid` set in `BeforeSend`. Before, an invalid or empty `Uuid` from the hook was sent as is, and capture rejected the whole batch.
+- fc05013: Send a NaN or ±Inf property value, `float32` or `float64`, as `null` and keep the event, as posthog-go 1.36.1 and later do, instead of dropping the event. A struct value that holds one is sent as `null` as a whole. Each event is checked as JSON before it is queued, so a custom `MarshalJSON` that returns invalid JSON fails only its own event instead of the request it is in.
+- fc05013: `Config.Validate` rejects a negative `CaptureAIBatchUploadTimeout` or `CaptureAIMaxQueueSize`. Before, a negative timeout meant AI uploads had no timeout, and a negative queue size quietly became the default. Only zero selects the default.
+- fc05013: Send `PostHog-Request-Timestamp` and `created_at` with sub-second precision. Whole seconds made PostHog's clock-skew correction move events up to a second later. The batch debug log no longer prints each message.
+- fc05013: Default capture retry waits now vary randomly by up to 25% either way, so clients that fail together do not all retry at the same moment.
+- fc05013: Fix a data race between `Enqueue` and `Close`, and report capture failures that previously reached no `Callback` as one aggregate log line per batch.
+- fc05013: Event `timestamp`, batch `created_at` and the `PostHog-Request-Timestamp` header always carry 3, 6 or 9 fractional-second digits in UTC, for example `2025-01-02T03:04:05.000Z`. Before, Go trimmed trailing zeros, so a whole second had no fraction. Finer precision from your timestamp or the clock is kept.
+
+## 1.44.1
+
+### Patch Changes
+
+- 63617ab: Preserve response-wide computation errors alongside evaluation_failed in direct flag-read events when remote evaluation uses the local poller fallback.
+
+## 1.44.0
+
+### Minor Changes
+
+- 1484754: A `CodeEmail` takes `Cc`, `Bcc` and `Attachments`. `Cc` and `Bcc` are lists of bare addresses, at most 10 each. An `EmailAttachment` is a `Filename` and its `Content` bytes, with an optional `ContentType` and `ContentID` (to show the file inline as `cid:<ContentID>`). An email carries at most 10 attachments and at most 40 MB after Base64 encoding, counting the bodies (the HTML twice without `Text`, since PostHog derives the text from it) and the encoded subject as PostHog does, about 29 MB of files; `Send` checks both before any request and fails with `too_many_attachments` or `message_too_large`. It then hashes each file with SHA-256, asks PostHog which files it lacks, uploads each file PostHog lacks once, straight to PostHog's file storage without the secret key, over https unless `AllowInsecureAppHost` is set and never through a redirect, and sends the email naming each file by its hash. PostHog keeps uploaded files for its retention period, and a file it already has isn't uploaded again, and an upload URL that expired while earlier files uploaded is asked for again. A failed upload fails with `attachment_upload_failed` and the storage's answer, or with `network_error` when storage can't be reached, naming the attachment in `Field`, and no email is sent; a storage 5xx, 429 or `RequestTimeout` and a network error are retried first, honoring storage's `Retry-After` up to 30 seconds; a longer wait comes back in `EmailError.RetryAfter` for the caller to honor. A refusal of the upload names the attachments in `Field` as `Attachments` or `Attachments[i]`. The day's upload quota running out fails with `upload_quota_exceeded`, named `EmailErrorDailyQuotaExceeded`, and isn't retried. An attachment without a `Filename` or `Content` fails with `invalid_attachment` before any request, and no error holds a file's content or an upload URL. Empty lists are left out of the request. A PostHog version that doesn't take `Cc` or `Bcc` yet refuses the send with an error that names the field, instead of sending without it; one without the upload route, or a project that can't send email from code, answers `not_found` on `Attachments` before any upload, and nothing is sent.
+
+## 1.43.0
+
+### Minor Changes
+
+- bf4b209: A `CodeEmail` now takes `Sensitive` and `Tracking`.
+  
+  `Sensitive` marks an email that carries a login link, a reset token or a code. PostHog keeps a sensitive email's links unchanged, leaves its subject off engagement events and keeps its content out of logs. Without it, a code send takes the setting of the saved template whose key matches its `TemplateKey`, or is sensitive when no template has that key, as before.
+  
+  `Tracking` says what PostHog tracks for the email: `posthog.EmailTrackingOn()`, `posthog.EmailTrackingOff()`, or `posthog.EmailTrackingWith(posthog.EmailTrackingOptions{...})` to set `Opens`, `Clicks` and `Engagement` on their own. Without it, PostHog counts opens, captures engagement events, and counts clicks only when the email isn't sensitive. Turn clicks on only when the email's links are safe to send through a redirect. Click tracking needs open tracking.
+  
+  `CaptureEngagement` is deprecated. Use `Tracking` with `EmailTrackingOptions{Engagement: ...}` instead. It still works, but PostHog refuses a send that sets both. The SDK now leaves `capture_engagement` out of the request unless you set it, which PostHog reads the same way.
+  
+  `Sensitive` and `Tracking` need PostHog's API support, which is rolling out. Until it reaches your region, a send that sets either fails with an `*EmailError`.
+
+## 1.42.4
+
+### Patch Changes
+
+- 1b62fef: Cohort `not_in` now excludes members and matches non-members during local feature flag evaluation.
+
+## 1.42.3
+
+### Patch Changes
+
+- 5f936d6: Fall back to server evaluation for unsupported cohort group types and correctly evaluate supported group types.
+- f09dd5c: A /flags result with `failed: true` is no longer reported as a successful disable.
+
+## 1.42.2
+
+### Patch Changes
+
+- f28be34: Identify, group identify, and exception events keep the rest of their properties when a value is NaN or Inf
+
+## 1.42.1
+
+### Patch Changes
+
+- d722122: Stop the legacy `/batch/` sender from sleeping after its last failed attempt, and clamp its `Retry-After` to the same 30s ceiling as analytics v1 capture.
+- 57c652f: Relative date filters in local flag evaluation no longer roll past the end of a shorter month. `1m` on March 31 now resolves to February 28.
+- dfd5ba3: ReloadFeatureFlags returns ErrClosed after the client is closed instead of panicking
+
 ## 1.42.0
 
 ### Minor Changes
@@ -103,7 +239,7 @@
 
 ### Patch Changes
 
-- 6b734dd: Preserve captured events with non-finite numeric properties by serializing NaN and infinities as null in both capture protocols. Arbitrary structs containing these numbers are replaced with null as a whole property.
+- v2 also sends NaN and infinities as null and keeps the event, but re-encodes only an event whose first encoding fails, so other events cost nothing extra (#394). See `docs/migration-v2.md`.
 
 ## 1.36.0
 

@@ -3,10 +3,11 @@ package posthogmcp
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 type preparedToolCall struct {
@@ -25,7 +26,7 @@ type preparedToolCall struct {
 	errorType             string
 	exceptionType         string
 	errorMessage          string
-	suppressPersonProfile bool
+	propertyProfileOptOut bool
 	parameters            any
 	response              any
 	groups                posthog.Groups
@@ -76,7 +77,7 @@ func prepareToolCall(call ToolCall, captureErrorMessages bool) (preparedToolCall
 	prepared := preparedToolCall{
 		call:                  call,
 		explicitID:            explicitID,
-		suppressPersonProfile: !explicitID || personProfileOptOut(call.Properties),
+		propertyProfileOptOut: personProfileOptOut(call.Properties),
 		toolName:              truncateUTF8(sanitizeResourceName(call.ToolName), maxResourceNameBytes),
 	}
 	prepared.conversationID = normalizeConversationID(call.ConversationID)
@@ -268,7 +269,15 @@ func prepareGroups(groups posthog.Groups) (posthog.Groups, error) {
 	if !ok {
 		return nil, errors.New("posthogmcp: normalized groups must be an object")
 	}
-	return posthog.Groups(value), nil
+	prepared := make(posthog.Groups, len(value))
+	for groupType, groupKey := range value {
+		key, ok := groupKey.(string)
+		if !ok {
+			return nil, errors.New("posthogmcp: normalized group keys must be strings")
+		}
+		prepared[groupType] = key
+	}
+	return prepared, nil
 }
 
 func safeErrorMessage(err error) (message string, resultErr error) {
@@ -347,6 +356,7 @@ func setStringProperty(properties posthog.Properties, key, value string) {
 }
 
 func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, includeSet bool) {
+	applyLibrary(properties)
 	if len(p.groups) > 0 {
 		properties[propertyGroups] = p.groups
 	}
@@ -355,9 +365,84 @@ func applyIdentityProperties(properties posthog.Properties, p preparedToolCall, 
 			properties[propertySet] = p.setProperties
 		}
 	}
-	if p.suppressPersonProfile {
-		properties[propertyProcessProfile] = false
+}
+
+// applyLibrary labels the event with this package's $lib and $lib_version when
+// the caller's properties set no $lib, replacing a lone $lib_version. A set
+// $lib is a non-empty string, as in the core SDK. A caller's $lib wins with its
+// own $lib_version, and gets this package's version only when it names this
+// package and has none.
+func applyLibrary(properties posthog.Properties) {
+	lib, _ := properties[propertyLib].(string)
+	switch {
+	case lib == "":
+		properties[propertyLib] = library
+		properties[propertyLibVersion] = posthog.Version
+	case lib == library:
+		if version, _ := properties[propertyLibVersion].(string); version == "" {
+			properties[propertyLibVersion] = posthog.Version
+		}
 	}
+}
+
+// options returns the event's capture options: the caller's EventOptions plus
+// the person profile opt-out. The opt-out goes in as an option, not a
+// property, so it wins over client and request-context defaults.
+func (p preparedToolCall) options() posthog.Options {
+	options := make(posthog.Options, len(p.call.EventOptions)+1)
+	for name, value := range p.call.EventOptions {
+		options[name] = value
+	}
+	switch {
+	case !p.explicitID:
+		// The fallback distinct ID is a session or "anonymous", so a person
+		// profile would be wrong whatever the caller asked for.
+		options[optionProcessProfile] = false
+	case p.propertyProfileOptOut && isNilOption(options[optionProcessProfile]):
+		options[optionProcessProfile] = false
+	}
+	if len(options) == 0 {
+		return nil
+	}
+	return options
+}
+
+// isNilOption reports whether an option value counts as unset: nil, or a nil
+// pointer, map, slice or interface, as in the core SDK.
+func isNilOption(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
+}
+
+// customOrLibrary returns the caller's custom properties, or only their $lib
+// and $lib_version when the event drops custom properties to fit, so a
+// smaller event keeps the caller's label. Only string values are kept: the
+// size bound can truncate a string but not a non-string value.
+func (p preparedToolCall) customOrLibrary(includeCustom bool) posthog.Properties {
+	if includeCustom {
+		return p.custom
+	}
+	var lib posthog.Properties
+	for _, key := range []string{propertyLib, propertyLibVersion} {
+		value, ok := p.custom[key]
+		if !ok {
+			continue
+		}
+		if _, isString := value.(string); !isString {
+			continue
+		}
+		if lib == nil {
+			lib = posthog.Properties{}
+		}
+		lib[key] = value
+	}
+	return lib
 }
 
 func mergeProperties(base, custom posthog.Properties) posthog.Properties {

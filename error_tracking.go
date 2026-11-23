@@ -29,15 +29,16 @@ type Exception struct {
 	Timestamp time.Time
 	// Properties are custom event properties flattened into the exception event.
 	Properties Properties
-	// DisableGeoIP controls whether this exception event disables GeoIP lookup.
-	// Enqueue overwrites it from Config.GetDisableGeoIP.
+	// Options are per-event capture options, sent unchanged. See Options.
+	Options Options
+	// DisableGeoIP reports whether the event sets $geoip_disable. Enqueue sets
+	// it from Config.GetDisableGeoIP, then from the $geoip_disable value left
+	// after BeforeSend. To change $geoip_disable, set the property.
 	DisableGeoIP bool
-	// IsServer controls whether the event includes the $is_server property.
-	// Enqueue overwrites it from Config.GetIsServer.
+	// IsServer reports whether the event sets $is_server. Enqueue sets it from
+	// Config.GetIsServer, then from the $is_server value left after BeforeSend.
+	// To change $is_server, set the property.
 	IsServer bool
-	// Library, when non-empty, replaces SDKName as this event's $lib.
-	// See Capture.Library.
-	Library string
 
 	// ExceptionList is the list of exception items sent as $exception_list. It must be non-empty.
 	ExceptionList []ExceptionItem
@@ -117,9 +118,9 @@ type ExceptionInApi struct {
 	Type string `json:"type"`
 	// Uuid is the valid event UUID sent to the batch API.
 	Uuid string `json:"uuid"`
-	// Library is the SDK name sent to the batch API.
+	// Library is the $lib the event is stored with.
 	Library string `json:"library"`
-	// LibraryVersion is the SDK version sent to the batch API.
+	// LibraryVersion is the $lib_version the event is stored with.
 	LibraryVersion string `json:"library_version"`
 	// Timestamp is the event timestamp sent to the batch API in UTC.
 	Timestamp time.Time `json:"timestamp"`
@@ -132,9 +133,9 @@ type ExceptionInApi struct {
 // ExceptionInApiProperties is the wire-format properties object for an Exception message.
 type ExceptionInApiProperties struct {
 	sysContext
-	// Lib is the SDK name sent as $lib.
+	// Lib is the $lib the event is stored with.
 	Lib string `json:"$lib"`
-	// LibVersion is the SDK version sent as $lib_version.
+	// LibVersion is the $lib_version the event is stored with.
 	LibVersion string `json:"$lib_version"`
 	// IsServer marks the event as originating from a server-side SDK.
 	// Omitted entirely when nil (Config.IsServer resolved to false).
@@ -237,8 +238,7 @@ func (msg ExceptionItem) Validate() error {
 
 // APIfy converts an Exception message into the PostHog batch API representation.
 func (msg Exception) APIfy() APIMessage {
-	library := libraryOrSDKName(msg.Library)
-	libVersion := getVersion()
+	library, libVersion := libIdentity(msg.Properties)
 
 	var isServer *bool
 	if msg.IsServer {

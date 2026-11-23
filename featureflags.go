@@ -278,7 +278,7 @@ type FeatureFlagsPoller struct {
 	firstFeatureFlagRequestFinished chan bool
 	shutdown                        chan bool
 	shutdownDone                    chan bool
-	forceReload                     chan bool
+	forceReload                     chan reloadRequest
 
 	// ctx covers polling work; cancel aborts it when shutdown outlives its deadline.
 	ctx    context.Context
@@ -843,7 +843,7 @@ func newFeatureFlagsPoller(
 		firstFeatureFlagRequestFinished: make(chan bool),
 		shutdown:                        make(chan bool),
 		shutdownDone:                    make(chan bool),
-		forceReload:                     make(chan bool),
+		forceReload:                     make(chan reloadRequest),
 		ctx:                             ctx,
 		cancel:                          cancel,
 		personalApiKey:                  personalApiKey,
@@ -866,22 +866,21 @@ func newFeatureFlagsPoller(
 func (poller *FeatureFlagsPoller) run() {
 	defer close(poller.shutdownDone)
 
-	poller.fetchNewFeatureFlags()
+	_ = poller.fetchNewFeatureFlags()
 	close(poller.firstFeatureFlagRequestFinished)
 
 	for {
 		timer := time.NewTimer(poller.nextPollTick())
 		select {
 		case <-poller.shutdown:
-			close(poller.forceReload)
 			timer.Stop()
 			poller.shutdownCacheProvider(poller.shutdownCtx)
 			return
-		case <-poller.forceReload:
+		case req := <-poller.forceReload:
 			timer.Stop()
-			poller.fetchNewFeatureFlags()
+			req.finish(poller.fetchNewFeatureFlags())
 		case <-timer.C:
-			poller.fetchNewFeatureFlags()
+			_ = poller.fetchNewFeatureFlags()
 		}
 	}
 }
@@ -889,24 +888,25 @@ func (poller *FeatureFlagsPoller) run() {
 // fetchNewFeatureFlags refreshes the local feature flag definitions used for local
 // evaluation. These should not be confused with the feature flags fetched from the
 // flags API.
-func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
+func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() error {
 	if poller.shuttingDown() {
-		return
+		return ErrClosed
 	}
 	if poller.cacheProvider == nil {
-		poller.fetchFlagDefinitions(false)
-		return
+		return poller.fetchFlagDefinitions(false)
 	}
 
 	// Cache-only readers must not claim fetch leadership they cannot use.
 	if poller.personalApiKey == "" {
-		poller.loadFlagDefinitionsFromCache()
-		return
+		if poller.loadFlagDefinitionsFromCache() {
+			return nil
+		}
+		return errNoCachedFlagDefinitions
 	}
 
 	shouldFetch, err := poller.cacheProvider.ShouldFetchFlagDefinitions(poller.ctx)
 	if poller.shuttingDown() {
-		return
+		return ErrClosed
 	}
 	if err != nil {
 		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider ShouldFetchFlagDefinitions failed, fetching from the API: %s", err)
@@ -915,18 +915,21 @@ func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
 
 	if !shouldFetch {
 		if poller.loadFlagDefinitionsFromCache() {
-			return
+			return nil
 		}
 
-		if poller.shuttingDown() || poller.state.Load() != nil {
-			return
+		if poller.shuttingDown() {
+			return ErrClosed
+		}
+		if poller.state.Load() != nil {
+			return nil
 		}
 
 		// Without definitions local evaluation is impossible, so fetch anyway.
 		poller.Logger.Debugf("[FEATURE FLAGS] No definitions cached or in memory, fetching from the API")
 	}
 
-	poller.fetchFlagDefinitions(shouldFetch)
+	return poller.fetchFlagDefinitions(shouldFetch)
 }
 
 // shuttingDown reports whether polling work was cancelled by a shutdown that
@@ -1199,15 +1202,15 @@ func (poller *FeatureFlagsPoller) shutdownCacheProvider(ctx context.Context) {
 
 // fetchFlagDefinitions fetches the latest feature flag definitions from the PostHog API.
 // When publish is true, a successful response is also stored in the cache provider.
-func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
+func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) error {
 	if poller.shuttingDown() {
-		return
+		return ErrClosed
 	}
 
 	personalApiKey := poller.personalApiKey
 	if personalApiKey == "" {
 		poller.Logger.Warnf("PostHog secret key is not configured; fetching feature flag definitions requires a SecretKey.")
-		return
+		return ErrNoSecretKey
 	}
 	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
 
@@ -1220,10 +1223,11 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 
 	res, cancel, err := poller.localEvaluationFlags(headers, currentEtag)
 	if err != nil {
-		if !poller.shuttingDown() {
-			poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		if poller.shuttingDown() {
+			return ErrClosed
 		}
-		return
+		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		return fmt.Errorf("fetch feature flag definitions: %w", err)
 	}
 	defer cancel()
 	defer res.Body.Close()
@@ -1251,7 +1255,10 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 		if publish && currentState != nil {
 			poller.publishFlagDefinitions(currentState.definitions)
 		}
-		return
+		if currentState == nil {
+			return errNoCachedFlagDefinitions
+		}
+		return nil
 	}
 
 	// Handle quota limit response (HTTP 402)
@@ -1266,23 +1273,23 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 		poller.state.Store(cleared)
 		poller.warnAboutUnresolvableFlags(cleared)
 		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
-		return
+		return ErrFlagDefinitionsQuotaLimited
 	}
 
 	if res.StatusCode != http.StatusOK {
 		poller.Logger.Errorf("Unable to fetch feature flags, status: %s", res.Status)
-		return
+		return fmt.Errorf("fetch feature flag definitions: status %s", res.Status)
 	}
 
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
-		return
+		return fmt.Errorf("read feature flag definitions: %w", err)
 	}
 	decoded, err := decodeFlagDefinitions(resBody)
 	if err != nil {
 		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
-		return
+		return fmt.Errorf("decode feature flag definitions: %w", err)
 	}
 
 	// Store new ETag from response (clear if server stops sending)
@@ -1291,6 +1298,7 @@ func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
 	if publish {
 		poller.publishFlagDefinitions(resBody)
 	}
+	return nil
 }
 
 // getMinimalFlagCalledEvents reports whether the local-evaluation payload
@@ -1389,6 +1397,10 @@ type flagValueAndPayload struct {
 	// from whichever source produced the value (local definitions or the
 	// remote /flags response).
 	minimalFlagCalledEvents bool
+	// flagFailed is set when /flags included the key but could not evaluate it.
+	// The enabled value on that detail is not a decision.
+	flagFailed                bool
+	errorsWhileComputingFlags bool
 }
 
 // GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
@@ -1426,6 +1438,8 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 	}
 
 	locallyEvaluated := err == nil && result != nil
+	flagFailed := false
+	errorsWhileComputingFlags := false
 	hasExperiment := flag.HasExperiment
 	minimalFlagCalledEvents := state != nil && state.minimalFlagCalledEvents
 
@@ -1444,25 +1458,31 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 		hasExperiment = nil
 		minimalFlagCalledEvents = false
 		if flagsResponse != nil {
+			errorsWhileComputingFlags = flagsResponse.ErrorsWhileComputingFlags
 			minimalFlagCalledEvents = flagsResponse.MinimalFlagCalledEvents
-			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
+			if remoteFlagFailed(flagsResponse, flagConfig.Key) {
+				// enabled=false on a failed detail is a placeholder. Leave the
+				// value unset so the caller reports evaluation_failed.
+				result = nil
+				flagFailed = true
+			} else if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue
+				if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
+					payload = rawMessageToString(rawPayload)
+				}
+				if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
+					hasExperiment = detail.Metadata.HasExperiment
+				}
 			} else {
 				// Flag not in remote response — treat as false (matches getFeatureFlagVariant behavior)
 				result = false
-			}
-			if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
-				payload = rawMessageToString(rawPayload)
-			}
-			if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
-				hasExperiment = detail.Metadata.HasExperiment
 			}
 		} else {
 			result = false
 		}
 	}
 
-	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents}
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents, flagFailed: flagFailed, errorsWhileComputingFlags: errorsWhileComputingFlags}
 }
 
 func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
@@ -1529,11 +1549,7 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 		if err != nil {
 			return response, err
 		}
-		if flagsResponse != nil {
-			for k, v := range flagsResponse.FeatureFlags {
-				response[k] = v
-			}
-		}
+		copyEvaluatedFlagValues(response, flagsResponse)
 	}
 
 	return response, nil
@@ -1586,16 +1602,11 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			}
 		}
 
-		groupKeyStr, ok := groupKeyToString(groupKey)
-		if !ok {
-			return nil, fmt.Errorf("[FEATURE FLAGS] Can't compute group feature flag: %s with a %T group key", flag.Key, groupKey)
-		}
-
 		focusedGroupProperties := groupProperties[groupType]
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groupKeyStr, nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+		return poller.matchFeatureFlagProperties(flag, groupKey, nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
 	} else {
 		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
@@ -1614,24 +1625,6 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			}
 		}
 		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
-	}
-}
-
-// groupKeyToString returns the bucketing ID for a group key. Groups values are
-// free-form, and the flags service accepts a string or a JSON number as a group
-// key, bucketing a number by its JSON form (42 -> "42"). Other types are rejected.
-func groupKeyToString(groupKey interface{}) (string, bool) {
-	switch key := groupKey.(type) {
-	case string:
-		return key, true
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
-		encoded, err := json.Marshal(key)
-		if err != nil {
-			return "", false
-		}
-		return string(encoded), true
-	default:
-		return "", false
 	}
 }
 
@@ -1749,15 +1742,11 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, UnresolvedFlagReasonMissingContext)
 					continue
 				}
-				groupKeyStr, ok := groupKeyToString(groupKey)
-				if !ok {
-					continue
-				}
 				if _, exists := focusedGroupProperties["$group_key"]; !exists {
 					focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 				}
 				effectiveProperties = focusedGroupProperties
-				effectiveBucketingId = groupKeyStr
+				effectiveBucketingId = groupKey
 			}
 		}
 
@@ -1910,6 +1899,9 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 					return conditionNoMatch, err
 				}
 			}
+			// Legacy release conditions ignore the negation field. Cohort
+			// leaves apply it themselves; flag filters use operators such
+			// as is_not and not_in. An invalid regex is already a non-match.
 			if !isMatch {
 				return conditionNoMatch, nil
 			}
@@ -2367,12 +2359,40 @@ func parseRelativeDate(dateStr string) (time.Time, error) {
 	case "w":
 		return now.AddDate(0, 0, -number*7), nil
 	case "m":
-		return now.AddDate(0, -number, 0), nil
+		return subtractMonths(now, number), nil
 	case "y":
-		return now.AddDate(-number, 0, 0), nil
+		return subtractYears(now, number), nil
 	default:
 		return time.Time{}, errors.New("invalid interval in relative date")
 	}
+}
+
+// subtractMonths steps back one month at a time and clamps the day after every
+// step, as the SDK spec requires: March 31 minus two months is January 28.
+// time.AddDate would normalize February 31 forward into March.
+func subtractMonths(t time.Time, months int) time.Time {
+	year, month, day := t.Date()
+	// Every month has at least 28 days, so nothing can clamp further after that.
+	for step := 1; step <= months && day > 28; step++ {
+		// Day 0 of a month is the last day of the month before it.
+		lastDay := time.Date(year, month-time.Month(step)+1, 0, 0, 0, 0, 0, time.UTC).Day()
+		if lastDay < day {
+			day = lastDay
+		}
+	}
+	hour, minute, second := t.Clock()
+	return time.Date(year, month-time.Month(months), day, hour, minute, second, t.Nanosecond(), t.Location())
+}
+
+func subtractYears(t time.Time, years int) time.Time {
+	year, month, day := t.Date()
+	// The year before a leap year is never a leap year, so February 29 clamps
+	// on the first step and stays on the 28th.
+	if years > 0 && month == time.February && day == 29 {
+		day = 28
+	}
+	hour, minute, second := t.Clock()
+	return time.Date(year-years, month, day, hour, minute, second, t.Nanosecond(), t.Location())
 }
 
 // semverTuple represents a parsed semantic version as (major, minor, patch).
@@ -3077,10 +3097,18 @@ func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (v
 // holdoutIDToString renders a holdout id for the synthetic variant key. The API
 // sends a number, but a string is accepted too; anything else is unusable.
 func holdoutIDToString(holdoutID interface{}) (string, bool) {
-	if id, ok := holdoutID.(string); ok {
+	switch id := holdoutID.(type) {
+	case string:
 		return id, true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		encoded, err := json.Marshal(id)
+		if err != nil {
+			return "", false
+		}
+		return string(encoded), true
+	default:
+		return "", false
 	}
-	return groupKeyToString(holdoutID)
 }
 
 // GetFeatureFlags returns the locally loaded feature flag definitions.
@@ -3284,8 +3312,44 @@ func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestD
 }
 
 // ForceReload requests an immediate reload of local feature flag definitions.
+// It does nothing once the poller has shut down. The send selects on shutdown
+// so a reload racing Close cannot send on a closed channel.
 func (poller *FeatureFlagsPoller) ForceReload() {
-	poller.forceReload <- true
+	select {
+	case <-poller.shutdown:
+	case poller.forceReload <- reloadRequest{}:
+	}
+}
+
+// reloadRequest asks the polling goroutine for a reload. When done is set, the
+// goroutine sends the reload's outcome on it; done must be buffered.
+type reloadRequest struct {
+	done chan<- error
+}
+
+func (r reloadRequest) finish(err error) {
+	if r.done != nil {
+		r.done <- err
+	}
+}
+
+// reloadAndWait runs a reload on the polling goroutine and waits for its outcome.
+// If ctx ends first it returns ctx.Err() and the reload still completes.
+func (poller *FeatureFlagsPoller) reloadAndWait(ctx context.Context) error {
+	done := make(chan error, 1)
+	select {
+	case <-poller.shutdown:
+		return ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	case poller.forceReload <- reloadRequest{done: done}:
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // shutdownPoller stops the polling goroutine, which releases the cache provider on
@@ -3375,12 +3439,7 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId 
 		if remoteErr != nil {
 			return nil, remoteErr
 		}
-		if flagsResponse != nil {
-			// Remote evaluation is authoritative for the flags it returns.
-			for key, value := range flagsResponse.FeatureFlags {
-				result[key] = value
-			}
-		}
+		copyEvaluatedFlagValues(result, flagsResponse)
 	}
 
 	return result, nil
@@ -3393,6 +3452,10 @@ func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId s
 
 	if variantErr != nil {
 		return false, variantErr
+	}
+
+	if remoteFlagFailed(flagsResponse, key) {
+		return nil, errFlagEvaluationFailed(key)
 	}
 
 	for flagKey, flagValue := range flagsResponse.FeatureFlags {
@@ -3409,6 +3472,9 @@ func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId s
 		return "", err
 	}
 	if flagsResponse != nil {
+		if remoteFlagFailed(flagsResponse, key) {
+			return "", errFlagEvaluationFailed(key)
+		}
 		if payload, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
 			return rawMessageToString(payload), nil
 		}

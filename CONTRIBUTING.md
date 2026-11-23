@@ -25,16 +25,17 @@ make test
 
 ## Nested modules
 
-Root `go test ./...` and Makefile checks do not enter the separate `otel/` and `posthogmcpsdk/` modules. For changes affecting either module, use its `go.mod` toolchain requirement and run the module-specific checks from the repository root:
+Root `go test ./...` and Makefile checks do not enter the separate `otel/`, `posthogmcpsdk/`, and `posthogmcpgo/` modules. For changes affecting any of them, use its `go.mod` toolchain requirement and run the module-specific checks from the repository root:
 
 ```bash
 (cd otel && go build ./... && go vet ./... && go test -race -count=1 -timeout=5m ./...)
 (cd posthogmcpsdk && go build ./... && go vet ./... && go test -race -count=1 -timeout=5m ./...)
+(cd posthogmcpgo && go build ./... && go vet ./... && go test -race -count=1 -timeout=5m ./...)
 ```
 
 Run the checks for the affected modules; core API changes may also affect their consumers. CI tests the supported toolchain and MCP SDK versions in [.github/workflows/unit-tests.yml](.github/workflows/unit-tests.yml).
 
-The MCP adapter's local `replace` tests the checkout, but consumers use the pinned released core. For adapter changes, also build and vet a temporary copy with that replacement removed, using `GOFLAGS=-mod=mod go build ./...` and `GOFLAGS=-mod=mod go vet ./...`, as CI does. This allows missing checksums to be populated in the temporary copy; do not modify the checkout's `go.mod` or `go.sum` for this check. See the adapter's [compatibility and development guide](posthogmcpsdk/README.md#compatibility-and-development) for this constraint and release ordering.
+The MCP adapters' local `replace` directives test the checkout, but consumers use the pinned released modules. For changes to either adapter, also build and vet a temporary copy with all local `replace` directives removed (`posthogmcpsdk` has one for the core; `posthogmcpgo` has two, for the core and for `posthogmcpsdk`), using `GOFLAGS=-mod=mod go build ./...` and `GOFLAGS=-mod=mod go vet ./...`, as CI does. This allows missing checksums to be populated in the temporary copy; do not modify the checkout's `go.mod` or `go.sum` for this check. See the compatibility and development guides of [`posthogmcpsdk`](posthogmcpsdk/README.md#compatibility-and-development) and [`posthogmcpgo`](posthogmcpgo/README.md#compatibility-and-development) for this constraint and release ordering.
 
 ## Testing local changes in another app
 
@@ -45,11 +46,11 @@ module example/posthog-go-app
 
 go 1.22.5
 
-require github.com/posthog/posthog-go v0.0.0-20240327112532-87b23fe11103
+require github.com/posthog/posthog-go/v2 v2.0.0
 
 require github.com/google/uuid v1.3.0 // indirect
 
-replace github.com/posthog/posthog-go => /path-to-your-local/posthog-go
+replace github.com/posthog/posthog-go/v2 => /path-to-your-local/posthog-go
 ```
 
 ## Public API changes

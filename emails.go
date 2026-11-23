@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	emailSendPath      = "/api/projects/@current/messaging/send/email/"
-	emailStatusPath    = "/api/projects/@current/messaging/emails/"
+	emailSendPath      = "/api/messaging/send/email/"
+	emailStatusPath    = "/api/messaging/emails/"
 	maxEmailRetryDelay = 30 * time.Second
 	maxEmailRetries    = 9
 	maxEmailReplyBytes = 1 << 20
@@ -98,9 +98,10 @@ type TemplateEmail struct {
 }
 
 // CodeEmail sends content your code rendered, named by a key. PostHog sends
-// it as is and never stores it. To send a React email, render it to HTML in
-// your app and pass the HTML. PostHog refuses a send whose TemplateKey names a
-// template in a marketing category with the error code "marketing_template".
+// the subject and bodies as is and never stores them; it keeps attachments,
+// as Attachments says. To send a React email, render it to HTML in your app
+// and pass the HTML. PostHog refuses a send whose TemplateKey names a template
+// in a marketing category with the error code "marketing_template".
 type CodeEmail struct {
 	// To is one recipient email address.
 	To string
@@ -117,10 +118,42 @@ type CodeEmail struct {
 	// Without it, PostHog sends from the project's default sender.
 	From    string
 	ReplyTo []string
+	// Cc are bare addresses, such as "finance@example.com", that get a copy
+	// the other recipients see. At most 10.
+	Cc []string
+	// Bcc are bare addresses that get a copy the other recipients never see.
+	// At most 10.
+	Bcc []string
+	// Attachments are files sent with the email: at most 10, and at most 40 MB
+	// for the whole message after Base64 encoding, which leaves about 29 MB
+	// for the files. Send checks both before any request. It then hashes each
+	// file, uploads the files PostHog doesn't have yet straight to PostHog's
+	// file storage, and sends the email naming them, so the network must
+	// allow uploads to the storage host the upload URL names. A file PostHog
+	// already has isn't uploaded again. PostHog refuses file types that
+	// mailbox providers block, such as .exe. PostHog can't fetch a file from a
+	// path or URL: read the file and pass its bytes. PostHog keeps each
+	// uploaded file in its file storage for its retention period, and a later
+	// send of the same bytes, from any of the project's code, reuses it.
+	Attachments []EmailAttachment
+	// Sensitive marks an email that carries a login link, a reset token or a
+	// code. PostHog keeps a sensitive email's links unchanged, leaves its
+	// subject off engagement events and keeps its content out of logs. Nil
+	// takes the setting of the saved template whose key is TemplateKey, or
+	// true when no template has that key.
+	Sensitive *bool
+	// Tracking says what PostHog tracks for this email. Nil keeps the
+	// defaults: PostHog counts opens and captures engagement events, and
+	// rewrites links to count clicks only when the email isn't Sensitive. Use
+	// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+	Tracking *EmailTracking
 	// CaptureEngagement says whether PostHog captures the email's engagement
-	// events, such as opens and clicks, as events of the recipient. Nil means
-	// true. A project whose admin turned engagement capture off captures
-	// nothing, whatever the send asks.
+	// events as events of the recipient. Nil means true. A project whose
+	// admin turned engagement capture off captures nothing, whatever the send
+	// asks. PostHog refuses a send that sets both CaptureEngagement and
+	// Tracking.
+	//
+	// Deprecated: Use Tracking with EmailTrackingOptions.Engagement.
 	CaptureEngagement *bool
 	// Category is EmailCategoryTransactional or a MessageCategory, which
 	// defines the category in code. Without it, the email follows the
@@ -137,6 +170,73 @@ type CodeEmail struct {
 	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
 	// Ptr(0) turns retries off.
 	MaxRetries *int
+}
+
+// EmailAttachment is a file sent with a CodeEmail.
+type EmailAttachment struct {
+	// Filename is the name the recipient sees, such as "invoice.pdf", with no
+	// path.
+	Filename string
+	// Content is the file's bytes.
+	Content []byte
+	// ContentType is a MIME type, such as "application/pdf". Without it, the
+	// type follows from Filename.
+	ContentType string
+	// ContentID shows the file inline: the HTML references it as
+	// <img src="cid:logo"> when ContentID is "logo".
+	ContentID string
+}
+
+// EmailTracking says what PostHog tracks for a CodeEmail. Make one with
+// EmailTrackingOn, EmailTrackingOff or EmailTrackingWith.
+type EmailTracking struct {
+	all     *bool
+	options EmailTrackingOptions
+}
+
+// EmailTrackingOptions turns each kind of tracking on or off. A nil field
+// keeps its default.
+type EmailTrackingOptions struct {
+	// Opens says whether PostHog adds its open pixel to count opens. Nil
+	// means true. With Opens false, PostHog counts no clicks, and refuses
+	// Clicks true.
+	Opens *bool `json:"opens,omitempty"`
+	// Clicks says whether PostHog rewrites the email's links to count clicks.
+	// Nil means true when the email isn't Sensitive and false when it is.
+	// Turn it on only when the links are safe to send through a redirect, so
+	// not for a login or password reset link. A link with a data-ph-no-track
+	// attribute is never rewritten.
+	Clicks *bool `json:"clicks,omitempty"`
+	// Engagement says whether PostHog captures the email's engagement events,
+	// such as opens and clicks, as events of the recipient. Nil means true.
+	Engagement *bool `json:"engagement,omitempty"`
+}
+
+// EmailTrackingOn tracks opens and clicks and captures engagement events.
+// Use it only when the email's links are safe to send through a redirect.
+func EmailTrackingOn() *EmailTracking {
+	return &EmailTracking{all: Ptr(true)}
+}
+
+// EmailTrackingOff turns off every kind of tracking, including kinds PostHog
+// adds later. PostHog then can't count the email's opens and clicks, and
+// captures no engagement events.
+func EmailTrackingOff() *EmailTracking {
+	return &EmailTracking{all: Ptr(false)}
+}
+
+// EmailTrackingWith sets each kind of tracking on its own.
+func EmailTrackingWith(options EmailTrackingOptions) *EmailTracking {
+	return &EmailTracking{options: options}
+}
+
+// MarshalJSON encodes the tracking as true, false or an object of the kinds
+// that are set.
+func (t EmailTracking) MarshalJSON() ([]byte, error) {
+	if t.all != nil {
+		return json.Marshal(*t.all)
+	}
+	return json.Marshal(t.options)
 }
 
 // EmailCategory is the category of a CodeEmail: EmailCategoryTransactional or
@@ -160,9 +260,9 @@ type MessageCategoryType string
 
 const (
 	// MessageCategoryMarketing: a marketing send honors the recipient's
-	// opt-outs, and its HTML, or its Text when it has no HTML, needs the
-	// {{ unsubscribe_url }} placeholder, which PostHog fills with the
-	// recipient's preferences link.
+	// opt-outs, can't have Cc or Bcc, and its HTML, or its Text when it has no
+	// HTML, needs the {{ unsubscribe_url }} placeholder, which PostHog fills
+	// with the recipient's preferences link.
 	MessageCategoryMarketing MessageCategoryType = "marketing"
 	// MessageCategoryTransactional: the email is sent as transactional and
 	// filed under the category.
@@ -178,8 +278,9 @@ const (
 // exists with another Type or TemplateKey names a template in another
 // category, "too_many_categories" when the project can't take
 // another category, "unsubscribe_link_required" when a marketing send has no
-// {{ unsubscribe_url }} placeholder, and "recipient_opted_out" when the
-// recipient opted out of the category or of all marketing.
+// {{ unsubscribe_url }} placeholder, "copies_not_allowed" when a marketing
+// send has Cc or Bcc, and "recipient_opted_out" when the recipient opted out
+// of the category or of all marketing.
 type MessageCategory struct {
 	// Key names the category, such as "newsletter". Recipients' opt-outs and
 	// preferences refer to the category by its key.
@@ -231,6 +332,7 @@ type EmailStatus struct {
 
 type emailSend struct {
 	body           []byte
+	attachments    []attachment
 	idempotencyKey string
 	maxRetries     *int
 }
@@ -243,16 +345,21 @@ type templateEmailBody struct {
 }
 
 type codeEmailBody struct {
-	To                string      `json:"to"`
-	TemplateKey       string      `json:"template_key"`
-	Subject           string      `json:"subject"`
-	HTML              string      `json:"html,omitempty"`
-	Text              string      `json:"text,omitempty"`
-	From              string      `json:"from,omitempty"`
-	ReplyTo           []string    `json:"reply_to,omitempty"`
-	CaptureEngagement bool        `json:"capture_engagement"`
-	DistinctID        string      `json:"distinct_id,omitempty"`
-	Category          interface{} `json:"category,omitempty"`
+	To                string         `json:"to"`
+	TemplateKey       string         `json:"template_key"`
+	Subject           string         `json:"subject"`
+	HTML              string         `json:"html,omitempty"`
+	Text              string         `json:"text,omitempty"`
+	From              string         `json:"from,omitempty"`
+	ReplyTo           []string       `json:"reply_to,omitempty"`
+	Cc                []string       `json:"cc,omitempty"`
+	Bcc               []string       `json:"bcc,omitempty"`
+	Attachments       []attachment   `json:"attachments,omitempty"`
+	Sensitive         *bool          `json:"sensitive,omitempty"`
+	Tracking          *EmailTracking `json:"tracking,omitempty"`
+	CaptureEngagement *bool          `json:"capture_engagement,omitempty"`
+	DistinctID        string         `json:"distinct_id,omitempty"`
+	Category          interface{}    `json:"category,omitempty"`
 }
 
 type messageCategoryBody struct {
@@ -324,10 +431,23 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	if e.HTML == "" && e.Text == "" {
 		return emailSend{}, invalidEmail("invalid_form", "HTML", "A CodeEmail needs HTML, Text or both.")
 	}
-	for _, address := range e.ReplyTo {
-		if strings.TrimSpace(address) == "" {
-			return emailSend{}, invalidEmail("invalid_reply_to", "ReplyTo", "ReplyTo must not hold a blank address.")
+	for _, list := range []struct {
+		field, code string
+		addresses   []string
+	}{
+		{"ReplyTo", "invalid_reply_to", e.ReplyTo},
+		{"Cc", "invalid_cc", e.Cc},
+		{"Bcc", "invalid_bcc", e.Bcc},
+	} {
+		for _, address := range list.addresses {
+			if strings.TrimSpace(address) == "" {
+				return emailSend{}, invalidEmail(list.code, list.field, list.field+" must not hold a blank address.")
+			}
 		}
+	}
+	attachments, attachmentsErr := checkAttachments(e.Attachments, e.Subject, e.HTML, e.Text)
+	if attachmentsErr != nil {
+		return emailSend{}, attachmentsErr
 	}
 	category, categoryErr := categoryWireValue(e.Category)
 	if categoryErr != nil {
@@ -341,14 +461,21 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		Text:              e.Text,
 		From:              e.From,
 		ReplyTo:           e.ReplyTo,
-		CaptureEngagement: e.CaptureEngagement == nil || *e.CaptureEngagement,
+		Cc:                e.Cc,
+		Bcc:               e.Bcc,
+		Attachments:       attachments,
+		Sensitive:         e.Sensitive,
+		Tracking:          e.Tracking,
+		CaptureEngagement: e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
 		Category:          category,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)
 	}
-	return newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
+	send, sendErr := newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
+	send.attachments = attachments
+	return send, sendErr
 }
 
 func checkRecipient(to string) *EmailError {
@@ -383,6 +510,10 @@ type emailSender struct {
 	http         http.Client
 	logger       Logger
 	backoff      func(attempt int) time.Duration
+	// now is the client's clock, which times how long an upload URL lives.
+	now func() time.Time
+	// allowInsecureUploads lets attachments upload to an http URL.
+	allowInsecureUploads bool
 
 	// ctx ends when Close runs out of time, which aborts requests and retry waits.
 	ctx      context.Context
@@ -406,8 +537,11 @@ func newEmailSender(config Config, transport http.RoundTripper) *emailSender {
 		},
 		logger:  config.Logger,
 		backoff: NewBackoff(time.Second, 2, 0.2, maxEmailRetryDelay).Duration,
-		ctx:     ctx,
-		cancel:  cancel,
+		now:     config.now,
+
+		allowInsecureUploads: config.AllowInsecureAppHost,
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 }
 
@@ -468,6 +602,11 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	maxRetries := s.maxRetries
 	if send.maxRetries != nil {
 		maxRetries = *send.maxRetries
+	}
+	if len(send.attachments) > 0 {
+		if err := s.uploadAttachments(ctx, maxRetries, send.attachments); err != nil {
+			return nil, err
+		}
 	}
 	header := s.header()
 	header.Set("Content-Type", "application/json")
@@ -568,27 +707,42 @@ func (s *emailSender) header() http.Header {
 // can fix. Every attempt carries the same header, so a send's idempotency key
 // holds across retries. A reply it returns is always a 2xx.
 func (s *emailSender) request(ctx context.Context, maxRetries int, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
+	var reply emailReply
+	err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
+		var err *EmailError
+		reply, err = s.do(ctx, method, url, header, body)
+		if err == nil && !reply.accepted() {
+			err = reply.error()
+		}
+		return err
+	})
+	if err != nil {
+		return emailReply{}, err
+	}
+	return reply, nil
+}
+
+// retry runs attempt until it succeeds, retrying what waiting can fix. Close
+// running out of time ends the attempt and the wait before the next one.
+func (s *emailSender) retry(ctx context.Context, maxRetries int, attempt func(context.Context) *EmailError) *EmailError {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(s.ctx, cancel)()
 	for n := 0; ; n++ {
-		reply, err := s.do(ctx, method, url, header, body)
-		if err == nil && !reply.accepted() {
-			err = reply.error()
-		}
+		err := attempt(ctx)
 		if err == nil {
-			return reply, nil
+			return nil
 		}
 		delay, retry := s.retryDelay(err, n, maxRetries)
 		if !retry {
-			return emailReply{}, err
+			return err
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			return emailReply{}, err.interruptedBy(ctx.Err())
+			return err.interruptedBy(ctx.Err())
 		}
 	}
 }

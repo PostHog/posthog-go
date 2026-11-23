@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/v2"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -254,9 +254,18 @@ func TestContextSpanProcessorShutdown(t *testing.T) {
 
 type contextClientWrapper struct{ posthog.Client }
 
+func newClient(t *testing.T, apiKey string) posthog.Client {
+	t.Helper()
+	client, err := posthog.New(apiKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
 func newEnabledClient(t *testing.T) posthog.Client {
 	t.Helper()
-	client := posthog.New("test-key")
+	client := newClient(t, "test-key")
 	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
@@ -268,16 +277,16 @@ func TestContextSpansFollowClientState(t *testing.T) {
 		want   map[string]string
 	}{
 		{"missing client", func(*testing.T) posthog.Client { return nil }, map[string]string{}},
-		{"empty API key", func(*testing.T) posthog.Client { return posthog.New(" ") }, map[string]string{}},
+		{"empty API key", func(t *testing.T) posthog.Client { return newClient(t, " ") }, map[string]string{}},
 		{"closed client", func(t *testing.T) posthog.Client {
-			client := posthog.New("test-key")
+			client := newClient(t, "test-key")
 			if err := client.Close(); err != nil {
 				t.Fatal(err)
 			}
 			return client
 		}, map[string]string{}},
 		{"enabled client", newEnabledClient, map[string]string{"posthogDistinctId": "user", "sessionId": "session"}},
-		{"wrapper without IsEnabled", func(*testing.T) posthog.Client { return contextClientWrapper{posthog.New("")} }, map[string]string{"posthogDistinctId": "user", "sessionId": "session"}},
+		{"wrapper without IsEnabled", func(t *testing.T) posthog.Client { return contextClientWrapper{newClient(t, "")} }, map[string]string{"posthogDistinctId": "user", "sessionId": "session"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/processor", func(t *testing.T) {
@@ -305,7 +314,7 @@ func TestContextSpansFollowClientState(t *testing.T) {
 }
 
 func TestContextSpanProcessorClientsAreIndependent(t *testing.T) {
-	closed, open := posthog.New("first-key"), newEnabledClient(t)
+	closed, open := newClient(t, "first-key"), newEnabledClient(t)
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}

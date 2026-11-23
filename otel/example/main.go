@@ -24,7 +24,7 @@ import (
 	"os"
 	"time"
 
-	posthogotel "github.com/posthog/posthog-go/otel"
+	posthogotel "github.com/posthog/posthog-go/otel/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"

@@ -6,13 +6,6 @@ type noopClient struct {
 	Config
 }
 
-var (
-	emptyFlagValues            = map[string]interface{}{}
-	emptyEvaluatedFlagRecords  = map[string]evaluatedFlagRecord{}
-	noopFeatureFlagResult      = &FeatureFlagResult{Enabled: false}
-	noopFeatureFlagEvaluations = &FeatureFlagEvaluations{flags: emptyEvaluatedFlagRecords}
-)
-
 func newNoopClient(config Config) Client {
 	return &noopClient{Config: config}
 }
@@ -25,6 +18,14 @@ func (c *noopClient) EnqueueWithContext(context.Context, Message) error {
 	return ErrSDKDisabled
 }
 
+func (c *noopClient) EnqueueAI(Message) error {
+	return ErrSDKDisabled
+}
+
+func (c *noopClient) EnqueueAIWithContext(context.Context, Message) error {
+	return ErrSDKDisabled
+}
+
 func (c *noopClient) IsFeatureEnabled(FeatureFlagPayload) (interface{}, error) {
 	return false, ErrSDKDisabled
 }
@@ -34,7 +35,7 @@ func (c *noopClient) GetFeatureFlag(FeatureFlagPayload) (interface{}, error) {
 }
 
 func (c *noopClient) GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error) {
-	return noopFeatureFlagResult, ErrSDKDisabled
+	return &FeatureFlagResult{Enabled: false}, ErrSDKDisabled
 }
 
 func (c *noopClient) GetFeatureFlagPayload(FeatureFlagPayload) (string, error) {
@@ -46,15 +47,15 @@ func (c *noopClient) GetRemoteConfigPayload(string) (string, error) {
 }
 
 func (c *noopClient) GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
-	return emptyFlagValues, ErrSDKDisabled
+	return map[string]interface{}{}, ErrSDKDisabled
 }
 
 func (c *noopClient) EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
-	return noopFeatureFlagEvaluations, ErrSDKDisabled
+	return emptyFeatureFlagEvaluations, ErrSDKDisabled
 }
 
 func (c *noopClient) EvaluateFlagsWithContext(context.Context, EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
-	return noopFeatureFlagEvaluations, ErrSDKDisabled
+	return emptyFeatureFlagEvaluations, ErrSDKDisabled
 }
 
 func (c *noopClient) ReloadFeatureFlags() error {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/posthog/posthog-go"
+	"github.com/posthog/posthog-go/v2"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"

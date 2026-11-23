@@ -7,7 +7,10 @@ event, the same event the Python and TypeScript SDKs send. Calls that do not
 get their own events, described below.
 
 ```go
-client := posthog.New("phc_project_api_key")
+client, err := posthog.New("phc_project_api_key")
+if err != nil {
+    log.Fatal(err)
+}
 defer client.Close()
 
 server := mcp.NewServer(&mcp.Implementation{Name: "weather-server", Version: "1.0.0"}, nil)
@@ -46,8 +49,24 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   (`io.modelcontextprotocol/aiInvocation` or `x-codex-turn-metadata`) when it
   names one, else from the `llm_model` argument described below.
 
-Use `WithIdentity` to attach a distinct ID, groups, and person properties, and
-`WithProperties` to add event properties.
+Use `WithIdentity` to attach a distinct ID, groups, and person properties,
+`WithProperties` to add event properties, and `WithEventOptions` to set capture
+options, such as turning off person processing:
+
+```go
+posthogmcpsdk.Instrument(server, analytics,
+	posthogmcpsdk.WithEventOptions(func(
+		context.Context, *mcp.CallToolRequest, *mcp.CallToolResult, error,
+	) (posthog.Options, error) {
+		return posthog.NewOptions().Set("process_person_profile", false), nil
+	}),
+)
+```
+
+These options override a `posthog.RequestContext`'s options. A call without a
+distinct ID is sent with `process_person_profile` set to `false`, though a
+`BeforeSend` hook on the client can still change it. A resolver error or panic
+goes to `WithErrorHandler`, and the call is captured without these options.
 
 ## Calls that are not tool calls
 
@@ -65,7 +84,7 @@ properties of a tool call, and no `$exception`.
   classified correctly. Invalid arguments for a registered tool are a failed
   call.
 - **`$mcp_input_required`** for each `input_required` round a client of the
-  2026-07-28 revision receives (go-sdk v1.8 and later), with `$mcp_tool_name`,
+  2026-07-28 revision receives (go-sdk v1.8.0 and later), with `$mcp_tool_name`,
   the round's `$mcp_duration_ms`, and `$mcp_input_request_methods`: the method
   of each input request, ordered by request id, duplicates kept, at most 100,
   and `[]` for a round with no input requests. Never the requests or answers.
@@ -80,8 +99,8 @@ properties of a tool call, and no `$exception`.
 - **`$mcp_missing_capability`** for a call to the opt-in virtual tool, described
   under "Reporting a missing capability".
 
-`WithProperties` applies to `$mcp_tool_call` only. `WithIdentity` applies to
-all of these events.
+`WithProperties` and `WithEventOptions` apply only to `$mcp_tool_call` and its
+`$exception`. `WithIdentity` applies to all of these events.
 
 ## The context argument
 
@@ -208,7 +227,7 @@ collision on an earlier page.
 
 `Instrument` adds receiving middleware, and sending middleware that watches for
 `notifications/tools/list_changed`. Receiving middleware added before it runs
-inside the measured duration; middleware added after it runs outside. To place
+inside the measured duration. Middleware added after it runs outside. To place
 the middleware yourself, install both halves of what `NewMiddleware` returns:
 
 ```go
@@ -224,13 +243,18 @@ is a separate Go module so that the core `posthog-go` module, which supports Go
 1.21, does not depend on the MCP SDK. Its `go.mod` replaces `posthog-go` with
 the repository root, so it builds against the local core without a workspace.
 
+The module is `github.com/posthog/posthog-go/posthogmcpsdk/v2`. Its public API
+uses core types, so its version moves in lockstep with `posthog-go`, major
+version included.
+
 Consumers ignore that `replace`, so they build against the `posthog-go`
 version this module's `go.mod` requires, and that version must contain
 `posthogmcp`. CI also builds and vets the module with the `replace` dropped, so
-an adapter change that needs unreleased core API fails there.
+an adapter change that needs unreleased core API fails there. Until the
+required version is tagged, CI skips that check with a warning.
 
-The release workflow synchronizes this module's core requirement to the new
-shared release version in the automated version-bump commit. It tags this module
-as `posthogmcpsdk/vX.Y.Z` at the same commit as `posthog-go` and `otel/vX.Y.Z`.
+The release workflow sets this module's core requirement to the new shared
+release version in the automated version-bump commit. It tags this module as
+`posthogmcpsdk/vX.Y.Z` at the same commit as `posthog-go` and `otel/vX.Y.Z`.
 Go resolves a nested module's versions from tags prefixed with its directory.
 See [RELEASING.md](../RELEASING.md) for the release process.
