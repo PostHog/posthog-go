@@ -207,188 +207,6 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 	}, server.received()[0].Body)
 }
 
-// sendAPI fakes PostHog's code send with the category wire contract. It accepts
-// omitted or null category (rejecting null description), creates a category
-// when its key is new, and checks template categories.
-type sendAPI struct {
-	*httptest.Server
-	mu sync.Mutex
-	// templates maps a template key to its category key, "" for none.
-	templates  map[string]string
-	categories map[string]storedCategory
-	sent       []sentEmail
-	rawBodies  []map[string]json.RawMessage
-}
-
-type storedCategory struct {
-	Type        string
-	Name        string
-	Description string
-}
-
-type sentEmail struct {
-	To       string
-	Category string
-}
-
-type parsedCategoryObject struct {
-	key          string
-	categoryType string
-	name         string
-	description  string
-}
-
-func newSendAPI(t *testing.T, templates map[string]string, categories map[string]storedCategory) *sendAPI {
-	if categories == nil {
-		categories = map[string]storedCategory{}
-	}
-	api := &sendAPI{templates: templates, categories: categories}
-	api.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isEmailPath(r.URL.Path) {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		var rawFields map[string]json.RawMessage
-		if err := json.NewDecoder(r.Body).Decode(&rawFields); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"type":"validation_error","code":"invalid_input","detail":"Not JSON."}`))
-			return
-		}
-		api.mu.Lock()
-		api.rawBodies = append(api.rawBodies, rawFields)
-		api.mu.Unlock()
-		status, reply := api.send(rawFields)
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(reply))
-	}))
-	t.Cleanup(api.Close)
-	return api
-}
-
-func parseCategoryWire(rawFields map[string]json.RawMessage) (leftOut, transactional bool, obj parsedCategoryObject, ok bool) {
-	raw, present := rawFields["category"]
-	if !present {
-		return true, false, parsedCategoryObject{}, true
-	}
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "null" {
-		return true, false, parsedCategoryObject{}, true
-	}
-	if trimmed == "" {
-		return false, false, parsedCategoryObject{}, false
-	}
-	var asString string
-	if json.Unmarshal(raw, &asString) == nil {
-		return false, asString == "transactional", parsedCategoryObject{}, asString == "transactional"
-	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil {
-		return false, false, parsedCategoryObject{}, false
-	}
-	for k := range fields {
-		if k != "key" && k != "type" && k != "name" && k != "description" {
-			return false, false, parsedCategoryObject{}, false
-		}
-	}
-	if json.Unmarshal(fields["key"], &obj.key) != nil || strings.TrimSpace(obj.key) == "" {
-		return false, false, parsedCategoryObject{}, false
-	}
-	if json.Unmarshal(fields["type"], &obj.categoryType) != nil || (obj.categoryType != "marketing" && obj.categoryType != "transactional") {
-		return false, false, parsedCategoryObject{}, false
-	}
-	if json.Unmarshal(fields["name"], &obj.name) != nil || strings.TrimSpace(obj.name) == "" {
-		return false, false, parsedCategoryObject{}, false
-	}
-	if descRaw, hasDesc := fields["description"]; hasDesc {
-		if strings.TrimSpace(string(descRaw)) == "null" || json.Unmarshal(descRaw, &obj.description) != nil {
-			return false, false, parsedCategoryObject{}, false
-		}
-	}
-	return false, false, obj, true
-}
-
-func (api *sendAPI) send(rawFields map[string]json.RawMessage) (int, string) {
-	const mismatch = `{"type":"validation_error","code":"category_mismatch","attr":"category","detail":"The category differs from the template's."}`
-	var to, templateKey string
-	_ = json.Unmarshal(rawFields["to"], &to)
-	_ = json.Unmarshal(rawFields["template_key"], &templateKey)
-
-	leftOut, transactional, asObject, valid := parseCategoryWire(rawFields)
-	if !valid {
-		return http.StatusBadRequest, `{"type":"validation_error","code":"invalid_input","attr":"category","detail":"Not a category."}`
-	}
-
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	if templateCategory, isTemplate := api.templates[templateKey]; isTemplate {
-		switch {
-		case api.categories[templateCategory].Type == "marketing":
-			return http.StatusBadRequest, `{"type":"validation_error","code":"marketing_template","detail":"The template is in a marketing category."}`
-		case transactional && templateCategory != "":
-			return http.StatusBadRequest, mismatch
-		case !leftOut && !transactional && (asObject.key != templateCategory || api.categories[templateCategory].Type != asObject.categoryType):
-			return http.StatusBadRequest, mismatch
-		}
-		api.sent = append(api.sent, sentEmail{To: to, Category: templateCategory})
-		return http.StatusAccepted, `{"message_id":"msg_1","replayed":false,"warnings":[]}`
-	}
-	if asObject.key != "" {
-		existing, found := api.categories[asObject.key]
-		if found && existing.Type != asObject.categoryType {
-			return http.StatusBadRequest, mismatch
-		}
-		if !found {
-			api.categories[asObject.key] = storedCategory{
-				Type:        asObject.categoryType,
-				Name:        asObject.name,
-				Description: asObject.description,
-			}
-		}
-	}
-	api.sent = append(api.sent, sentEmail{To: to, Category: asObject.key})
-	return http.StatusAccepted, `{"message_id":"msg_1","replayed":false,"warnings":[]}`
-}
-
-func (api *sendAPI) storedCategories() map[string]storedCategory {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	copied := make(map[string]storedCategory, len(api.categories))
-	for key, category := range api.categories {
-		copied[key] = category
-	}
-	return copied
-}
-
-func (api *sendAPI) sentEmails() []sentEmail {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	return append([]sentEmail(nil), api.sent...)
-}
-
-func (api *sendAPI) lastRawBody() map[string]json.RawMessage {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	if len(api.rawBodies) == 0 {
-		return nil
-	}
-	return api.rawBodies[len(api.rawBodies)-1]
-}
-
-func sendAPIClient(t *testing.T, api *sendAPI) Client {
-	client, err := NewWithConfig("phc_test", Config{Endpoint: api.URL, AppHost: api.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
-	senderOf(client).backoff = func(int) time.Duration { return 0 }
-	return client
-}
-
-func receiptsTemplateClient(t *testing.T) (Client, *sendAPI) {
-	api := newSendAPI(t, map[string]string{"order-receipt": "receipts"}, map[string]storedCategory{
-		"receipts": {Type: "transactional", Name: "Receipts"},
-	})
-	return sendAPIClient(t, api), api
-}
-
 func TestEmailsSendCodeCreatesItsCategory(t *testing.T) {
 	const html = `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`
 	tests := []struct {
@@ -446,9 +264,11 @@ func TestEmailsSendCodeCreatesItsCategory(t *testing.T) {
 }
 
 func TestEmailsSendCodeRefusesACategoryOfAnotherType(t *testing.T) {
-	stored := map[string]storedCategory{"newsletter": {Type: "marketing", Name: "Newsletter"}}
-	api := newSendAPI(t, nil, map[string]storedCategory{"newsletter": stored["newsletter"]})
-	client := sendAPIClient(t, api)
+	server := newEmailServer(t, stubReply{
+		status: http.StatusBadRequest,
+		body:   `{"type":"validation_error","code":"category_mismatch","attr":"category","detail":"The category differs from the stored one."}`,
+	})
+	client := newEmailClient(t, server)
 
 	_, err := client.Emails().Send(context.Background(), CodeEmail{
 		To:          "user@example.com",
@@ -459,10 +279,17 @@ func TestEmailsSendCodeRefusesACategoryOfAnotherType(t *testing.T) {
 	})
 
 	emailErr := requireEmailError(t, err)
+	require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
 	require.Equal(t, "category_mismatch", emailErr.Code)
+	require.Equal(t, "category", emailErr.Field)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
-	require.Equal(t, stored, api.storedCategories())
-	require.Empty(t, api.sentEmails())
+	requests := server.received()
+	require.Len(t, requests, 1)
+	require.Equal(t, map[string]interface{}{
+		"key":  "newsletter",
+		"type": "transactional",
+		"name": "Newsletter",
+	}, requests[0].Body["category"])
 }
 
 func receiptEmail(category EmailCategory) CodeEmail {
@@ -479,28 +306,42 @@ func TestEmailsSendCodeWithoutACategoryFollowsTheTemplatesCategory(t *testing.T)
 	var noCategory *MessageCategory
 	for name, category := range map[string]EmailCategory{"no category": nil, "nil category pointer": noCategory} {
 		t.Run(name, func(t *testing.T) {
-			client, api := receiptsTemplateClient(t)
+			server := newEmailServer(t, accepted("msg_1"))
+			client := newEmailClient(t, server)
 
-			_, err := client.Emails().Send(context.Background(), receiptEmail(category))
+			result, err := client.Emails().Send(context.Background(), receiptEmail(category))
 
 			require.NoError(t, err)
-			_, hasCategory := api.lastRawBody()["category"]
+			require.Equal(t, &SendEmailResult{ID: "msg_1", Warnings: []EmailWarning{}}, result)
+			requests := server.received()
+			require.Len(t, requests, 1)
+			var rawFields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal([]byte(requests[0].Raw), &rawFields))
+			_, hasCategory := rawFields["category"]
 			require.False(t, hasCategory, "category key must be absent, not null")
-			require.Equal(t, []sentEmail{{To: "user@example.com", Category: "receipts"}}, api.sentEmails())
 		})
 	}
 }
 
 func TestEmailsSendCodeRefusesTransactionalForATemplateInACategory(t *testing.T) {
-	client, api := receiptsTemplateClient(t)
+	server := newEmailServer(t, stubReply{
+		status: http.StatusBadRequest,
+		body:   `{"type":"validation_error","code":"category_mismatch","attr":"category","detail":"The category differs from the template's."}`,
+	})
+	client := newEmailClient(t, server)
 
 	_, err := client.Emails().Send(context.Background(), receiptEmail(EmailCategoryTransactional))
 
 	emailErr := requireEmailError(t, err)
+	require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
 	require.Equal(t, "category_mismatch", emailErr.Code)
+	require.Equal(t, "category", emailErr.Field)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
-	require.Equal(t, `"transactional"`, string(api.lastRawBody()["category"]))
-	require.Empty(t, api.sentEmails())
+	requests := server.received()
+	require.Len(t, requests, 1)
+	var rawFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(requests[0].Raw), &rawFields))
+	require.Equal(t, `"transactional"`, string(rawFields["category"]))
 }
 
 func TestEmailsSendCodeMarketingDoesNotRetryOptedOut(t *testing.T) {
@@ -556,23 +397,30 @@ func TestEmailsSendCodeMarketingDoesNotRetryOrStripCategoryOnPreCategoryServer(t
 	})
 
 	t.Run("mixed-version old CDP field_not_accepted", func(t *testing.T) {
-		posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
-		posthog.sendFaults = map[int]stubReply{
-			0: failed(http.StatusBadRequest, "field_not_accepted"),
-		}
-		client := newEmailClientFor(t, posthog.URL)
+		server := newEmailServer(
+			t,
+			stubReply{
+				status: http.StatusBadRequest,
+				body:   `{"type":"validation_error","code":"field_not_accepted","attr":"category","detail":"PostHog doesn't accept this field yet."}`,
+			},
+			accepted("msg_1"),
+		)
+		client := newEmailClient(t, server)
 
 		_, err := client.Emails().Send(context.Background(), email)
 
 		emailErr := requireEmailError(t, err)
 		require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
 		require.Equal(t, "field_not_accepted", emailErr.Code)
+		require.Equal(t, "category", emailErr.Field)
 		require.Equal(t, EmailErrorValidation, emailErr.Name)
-		posthog.mu.Lock()
-		attempts := posthog.sends
-		posthog.mu.Unlock()
-		require.Equal(t, 1, attempts)
-		require.Empty(t, posthog.deliveredEmails())
+		requests := server.received()
+		require.Len(t, requests, 1)
+		require.Equal(t, map[string]interface{}{
+			"key":  "newsletter",
+			"type": "marketing",
+			"name": "Newsletter",
+		}, requests[0].Body["category"])
 	})
 }
 
