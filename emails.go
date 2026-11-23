@@ -62,7 +62,7 @@ var (
 // error with code "scheduling_unsupported" before any request. Get reads
 // "scheduled" until the email goes out. To stop scheduled emails before they
 // go out, disable the email's workflow in PostHog until they have reached a
-// final status. A CodeEmail's workflow is named by its TemplateKey.
+// final status.
 type Emails interface {
 	// Send queues one email, from a TemplateEmail made in PostHog or from a
 	// CodeEmail your code rendered, or schedules it when it has a

@@ -165,8 +165,8 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 		{name: "the requested time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.000Z"`), wantStatus: "scheduled", wantAt: testScheduledAt},
 		{name: "the requested time in another offset", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T10:00:00+01:00"`), wantStatus: "scheduled", wantAt: testScheduledAt},
 		{name: "a past time sent now", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
-		{name: "a time within the clock skew sent now", at: testClientNow.Add(maxEmailClockSkew), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
-		{name: "a time still ahead sent now", at: testClientNow.Add(maxEmailClockSkew + time.Millisecond), reply: reply(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
+		{name: "a time a minute ahead sent now", at: testClientNow.Add(time.Minute), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
+		{name: "a time more than a minute ahead sent now", at: testClientNow.Add(time.Minute + time.Millisecond), reply: reply(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
 		{name: "another time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.001Z"`), unconfirmed: true},
 		{name: "no scheduled_at", reply: reply(``), unconfirmed: true},
 		{name: "no scheduled_at with status queued", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued"`), unconfirmed: true},
@@ -224,8 +224,12 @@ func TestEmailsSendReplaysAScheduledSend(t *testing.T) {
 	require.False(t, first.Replayed)
 	require.Equal(t, &SendEmailResult{ID: testMessageID, Replayed: true, Warnings: []EmailWarning{}, Status: "scheduled", ScheduledAt: testScheduledAt}, again)
 	requests := server.received()
+	require.Len(t, requests, 2)
+	for _, request := range requests {
+		require.Equal(t, "trial-ending:user_123", request.Header.Get("Idempotency-Key"))
+		require.Equal(t, "2026-12-01T09:00:00.000Z", request.Body["scheduled_at"])
+	}
 	require.Equal(t, requests[0].Raw, requests[1].Raw)
-	require.Equal(t, requests[0].Header.Get("Idempotency-Key"), requests[1].Header.Get("Idempotency-Key"))
 }
 
 func TestEmailsSendLogsWarningsOfAnUnconfirmedSchedule(t *testing.T) {
