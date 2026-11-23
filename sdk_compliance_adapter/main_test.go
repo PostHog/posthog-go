@@ -38,7 +38,7 @@ func TestPostFlagsWithRetryRetriesRetryableStatusThenSucceeds(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := postFlagsWithRetry(server.URL, []byte(`{"flag_keys_to_evaluate":["example"]}`))
+	resp, err := postFlagsWithRetry(server.URL, []byte(`{"flag_keys_to_evaluate":["example"]}`), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestPostFlagsWithRetryStopsAfterRetryableFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`))
+	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`), "")
 	if err == nil {
 		if resp != nil {
 			resp.Body.Close()
@@ -78,7 +78,7 @@ func TestPostFlagsWithRetryDoesNotRetryNonRetryableStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`))
+	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`), "")
 	if err == nil {
 		if resp != nil {
 			resp.Body.Close()
@@ -310,5 +310,73 @@ func TestHealthDeclaresDiagnosticCapabilities(t *testing.T) {
 		if !have[want] {
 			t.Errorf("capability %q missing from %v", want, health.Capabilities)
 		}
+	}
+}
+
+func TestHealthDeclaresParallelSupport(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	healthHandler(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	var body map[string]interface{}
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["supports_parallel"] != true {
+		t.Fatalf("supports_parallel = %v, want true", body["supports_parallel"])
+	}
+}
+
+func TestStateIsIsolatedPerTestID(t *testing.T) {
+	stateA, idA := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-a", nil))
+	stateB, idB := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-b", nil))
+	again, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
+	global, idGlobal := stateFor(httptest.NewRequest(http.MethodGet, "/state", nil))
+
+	if idA != "t-a" || idB != "t-b" || idGlobal != "" {
+		t.Fatalf("test ids = %q, %q, %q", idA, idB, idGlobal)
+	}
+	if stateA == stateB || stateA == global || stateB == global {
+		t.Fatal("each test_id must get its own state, separate from the default state")
+	}
+	if again != stateA {
+		t.Fatal("requests with the same test_id must share state")
+	}
+
+	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-a", nil))
+	afterReset, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
+	if afterReset == stateA {
+		t.Fatal("/reset must drop the state for its test_id")
+	}
+	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-a", nil))
+	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-b", nil))
+}
+
+func TestOutboundRequestsCarryTestIDHeader(t *testing.T) {
+	var got []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get(testIDHeader))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	transport := &TrackedTransport{base: http.DefaultTransport, state: newAdapterState(), testID: "t-capture"}
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/batch/", strings.NewReader(`{"batch":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	resp, err = postFlagsWithRetry(server.URL, []byte(`{}`), "t-flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if want := []string{"t-capture", "t-flags"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s headers = %v, want %v", testIDHeader, got, want)
 	}
 }
