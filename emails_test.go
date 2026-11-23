@@ -209,15 +209,16 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 
 var (
 	htmlCommentPattern          = regexp.MustCompile(`(?s)<!--.*?-->`)
-	htmlClickableUnsubPattern   = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*(?:"\s*\{\{\s*unsubscribe_url\s*\}\}(?:#[^"]*)?\s*"|'\s*\{\{\s*unsubscribe_url\s*\}\}(?:#[^']*)?\s*')`)
+	htmlClickableUnsubPattern   = regexp.MustCompile(`<(?i:a)\s+(?:(?:[^>"']|"[^"]*"|'[^']*')*\s+)?(?i:href)\s*=\s*(?:"\s*\{\{\s*unsubscribe_url\s*\}\}(?:[?#][^"]*)?\s*"|'\s*\{\{\s*unsubscribe_url\s*\}\}(?:[?#][^']*)?\s*')`)
 	textUnsubPlaceholderPattern = regexp.MustCompile(`\{\{\s*unsubscribe_url\s*\}\}`)
 )
 
 // sendAPI fakes PostHog's code send with the category wire contract. It accepts
 // omitted or null category (rejecting null description), requires a clickable
-// {{ unsubscribe_url }} link in HTML (with optional #fragment, or placeholder
-// in text when HTML is empty) before checking cc/bcc on marketing sends,
-// creates a category when its key is new, and checks template categories.
+// {{ unsubscribe_url }} link in HTML (with optional ?query or #fragment, or
+// placeholder in text when HTML is empty) before checking cc/bcc on marketing
+// sends, creates a category when its key is new, and checks template
+// categories.
 type sendAPI struct {
 	*httptest.Server
 	mu sync.Mutex
@@ -226,14 +227,12 @@ type sendAPI struct {
 	categories map[string]storedCategory
 	sent       []sentEmail
 	rawBodies  []map[string]json.RawMessage
-	rawJSONs   []string
 }
 
 type storedCategory struct {
-	Type           string
-	Name           string
-	Description    string
-	HasDescription bool
+	Type        string
+	Name        string
+	Description string
 }
 
 type sentEmail struct {
@@ -242,11 +241,10 @@ type sentEmail struct {
 }
 
 type parsedCategoryObject struct {
-	key            string
-	categoryType   string
-	name           string
-	description    string
-	hasDescription bool
+	key          string
+	categoryType string
+	name         string
+	description  string
 }
 
 func newSendAPI(t *testing.T, templates map[string]string, categories map[string]storedCategory) *sendAPI {
@@ -259,21 +257,14 @@ func newSendAPI(t *testing.T, templates map[string]string, categories map[string
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		raw, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"type":"validation_error","code":"invalid_input","detail":"Not JSON."}`))
-			return
-		}
 		var rawFields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &rawFields); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&rawFields); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"type":"validation_error","code":"invalid_input","detail":"Not JSON."}`))
 			return
 		}
 		api.mu.Lock()
 		api.rawBodies = append(api.rawBodies, rawFields)
-		api.rawJSONs = append(api.rawJSONs, string(raw))
 		api.mu.Unlock()
 		status, reply := api.send(rawFields)
 		w.WriteHeader(status)
@@ -321,7 +312,6 @@ func parseCategoryWire(rawFields map[string]json.RawMessage) (leftOut, transacti
 		if strings.TrimSpace(string(descRaw)) == "null" || json.Unmarshal(descRaw, &obj.description) != nil {
 			return false, false, parsedCategoryObject{}, false
 		}
-		obj.hasDescription = true
 	}
 	return false, false, obj, true
 }
@@ -379,10 +369,9 @@ func (api *sendAPI) send(rawFields map[string]json.RawMessage) (int, string) {
 		}
 		if !found {
 			api.categories[asObject.key] = storedCategory{
-				Type:           asObject.categoryType,
-				Name:           asObject.name,
-				Description:    asObject.description,
-				HasDescription: asObject.hasDescription,
+				Type:        asObject.categoryType,
+				Name:        asObject.name,
+				Description: asObject.description,
 			}
 		}
 	}
@@ -415,15 +404,6 @@ func (api *sendAPI) lastRawBody() map[string]json.RawMessage {
 	return api.rawBodies[len(api.rawBodies)-1]
 }
 
-func (api *sendAPI) lastRawJSON() string {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	if len(api.rawJSONs) == 0 {
-		return ""
-	}
-	return api.rawJSONs[len(api.rawJSONs)-1]
-}
-
 func sendAPIClient(t *testing.T, api *sendAPI) Client {
 	client, err := NewWithConfig("phc_test", Config{Endpoint: api.URL, AppHost: api.URL, AllowInsecureAppHost: true, SecretKey: "phs_test", Logger: testLogger{t.Logf, t.Logf}})
 	require.NoError(t, err)
@@ -451,21 +431,21 @@ func TestEmailsSendCodeCreatesItsCategory(t *testing.T) {
 			name:         "marketing with description",
 			category:     MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: Ptr("Monthly product news")},
 			key:          "newsletter",
-			want:         storedCategory{Type: "marketing", Name: "Newsletter", Description: "Monthly product news", HasDescription: true},
+			want:         storedCategory{Type: "marketing", Name: "Newsletter", Description: "Monthly product news"},
 			wantWireJSON: `{"key":"newsletter","type":"marketing","name":"Newsletter","description":"Monthly product news"}`,
 		},
 		{
 			name:         "marketing with empty description",
 			category:     MessageCategory{Key: "updates", Type: MessageCategoryMarketing, Name: "Updates", Description: Ptr("")},
 			key:          "updates",
-			want:         storedCategory{Type: "marketing", Name: "Updates", Description: "", HasDescription: true},
+			want:         storedCategory{Type: "marketing", Name: "Updates", Description: ""},
 			wantWireJSON: `{"key":"updates","type":"marketing","name":"Updates","description":""}`,
 		},
 		{
 			name:         "transactional without description, through a pointer",
 			category:     &MessageCategory{Key: "receipts", Type: MessageCategoryTransactional, Name: "Receipts"},
 			key:          "receipts",
-			want:         storedCategory{Type: "transactional", Name: "Receipts"},
+			want:         storedCategory{Type: "transactional", Name: "Receipts", Description: ""},
 			wantWireJSON: `{"key":"receipts","type":"transactional","name":"Receipts"}`,
 		},
 	}
@@ -529,8 +509,6 @@ func TestEmailsSendCodeWithoutACategoryFollowsTheTemplatesCategory(t *testing.T)
 			_, err := client.Emails().Send(context.Background(), receiptEmail(category))
 
 			require.NoError(t, err)
-			raw := api.lastRawJSON()
-			require.NotContains(t, raw, `"category"`, "raw HTTP JSON body must omit category")
 			_, hasCategory := api.lastRawBody()["category"]
 			require.False(t, hasCategory, "category key must be absent, not null")
 			require.Equal(t, []sentEmail{{To: "user@example.com", Category: "receipts"}}, api.sentEmails())
