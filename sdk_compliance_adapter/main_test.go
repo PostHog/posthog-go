@@ -327,12 +327,14 @@ func TestHealthDeclaresParallelSupport(t *testing.T) {
 }
 
 func TestStateIsIsolatedPerTestID(t *testing.T) {
-	stateA, idA := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-a", nil), true)
-	stateB, idB := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-b", nil), true)
-	again, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil), false)
-	global, idGlobal := stateFor(httptest.NewRequest(http.MethodGet, "/state", nil), false)
+	stateA, idA := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-a", nil), true)
+	stateA.lifecycleMu.Unlock()
+	stateB, idB := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-b", nil), true)
+	stateB.lifecycleMu.Unlock()
+	again, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
+	global, idGlobal := stateFor(httptest.NewRequest(http.MethodGet, "/state", nil))
 	defer func() {
-		takeState(httptest.NewRequest(http.MethodPost, "/reset?test_id=t-b", nil))
+		resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-b", nil))
 	}()
 
 	if idA != "t-a" || idB != "t-b" || idGlobal != "" {
@@ -346,7 +348,7 @@ func TestStateIsIsolatedPerTestID(t *testing.T) {
 	}
 
 	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-a", nil))
-	afterReset, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil), false)
+	afterReset, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
 	if afterReset == stateA {
 		t.Fatal("/reset must drop the state for its test_id")
 	}
@@ -386,12 +388,11 @@ func TestFailedInitForgetsItsRegistration(t *testing.T) {
 }
 
 func TestInitAfterOverlappingResetUsesARegisteredState(t *testing.T) {
-	removed, _ := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-turns", nil), true)
+	removed, _ := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-turns", nil), true)
 	defer resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-turns", nil))
 
-	// Hold the lifecycle lock like an in-progress /reset, so /init waits on the
-	// state that the reset then removes.
-	removed.lifecycleMu.Lock()
+	// Hold the lifecycle lock and then remove the state like /reset does, so
+	// /init waits on a state that is no longer registered.
 	done := make(chan int)
 	go func() {
 		body := strings.NewReader(`{"api_key":"phc_test","host":"http://test-harness:8081"}`)
@@ -400,7 +401,7 @@ func TestInitAfterOverlappingResetUsesARegisteredState(t *testing.T) {
 		done <- recorder.Code
 	}()
 	time.Sleep(50 * time.Millisecond)
-	takeState(httptest.NewRequest(http.MethodPost, "/reset?test_id=t-turns", nil))
+	forgetState(removed, "t-turns")
 	removed.lifecycleMu.Unlock()
 
 	if code := <-done; code != http.StatusOK {
@@ -410,7 +411,7 @@ func TestInitAfterOverlappingResetUsesARegisteredState(t *testing.T) {
 		removed.client.Close()
 		t.Fatal("/init stored its client on a state that /reset removed")
 	}
-	registered, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-turns", nil), false)
+	registered, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-turns", nil))
 	registered.mu.Lock()
 	defer registered.mu.Unlock()
 	if registered.client == nil {
@@ -418,14 +419,37 @@ func TestInitAfterOverlappingResetUsesARegisteredState(t *testing.T) {
 	}
 }
 
-func TestOnlyOneResetTakesAState(t *testing.T) {
-	registered, _ := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-race", nil), true)
-	reset := httptest.NewRequest(http.MethodPost, "/reset?test_id=t-race", nil)
-	if took := takeState(reset); took != registered {
-		t.Fatal("the first reset must take the registered state")
+// registryCheckingClient records whether its test_id was still registered when
+// /reset closed it.
+type registryCheckingClient struct {
+	posthog.Client
+	testID            string
+	registeredOnClose bool
+}
+
+func (c *registryCheckingClient) Close() error {
+	statesMu.Lock()
+	_, c.registeredOnClose = states[c.testID]
+	statesMu.Unlock()
+	return nil
+}
+
+func TestResetKeepsTestIDRegisteredUntilOldClientCloses(t *testing.T) {
+	state, _ := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-close", nil), true)
+	client := &registryCheckingClient{testID: "t-close"}
+	state.client = client
+	state.lifecycleMu.Unlock()
+
+	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-close", nil))
+
+	if !client.registeredOnClose {
+		t.Fatal("/reset must keep the test_id registered until the old client has closed")
 	}
-	if took := takeState(reset); took != nil {
-		t.Fatal("an overlapping reset must not take any state")
+	statesMu.Lock()
+	_, kept := states["t-close"]
+	statesMu.Unlock()
+	if kept {
+		t.Fatal("/reset must remove the test_id once it finishes")
 	}
 }
 
