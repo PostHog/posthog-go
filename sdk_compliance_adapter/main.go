@@ -573,11 +573,17 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	// itself instead of failing (fail_open).
 	client, err := posthog.NewWithConfig(req.APIKey, config)
 	if err != nil {
+		forgetUninitializedState(state, testID)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if !publishClient(state, testID, client, &config, req.APIKey, validatedHost) {
+	replaced, ok := publishClient(state, testID, client, &config, req.APIKey, validatedHost)
+	// Close outside the locks for the same reason as oldClient above.
+	if replaced != nil {
+		replaced.Close()
+	}
+	if !ok {
 		client.Close()
 		http.Error(w, "test_id was reset during /init", http.StatusConflict)
 		return
@@ -589,22 +595,40 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 // publishClient stores the new client on state. For a test_id it holds statesMu
 // so a concurrent /reset either sees and closes this client or has already
 // removed state, in which case it returns false and the caller closes client.
-func publishClient(state *AdapterState, testID string, client posthog.Client, config *posthog.Config, apiKey, host string) bool {
+// It returns any client that an overlapping /init stored first, which the
+// caller must close.
+func publishClient(state *AdapterState, testID string, client posthog.Client, config *posthog.Config, apiKey, host string) (replaced posthog.Client, ok bool) {
 	if testID != "" {
 		statesMu.Lock()
 		defer statesMu.Unlock()
 		if states[testID] != state {
-			return false
+			return nil, false
 		}
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	replaced = state.client
 	state.client = client
 	state.config = config
 	state.apiKey = apiKey
 	state.host = host
 	state.testID = testID
-	return true
+	return replaced, true
+}
+
+// forgetUninitializedState removes a test_id that /init registered but could not
+// give a client, unless another /init has since stored one.
+func forgetUninitializedState(state *AdapterState, testID string) {
+	if testID == "" {
+		return
+	}
+	statesMu.Lock()
+	defer statesMu.Unlock()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if states[testID] == state && state.client == nil {
+		delete(states, testID)
+	}
 }
 
 func captureHandler(w http.ResponseWriter, r *http.Request) {
