@@ -13,8 +13,9 @@ import (
 // attached to a Capture event via Capture.Flags so the event carries the
 // exact values the application branched on, with no additional /flags call.
 //
-// Calls to IsEnabled and GetFlag fire $feature_flag_called (deduped per
-// (distinct_id, key, device_id)). GetFlagPayload does not fire an event.
+// Calls to IsEnabled, IsEnabledOrDefault and GetFlag fire $feature_flag_called
+// (deduped per (distinct_id, key, device_id)). GetFlagPayload does not fire an
+// event.
 type FeatureFlagEvaluations struct {
 	host                    featureFlagEvaluationsHost
 	distinctId              string
@@ -74,17 +75,33 @@ type featureFlagEvaluationsHost struct {
 }
 
 // IsEnabled reports whether the flag is enabled for this snapshot's user.
-// Unknown flags return false. The first call for a given key fires
+// Unknown flags return false; use IsEnabledOrDefault to choose what an
+// unknown flag resolves to. The first call for a given key fires
 // $feature_flag_called with full evaluation metadata; subsequent calls with
 // the same response are deduped against the client's per-distinct_id cache.
 func (e *FeatureFlagEvaluations) IsEnabled(key string) bool {
+	return e.isEnabled(key, false)
+}
+
+// IsEnabledOrDefault reports whether the flag is enabled for this snapshot's
+// user, returning defaultValue when the flag has no value for them: the
+// snapshot holds no flag with that key, the flags request failed, or the flag
+// stayed unresolved. A flag that does have a value always wins over
+// defaultValue, including when that value is false.
+//
+// It records access and fires $feature_flag_called exactly like IsEnabled.
+func (e *FeatureFlagEvaluations) IsEnabledOrDefault(key string, defaultValue bool) bool {
+	return e.isEnabled(key, defaultValue)
+}
+
+func (e *FeatureFlagEvaluations) isEnabled(key string, defaultValue bool) bool {
 	if e == nil {
-		return false
+		return defaultValue
 	}
 	flag, ok := e.flags[key]
 	e.recordAccess(key)
 	if !ok {
-		return false
+		return defaultValue
 	}
 	return flag.Enabled
 }
@@ -141,7 +158,8 @@ func (e *FeatureFlagEvaluations) Keys() []string {
 // UnresolvedFlags returns the flags that have a loaded local definition but
 // that neither local evaluation nor a remote fallback resolved, mapped to the
 // reason local evaluation was inconclusive. These flags are absent from Keys,
-// IsEnabled returns false and GetFlag returns nil for them. Reading this does
+// IsEnabled returns false (IsEnabledOrDefault its default) and GetFlag returns
+// nil for them. Reading this does
 // not record an access and does not fire an event. The returned map is a copy.
 //
 // Snapshots returned by Only and OnlyAccessed have no unresolved flags.
