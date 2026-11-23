@@ -83,9 +83,13 @@ func ExampleEmails_marketing() {
 		DistinctID: "user_123",
 	})
 
-	var emailErr *posthog.EmailError
-	if errors.As(err, &emailErr) && emailErr.Code == "recipient_opted_out" {
-		fmt.Println("the recipient opted out of the newsletter")
+	if err != nil {
+		var emailErr *posthog.EmailError
+		if errors.As(err, &emailErr) && emailErr.Code == "recipient_opted_out" {
+			fmt.Println("the recipient opted out of the newsletter")
+			return
+		}
+		log.Fatal(err)
 	}
 }
 

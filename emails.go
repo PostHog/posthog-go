@@ -156,9 +156,13 @@ type CodeEmail struct {
 	// Deprecated: Use Tracking with EmailTrackingOptions.Engagement.
 	CaptureEngagement *bool
 	// Category is EmailCategoryTransactional or a MessageCategory, which
-	// defines the category in code. Without it, the email follows the
-	// transactional category of the template that TemplateKey names, or is
-	// transactional with no category.
+	// defines the category in code. Without it, when code-send categories are
+	// enabled for the project, the email follows the transactional category of
+	// the template that TemplateKey names, or is transactional with no
+	// category; when categories are disabled for the project, the email is
+	// queued as transactional with no category. An explicit MessageCategory
+	// returns "categories_not_enabled" when categories are unavailable for the
+	// project (and HTTP 400 on an older PostHog server).
 	Category EmailCategory
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
@@ -252,7 +256,8 @@ type transactionalEmailCategory struct{}
 // EmailCategoryTransactional sends transactional email with no category.
 // Unlike a CodeEmail without a Category, it doesn't follow the category of
 // the template that TemplateKey names: PostHog refuses it with
-// "category_mismatch" when that template is in a category.
+// "category_mismatch" when that template is in a transactional category
+// (and "marketing_template" when it is in a marketing category).
 var EmailCategoryTransactional = transactionalEmailCategory{}
 
 // MessageCategoryType is the type of a MessageCategory.
@@ -260,9 +265,12 @@ type MessageCategoryType string
 
 const (
 	// MessageCategoryMarketing: a marketing send honors the recipient's
-	// opt-outs, can't have Cc or Bcc, and its HTML, or its Text when it has no
-	// HTML, needs the {{ unsubscribe_url }} placeholder, which PostHog fills
-	// with the recipient's preferences link.
+	// opt-outs, can't have Cc or Bcc ("copies_not_allowed"), and can't combine
+	// attachments with workflows that can defer delivery ("workflow_can_wait").
+	// Its HTML body needs a clickable link whose href is {{ unsubscribe_url }}
+	// (such as <a href="{{ unsubscribe_url }}">Unsubscribe</a>), or its Text
+	// body needs {{ unsubscribe_url }} when it has no HTML, which PostHog
+	// fills with the recipient's preferences link.
 	MessageCategoryMarketing MessageCategoryType = "marketing"
 	// MessageCategoryTransactional: the email is sent as transactional and
 	// filed under the category.
@@ -274,13 +282,20 @@ const (
 // that Key keeps the category's name and description, so change them in
 // PostHog.
 //
-// PostHog refuses a send with the error code "category_mismatch" when the Key
-// exists with another Type or TemplateKey names a template in another
-// category, "too_many_categories" when the project can't take
-// another category, "unsubscribe_link_required" when a marketing send has no
-// {{ unsubscribe_url }} placeholder, "copies_not_allowed" when a marketing
-// send has Cc or Bcc, and "recipient_opted_out" when the recipient opted out
-// of the category or of all marketing.
+// PostHog refuses a send with the error code "categories_not_enabled" when
+// code-send categories are unavailable for the project (and HTTP 400 on an
+// older server), "category_mismatch" when the Key exists with another Type
+// or TemplateKey names a template in another transactional category,
+// "marketing_template" when TemplateKey names a template in a marketing
+// category, "too_many_categories" when the project can't take another
+// category, "unsubscribe_link_required" when a marketing send's HTML has no
+// clickable href="{{ unsubscribe_url }}" link (or its Text has no
+// {{ unsubscribe_url }} placeholder when there is no HTML),
+// "copies_not_allowed" when a marketing send has Cc or Bcc (avoid passing
+// Cc or Bcc on marketing sends, especially with attachments),
+// "workflow_can_wait" when a marketing send combines attachments with a
+// deferrable workflow, and "recipient_opted_out" when the recipient opted
+// out of the category or of all marketing.
 type MessageCategory struct {
 	// Key names the category, such as "newsletter". Recipients' opt-outs and
 	// preferences refer to the category by its key.
