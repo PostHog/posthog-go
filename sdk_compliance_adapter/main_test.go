@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/posthog/posthog-go/v2"
@@ -369,47 +370,6 @@ func TestOnlyInitRegistersTestIDs(t *testing.T) {
 	}
 }
 
-func TestInitClosesClientWhenResetRemovedItsState(t *testing.T) {
-	state, testID := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-init-race", nil), true)
-	takeState(httptest.NewRequest(http.MethodPost, "/reset?test_id=t-init-race", nil))
-
-	client, err := posthog.NewWithConfig("phc_test", posthog.Config{Endpoint: "http://127.0.0.1:1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	if _, ok := publishClient(state, testID, client, &posthog.Config{}, "phc_test", "http://127.0.0.1:1"); ok {
-		t.Fatal("publishClient must refuse a state that /reset already removed")
-	}
-	if state.client != nil {
-		t.Fatal("a refused client must not be stored on the removed state")
-	}
-}
-
-func TestOverlappingInitReturnsTheClientItReplaces(t *testing.T) {
-	state, testID := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-overlap", nil), true)
-	defer takeState(httptest.NewRequest(http.MethodPost, "/reset?test_id=t-overlap", nil))
-
-	newClient := func() posthog.Client {
-		client, err := posthog.NewWithConfig("phc_test", posthog.Config{Endpoint: "http://127.0.0.1:1"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return client
-	}
-	first, second := newClient(), newClient()
-	defer second.Close()
-
-	if replaced, ok := publishClient(state, testID, first, &posthog.Config{}, "phc_test", "http://127.0.0.1:1"); !ok || replaced != nil {
-		t.Fatalf("first publish = %v, %v", replaced, ok)
-	}
-	replaced, ok := publishClient(state, testID, second, &posthog.Config{}, "phc_test", "http://127.0.0.1:1")
-	if !ok || replaced != first {
-		t.Fatal("a later /init must hand back the client it replaced so it can be closed")
-	}
-	replaced.Close()
-}
-
 func TestFailedInitForgetsItsRegistration(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	body := strings.NewReader(`{"api_key":"phc_test","host":"http://test-harness:8081","flush_at":-1}`)
@@ -422,6 +382,39 @@ func TestFailedInitForgetsItsRegistration(t *testing.T) {
 	statesMu.Unlock()
 	if kept {
 		t.Fatal("a failed /init must not keep its test_id registered")
+	}
+}
+
+func TestInitAfterOverlappingResetUsesARegisteredState(t *testing.T) {
+	removed, _ := stateFor(httptest.NewRequest(http.MethodPost, "/init?test_id=t-turns", nil), true)
+	defer resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-turns", nil))
+
+	// Hold the lifecycle lock like an in-progress /reset, so /init waits on the
+	// state that the reset then removes.
+	removed.lifecycleMu.Lock()
+	done := make(chan int)
+	go func() {
+		body := strings.NewReader(`{"api_key":"phc_test","host":"http://test-harness:8081"}`)
+		recorder := httptest.NewRecorder()
+		initHandler(recorder, httptest.NewRequest(http.MethodPost, "/init?test_id=t-turns", body))
+		done <- recorder.Code
+	}()
+	time.Sleep(50 * time.Millisecond)
+	takeState(httptest.NewRequest(http.MethodPost, "/reset?test_id=t-turns", nil))
+	removed.lifecycleMu.Unlock()
+
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("/init = %d", code)
+	}
+	if removed.client != nil {
+		removed.client.Close()
+		t.Fatal("/init stored its client on a state that /reset removed")
+	}
+	registered, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-turns", nil), false)
+	registered.mu.Lock()
+	defer registered.mu.Unlock()
+	if registered.client == nil {
+		t.Fatal("/init must store its client on the registered state")
 	}
 }
 

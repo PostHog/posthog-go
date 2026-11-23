@@ -145,6 +145,9 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 // AdapterState tracks SDK state for test assertions
 type AdapterState struct {
+	// lifecycleMu makes /init and /reset for the same state take turns, so an
+	// overlapping pair cannot leave a client unclosed or unreachable.
+	lifecycleMu         sync.Mutex
 	mu                  sync.Mutex
 	client              posthog.Client
 	config              *posthog.Config
@@ -508,7 +511,8 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host must be the SDK harness mock URL", http.StatusBadRequest)
 		return
 	}
-	state, testID := stateFor(r, true)
+	state, testID := lockRegisteredState(r)
+	defer state.lifecycleMu.Unlock()
 
 	state.mu.Lock()
 	oldClient := state.client
@@ -578,57 +582,48 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	replaced, ok := publishClient(state, testID, client, &config, req.APIKey, validatedHost)
-	// Close outside the locks for the same reason as oldClient above.
-	if replaced != nil {
-		replaced.Close()
-	}
-	if !ok {
-		client.Close()
-		http.Error(w, "test_id was reset during /init", http.StatusConflict)
-		return
-	}
+	state.mu.Lock()
+	state.client = client
+	state.config = &config
+	state.apiKey = req.APIKey
+	state.host = validatedHost
+	state.testID = testID
+	state.mu.Unlock()
 
 	jsonResponse(w, map[string]bool{"success": true})
 }
 
-// publishClient stores the new client on state. For a test_id it holds statesMu
-// so a concurrent /reset either sees and closes this client or has already
-// removed state, in which case it returns false and the caller closes client.
-// It returns any client that an overlapping /init stored first, which the
-// caller must close.
-func publishClient(state *AdapterState, testID string, client posthog.Client, config *posthog.Config, apiKey, host string) (replaced posthog.Client, ok bool) {
-	if testID != "" {
-		statesMu.Lock()
-		defer statesMu.Unlock()
-		if states[testID] != state {
-			return nil, false
+// lockRegisteredState registers the request's test_id if needed and locks its
+// lifecycle. It retries when a /reset removed the state before the lock was
+// taken, so /init never stores a client on a state nothing can reach.
+func lockRegisteredState(r *http.Request) (*AdapterState, string) {
+	for {
+		state, testID := stateFor(r, true)
+		state.lifecycleMu.Lock()
+		if testID == "" {
+			return state, testID
 		}
+		statesMu.Lock()
+		registered := states[testID] == state
+		statesMu.Unlock()
+		if registered {
+			return state, testID
+		}
+		state.lifecycleMu.Unlock()
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	replaced = state.client
-	state.client = client
-	state.config = config
-	state.apiKey = apiKey
-	state.host = host
-	state.testID = testID
-	return replaced, true
 }
 
-// forgetUninitializedState removes a test_id that /init registered but could not
-// give a client, unless another /init has since stored one.
+// forgetUninitializedState removes a test_id whose /init failed. The caller holds
+// state.lifecycleMu, so no other /init can be storing a client on state.
 func forgetUninitializedState(state *AdapterState, testID string) {
 	if testID == "" {
 		return
 	}
 	statesMu.Lock()
-	defer statesMu.Unlock()
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if states[testID] == state && state.client == nil {
+	if states[testID] == state {
 		delete(states, testID)
 	}
+	statesMu.Unlock()
 }
 
 func captureHandler(w http.ResponseWriter, r *http.Request) {
@@ -984,6 +979,8 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]bool{"success": true})
 		return
 	}
+	state.lifecycleMu.Lock()
+	defer state.lifecycleMu.Unlock()
 	state.mu.Lock()
 	oldClient := state.client
 	state.client = nil
