@@ -209,15 +209,15 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 
 var (
 	htmlCommentPattern          = regexp.MustCompile(`(?s)<!--.*?-->`)
-	htmlClickableUnsubPattern   = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*(?:"[^"]*\{\{\s*unsubscribe_url\s*\}\}[^"]*"|'[^']*\{\{\s*unsubscribe_url\s*\}\}[^']*')`)
+	htmlClickableUnsubPattern   = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*(?:"\s*\{\{\s*unsubscribe_url\s*\}\}(?:#[^"]*)?\s*"|'\s*\{\{\s*unsubscribe_url\s*\}\}(?:#[^']*)?\s*')`)
 	textUnsubPlaceholderPattern = regexp.MustCompile(`\{\{\s*unsubscribe_url\s*\}\}`)
 )
 
-// sendAPI fakes PostHog's code send with the category wire contract. It rejects
-// explicit null for category or description, requires a clickable
-// {{ unsubscribe_url }} link in HTML (or placeholder in text when HTML is
-// empty) and no cc/bcc on marketing sends, creates a category when its key is
-// new, and checks template categories.
+// sendAPI fakes PostHog's code send with the category wire contract. It accepts
+// omitted or null category (rejecting null description), requires a clickable
+// {{ unsubscribe_url }} link in HTML (with optional #fragment, or placeholder
+// in text when HTML is empty) before checking cc/bcc on marketing sends,
+// creates a category when its key is new, and checks template categories.
 type sendAPI struct {
 	*httptest.Server
 	mu sync.Mutex
@@ -226,6 +226,7 @@ type sendAPI struct {
 	categories map[string]storedCategory
 	sent       []sentEmail
 	rawBodies  []map[string]json.RawMessage
+	rawJSONs   []string
 }
 
 type storedCategory struct {
@@ -258,14 +259,21 @@ func newSendAPI(t *testing.T, templates map[string]string, categories map[string
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"validation_error","code":"invalid_input","detail":"Not JSON."}`))
+			return
+		}
 		var rawFields map[string]json.RawMessage
-		if err := json.NewDecoder(r.Body).Decode(&rawFields); err != nil {
+		if err := json.Unmarshal(raw, &rawFields); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"type":"validation_error","code":"invalid_input","detail":"Not JSON."}`))
 			return
 		}
 		api.mu.Lock()
 		api.rawBodies = append(api.rawBodies, rawFields)
+		api.rawJSONs = append(api.rawJSONs, string(raw))
 		api.mu.Unlock()
 		status, reply := api.send(rawFields)
 		w.WriteHeader(status)
@@ -281,7 +289,10 @@ func parseCategoryWire(rawFields map[string]json.RawMessage) (leftOut, transacti
 		return true, false, parsedCategoryObject{}, true
 	}
 	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" || trimmed == "null" {
+	if trimmed == "null" {
+		return true, false, parsedCategoryObject{}, true
+	}
+	if trimmed == "" {
 		return false, false, parsedCategoryObject{}, false
 	}
 	var asString string
@@ -355,11 +366,11 @@ func (api *sendAPI) send(rawFields map[string]json.RawMessage) (int, string) {
 	}
 	if asObject.key != "" {
 		if asObject.categoryType == "marketing" {
-			if len(cc) > 0 || len(bcc) > 0 {
-				return http.StatusBadRequest, `{"type":"validation_error","code":"copies_not_allowed","attr":"cc","detail":"Marketing sends can't have cc or bcc."}`
-			}
 			if !hasClickableUnsubscribeLink(htmlBody, textBody) {
 				return http.StatusBadRequest, `{"type":"validation_error","code":"unsubscribe_link_required","attr":"html","detail":"Marketing sends need a clickable unsubscribe link."}`
+			}
+			if len(cc) > 0 || len(bcc) > 0 {
+				return http.StatusBadRequest, `{"type":"validation_error","code":"copies_not_allowed","attr":"cc","detail":"Marketing sends can't have cc or bcc."}`
 			}
 		}
 		existing, found := api.categories[asObject.key]
@@ -402,6 +413,15 @@ func (api *sendAPI) lastRawBody() map[string]json.RawMessage {
 		return nil
 	}
 	return api.rawBodies[len(api.rawBodies)-1]
+}
+
+func (api *sendAPI) lastRawJSON() string {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.rawJSONs) == 0 {
+		return ""
+	}
+	return api.rawJSONs[len(api.rawJSONs)-1]
 }
 
 func sendAPIClient(t *testing.T, api *sendAPI) Client {
@@ -509,6 +529,8 @@ func TestEmailsSendCodeWithoutACategoryFollowsTheTemplatesCategory(t *testing.T)
 			_, err := client.Emails().Send(context.Background(), receiptEmail(category))
 
 			require.NoError(t, err)
+			raw := api.lastRawJSON()
+			require.NotContains(t, raw, `"category"`, "raw HTTP JSON body must omit category")
 			_, hasCategory := api.lastRawBody()["category"]
 			require.False(t, hasCategory, "category key must be absent, not null")
 			require.Equal(t, []sentEmail{{To: "user@example.com", Category: "receipts"}}, api.sentEmails())

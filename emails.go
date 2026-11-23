@@ -265,12 +265,12 @@ type MessageCategoryType string
 
 const (
 	// MessageCategoryMarketing: a marketing send honors the recipient's
-	// opt-outs, can't have Cc or Bcc ("copies_not_allowed"), and can't combine
-	// attachments with workflows that can defer delivery ("workflow_can_wait").
-	// Its HTML body needs a clickable link whose href is {{ unsubscribe_url }}
-	// (such as <a href="{{ unsubscribe_url }}">Unsubscribe</a>), or its Text
-	// body needs {{ unsubscribe_url }} when it has no HTML, which PostHog
-	// fills with the recipient's preferences link.
+	// opt-outs, can't have Cc or Bcc ("copies_not_allowed"), and can't carry
+	// attachments ("workflow_can_wait", because marketing sending limits can
+	// hold delivery). Its HTML body needs a clickable link whose href is
+	// {{ unsubscribe_url }} (such as <a href="{{ unsubscribe_url }}">Unsubscribe</a>),
+	// or its Text body needs {{ unsubscribe_url }} when it has no HTML, which
+	// PostHog fills with the recipient's preferences link.
 	MessageCategoryMarketing MessageCategoryType = "marketing"
 	// MessageCategoryTransactional: the email is sent as transactional and
 	// filed under the category.
@@ -291,11 +291,11 @@ const (
 // category, "unsubscribe_link_required" when a marketing send's HTML has no
 // clickable href="{{ unsubscribe_url }}" link (or its Text has no
 // {{ unsubscribe_url }} placeholder when there is no HTML),
-// "copies_not_allowed" when a marketing send has Cc or Bcc (avoid passing
-// Cc or Bcc on marketing sends, especially with attachments),
-// "workflow_can_wait" when a marketing send combines attachments with a
-// deferrable workflow, and "recipient_opted_out" when the recipient opted
-// out of the category or of all marketing.
+// "copies_not_allowed" when a marketing send has Cc or Bcc,
+// "workflow_can_wait" when a marketing send carries attachments (because
+// marketing sending limits can hold delivery; avoid passing Cc, Bcc or
+// attachments on marketing sends), and "recipient_opted_out" when the
+// recipient opted out of the category or of all marketing.
 type MessageCategory struct {
 	// Key names the category, such as "newsletter". Recipients' opt-outs and
 	// preferences refer to the category by its key.
