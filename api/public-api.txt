@@ -1169,6 +1169,9 @@ runs using previously saved dataset and scorer version IDs. All network calls
 take a context and return after acknowledgment. Use errors.As to inspect an
 APIError or recover the unfinished portion of a BulkError.
 
+The client reads up to 128 MiB for a successful list page and 4 MiB for other
+responses. If a page exceeds the limit, request a smaller page.
+
 TYPES
 
 type APIError struct {

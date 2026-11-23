@@ -1,6 +1,7 @@
 package evaluations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -210,6 +212,119 @@ func TestTransportBoundaries(t *testing.T) {
 	apiFailure(t, err, "client_closed", NotSent)
 	require.Equal(t, int32(2), calls.Load())
 }
+
+func TestIncompleteErrorResponse(t *testing.T) {
+	for _, tc := range []struct {
+		status      int
+		retryAfter  string
+		persistence Persistence
+	}{
+		{http.StatusTooManyRequests, "60", Rejected},
+		{http.StatusForbidden, "", Rejected},
+		{http.StatusServiceUnavailable, "60", Unknown},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			calls := 0
+			client, err := NewClient(Config{ProjectID: 42, SecretKey: "test-key", Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				require.Equal(t, 1, calls, "unexpected retry")
+				body := io.MultiReader(strings.NewReader(`{"code":"incomplete"}`), iotest.ErrReader(io.ErrUnexpectedEOF))
+				return &http.Response{
+					StatusCode: tc.status, Header: http.Header{"Retry-After": {tc.retryAfter}}, Body: io.NopCloser(body),
+				}, nil
+			})})
+			require.NoError(t, err)
+			defer client.Close()
+
+			_, err = client.CreateExperiment(ctx, Fields{"name": "test"})
+			failure := apiFailure(t, err, "", tc.persistence)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			require.Equal(t, tc.status, failure.Status)
+			require.NotEmpty(t, failure.Submission["id"])
+			require.Nil(t, failure.Response)
+			if tc.retryAfter != "" {
+				require.NotNil(t, failure.RetryAfter)
+				require.Equal(t, 60*time.Second, *failure.RetryAfter)
+			}
+		})
+	}
+}
+
+func TestIncompleteSuccessRetriesReplayableRequest(t *testing.T) {
+	calls := 0
+	raw, err := encode(receipt(runID, "uploading"))
+	require.NoError(t, err)
+	client, err := NewClient(Config{ProjectID: 42, SecretKey: "test-key", Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		var body io.Reader = iotest.ErrReader(io.ErrUnexpectedEOF)
+		if calls == 2 {
+			body = bytes.NewReader(raw)
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(body)}, nil
+	})})
+	require.NoError(t, err)
+	defer client.Close()
+	_, err = client.CreateExperiment(ctx, Fields{"id": runID, "name": "test"})
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+}
+
+func TestResponseBodyLimit(t *testing.T) {
+	raw, err := readResponseBody(io.NopCloser(strings.NewReader("{}")), 2)
+	require.NoError(t, err)
+	require.Equal(t, []byte("{}"), raw)
+
+	body := strings.NewReader("{} extra bytes")
+	raw, err = readResponseBody(io.NopCloser(body), 2)
+	require.ErrorIs(t, err, errResponseTooLarge)
+	require.Nil(t, raw)
+	require.Equal(t, len("extra bytes"), body.Len(), "stop reading after the overflow byte")
+}
+
+func TestOversizedResponses(t *testing.T) {
+	// Padding leaves a valid JSON document at the limit. Parsing that prefix
+	// would incorrectly acknowledge a write or trust incomplete error details.
+	padding := strings.Repeat(" ", maxResponseBytes)
+	calls := 0
+	client, err := NewClient(Config{ProjectID: 42, SecretKey: "test-key", Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		var data Fields
+		status := http.StatusOK
+		switch calls {
+		case 1:
+			data = receipt(runID, "uploading")
+		case 2:
+			status = http.StatusForbidden
+			data = Fields{"code": "partial"}
+		case 3:
+			data = page(nil)
+		default:
+			t.Fatalf("unexpected request %d", calls)
+		}
+		raw, err := encode(data)
+		require.NoError(t, err)
+		body := io.MultiReader(bytes.NewReader(raw), strings.NewReader(padding))
+		return &http.Response{StatusCode: status, Body: io.NopCloser(body)}, nil
+	})})
+	require.NoError(t, err)
+	defer client.Close()
+
+	_, err = client.CreateExperiment(ctx, Fields{"id": runID, "name": "test"})
+	failure := apiFailure(t, err, "invalid_response", Unknown)
+	require.ErrorIs(t, err, errResponseTooLarge)
+	require.Equal(t, http.StatusOK, failure.Status)
+	require.Equal(t, runID, failure.Submission["id"])
+	_, err = client.Datasets.List(ctx, ListOptions{})
+	failure = apiFailure(t, err, "", Rejected)
+	require.ErrorIs(t, err, errResponseTooLarge)
+	require.Equal(t, http.StatusForbidden, failure.Status)
+	require.Nil(t, failure.Response)
+	page, err := client.Datasets.List(ctx, ListOptions{})
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+	require.Equal(t, 3, calls)
+}
+
 func TestRevisionOperations(t *testing.T) {
 	base := experimentsPath + runID + "/"
 	item := base + "items/" + itemID + "/"

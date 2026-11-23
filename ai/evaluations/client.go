@@ -6,6 +6,9 @@
 // runs using previously saved dataset and scorer version IDs. All network calls
 // take a context and return after acknowledgment. Use errors.As to inspect an
 // [APIError] or recover the unfinished portion of a [BulkError].
+//
+// The client reads up to 128 MiB for a successful list page and 4 MiB for
+// other responses. If a page exceeds the limit, request a smaller page.
 package evaluations
 
 import (
@@ -27,7 +30,8 @@ import (
 
 // Config configures one project. Timeout defaults to 15 seconds per attempt.
 // MaxRetries defaults to three additional attempts. Set it to a pointer to zero
-// to disable retries. Host may include a reverse-proxy path prefix.
+// to disable retries. Host may include a reverse-proxy path prefix. Use HTTPS
+// for remote hosts. An explicit HTTP host sends the secret key in cleartext.
 type Config struct {
 	ProjectID  int
 	SecretKey  string
@@ -143,6 +147,26 @@ type request struct {
 	retry        bool
 }
 
+const (
+	maxResponseBytes = 4 << 20
+	// A dataset page can contain 100 records with up to 1 MB of metadata each.
+	maxPageResponseBytes = 128 << 20
+)
+
+var errResponseTooLarge = errors.New("evaluations: response body exceeds size limit")
+
+func readResponseBody(body io.ReadCloser, limit int64) ([]byte, error) {
+	defer body.Close()
+	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if int64(len(raw)) > limit {
+		return nil, errResponseTooLarge
+	}
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // call parses each successful response exactly once. Parsing errors never trigger a retry.
 func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (T, error)) (T, error) {
 	var zero T
@@ -177,12 +201,15 @@ func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (
 		req.Header.Set("Accept", "application/json")
 		res, err := c.http.Do(req)
 		failure := &APIError{Code: "transport_error", Persistence: Unknown, cause: err}
+		canRetry := true // Transport failures may be retried for replayable operations.
 		if err == nil {
-			raw, readErr := io.ReadAll(res.Body)
-			res.Body.Close()
-			if readErr != nil {
-				failure.cause = readErr
-			} else if res.StatusCode >= 200 && res.StatusCode < 300 {
+			success := res.StatusCode >= 200 && res.StatusCode < 300
+			limit := int64(maxResponseBytes)
+			if success && r.method == http.MethodGet && r.query.Has("limit") {
+				limit = maxPageResponseBytes
+			}
+			raw, readErr := readResponseBody(res.Body, limit)
+			if success && readErr == nil {
 				var data Fields
 				if r.method == "DELETE" {
 					if res.StatusCode != 204 {
@@ -201,8 +228,19 @@ func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (
 					return zero, failure
 				}
 				return value, nil
+			}
+			// Status and retry headers still apply when the body is incomplete.
+			failure = httpError(res, raw)
+			failure.cause = readErr
+			if success {
+				if errors.Is(readErr, errResponseTooLarge) {
+					failure.Code = "invalid_response"
+					failure.Detail = errResponseTooLarge.Error()
+					return zero, failure
+				}
+				failure.Code = "transport_error"
 			} else {
-				failure = httpError(res, raw)
+				canRetry = retryable(res.StatusCode)
 			}
 		}
 		hadUnknown = hadUnknown || failure.Persistence == Unknown
@@ -214,7 +252,7 @@ func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (
 			return zero, failure
 		}
 		lastFailure = failure
-		if !(r.retry || r.method == "GET") || attempt >= c.retries || !retryable(failure.Status) {
+		if !(r.retry || r.method == "GET") || attempt >= c.retries || !canRetry {
 			return zero, failure
 		}
 		wait := delay
@@ -237,7 +275,7 @@ func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (
 }
 func retryable(status int) bool {
 	switch status {
-	case 0, 408, 429, 500, 502, 503, 504:
+	case 408, 429, 500, 502, 503, 504:
 		return true
 	}
 	return false

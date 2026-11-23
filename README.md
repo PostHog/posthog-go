@@ -23,6 +23,7 @@ module, so the core SDK stays free of OpenTelemetry dependencies.
 Use the [evaluations package](ai/evaluations) to manage AI datasets and scorer
 versions, pin a dataset snapshot, and upload results to an offline experiment.
 It uses a project ID and secret key and acknowledges each operation directly.
+Use HTTPS for remote hosts. An explicit HTTP host sends the secret key in cleartext.
 Personal keys can manage resources with the corresponding scopes. An ingestion
 key can create an experiment, upload results, and complete or fail the run.
 See the [Go example](ai/evaluations/example_test.go) for a dataset-backed run
