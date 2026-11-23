@@ -72,6 +72,10 @@ type EmailError struct {
 	// RetryAfter is how long PostHog, or file storage for an upload, asked the
 	// client to wait before it tries again, and 0 when it did not ask.
 	RetryAfter time.Duration
+	// MessageID is the message ID of an email PostHog accepted although the
+	// call failed, such as a scheduled send whose time PostHog didn't
+	// confirm, and empty otherwise.
+	MessageID string
 
 	cause error
 }
@@ -104,6 +108,34 @@ func invalidEmail(code, field, message string) *EmailError {
 	err.Name = EmailErrorValidation
 	err.Field = field
 	return err
+}
+
+// schedulingUnsupported refuses a scheduled send to a host that may not
+// schedule it: a PostHog from before scheduling would drop ScheduledAt and
+// send the email at once, which no check of the answer can undo.
+func schedulingUnsupported(appHost string) *EmailError {
+	err := invalidEmail("scheduling_unsupported", "ScheduledAt", "This client sends email to "+appHost+", and only PostHog Cloud schedules emails, so "+emailNotSent+".")
+	err.Why = "A self-hosted PostHog, or a proxy in front of PostHog Cloud, may send the email at once instead of at ScheduledAt."
+	err.Fix = "Send through PostHog Cloud US or EU, or leave out ScheduledAt to send the email now."
+	return err
+}
+
+// schedulingUnconfirmed is an accepted scheduled send whose answer doesn't
+// confirm the time asked for, so the email may go out at another time.
+func schedulingUnconfirmed(messageID string, status int, callerChoseKey bool) *EmailError {
+	fix := "Read what happened to the email with Emails.Get(err.MessageID). Sending it again with the same IdempotencyKey returns the same answer."
+	if !callerChoseKey {
+		fix = "Read what happened to the email with Emails.Get(err.MessageID). Don't send it again: the client chose this send's IdempotencyKey, so a new send with any key queues a second email."
+	}
+	return &EmailError{
+		Name:       EmailErrorApplication,
+		Code:       "scheduling_unconfirmed",
+		Message:    "PostHog accepted the email " + messageID + " without confirming it waits for ScheduledAt, so it may go out now.",
+		StatusCode: status,
+		Fix:        fix,
+		Field:      "ScheduledAt",
+		MessageID:  messageID,
+	}
 }
 
 func emailErrorName(status int, code string) EmailErrorName {

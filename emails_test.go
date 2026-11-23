@@ -131,7 +131,7 @@ func TestEmailsSendTemplate(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, &SendEmailResult{ID: "msg_1", Warnings: []EmailWarning{}}, result)
+	require.Equal(t, &SendEmailResult{ID: "msg_1", Warnings: []EmailWarning{}, Status: "queued"}, result)
 	requests := server.received()
 	require.Len(t, requests, 1)
 	require.Equal(t, http.MethodPost, requests[0].Method)
@@ -440,6 +440,7 @@ func TestEmailsSendResult(t *testing.T) {
 		ID:       "msg_1",
 		Replayed: true,
 		Warnings: []EmailWarning{{Code: "template_superseded", Message: "A newer version exists.", Fix: "Upload it."}},
+		Status:   "queued",
 	}, result)
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/posthog/posthog-go/v2"
 )
@@ -146,4 +147,33 @@ func ExampleEmails_Get() {
 	if status.Status == "bounced" {
 		fmt.Println("bounced:", status.Reason)
 	}
+}
+
+// Send a reminder a day from now. Work out the time once, so a retry with the
+// same idempotency key sends the same time. Only a client on PostHog Cloud
+// schedules emails.
+func ExampleEmails_scheduled() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{
+		Endpoint:  "https://eu.i.posthog.com",
+		SecretKey: "phs_...",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	result, err := client.Emails().Send(context.Background(), posthog.TemplateEmail{
+		To:             "user@example.com",
+		TemplateID:     "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+		IdempotencyKey: "trial-ending:user_123",
+		ScheduledAt:    time.Now().Add(24 * time.Hour),
+	})
+	var emailErr *posthog.EmailError
+	if errors.As(err, &emailErr) && emailErr.Code == "scheduling_unconfirmed" {
+		log.Fatalf("read email %s before sending it again: %s", emailErr.MessageID, emailErr.Fix)
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Status, result.ID, result.ScheduledAt)
 }

@@ -25,6 +25,7 @@ const (
 	maxEmailReplyBytes = 1 << 20
 	emailNotSent       = "no email was sent"
 	emailStatusNotRead = "no email status was read"
+	scheduledAtLayout  = "2006-01-02T15:04:05.000Z07:00"
 )
 
 var (
@@ -37,6 +38,7 @@ var (
 		"https://eu.i.posthog.com": "https://eu.posthog.com",
 		"https://eu.posthog.com":   "https://eu.posthog.com",
 	}
+	schedulingAppHosts = map[string]bool{"https://us.posthog.com": true, "https://eu.posthog.com": true}
 )
 
 // Emails sends transactional email, such as a password reset or a receipt, to
@@ -51,10 +53,19 @@ var (
 // Every error is an *EmailError. Network errors, rate limits, an idempotency
 // key in flight and an unavailable service are retried up to
 // Config.EmailRequestMaxRetries times, with the same idempotency key.
+//
+// A send with ScheduledAt waits until that time, at most 7 days ahead. Only
+// PostHog Cloud schedules emails: on any other app host, such as a
+// self-hosted PostHog, a reverse proxy or a custom domain, Send returns an
+// error with code "scheduling_unsupported" before any request. Get reads
+// "scheduled" until the email goes out. To stop scheduled emails before they
+// go out, disable the email's workflow in PostHog until they reached a final
+// status; that refuses every new send of it meanwhile.
 type Emails interface {
 	// Send queues one email, from a TemplateEmail made in PostHog or from a
-	// CodeEmail your code rendered. A result means PostHog queued the email,
-	// not that it was delivered.
+	// CodeEmail your code rendered, or schedules it when it has a
+	// ScheduledAt. A result means PostHog queued or scheduled the email, not
+	// that it was delivered; its Status says which.
 	Send(ctx context.Context, email Email) (*SendEmailResult, error)
 
 	// Get reads the status of an email that Send queued, for 30 days after the
@@ -92,6 +103,15 @@ type TemplateEmail struct {
 	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
 	// Ptr(0) turns retries off.
 	MaxRetries *int
+	// ScheduledAt sends the email at this time instead of now, at most 7 days
+	// ahead, on PostHog Cloud only. PostHog keeps the time to the
+	// millisecond, so the client rounds a finer time up to the next
+	// millisecond. A time that has passed sends the email now. The zero time
+	// sends now. Work out a relative time, such as an hour from now, once,
+	// and send the same time when you send again with the same
+	// IdempotencyKey: another time with the same key is refused with
+	// "idempotency_key_reused".
+	ScheduledAt time.Time
 }
 
 // CodeEmail sends content your code rendered, named by a key. PostHog sends
@@ -161,6 +181,9 @@ type CodeEmail struct {
 	// MaxRetries overrides Config.EmailRequestMaxRetries for this send.
 	// Ptr(0) turns retries off.
 	MaxRetries *int
+	// ScheduledAt sends the email at this time instead of now. See
+	// TemplateEmail.ScheduledAt.
+	ScheduledAt time.Time
 }
 
 // EmailAttachment is a file sent with a CodeEmail.
@@ -230,15 +253,22 @@ func (t EmailTracking) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.options)
 }
 
-// SendEmailResult is an email that PostHog queued.
+// SendEmailResult is an email that PostHog queued or scheduled.
 type SendEmailResult struct {
-	// ID is the queued email's message ID.
+	// ID is the email's message ID.
 	ID string
 	// Replayed is true when PostHog had already accepted this idempotency key
 	// and returned the first send's result.
 	Replayed bool
 	// Warnings are logged through Config.Logger as well.
 	Warnings []EmailWarning
+	// Status is "scheduled" when the email waits for ScheduledAt, and
+	// "queued" when it goes out now, also when the ScheduledAt it was sent
+	// with had already passed.
+	Status string
+	// ScheduledAt is when a scheduled email goes out, in UTC, and the zero
+	// time when the email goes out now.
+	ScheduledAt time.Time
 }
 
 // EmailWarning is a warning PostHog returned with a queued email.
@@ -252,8 +282,9 @@ type EmailWarning struct {
 type EmailStatus struct {
 	// ID is the message ID that Send returned.
 	ID string
-	// Status is "queued", "sent", "failed", "delivered", "bounced" or
-	// "complained" today. Later SDK versions can see values this list does not
+	// Status is "scheduled", "queued", "sent", "failed", "delivered",
+	// "bounced" or "complained" today. A scheduled email reads "scheduled"
+	// until it goes out. Later SDK versions can see values this list does not
 	// have yet.
 	Status string
 	// CreatedAt is when PostHog queued the email.
@@ -270,7 +301,11 @@ type emailSend struct {
 	body           []byte
 	attachments    []attachment
 	idempotencyKey string
+	callerChoseKey bool
 	maxRetries     *int
+	// scheduledAt is the requested time rounded up to the millisecond, as the
+	// body carries it, or the zero time.
+	scheduledAt time.Time
 }
 
 type templateEmailBody struct {
@@ -278,6 +313,7 @@ type templateEmailBody struct {
 	To          string                 `json:"to"`
 	MessageData map[string]interface{} `json:"message_data"`
 	DistinctID  string                 `json:"distinct_id,omitempty"`
+	ScheduledAt string                 `json:"scheduled_at,omitempty"`
 }
 
 type codeEmailBody struct {
@@ -295,6 +331,7 @@ type codeEmailBody struct {
 	Tracking          *EmailTracking `json:"tracking,omitempty"`
 	CaptureEngagement *bool          `json:"capture_engagement,omitempty"`
 	DistinctID        string         `json:"distinct_id,omitempty"`
+	ScheduledAt       string         `json:"scheduled_at,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -308,16 +345,18 @@ func (e TemplateEmail) prepare() (emailSend, *EmailError) {
 	if messageData == nil {
 		messageData = map[string]interface{}{}
 	}
+	scheduledAt := ceilToMillisecond(e.ScheduledAt)
 	body, err := encodeEmailBody(templateEmailBody{
 		TemplateID:  strings.ToLower(e.TemplateID),
 		To:          e.To,
 		MessageData: messageData,
 		DistinctID:  e.DistinctID,
+		ScheduledAt: formatScheduledAt(scheduledAt),
 	})
 	if err != nil {
 		return emailSend{}, invalidEmail("invalid_template_data", "TemplateData", "TemplateData must encode as JSON.")
 	}
-	return newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
+	return newEmailSend(body, e.IdempotencyKey, e.MaxRetries, scheduledAt)
 }
 
 func (e CodeEmail) prepare() (emailSend, *EmailError) {
@@ -351,6 +390,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	if attachmentsErr != nil {
 		return emailSend{}, attachmentsErr
 	}
+	scheduledAt := ceilToMillisecond(e.ScheduledAt)
 	body, err := encodeEmailBody(codeEmailBody{
 		To:                e.To,
 		TemplateKey:       e.TemplateKey,
@@ -366,11 +406,12 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		Tracking:          e.Tracking,
 		CaptureEngagement: e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
+		ScheduledAt:       formatScheduledAt(scheduledAt),
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)
 	}
-	send, sendErr := newEmailSend(body, e.IdempotencyKey, e.MaxRetries)
+	send, sendErr := newEmailSend(body, e.IdempotencyKey, e.MaxRetries, scheduledAt)
 	send.attachments = attachments
 	return send, sendErr
 }
@@ -382,8 +423,29 @@ func checkRecipient(to string) *EmailError {
 	return nil
 }
 
-func newEmailSend(body []byte, idempotencyKey string, maxRetries *int) (emailSend, *EmailError) {
-	if idempotencyKey == "" {
+// ceilToMillisecond rounds a time up to PostHog's millisecond precision, in
+// UTC, so a scheduled email never goes out before the time asked for.
+func ceilToMillisecond(at time.Time) time.Time {
+	if at.IsZero() {
+		return time.Time{}
+	}
+	truncated := at.Truncate(time.Millisecond)
+	if !truncated.Equal(at) {
+		truncated = truncated.Add(time.Millisecond)
+	}
+	return truncated.UTC()
+}
+
+func formatScheduledAt(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.Format(scheduledAtLayout)
+}
+
+func newEmailSend(body []byte, idempotencyKey string, maxRetries *int, scheduledAt time.Time) (emailSend, *EmailError) {
+	callerChoseKey := idempotencyKey != ""
+	if !callerChoseKey {
 		idempotencyKey = uuid.NewString()
 	} else if !idempotencyKeyPattern.MatchString(idempotencyKey) {
 		return emailSend{}, invalidEmail("invalid_idempotency_key", "IdempotencyKey", "IdempotencyKey must be 1 to 255 visible ASCII characters without spaces.")
@@ -391,7 +453,7 @@ func newEmailSend(body []byte, idempotencyKey string, maxRetries *int) (emailSen
 	if maxRetries != nil && (*maxRetries < 0 || *maxRetries > maxEmailRetries) {
 		return emailSend{}, invalidEmail("invalid_max_retries", "MaxRetries", "MaxRetries must be 0 to 9.")
 	}
-	return emailSend{body: body, idempotencyKey: idempotencyKey, maxRetries: maxRetries}, nil
+	return emailSend{body: body, idempotencyKey: idempotencyKey, callerChoseKey: callerChoseKey, maxRetries: maxRetries, scheduledAt: scheduledAt}, nil
 }
 
 // emailSender implements Emails. It owns the attempt loop, so every attempt of
@@ -495,6 +557,9 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 		return nil, err
 	}
 	defer finish()
+	if !send.scheduledAt.IsZero() && !schedulingAppHosts[s.appHost] {
+		return nil, schedulingUnsupported(s.appHost)
+	}
 
 	maxRetries := s.maxRetries
 	if send.maxRetries != nil {
@@ -512,7 +577,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	if err != nil {
 		return nil, err
 	}
-	result, err := reply.sendResult()
+	result, err := reply.sendResult(send)
 	if err != nil {
 		return nil, err
 	}
@@ -775,13 +840,20 @@ func (r emailReply) apiError(message string) *EmailError {
 	return &EmailError{Name: emailErrorName(r.status, "api_error"), Code: "api_error", Message: message, StatusCode: r.status, RetryAfter: r.retryAfter}
 }
 
-func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
+func (r emailReply) sendResult(send emailSend) (*SendEmailResult, *EmailError) {
 	id := r.text("message_id")
 	if id == "" {
 		return nil, r.apiError("PostHog answered without a message ID.")
 	}
 	replayed, _ := r.fields["replayed"].(bool)
-	result := &SendEmailResult{ID: id, Replayed: replayed, Warnings: []EmailWarning{}}
+	result := &SendEmailResult{ID: id, Replayed: replayed, Warnings: []EmailWarning{}, Status: "queued"}
+	if !send.scheduledAt.IsZero() && !r.sendsNow() {
+		if !r.confirmsSchedule(send.scheduledAt) {
+			return nil, schedulingUnconfirmed(id, r.status, send.callerChoseKey)
+		}
+		result.Status = "scheduled"
+		result.ScheduledAt = send.scheduledAt
+	}
 	warnings, _ := r.fields["warnings"].([]interface{})
 	for _, item := range warnings {
 		fields, ok := item.(map[string]interface{})
@@ -800,6 +872,18 @@ func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 		result.Warnings = append(result.Warnings, EmailWarning{Code: code, Message: message, Fix: warning.text("fix")})
 	}
 	return result, nil
+}
+
+// sendsNow is PostHog's answer to a scheduled send whose time had passed at
+// accept: the email goes out now.
+func (r emailReply) sendsNow() bool {
+	answered, has := r.fields["scheduled_at"]
+	return has && answered == nil && r.text("status") == "queued"
+}
+
+func (r emailReply) confirmsSchedule(requested time.Time) bool {
+	answered, err := time.Parse(time.RFC3339Nano, r.text("scheduled_at"))
+	return err == nil && r.text("status") == "scheduled" && answered.Equal(requested)
 }
 
 func (r emailReply) emailStatus() (*EmailStatus, *EmailError) {
