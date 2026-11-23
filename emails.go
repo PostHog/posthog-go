@@ -26,6 +26,9 @@ const (
 	emailNotSent       = "no email was sent"
 	emailStatusNotRead = "no email status was read"
 	scheduledAtLayout  = "2006-01-02T15:04:05.000Z07:00"
+	// maxEmailClockSkew is how far the client's clock may run behind
+	// PostHog's before a send PostHog calls past looks early to the client.
+	maxEmailClockSkew = time.Minute
 )
 
 var (
@@ -38,7 +41,6 @@ var (
 		"https://eu.i.posthog.com": "https://eu.posthog.com",
 		"https://eu.posthog.com":   "https://eu.posthog.com",
 	}
-	schedulingAppHosts = map[string]bool{"https://us.posthog.com": true, "https://eu.posthog.com": true}
 )
 
 // Emails sends transactional email, such as a password reset or a receipt, to
@@ -59,8 +61,8 @@ var (
 // self-hosted PostHog, a reverse proxy or a custom domain, Send returns an
 // error with code "scheduling_unsupported" before any request. Get reads
 // "scheduled" until the email goes out. To stop scheduled emails before they
-// go out, disable the email's workflow in PostHog until they reached a final
-// status; that refuses every new send of it meanwhile.
+// go out, disable the email's workflow in PostHog until they have reached a
+// final status. A CodeEmail's workflow is named by its TemplateKey.
 type Emails interface {
 	// Send queues one email, from a TemplateEmail made in PostHog or from a
 	// CodeEmail your code rendered, or schedules it when it has a
@@ -301,11 +303,8 @@ type emailSend struct {
 	body           []byte
 	attachments    []attachment
 	idempotencyKey string
-	callerChoseKey bool
 	maxRetries     *int
-	// scheduledAt is the requested time rounded up to the millisecond, as the
-	// body carries it, or the zero time.
-	scheduledAt time.Time
+	scheduledAt    time.Time
 }
 
 type templateEmailBody struct {
@@ -444,8 +443,7 @@ func formatScheduledAt(at time.Time) string {
 }
 
 func newEmailSend(body []byte, idempotencyKey string, maxRetries *int, scheduledAt time.Time) (emailSend, *EmailError) {
-	callerChoseKey := idempotencyKey != ""
-	if !callerChoseKey {
+	if idempotencyKey == "" {
 		idempotencyKey = uuid.NewString()
 	} else if !idempotencyKeyPattern.MatchString(idempotencyKey) {
 		return emailSend{}, invalidEmail("invalid_idempotency_key", "IdempotencyKey", "IdempotencyKey must be 1 to 255 visible ASCII characters without spaces.")
@@ -453,7 +451,7 @@ func newEmailSend(body []byte, idempotencyKey string, maxRetries *int, scheduled
 	if maxRetries != nil && (*maxRetries < 0 || *maxRetries > maxEmailRetries) {
 		return emailSend{}, invalidEmail("invalid_max_retries", "MaxRetries", "MaxRetries must be 0 to 9.")
 	}
-	return emailSend{body: body, idempotencyKey: idempotencyKey, callerChoseKey: callerChoseKey, maxRetries: maxRetries, scheduledAt: scheduledAt}, nil
+	return emailSend{body: body, idempotencyKey: idempotencyKey, maxRetries: maxRetries, scheduledAt: scheduledAt}, nil
 }
 
 // emailSender implements Emails. It owns the attempt loop, so every attempt of
@@ -557,7 +555,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 		return nil, err
 	}
 	defer finish()
-	if !send.scheduledAt.IsZero() && !schedulingAppHosts[s.appHost] {
+	if !send.scheduledAt.IsZero() && cloudAppHosts[s.appHost] != s.appHost {
 		return nil, schedulingUnsupported(s.appHost)
 	}
 
@@ -577,12 +575,17 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	if err != nil {
 		return nil, err
 	}
-	result, err := reply.sendResult(send)
+	result, err := reply.sendResult()
 	if err != nil {
 		return nil, err
 	}
 	for _, warning := range result.Warnings {
 		s.logger.Warnf("PostHog email warning %s: %s", warning.Code, warning.Message)
+	}
+	if !send.scheduledAt.IsZero() {
+		if err := reply.checkSchedule(result, send.scheduledAt, s.now()); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
@@ -840,20 +843,13 @@ func (r emailReply) apiError(message string) *EmailError {
 	return &EmailError{Name: emailErrorName(r.status, "api_error"), Code: "api_error", Message: message, StatusCode: r.status, RetryAfter: r.retryAfter}
 }
 
-func (r emailReply) sendResult(send emailSend) (*SendEmailResult, *EmailError) {
+func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 	id := r.text("message_id")
 	if id == "" {
 		return nil, r.apiError("PostHog answered without a message ID.")
 	}
 	replayed, _ := r.fields["replayed"].(bool)
 	result := &SendEmailResult{ID: id, Replayed: replayed, Warnings: []EmailWarning{}, Status: "queued"}
-	if !send.scheduledAt.IsZero() && !r.sendsNow() {
-		if !r.confirmsSchedule(send.scheduledAt) {
-			return nil, schedulingUnconfirmed(id, r.status, send.callerChoseKey)
-		}
-		result.Status = "scheduled"
-		result.ScheduledAt = send.scheduledAt
-	}
 	warnings, _ := r.fields["warnings"].([]interface{})
 	for _, item := range warnings {
 		fields, ok := item.(map[string]interface{})
@@ -874,16 +870,26 @@ func (r emailReply) sendResult(send emailSend) (*SendEmailResult, *EmailError) {
 	return result, nil
 }
 
-// sendsNow is PostHog's answer to a scheduled send whose time had passed at
-// accept: the email goes out now.
-func (r emailReply) sendsNow() bool {
-	answered, has := r.fields["scheduled_at"]
-	return has && answered == nil && r.text("status") == "queued"
-}
-
-func (r emailReply) confirmsSchedule(requested time.Time) bool {
-	answered, err := time.Parse(time.RFC3339Nano, r.text("scheduled_at"))
-	return err == nil && r.text("status") == "scheduled" && answered.Equal(requested)
+// checkSchedule accepts the answer to a scheduled send only when it confirms
+// the requested time, or says the email goes out now for a time that has
+// passed. A PostHog that dropped the time answers "queued" too, so a
+// "queued" for a time still ahead of the client's clock is unconfirmed.
+func (r emailReply) checkSchedule(result *SendEmailResult, requested, now time.Time) *EmailError {
+	answered, hasTime := r.fields["scheduled_at"]
+	switch r.text("status") {
+	case "scheduled":
+		at, err := time.Parse(time.RFC3339Nano, r.text("scheduled_at"))
+		if err == nil && at.Equal(requested) {
+			result.Status = "scheduled"
+			result.ScheduledAt = requested
+			return nil
+		}
+	case "queued":
+		if hasTime && answered == nil && !requested.After(now.Add(maxEmailClockSkew)) {
+			return nil
+		}
+	}
+	return schedulingUnconfirmed(result.ID, r.status)
 }
 
 func (r emailReply) emailStatus() (*EmailStatus, *EmailError) {

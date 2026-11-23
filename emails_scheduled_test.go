@@ -12,27 +12,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testScheduledAt = time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+var (
+	testScheduledAt = time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+	testClientNow   = time.Date(2026, 11, 30, 9, 0, 0, 0, time.UTC)
+)
 
-// newCloudEmailClient is a client on PostHog Cloud US whose requests reach
-// server, since only a Cloud client schedules.
+// newCloudEmailClient is a client on PostHog Cloud US, at testClientNow, whose
+// requests reach server, since only a Cloud client schedules.
 func newCloudEmailClient(t *testing.T, server *emailServer) Client {
 	target, err := url.Parse(server.URL)
 	require.NoError(t, err)
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		r = r.Clone(r.Context())
-		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
-		return http.DefaultTransport.RoundTrip(r)
+	c := newEmailClientFor(t, server.URL, func(config *Config) {
+		config.Endpoint, config.AppHost, config.AllowInsecureAppHost = "https://us.i.posthog.com", "", false
+		config.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			r = r.Clone(r.Context())
+			r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
+			return http.DefaultTransport.RoundTrip(r)
+		})
 	})
-	c, err := NewWithConfig("phc_test", Config{Endpoint: "https://us.i.posthog.com", SecretKey: "phs_test", Transport: transport, Logger: testLogger{t.Logf, t.Logf}})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-	senderOf(c).backoff = func(int) time.Duration { return 0 }
+	senderOf(c).now = func() time.Time { return testClientNow }
 	return c
 }
 
 func scheduled(at string) stubReply {
-	return stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","replayed":false,"warnings":[],"status":"scheduled","scheduled_at":"` + at + `"}`}
+	return stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","replayed":false,"status":"scheduled","scheduled_at":"` + at + `"}`}
 }
 
 func codeEmail() CodeEmail {
@@ -59,6 +62,7 @@ func TestEmailsSendScheduledAtOnBothForms(t *testing.T) {
 			require.Equal(t, time.UTC, result.ScheduledAt.Location())
 			requests := server.received()
 			require.Len(t, requests, 1)
+			require.Equal(t, "/api/messaging/send/email/", requests[0].Path)
 			require.Equal(t, "2026-12-01T09:00:00.000Z", requests[0].Body["scheduled_at"])
 		})
 	}
@@ -98,15 +102,17 @@ func TestEmailsSendScheduledAtOnlyOnPostHogCloud(t *testing.T) {
 	tests := []struct {
 		name     string
 		config   Config
-		appHost  string
+		sendURL  string
+		inError  string
 		schedule bool
 	}{
-		{name: "US ingestion host", config: Config{Endpoint: "https://us.i.posthog.com"}, appHost: "https://us.posthog.com", schedule: true},
-		{name: "EU app host", config: Config{AppHost: "https://eu.posthog.com/"}, appHost: "https://eu.posthog.com", schedule: true},
-		{name: "legacy app host", config: Config{Endpoint: "https://app.posthog.com"}, appHost: "https://us.posthog.com", schedule: true},
-		{name: "self-hosted", config: Config{AppHost: "https://posthog.example.com"}, appHost: "https://posthog.example.com"},
-		{name: "reverse proxy in front of Cloud", config: Config{Endpoint: "https://us.i.posthog.com", AppHost: "https://e.example.com"}, appHost: "https://e.example.com"},
-		{name: "local http host", config: Config{AppHost: "http://localhost:8010", AllowInsecureAppHost: true}, appHost: "http://localhost:8010"},
+		{name: "US ingestion host", config: Config{Endpoint: "https://us.i.posthog.com"}, sendURL: "https://us.posthog.com/api/messaging/send/email/", schedule: true},
+		{name: "EU app host", config: Config{AppHost: "https://eu.posthog.com/"}, sendURL: "https://eu.posthog.com/api/messaging/send/email/", schedule: true},
+		{name: "legacy app host", config: Config{Endpoint: "https://app.posthog.com"}, sendURL: "https://us.posthog.com/api/messaging/send/email/", schedule: true},
+		{name: "self-hosted", config: Config{AppHost: "https://posthog.example.com"}, inError: "https://posthog.example.com"},
+		{name: "reverse proxy in front of Cloud", config: Config{Endpoint: "https://us.i.posthog.com", AppHost: "https://e.example.com"}, inError: "https://e.example.com"},
+		{name: "local http host", config: Config{AppHost: "http://localhost:8010", AllowInsecureAppHost: true}, inError: "http://localhost:8010"},
+		{name: "proxy with credentials in its URL", config: Config{AppHost: "https://user:hunter2@e.example.com/posthog?token=abc"}, inError: "https://e.example.com"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -130,14 +136,14 @@ func TestEmailsSendScheduledAtOnlyOnPostHogCloud(t *testing.T) {
 			if tt.schedule {
 				require.NoError(t, err)
 				require.Equal(t, "scheduled", result.Status)
-				require.Equal(t, []string{tt.appHost + emailSendPath}, urls)
+				require.Equal(t, []string{tt.sendURL}, urls)
 				return
 			}
 			emailErr := requireEmailError(t, err)
 			require.Equal(t, "scheduling_unsupported", emailErr.Code)
 			require.Equal(t, EmailErrorValidation, emailErr.Name)
 			require.Equal(t, "ScheduledAt", emailErr.Field)
-			require.Equal(t, "This client sends email to "+tt.appHost+", and only PostHog Cloud schedules emails, so no email was sent.", emailErr.Message)
+			require.Equal(t, "This client sends email to "+tt.inError+", and only PostHog Cloud schedules emails, so no email was sent.", emailErr.Message)
 			require.Zero(t, emailErr.StatusCode)
 			require.Empty(t, urls)
 		})
@@ -146,10 +152,11 @@ func TestEmailsSendScheduledAtOnlyOnPostHogCloud(t *testing.T) {
 
 func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 	reply := func(fields string) stubReply {
-		return stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","replayed":true,"warnings":[]` + fields + `}`}
+		return stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","replayed":false` + fields + `}`}
 	}
 	tests := []struct {
 		name        string
+		at          time.Time
 		reply       stubReply
 		wantStatus  string
 		wantAt      time.Time
@@ -157,12 +164,14 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 	}{
 		{name: "the requested time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.000Z"`), wantStatus: "scheduled", wantAt: testScheduledAt},
 		{name: "the requested time in another offset", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T10:00:00+01:00"`), wantStatus: "scheduled", wantAt: testScheduledAt},
-		{name: "a past time sent now", reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
+		{name: "a past time sent now", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
+		{name: "a time within the clock skew sent now", at: testClientNow.Add(maxEmailClockSkew), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
+		{name: "a time still ahead sent now", at: testClientNow.Add(maxEmailClockSkew + time.Millisecond), reply: reply(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
 		{name: "another time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.001Z"`), unconfirmed: true},
 		{name: "no scheduled_at", reply: reply(``), unconfirmed: true},
-		{name: "no scheduled_at with status queued", reply: reply(`,"status":"queued"`), unconfirmed: true},
+		{name: "no scheduled_at with status queued", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued"`), unconfirmed: true},
 		{name: "scheduled without a time", reply: reply(`,"status":"scheduled","scheduled_at":null`), unconfirmed: true},
-		{name: "queued with a time", reply: reply(`,"status":"queued","scheduled_at":"2026-12-01T09:00:00.000Z"`), unconfirmed: true},
+		{name: "queued with a time", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued","scheduled_at":"2026-11-30T08:00:00.000Z"`), unconfirmed: true},
 		{name: "a time without a status", reply: reply(`,"scheduled_at":"2026-12-01T09:00:00.000Z"`), unconfirmed: true},
 		{name: "a time that doesn't parse", reply: reply(`,"status":"scheduled","scheduled_at":"tomorrow"`), unconfirmed: true},
 	}
@@ -172,6 +181,9 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 			client := newCloudEmailClient(t, server)
 			email := templateEmail()
 			email.ScheduledAt = testScheduledAt
+			if !tt.at.IsZero() {
+				email.ScheduledAt = tt.at
+			}
 
 			result, err := client.Emails().Send(context.Background(), email)
 
@@ -185,43 +197,53 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 				require.Equal(t, http.StatusAccepted, emailErr.StatusCode)
 				require.Equal(t, "ScheduledAt", emailErr.Field)
 				require.Contains(t, emailErr.Message, testMessageID)
+				require.Equal(t, "Read what happened to the email with Emails.Get(err.MessageID) before you send it again: another send can queue a second email.", emailErr.Fix)
 				return
 			}
 			require.NoError(t, err)
 			require.Equal(t, testMessageID, result.ID)
-			require.True(t, result.Replayed)
 			require.Equal(t, tt.wantStatus, result.Status)
 			require.True(t, result.ScheduledAt.Equal(tt.wantAt), "got %v", result.ScheduledAt)
 		})
 	}
 }
 
-func TestEmailsSendUnconfirmedScheduleSaysWhetherToSendAgain(t *testing.T) {
-	tests := []struct {
-		name           string
-		idempotencyKey string
-		wantFix        string
-	}{
-		{name: "caller's key", idempotencyKey: "welcome:user_123", wantFix: "Read what happened to the email with Emails.Get(err.MessageID). Sending it again with the same IdempotencyKey returns the same answer."},
-		{name: "client's key", wantFix: "Read what happened to the email with Emails.Get(err.MessageID). Don't send it again: the client chose this send's IdempotencyKey, so a new send with any key queues a second email."},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := newEmailServer(t, accepted(testMessageID))
-			client := newCloudEmailClient(t, server)
-			email := templateEmail()
-			email.ScheduledAt = testScheduledAt
-			email.IdempotencyKey = tt.idempotencyKey
+func TestEmailsSendReplaysAScheduledSend(t *testing.T) {
+	replay := `{"message_id":"` + testMessageID + `","replayed":true,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.000Z"}`
+	server := newEmailServer(t, scheduled("2026-12-01T09:00:00.000Z"), stubReply{status: http.StatusAccepted, body: replay})
+	client := newCloudEmailClient(t, server)
+	email := templateEmail()
+	email.IdempotencyKey = "trial-ending:user_123"
+	email.ScheduledAt = testScheduledAt
 
-			_, err := client.Emails().Send(context.Background(), email)
+	first, err := client.Emails().Send(context.Background(), email)
+	require.NoError(t, err)
+	again, err := client.Emails().Send(context.Background(), email)
 
-			require.Equal(t, tt.wantFix, requireEmailError(t, err).Fix)
-		})
-	}
+	require.NoError(t, err)
+	require.False(t, first.Replayed)
+	require.Equal(t, &SendEmailResult{ID: testMessageID, Replayed: true, Warnings: []EmailWarning{}, Status: "scheduled", ScheduledAt: testScheduledAt}, again)
+	requests := server.received()
+	require.Equal(t, requests[0].Raw, requests[1].Raw)
+	require.Equal(t, requests[0].Header.Get("Idempotency-Key"), requests[1].Header.Get("Idempotency-Key"))
+}
+
+func TestEmailsSendLogsWarningsOfAnUnconfirmedSchedule(t *testing.T) {
+	server := newEmailServer(t, stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","warnings":[{"code":"template_superseded","detail":"A newer version exists."}]}`})
+	logs := &recordingLogger{}
+	client := newCloudEmailClient(t, server)
+	senderOf(client).logger = logs
+	email := templateEmail()
+	email.ScheduledAt = testScheduledAt
+
+	_, err := client.Emails().Send(context.Background(), email)
+
+	require.Equal(t, "scheduling_unconfirmed", requireEmailError(t, err).Code)
+	require.Equal(t, []string{"PostHog email warning template_superseded: A newer version exists."}, logs.warnings())
 }
 
 func TestEmailsSendSurfacesARefusedScheduleWithoutSendingNow(t *testing.T) {
-	server := newEmailServer(t, stubReply{status: http.StatusBadRequest, body: `{"type":"validation_error","code":"invalid_input","detail":"scheduled_at is more than 7 days ahead.","attr":"scheduled_at"}`})
+	server := newEmailServer(t, stubReply{status: http.StatusBadRequest, body: `{"type":"validation_error","code":"scheduled_too_far","detail":"` + "`scheduled_at`" + ` is more than 7 days away, so PostHog didn't send the email.","attr":"scheduled_at","why":"PostHog holds a scheduled email for at most 7 days after the request.","fix":"Pick a time within 7 days, or send the email closer to the time."}`})
 	client := newCloudEmailClient(t, server)
 	email := codeEmail()
 	email.ScheduledAt = testScheduledAt
@@ -230,6 +252,7 @@ func TestEmailsSendSurfacesARefusedScheduleWithoutSendingNow(t *testing.T) {
 
 	require.Nil(t, result)
 	emailErr := requireEmailError(t, err)
+	require.Equal(t, "scheduled_too_far", emailErr.Code)
 	require.Equal(t, EmailErrorValidation, emailErr.Name)
 	require.Equal(t, "scheduled_at", emailErr.Field)
 	require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
@@ -237,14 +260,4 @@ func TestEmailsSendSurfacesARefusedScheduleWithoutSendingNow(t *testing.T) {
 	requests := server.received()
 	require.Len(t, requests, 1)
 	require.Equal(t, "2026-12-01T09:00:00.000Z", requests[0].Body["scheduled_at"])
-}
-
-func TestEmailsGetReadsAScheduledEmail(t *testing.T) {
-	server := newEmailServer(t, stubReply{status: http.StatusOK, body: `{"id":"` + testMessageID + `","status":"scheduled","created_at":"2026-11-30T09:00:00Z","status_at":"2026-11-30T09:00:00Z","reason":null}`})
-	client := newEmailClient(t, server)
-
-	status, err := client.Emails().Get(context.Background(), testMessageID)
-
-	require.NoError(t, err)
-	require.Equal(t, "scheduled", status.Status)
 }

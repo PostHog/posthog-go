@@ -149,8 +149,9 @@ func ExampleEmails_Get() {
 	}
 }
 
-// Send a reminder a day from now. Work out the time once, so a retry with the
-// same idempotency key sends the same time. Only a client on PostHog Cloud
+// Send a reminder a day before a trial ends. The time comes from a stored
+// fact, so a rerun of the job sends the same time with the same idempotency
+// key and gets the first send's answer. Only a client on PostHog Cloud
 // schedules emails.
 func ExampleEmails_scheduled() {
 	client, err := posthog.NewWithConfig("phc_...", posthog.Config{
@@ -162,11 +163,12 @@ func ExampleEmails_scheduled() {
 	}
 	defer client.Close()
 
+	trialEndsAt := time.Date(2026, 12, 8, 9, 0, 0, 0, time.UTC)
 	result, err := client.Emails().Send(context.Background(), posthog.TemplateEmail{
 		To:             "user@example.com",
 		TemplateID:     "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
 		IdempotencyKey: "trial-ending:user_123",
-		ScheduledAt:    time.Now().Add(24 * time.Hour),
+		ScheduledAt:    trialEndsAt.Add(-24 * time.Hour),
 	})
 	var emailErr *posthog.EmailError
 	if errors.As(err, &emailErr) && emailErr.Code == "scheduling_unconfirmed" {

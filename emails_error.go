@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -114,25 +115,31 @@ func invalidEmail(code, field, message string) *EmailError {
 // schedule it: a PostHog from before scheduling would drop ScheduledAt and
 // send the email at once, which no check of the answer can undo.
 func schedulingUnsupported(appHost string) *EmailError {
-	err := invalidEmail("scheduling_unsupported", "ScheduledAt", "This client sends email to "+appHost+", and only PostHog Cloud schedules emails, so "+emailNotSent+".")
+	err := invalidEmail("scheduling_unsupported", "ScheduledAt", "This client sends email to "+originOf(appHost)+", and only PostHog Cloud schedules emails, so "+emailNotSent+".")
 	err.Why = "A self-hosted PostHog, or a proxy in front of PostHog Cloud, may send the email at once instead of at ScheduledAt."
 	err.Fix = "Send through PostHog Cloud US or EU, or leave out ScheduledAt to send the email now."
 	return err
 }
 
+// originOf is the scheme and host of a URL, so an error never carries
+// credentials, a path or a query from Config.AppHost.
+func originOf(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return "the configured AppHost"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
 // schedulingUnconfirmed is an accepted scheduled send whose answer doesn't
 // confirm the time asked for, so the email may go out at another time.
-func schedulingUnconfirmed(messageID string, status int, callerChoseKey bool) *EmailError {
-	fix := "Read what happened to the email with Emails.Get(err.MessageID). Sending it again with the same IdempotencyKey returns the same answer."
-	if !callerChoseKey {
-		fix = "Read what happened to the email with Emails.Get(err.MessageID). Don't send it again: the client chose this send's IdempotencyKey, so a new send with any key queues a second email."
-	}
+func schedulingUnconfirmed(messageID string, status int) *EmailError {
 	return &EmailError{
 		Name:       EmailErrorApplication,
 		Code:       "scheduling_unconfirmed",
 		Message:    "PostHog accepted the email " + messageID + " without confirming it waits for ScheduledAt, so it may go out now.",
 		StatusCode: status,
-		Fix:        fix,
+		Fix:        "Read what happened to the email with Emails.Get(err.MessageID) before you send it again: another send can queue a second email.",
 		Field:      "ScheduledAt",
 		MessageID:  messageID,
 	}
