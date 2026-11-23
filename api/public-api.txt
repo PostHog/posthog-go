@@ -1156,6 +1156,469 @@ type Variants struct {
 }
 
 
+## github.com/posthog/posthog-go/v2/ai/evaluations
+
+package evaluations // import "github.com/posthog/posthog-go/v2/ai/evaluations"
+
+Package evaluations manages AI datasets, scorer definitions, and offline
+experiments through the acknowledged PostHog project API.
+
+Use a personal API key to manage datasets and scorers. An ingestion key with
+offline_evaluation_ingestion:write can create runs, submit outcomes and close
+runs using previously saved dataset and scorer version IDs. All network calls
+take a context and return after acknowledgment. Use errors.As to inspect an
+APIError or recover the unfinished portion of a BulkError.
+
+TYPES
+
+type APIError struct {
+	Status         int
+	Code, Attr     string
+	Detail, Errors any
+	Response       Fields
+	RetryAfter     *time.Duration
+	Persistence    Persistence
+	Submission     Fields
+}
+
+func (e *APIError) Error() string
+
+func (e *APIError) GoString() string
+
+func (e *APIError) Unwrap() error
+
+type BooleanConfig struct {
+	TrueLabel     *string        `json:"true_label"`
+	FalseLabel    *string        `json:"false_label"`
+	TrueIsFailure Optional[bool] `json:"true_is_failure"`
+}
+
+func (BooleanConfig) Kind() string
+
+func (c BooleanConfig) MarshalJSON() ([]byte, error)
+
+type BulkError struct {
+	Completed      BulkReceipt
+	FailedIndex    int
+	PendingResults []Result
+	FailedChunk    []byte
+	Err            error
+}
+
+func (e *BulkError) Error() string
+
+func (e *BulkError) GoString() string
+
+func (e *BulkError) Unwrap() error
+
+type BulkReceipt struct{ Chunks []UploadReceipt }
+
+type CategoricalConfig struct {
+	Options       []CategoryOption              `json:"options"`
+	SelectionMode string                        `json:"selection_mode"`
+	MinSelections Optional[int]                 `json:"min_selections"`
+	MaxSelections Optional[int]                 `json:"max_selections"`
+	PassingRule   Optional[CategoryPassingRule] `json:"passing_rule"`
+}
+
+func (CategoricalConfig) Kind() string
+
+func (c CategoricalConfig) MarshalJSON() ([]byte, error)
+
+type CategoryOption struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
+type CategoryPassingRule struct {
+	Categories []string `json:"categories"`
+}
+
+type Client struct {
+	Datasets Datasets
+	Scorers  Scorers
+
+}
+
+func NewClient(cfg Config) (*Client, error)
+
+func (c *Client) Close()
+
+func (c *Client) CreateExperiment(ctx context.Context, fields Fields) (*Experiment, error)
+
+func (c *Client) ResumeExperiment(id string) (*Experiment, error)
+
+type Composition struct {
+	Expression string             `json:"expression"`
+	Inputs     []CompositionInput `json:"inputs"`
+}
+
+type CompositionInput struct {
+	Alias           string `json:"alias"`
+	ScorerVersionID string `json:"scorer_version_id"`
+}
+
+type Config struct {
+	ProjectID  int
+	SecretKey  string
+	Host       string
+	Timeout    time.Duration
+	MaxRetries *int
+	Transport  http.RoundTripper
+}
+
+type CreateScorerOptions struct {
+	Calculation string
+	Composition *Composition
+	Description Optional[string]
+	Tags        []string
+}
+
+type CreateVersionOptions struct {
+	BaseVersion *int
+	Name        *string
+	Description Optional[string]
+	Composition *Composition
+}
+
+type Dataset struct {
+	DatasetAudit
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	Description       string     `json:"description"`
+	Metadata          Fields     `json:"metadata"`
+	Tags              []string   `json:"tags"`
+	Archived          bool       `json:"archived"`
+	CurrentRevision   *int       `json:"current_revision"`
+	CurrentRevisionID *string    `json:"current_revision_id"`
+	UpdatedAt         *time.Time `json:"updated_at"`
+}
+
+type DatasetAudit struct {
+	TeamID    int       `json:"team_id"`
+	CreatedAt time.Time `json:"created_at"`
+	CreatedBy Fields    `json:"created_by"`
+}
+
+type DatasetItem struct {
+	DatasetAudit
+	ID                string     `json:"id"`
+	DatasetID         string     `json:"dataset"`
+	ClientItemID      *string    `json:"client_item_id"`
+	Version           int        `json:"version"`
+	VersionID         string     `json:"version_id"`
+	DatasetRevision   int        `json:"dataset_revision"`
+	DatasetRevisionID string     `json:"dataset_revision_id"`
+	Archived          bool       `json:"archived"`
+	Input             any        `json:"input"`
+	ExpectedOutput    any        `json:"expected_output"`
+	SourceOutput      any        `json:"source_output"`
+	Metadata          Fields     `json:"metadata"`
+	SourceTraceID     *string    `json:"source_trace_id"`
+	SourceEventID     *string    `json:"source_event_id"`
+	SourceTimestamp   *time.Time `json:"source_timestamp"`
+	UpdatedAt         *time.Time `json:"updated_at"`
+	VersionCreatedAt  time.Time  `json:"version_created_at"`
+	VersionCreatedBy  Fields     `json:"version_created_by"`
+}
+
+type DatasetRevision struct {
+	DatasetAudit
+	ID        string `json:"id"`
+	DatasetID string `json:"dataset_id"`
+	Revision  int    `json:"revision"`
+}
+
+type DatasetSnapshot struct {
+	Dataset Dataset
+
+}
+
+func (s *DatasetSnapshot) ForEach(ctx context.Context, pageSize int, visit func(DatasetItem) error) error
+
+func (s *DatasetSnapshot) Revision() int
+
+func (s *DatasetSnapshot) RevisionID() string
+
+type Datasets struct {
+}
+
+func (d Datasets) Archive(ctx context.Context, id string) (Dataset, error)
+
+func (d Datasets) ArchiveItem(ctx context.Context, id string, baseVersion int) (DatasetItem, error)
+
+func (d Datasets) Create(ctx context.Context, fields Fields) (Dataset, error)
+
+func (d Datasets) CreateItem(ctx context.Context, datasetID string, fields Fields) (DatasetItem, error)
+
+func (d Datasets) Get(ctx context.Context, id string) (Dataset, error)
+
+func (d Datasets) GetItem(ctx context.Context, id string, revision *int) (DatasetItem, error)
+
+func (d Datasets) List(ctx context.Context, options ListOptions) (Page[Dataset], error)
+
+func (d Datasets) ListItemVersions(ctx context.Context, id string, options PageOptions) (Page[DatasetItem], error)
+
+func (d Datasets) ListItems(ctx context.Context, id string, options ItemListOptions) (Page[DatasetItem], error)
+
+func (d Datasets) ListRevisions(ctx context.Context, id string, options PageOptions) (Page[DatasetRevision], error)
+
+func (d Datasets) Restore(ctx context.Context, id string) (Dataset, error)
+
+func (d Datasets) RestoreItem(ctx context.Context, id string, baseVersion int, sourceVersion *int) (DatasetItem, error)
+
+func (d Datasets) Snapshot(ctx context.Context, id string, revision *int) (*DatasetSnapshot, error)
+
+func (d Datasets) Update(ctx context.Context, id string, fields Fields) (Dataset, error)
+
+func (d Datasets) UpdateItem(ctx context.Context, id string, baseVersion int, fields Fields) (DatasetItem, error)
+
+type Experiment struct {
+}
+
+func (e *Experiment) Complete(ctx context.Context) (ExperimentReceipt, error)
+
+func (e *Experiment) DeleteItem(ctx context.Context, id string, revision int64) error
+
+func (e *Experiment) DeleteItemPayload(ctx context.Context, id string, revision int64) error
+
+func (e *Experiment) DeleteResult(ctx context.Context, id string, revision int64) error
+
+func (e *Experiment) DeleteResultPayload(ctx context.Context, id string, revision int64) error
+
+func (e *Experiment) Fail(ctx context.Context) (ExperimentReceipt, error)
+
+func (e *Experiment) GetItemRevision(ctx context.Context, id string) (int64, error)
+
+func (e *Experiment) GetResultRevision(ctx context.Context, id string) (int64, error)
+
+func (e *Experiment) GetTags(ctx context.Context) ([]string, error)
+
+func (e *Experiment) ID() string
+
+func (e *Experiment) Receipt() *ExperimentReceipt
+
+func (e *Experiment) SetTags(ctx context.Context, tags []string) ([]string, error)
+
+func (e *Experiment) Submission() Fields
+
+func (e *Experiment) UpdateItem(ctx context.Context, id string, revision int64, changes Fields) (int64, error)
+
+func (e *Experiment) UpdateItemPayload(ctx context.Context, id string, revision int64, payload Fields) (int64, error)
+
+func (e *Experiment) UpdateResult(ctx context.Context, id string, revision int64, changes Fields) (int64, error)
+
+func (e *Experiment) UpdateResultPayload(ctx context.Context, id string, revision int64, payload Fields) (int64, error)
+
+func (e *Experiment) UploadResult(ctx context.Context, result Result) (UploadReceipt, error)
+
+func (e *Experiment) UploadResults(ctx context.Context, input []Result) (BulkReceipt, error)
+
+type ExperimentReceipt struct {
+	ID                  string     `json:"id"`
+	Status              string     `json:"status"`
+	Created             bool       `json:"created"`
+	StartedAt           time.Time  `json:"started_at"`
+	CreatedAt           time.Time  `json:"created_at"`
+	FinishedAt          *time.Time `json:"finished_at"`
+	ExpectedItemCount   *int64     `json:"expected_item_count"`
+	ExpectedResultCount *int64     `json:"expected_result_count"`
+	AcceptedItemCount   int64      `json:"accepted_item_count"`
+	AcceptedResultCount int64      `json:"accepted_result_count"`
+}
+
+type Fields = map[string]any
+
+type Item struct {
+}
+
+func ItemFromDataset(row DatasetItem, fields Fields) (Item, error)
+
+func ItemReference(id string) (Item, error)
+
+func NewItem(fields Fields) (Item, error)
+
+func RestoreItem(data []byte) (Item, error)
+
+func (i Item) ID() string
+
+func (i Item) MarshalJSON() ([]byte, error)
+
+type ItemListOptions struct {
+	PageOptions
+	Revision *int
+	Archived bool
+}
+
+type ItemReceipt struct {
+	ID         string    `json:"id"`
+	Created    bool      `json:"created"`
+	AcceptedAt time.Time `json:"accepted_at"`
+}
+
+type ListOptions struct {
+	PageOptions
+	Search, OrderBy string
+	Archived        bool
+	Tags            []string
+	TagMatch        string
+}
+
+type NumericConfig struct {
+	Min         Optional[float64]            `json:"min"`
+	Max         Optional[float64]            `json:"max"`
+	Step        Optional[float64]            `json:"step"`
+	PassingRule Optional[NumericPassingRule] `json:"passing_rule"`
+}
+
+func (NumericConfig) Kind() string
+
+func (c NumericConfig) MarshalJSON() ([]byte, error)
+
+type NumericPassingRule struct {
+	Operator  string  `json:"operator"`
+	Threshold float64 `json:"threshold"`
+}
+
+type Optional[T any] struct {
+	Present bool
+	Value   *T
+}
+
+func Null[T any]() Optional[T]
+
+func Value[T any](v T) Optional[T]
+
+func (o *Optional[T]) UnmarshalJSON(b []byte) error
+
+type Page[T any] struct {
+	Count          int64
+	Results        []T
+	NextOffset     *int
+	Next, Previous *string
+}
+
+type PageOptions struct{ Limit, Offset int }
+
+type Persistence string
+
+const (
+	NotSent  Persistence = "not_sent"
+	Rejected Persistence = "rejected"
+	Unknown  Persistence = "unknown"
+)
+type Result struct {
+}
+
+func NewResult(item Item, scorerVersionID string, fields Fields) (Result, error)
+
+func RestoreResult(data []byte, attached *Item) (Result, error)
+
+func (r Result) ItemID() string
+
+func (r Result) MarshalJSON() ([]byte, error)
+
+func (r Result) ScorerVersionID() string
+
+type ResultReceipt struct {
+	ItemReceipt
+	ItemID          string  `json:"item_id"`
+	ScorerVersionID string  `json:"scorer_version_id"`
+	Status          *string `json:"status"`
+	ErrorCode       *string `json:"error_code"`
+}
+
+type Scorer struct {
+	Scoring
+	ID                      string        `json:"id"`
+	Name                    string        `json:"name"`
+	Description             string        `json:"description"`
+	Archived                bool          `json:"archived"`
+	Tags                    []string      `json:"tags"`
+	CurrentVersion          int           `json:"current_version"`
+	CurrentVersionID        string        `json:"current_version_id"`
+	Team                    int           `json:"team"`
+	CreatedAt               time.Time     `json:"created_at"`
+	UpdatedAt               time.Time     `json:"updated_at"`
+	CreatedBy               Fields        `json:"created_by"`
+	InputScorers            []ScorerInput `json:"input_scorers"`
+	DependentCompositeCount int           `json:"dependent_composite_count"`
+}
+
+type ScorerConfig interface {
+	Kind() string
+	json.Marshaler
+}
+
+type ScorerInput struct {
+	Alias           string       `json:"alias"`
+	ScorerVersionID string       `json:"scorer_version_id"`
+	DefinitionID    string       `json:"definition_id"`
+	Name            string       `json:"name"`
+	Kind            string       `json:"kind"`
+	Config          ScorerConfig `json:"config"`
+	Version         int          `json:"version"`
+	LatestVersionID *string      `json:"latest_version_id"`
+	LatestVersion   *int         `json:"latest_version"`
+}
+
+type ScorerListOptions struct {
+	ListOptions
+	Kind, Calculation, InputDefinitionID string
+}
+
+type ScorerVersion struct {
+	Scoring
+	ID           string    `json:"id"`
+	DefinitionID string    `json:"definition_id"`
+	Version      int       `json:"version"`
+	CreatedAt    time.Time `json:"created_at"`
+	CreatedBy    Fields    `json:"created_by"`
+}
+
+type ScorerVersionPage struct {
+	Count      int64
+	Results    []ScorerVersion
+	NextCursor *string
+}
+
+type Scorers struct {
+}
+
+func (s Scorers) Create(ctx context.Context, name string, config ScorerConfig, options CreateScorerOptions) (Scorer, error)
+
+func (s Scorers) CreateVersion(ctx context.Context, id string, config ScorerConfig, options CreateVersionOptions) (Scorer, error)
+
+func (s Scorers) Get(ctx context.Context, id string) (Scorer, error)
+
+func (s Scorers) GetVersion(ctx context.Context, id, versionID string) (ScorerVersion, error)
+
+func (s Scorers) List(ctx context.Context, options ScorerListOptions) (Page[Scorer], error)
+
+func (s Scorers) ListVersions(ctx context.Context, id string, options VersionListOptions) (ScorerVersionPage, error)
+
+func (s Scorers) Update(ctx context.Context, id string, fields Fields) (Scorer, error)
+
+func (s Scorers) ValidateComposition(ctx context.Context, kind string, composition Composition, config ScorerConfig) (bool, error)
+
+type Scoring struct {
+	Kind        string       `json:"kind"`
+	Config      ScorerConfig `json:"config"`
+	Calculation string       `json:"calculation"`
+	Composition *Composition `json:"composition"`
+}
+
+type UploadReceipt struct {
+	Items   []ItemReceipt
+	Results []ResultReceipt
+}
+
+type VersionListOptions struct {
+	Limit  int
+	Cursor string
+}
+
+
 ## github.com/posthog/posthog-go/v2/extras
 
 package extras // import "github.com/posthog/posthog-go/v2/extras"
