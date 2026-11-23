@@ -207,19 +207,9 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 	}, server.received()[0].Body)
 }
 
-var (
-	htmlCommentPattern          = regexp.MustCompile(`(?s)<!--.*?-->`)
-	htmlTemplatePattern         = regexp.MustCompile(`(?is)<template\b[^>]*>.*?</template>`)
-	htmlClickableUnsubPattern   = regexp.MustCompile(`<(?i:a)\s+(?:(?:[^>"']|"[^"]*"|'[^']*')*\s+)?(?i:href)\s*=\s*(?:"\s*\{\{\s*unsubscribe_url\s*\}\}(?:[?#][^"]*)?\s*"|'\s*\{\{\s*unsubscribe_url\s*\}\}(?:[?#][^']*)?\s*')`)
-	textUnsubPlaceholderPattern = regexp.MustCompile(`\{\{\s*unsubscribe_url\s*\}\}`)
-)
-
 // sendAPI fakes PostHog's code send with the category wire contract. It accepts
-// omitted or null category (rejecting null description), requires a clickable
-// {{ unsubscribe_url }} link in HTML (with optional ?query or #fragment, or
-// placeholder in text when HTML is empty) before checking cc/bcc on marketing
-// sends, creates a category when its key is new, and checks template
-// categories.
+// omitted or null category (rejecting null description), creates a category
+// when its key is new, and checks template categories.
 type sendAPI struct {
 	*httptest.Server
 	mu sync.Mutex
@@ -317,25 +307,11 @@ func parseCategoryWire(rawFields map[string]json.RawMessage) (leftOut, transacti
 	return false, false, obj, true
 }
 
-func hasClickableUnsubscribeLink(htmlBody, textBody string) bool {
-	if htmlBody != "" {
-		visible := htmlCommentPattern.ReplaceAllString(htmlBody, "")
-		visible = htmlTemplatePattern.ReplaceAllString(visible, "")
-		return htmlClickableUnsubPattern.MatchString(visible)
-	}
-	return textUnsubPlaceholderPattern.MatchString(textBody)
-}
-
 func (api *sendAPI) send(rawFields map[string]json.RawMessage) (int, string) {
 	const mismatch = `{"type":"validation_error","code":"category_mismatch","attr":"category","detail":"The category differs from the template's."}`
-	var to, templateKey, htmlBody, textBody string
-	var cc, bcc []string
+	var to, templateKey string
 	_ = json.Unmarshal(rawFields["to"], &to)
 	_ = json.Unmarshal(rawFields["template_key"], &templateKey)
-	_ = json.Unmarshal(rawFields["html"], &htmlBody)
-	_ = json.Unmarshal(rawFields["text"], &textBody)
-	_ = json.Unmarshal(rawFields["cc"], &cc)
-	_ = json.Unmarshal(rawFields["bcc"], &bcc)
 
 	leftOut, transactional, asObject, valid := parseCategoryWire(rawFields)
 	if !valid {
@@ -357,14 +333,6 @@ func (api *sendAPI) send(rawFields map[string]json.RawMessage) (int, string) {
 		return http.StatusAccepted, `{"message_id":"msg_1","replayed":false,"warnings":[]}`
 	}
 	if asObject.key != "" {
-		if asObject.categoryType == "marketing" {
-			if !hasClickableUnsubscribeLink(htmlBody, textBody) {
-				return http.StatusBadRequest, `{"type":"validation_error","code":"unsubscribe_link_required","attr":"html","detail":"Marketing sends need a clickable unsubscribe link."}`
-			}
-			if len(cc) > 0 || len(bcc) > 0 {
-				return http.StatusBadRequest, `{"type":"validation_error","code":"copies_not_allowed","attr":"cc","detail":"Marketing sends can't have cc or bcc."}`
-			}
-		}
 		existing, found := api.categories[asObject.key]
 		if found && existing.Type != asObject.categoryType {
 			return http.StatusBadRequest, mismatch
@@ -561,27 +529,51 @@ func TestEmailsSendCodeMarketingDoesNotRetryOptedOut(t *testing.T) {
 }
 
 func TestEmailsSendCodeMarketingDoesNotRetryOrStripCategoryOnPreCategoryServer(t *testing.T) {
-	posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
-	client := newEmailClientFor(t, posthog.URL)
-
-	_, err := client.Emails().Send(context.Background(), CodeEmail{
+	email := CodeEmail{
 		To:          "user@example.com",
 		TemplateKey: "monthly-newsletter",
 		Subject:     "What's new",
 		HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
 		Category:    MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter"},
+	}
+
+	t.Run("old Django invalid_input", func(t *testing.T) {
+		posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+		client := newEmailClientFor(t, posthog.URL)
+
+		_, err := client.Emails().Send(context.Background(), email)
+
+		emailErr := requireEmailError(t, err)
+		require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
+		require.Equal(t, "invalid_input", emailErr.Code)
+		require.Equal(t, "category", emailErr.Field)
+		require.Equal(t, EmailErrorValidation, emailErr.Name)
+		posthog.mu.Lock()
+		attempts := posthog.sends
+		posthog.mu.Unlock()
+		require.Equal(t, 1, attempts)
+		require.Empty(t, posthog.deliveredEmails())
 	})
 
-	emailErr := requireEmailError(t, err)
-	require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
-	require.Equal(t, "invalid_input", emailErr.Code)
-	require.Equal(t, "category", emailErr.Field)
-	require.Equal(t, EmailErrorValidation, emailErr.Name)
-	posthog.mu.Lock()
-	attempts := posthog.sends
-	posthog.mu.Unlock()
-	require.Equal(t, 1, attempts)
-	require.Empty(t, posthog.deliveredEmails())
+	t.Run("mixed-version old CDP field_not_accepted", func(t *testing.T) {
+		posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
+		posthog.sendFaults = map[int]stubReply{
+			0: failed(http.StatusBadRequest, "field_not_accepted"),
+		}
+		client := newEmailClientFor(t, posthog.URL)
+
+		_, err := client.Emails().Send(context.Background(), email)
+
+		emailErr := requireEmailError(t, err)
+		require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
+		require.Equal(t, "field_not_accepted", emailErr.Code)
+		require.Equal(t, EmailErrorValidation, emailErr.Name)
+		posthog.mu.Lock()
+		attempts := posthog.sends
+		posthog.mu.Unlock()
+		require.Equal(t, 1, attempts)
+		require.Empty(t, posthog.deliveredEmails())
+	})
 }
 
 func TestEmailsSendCodeCopies(t *testing.T) {

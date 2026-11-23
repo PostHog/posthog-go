@@ -159,10 +159,13 @@ type CodeEmail struct {
 	// defines the category in code. Without it, when code-send categories are
 	// enabled for the project, the email follows the transactional category of
 	// the template that TemplateKey names, or is transactional with no
-	// category; when categories are disabled for the project, the email is
-	// queued as transactional with no category. An explicit MessageCategory
-	// returns "categories_not_enabled" when categories are unavailable for the
-	// project (and HTTP 400 on an older PostHog server).
+	// category; when categories are disabled for the project, it is queued as
+	// transactional with no category unless TemplateKey names a saved template
+	// in a category (a saved template in a transactional category sends in
+	// that category, and one in a marketing category returns
+	// "marketing_template"). An explicit MessageCategory returns
+	// "categories_not_enabled" when categories are unavailable for the project
+	// (and HTTP 400 on an older PostHog server).
 	Category EmailCategory
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
