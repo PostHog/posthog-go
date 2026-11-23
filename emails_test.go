@@ -317,6 +317,7 @@ func TestEmailsSendCodeWithoutACategoryFollowsTheTemplatesCategory(t *testing.T)
 			require.Len(t, requests, 1)
 			var rawFields map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal([]byte(requests[0].Raw), &rawFields))
+			require.Equal(t, `"order-receipt"`, string(rawFields["template_key"]))
 			_, hasCategory := rawFields["category"]
 			require.False(t, hasCategory, "category key must be absent, not null")
 		})
@@ -341,6 +342,7 @@ func TestEmailsSendCodeRefusesTransactionalForATemplateInACategory(t *testing.T)
 	require.Len(t, requests, 1)
 	var rawFields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(requests[0].Raw), &rawFields))
+	require.Equal(t, `"order-receipt"`, string(rawFields["template_key"]))
 	require.Equal(t, `"transactional"`, string(rawFields["category"]))
 }
 
