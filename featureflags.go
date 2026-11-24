@@ -707,7 +707,8 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			var result interface{}
 			var err error
 			if depFlag.Filters.FeatureEnrollment {
-				result, err = matchDependencyFeatureEnrollment(depFlag, properties)
+				// Only a person-aggregated caller gets here, so these are the person's.
+				result, err = matchFeatureEnrollment(depFlag, properties)
 			} else {
 				result, err = poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
 			}
@@ -785,6 +786,14 @@ func dependencyChainDefinitionError(dependencyChain []string, flagsByKey map[str
 			}
 		}
 		if !depFlag.Active {
+			continue
+		}
+		// Enrollment reads the person's properties and skips the release conditions, so only
+		// the caller's aggregation matters.
+		if depFlag.Filters.FeatureEnrollment {
+			if aggregationGroupTypeIndex != nil {
+				return errDependencyAggregationRequiresServer
+			}
 			continue
 		}
 		if !uint8PtrEqual(depFlag.Filters.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
@@ -1145,19 +1154,6 @@ func matchFeatureEnrollment(flag FeatureFlag, personProperties Properties) (bool
 	default:
 		return false, nil
 	}
-}
-
-// matchDependencyFeatureEnrollment evaluates an early-access flag reached as a dependency.
-// A dependency reuses the caller's properties, which are the person's only for a
-// person-aggregated flag, so a group-aggregated enrollment flag can't be read here.
-func matchDependencyFeatureEnrollment(flag FeatureFlag, properties Properties) (bool, error) {
-	if flag.Filters.AggregationGroupTypeIndex != nil {
-		return false, &InconclusiveMatchError{
-			msg:    "Group flag dependency has feature enrollment, which reads person properties",
-			Reason: UnresolvedFlagReasonUnsupportedDefinition,
-		}
-	}
-	return matchFeatureEnrollment(flag, properties)
 }
 
 // definitionUnresolvedReason returns the unresolved reason that comes from the flag's
