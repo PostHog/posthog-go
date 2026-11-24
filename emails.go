@@ -77,27 +77,26 @@ type Emails interface {
 	// send.
 	Get(ctx context.Context, messageID string) (*EmailStatus, error)
 
-	// Batch sends the same email to many recipients, one email each, from a
-	// TemplateEmailBatch, with TemplateData per recipient, or a
-	// CodeEmailBatch. The client sends at most 100 recipients and 4 MiB of
-	// JSON per request, one request after another, and waits at least 45
-	// seconds for each answer. Every retry of a request carries each
-	// recipient's IdempotencyKey, so a retry never queues an email twice.
+	// Batch sends the same email to up to 100 recipients, one email each, in
+	// one request, from a TemplateEmailBatch, with TemplateData per
+	// recipient, or a CodeEmailBatch. It refuses more than 100 recipients
+	// before sending anything. It waits at least 45 seconds for the answer.
+	// Every retry carries each recipient's IdempotencyKey, so a retry never
+	// queues an email twice.
 	//
 	// The result holds one BatchEmailResult per recipient, in order: check
-	// each Status. A request PostHog refuses as too large for its email
-	// pipeline goes out again as two requests of half its recipients, down to
-	// one recipient, who then fails with "content_too_large". Any other
-	// request that fails as a whole, such as a rate limit past its retries,
-	// stops the batch: Batch returns that request's error with a
-	// result that still holds every recipient. An "unconfirmed" email's Error
-	// says to send it again with the same IdempotencyKey. The error code
-	// "batch_unavailable" (409) means the project can't send batches yet, and
-	// "not_found" that the template doesn't exist or batch sends are off for
-	// the project: send each email the batch didn't queue with Send and its
-	// recipient's IdempotencyKey, within 24 hours so it goes out once. A
-	// result is nil only when the client sent nothing, such as for an
-	// argument it refuses before any request.
+	// each Status. When PostHog refuses the request as a whole, Batch returns
+	// that error with a result that holds every recipient, such as
+	// "too_large" (413), whose Fix says to split the recipients into smaller
+	// batches. The client checks only the recipient count, not the size. An
+	// "unconfirmed" email's Error says to send it again with the same
+	// IdempotencyKey. The error code "batch_unavailable" (409) means the
+	// project can't send batches yet, and "not_found" that the template
+	// doesn't exist or batch sends are off for the project: send each email
+	// the batch didn't queue with Send and its recipient's IdempotencyKey,
+	// within 24 hours so it goes out once. A result is nil only when the
+	// client sent nothing, such as for an argument it refuses before any
+	// request.
 	Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error)
 }
 

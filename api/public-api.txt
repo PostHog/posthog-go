@@ -202,7 +202,6 @@ type BatchEmailResult struct {
 	MessageID string
 	Replayed bool
 	Error *EmailError
-	LaterError *EmailError
 }
 
 
