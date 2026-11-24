@@ -89,8 +89,11 @@ type CodeEmailBatch struct {
 //   - "failed": PostHog didn't queue the email, and Error says why.
 //   - "unconfirmed": the client can't tell whether PostHog queued the email,
 //     such as after a lost answer, even when PostHog refused the retry, or
-//     while another request holds its key. It may still go out. Send it again with the same IdempotencyKey within 24
-//     hours, so it goes out once.
+//     while another request holds its key. It may still go out. Send it
+//     again with the same IdempotencyKey within 24 hours of the first
+//     request that used it, so it goes out once. A refused retry of an email
+//     whose key belongs to another email is "failed": no attempt could have
+//     queued it.
 type BatchEmailResult struct {
 	// Index is the recipient's position in Recipients.
 	Index          int
@@ -104,7 +107,8 @@ type BatchEmailResult struct {
 	Replayed bool
 	// Error says why the email is not "queued". For an "unconfirmed" email,
 	// its Code is "delivery_unavailable", "idempotency_key_in_flight" or
-	// "api_error", and its Fix says to send it again with the same key.
+	// "api_error", or PostHog's refusal of a retry after a lost answer, and
+	// its Fix says to send it again with the same key.
 	Error *EmailError
 }
 
@@ -300,7 +304,7 @@ func (r *batchRun) result() *SendBatchResult {
 // request failed as a whole.
 func (r *batchRun) answer(reply emailReply) *EmailError {
 	if !reply.accepted() {
-		return batchReplyError(reply)
+		return batchReplyError(reply, len(r.members))
 	}
 	slots, _ := reply.fields["results"].([]interface{})
 	if len(slots) != len(r.members) {
@@ -322,8 +326,12 @@ func (r *batchRun) settle(i int, slot emailReply) {
 		return
 	}
 	answer := slotError(slot.fields["error"], messageID)
-	if r.lost {
-		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: unconfirmedEmail(messageID)})
+	// A reused key belongs to another email, so no attempt of this one
+	// could have queued it.
+	if r.lost && answer.Code != "idempotency_key_reused" {
+		kept := *answer
+		kept.Fix = resendWithTheSameKey
+		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: &kept})
 		return
 	}
 	switch answer.Code {
@@ -423,10 +431,13 @@ func (s *emailSender) logWarnings(warnings []EmailWarning) {
 }
 
 // batchReplyError is a batch request that failed as a whole.
-func batchReplyError(reply emailReply) *EmailError {
+func batchReplyError(reply emailReply, recipients int) *EmailError {
 	err := reply.error()
 	if reply.status == http.StatusRequestEntityTooLarge && err.Fix == "" {
 		err.Fix = "Split the recipients into smaller batches."
+		if recipients == 1 {
+			err.Fix = "Make this recipient's email smaller."
+		}
 	}
 	if reply.status == http.StatusNotFound && reply.text("code") == "" {
 		err.Code, err.Name = "not_found", EmailErrorNotFound
@@ -463,7 +474,7 @@ func slotError(raw interface{}, messageID string) *EmailError {
 	return &EmailError{Name: emailErrorName(status, code), Code: code, Message: message, StatusCode: status, MessageID: messageID}
 }
 
-const resendWithTheSameKey = "Send it again with the same IdempotencyKey within 24 hours, so it goes out once."
+const resendWithTheSameKey = "Send it again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
 
 func unconfirmedEmail(messageID string) *EmailError {
 	return &EmailError{Name: EmailErrorServiceUnavailable, Code: "delivery_unavailable", Message: "PostHog didn't confirm this email, so it may still go out.", Fix: resendWithTheSameKey, MessageID: messageID}

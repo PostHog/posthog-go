@@ -95,7 +95,7 @@ func (s *batchServer) received() []batchRequest {
 
 func messageIDFor(key string) string { return "msg-" + key }
 
-const wantResendFix = "Send it again with the same IdempotencyKey within 24 hours, so it goes out once."
+const wantResendFix = "Send it again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
 
 // slots answers each recipient of a batch request with the slot slot makes.
 func slots(r batchRequest, slot func(recipient map[string]interface{}) string, warnings string) stubReply {
@@ -295,6 +295,7 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 	tests := []struct {
 		name, body, fix string
 		status          int
+		recipients      int
 	}{
 		{
 			name:   "a 413 without a fix",
@@ -309,6 +310,13 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 			fix:    "Send fewer recipients in each batch.",
 		},
 		{
+			name:       "a 413 for one recipient",
+			status:     http.StatusRequestEntityTooLarge,
+			body:       `{"code":"content_too_large","detail":"The batch is larger than PostHog takes."}`,
+			fix:        "Make this recipient's email smaller.",
+			recipients: 1,
+		},
+		{
 			name:   "shared content too large, which splitting doesn't help",
 			status: http.StatusBadRequest,
 			body:   `{"code":"content_too_large","detail":"The shared content is larger than PostHog takes."}`,
@@ -318,15 +326,22 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newBatchServer(t, func(int, batchRequest) stubReply { return stubReply{status: tt.status, body: tt.body} })
 			client := newEmailClientFor(t, server.URL)
+			count := tt.recipients
+			if count == 0 {
+				count = 4
+			}
 
-			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(4)...))
+			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(count)...))
 
 			emailErr := requireEmailError(t, err)
 			require.Equal(t, "content_too_large", emailErr.Code)
 			require.Equal(t, tt.status, emailErr.StatusCode)
 			require.Equal(t, tt.fix, emailErr.Fix)
 			require.Len(t, server.received(), 1, "the client doesn't split the batch")
-			require.Equal(t, []string{"failed", "failed", "failed", "failed"}, statuses(result))
+			for _, status := range statuses(result) {
+				require.Equal(t, "failed", status)
+			}
+			require.Len(t, result.Results, count)
 		})
 	}
 }
@@ -385,7 +400,7 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 				func(r batchRequest) stubReply { return slots(r, refused, "") },
 			},
 			status:    "unconfirmed",
-			errorCode: "delivery_unavailable",
+			errorCode: "recipient_suppressed",
 		},
 		{
 			name: "a refusal after a 503",
@@ -394,7 +409,18 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 				func(r batchRequest) stubReply { return slots(r, refused, "") },
 			},
 			status:    "unconfirmed",
-			errorCode: "delivery_unavailable",
+			errorCode: "recipient_suppressed",
+		},
+		{
+			name: "a reused key after a lost answer",
+			answers: []func(batchRequest) stubReply{
+				func(batchRequest) stubReply { return stubReply{status: dropConnection} },
+				func(r batchRequest) stubReply {
+					return slots(r, refusedSlot("idempotency_key_reused", http.StatusConflict), "")
+				},
+			},
+			status:    "failed",
+			errorCode: "idempotency_key_reused",
 		},
 		{
 			name: "queued after a lost answer",
@@ -452,6 +478,9 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 			}
 			require.Equal(t, tt.errorCode, got.Error.Code)
 			require.NotEmpty(t, got.MessageID)
+			if strings.Contains(tt.name, "refusal") || strings.Contains(tt.name, "reused") {
+				require.Equal(t, "PostHog said no.", got.Error.Message, "PostHog's detail is kept")
+			}
 			if tt.status == "unconfirmed" {
 				require.Equal(t, wantResendFix, got.Error.Fix)
 			}
