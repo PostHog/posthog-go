@@ -94,8 +94,8 @@ type CodeEmailBatch struct {
 //   - "unconfirmed": the client can't tell whether PostHog queued the email,
 //     such as after a lost answer. It may still go out. Send it again with
 //     the same IdempotencyKey within 24 hours, so it goes out once.
-//     LaterError holds what a retry in the same call answered, which
-//     describes only that retry.
+//     LaterError holds what a retry in the same call answered: PostHog's
+//     latest refusal, or else its latest answer. It describes only that retry.
 //   - "not_attempted": an earlier request of the batch failed, so the client
 //     sent nothing for this recipient.
 type BatchEmailResult struct {
@@ -356,22 +356,15 @@ func (r *batchRun) settle(i int, slot emailReply) {
 
 // stop records that chunk failed as a whole with err, so the batch sends none
 // of the pending requests. A recipient an earlier attempt may have queued
-// stays "unconfirmed", with err as its LaterError when PostHog answered a
-// later attempt with it.
-func (r *batchRun) stop(chunk []int, pending [][]int, err *EmailError, mayHaveQueued bool) {
+// stays "unconfirmed", with later, PostHog's answer to a later attempt, as its
+// LaterError.
+func (r *batchRun) stop(chunk []int, pending [][]int, err, later *EmailError) {
 	for _, i := range chunk {
-		switch {
-		case mayHaveQueued:
-		case r.unconfirmed(i):
-			earlier := r.results[i]
-			later := err
-			if err.StatusCode == 0 {
-				later = nil
-			}
-			r.set(i, "unconfirmed", BatchEmailResult{MessageID: earlier.MessageID, Error: earlier.Error, LaterError: later})
-		default:
-			r.set(i, "failed", BatchEmailResult{Error: err})
+		if r.unconfirmed(i) {
+			r.results[i].LaterError = later
+			continue
 		}
+		r.set(i, "failed", BatchEmailResult{Error: err})
 	}
 	r.skip(pending, &EmailError{Name: EmailErrorApplication, Code: "not_attempted", Message: "An earlier request of the batch failed, so the client sent nothing for this recipient."})
 }
@@ -434,7 +427,8 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		}
 		body := run.body(chunk)
 		attempts, uncertain, lostBefore := 0, false, false
-		// answered is PostHog's latest answer to an attempt after a lost one.
+		// answered is PostHog's latest answer to an attempt after a lost one. A
+		// refusal outlasts a later answer that may have queued the emails.
 		var answered *EmailError
 		err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 			if uncertain {
@@ -450,7 +444,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 				err = run.answer(chunk, reply)
 			}
 			uncertain = err != nil && mayHaveQueued(err)
-			if lostBefore && err != nil && err.StatusCode != 0 {
+			if lostBefore && err != nil && err.StatusCode != 0 && (!uncertain || answered == nil || mayHaveQueued(answered)) {
 				answered = err
 			}
 			return err
@@ -460,11 +454,6 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		}
 		if uncertain {
 			run.lost(chunk)
-			if answered != nil {
-				for _, i := range chunk {
-					run.results[i].LaterError = answered
-				}
-			}
 		}
 		if err.StatusCode == http.StatusRequestEntityTooLarge && err.Code == "content_too_large" && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
 			// The pipeline refused the data it copies to every recipient, so
@@ -480,7 +469,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 			run.set(chunk[0], "failed", BatchEmailResult{Error: &alone})
 			continue
 		}
-		run.stop(chunk, pending, err, uncertain)
+		run.stop(chunk, pending, err, answered)
 		return s.batchFailed(run, err)
 	}
 	s.logWarnings(run.warnings)

@@ -560,24 +560,64 @@ func TestEmailsBatchKeepsALostEmailUnconfirmedWhenTheRetryIsRefused(t *testing.T
 	}
 }
 
-func TestEmailsBatchKeepsPostHogsAnswerBetweenLostAnswers(t *testing.T) {
-	server := newBatchServer(t, func(n int, r batchRequest) stubReply {
-		if n == 1 {
-			return stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
+func TestEmailsBatchKeepsPostHogsRefusalBetweenLostAnswers(t *testing.T) {
+	rateLimited := stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
+	for _, tt := range []struct {
+		name, code string
+		last       stubReply
+	}{
+		{name: "then a lost answer", code: "network_error", last: stubReply{status: dropConnection}},
+		{name: "then a 503", code: "delivery_unavailable", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newBatchServer(t, func(n int, r batchRequest) stubReply {
+				switch n {
+				case 0:
+					return stubReply{status: dropConnection}
+				case 1:
+					return rateLimited
+				}
+				return tt.last
+			})
+			client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(2) })
+
+			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
+
+			require.Equal(t, tt.code, requireEmailError(t, err).Code)
+			require.Len(t, server.received(), 3)
+			got := result.Results[0]
+			require.Equal(t, "unconfirmed", got.Status)
+			require.NotNil(t, got.LaterError, "PostHog refused the second attempt")
+			require.Equal(t, "rate_limited", got.LaterError.Code)
+			require.Equal(t, http.StatusTooManyRequests, got.LaterError.StatusCode)
+		})
+	}
+	t.Run("then a shutdown", func(t *testing.T) {
+		server := newBatchServer(t, func(n int, r batchRequest) stubReply {
+			if n == 0 {
+				return stubReply{status: dropConnection}
+			}
+			return rateLimited
+		})
+		client, closeClient, closed := closingClient(t, server.URL)
+		waits := 0
+		senderOf(client).backoff = func(int) time.Duration {
+			if waits++; waits == 2 {
+				closeClient()
+			}
+			return 0
 		}
-		return stubReply{status: dropConnection}
+
+		result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
+
+		require.NoError(t, <-closed)
+		require.Equal(t, "client_closed", requireEmailError(t, err).Code)
+		require.Len(t, server.received(), 2)
+		got := result.Results[0]
+		require.Equal(t, "unconfirmed", got.Status)
+		require.NotNil(t, got.LaterError, "PostHog refused the second attempt")
+		require.Equal(t, "rate_limited", got.LaterError.Code)
 	})
-	client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(2) })
-
-	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
-
-	require.Equal(t, "network_error", requireEmailError(t, err).Code)
-	require.Len(t, server.received(), 3)
-	got := result.Results[0]
-	require.Equal(t, "unconfirmed", got.Status)
-	require.NotNil(t, got.LaterError, "PostHog answered the second attempt")
-	require.Equal(t, "rate_limited", got.LaterError.Code)
-	require.Equal(t, http.StatusTooManyRequests, got.LaterError.StatusCode)
 }
 
 func TestEmailsBatchLeavesUnconfirmedEmailsToAResendWithTheirKeys(t *testing.T) {
