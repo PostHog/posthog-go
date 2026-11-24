@@ -29,10 +29,47 @@ func dependentOnBetaFeature() string {
 		`], "rollout_percentage": 100}]}}`
 }
 
+// Values whose JSON differs from their Go string.
+type enrollmentJSONString string
+
+func (s enrollmentJSONString) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s == "enrolled")
+}
+
+type enrollmentTextString string
+
+func (s enrollmentTextString) MarshalText() ([]byte, error) {
+	return []byte(fmt.Sprint(s == "enrolled")), nil
+}
+
+type enrollmentRawMarshaler string
+
+func (s enrollmentRawMarshaler) MarshalJSON() ([]byte, error) { return []byte(s), nil }
+
+type enrollmentStringer struct{ Fn func() }
+
+func (enrollmentStringer) String() string { return "true" }
+
+type enrollmentNode struct{ Next *enrollmentNode }
+
 func TestFeatureEnrollmentValues(t *testing.T) {
 	type namedBool bool
 	type namedString string
 	enrolled, optedOut := true, false
+	pointer, enrolledString, otherString := &enrolled, "true", "True"
+	jsonEnrolled, jsonTrue := enrollmentJSONString("enrolled"), enrollmentJSONString("true")
+	textEnrolled, textTrue := enrollmentTextString("enrolled"), enrollmentTextString("true")
+	cyclicMap := map[string]interface{}{}
+	cyclicMap["self"] = cyclicMap
+	cyclicSlice := []interface{}{nil}
+	cyclicSlice[0] = cyclicSlice
+	cyclicProperties := Properties{}
+	cyclicProperties["self"] = cyclicProperties
+	type namedMap map[string]interface{}
+	cyclicNamedMap := namedMap{}
+	cyclicNamedMap["self"] = cyclicNamedMap
+	cyclicPointer := &enrollmentNode{}
+	cyclicPointer.Next = cyclicPointer
 	for _, tt := range []struct {
 		name       string
 		enrollment interface{}
@@ -57,6 +94,29 @@ func TestFeatureEnrollmentValues(t *testing.T) {
 		{"named string", namedString("true"), everyoneOff, true},
 		{"raw JSON", json.RawMessage(`true`), everyoneOff, true},
 		{"array with true", []bool{true}, everyoneOn, false},
+		{"pointer to \"true\"", &enrolledString, everyoneOff, true},
+		{"pointer to another string", &otherString, everyoneOn, false},
+		{"nil string pointer", (*string)(nil), everyoneOn, false},
+		{"pointer to a pointer", &pointer, everyoneOff, true},
+		{"raw JSON escape", json.RawMessage(` "\u0074rue" `), everyoneOff, true},
+		{"raw JSON number", json.RawMessage(`1`), everyoneOn, false},
+		{"JSON number", json.Number("true"), everyoneOn, false},
+		{"MarshalJSON to true", enrollmentJSONString("enrolled"), everyoneOff, true},
+		{"MarshalJSON to false", enrollmentJSONString("true"), everyoneOn, false},
+		{"pointer, MarshalJSON to true", &jsonEnrolled, everyoneOff, true},
+		{"pointer, MarshalJSON to false", &jsonTrue, everyoneOn, false},
+		{"MarshalText to \"true\"", enrollmentTextString("enrolled"), everyoneOff, true},
+		{"MarshalText to \"false\"", enrollmentTextString("true"), everyoneOn, false},
+		{"pointer, MarshalText to \"true\"", &textEnrolled, everyoneOff, true},
+		{"pointer, MarshalText to \"false\"", &textTrue, everyoneOn, false},
+		{"can't be encoded, String is \"true\"", enrollmentStringer{Fn: func() {}}, everyoneOn, false},
+		{"empty encoding", enrollmentRawMarshaler(""), everyoneOn, false},
+		{"malformed encoding", enrollmentRawMarshaler("tru"), everyoneOn, false},
+		{"cyclic map", cyclicMap, everyoneOn, false},
+		{"cyclic slice", cyclicSlice, everyoneOn, false},
+		{"cyclic properties", cyclicProperties, everyoneOn, false},
+		{"cyclic named map", cyclicNamedMap, everyoneOn, false},
+		{"cyclic pointer", cyclicPointer, everyoneOn, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := computeDefinedFlag(t, localDefinitions(enrollmentFlagDefinition(tt.groups)), "beta-feature",

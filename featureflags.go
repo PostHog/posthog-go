@@ -1146,9 +1146,43 @@ func matchFeatureEnrollment(flag FeatureFlag, personProperties Properties) (bool
 			Reason: UnresolvedFlagReasonMissingContext,
 		}
 	}
-	// The string form of JSON true and "true" is the same, and it is what exact matching
-	// compares, so pointers and named types read as they are sent to /flags.
-	return exactValueToString(value) == "true", nil
+	return isEnrolledValue(value), nil
+}
+
+// isEnrolledValue reports whether value is sent to /flags as JSON true or "true". Types with
+// their own encoding are encoded, so they read here as they do there. A value that can't be
+// encoded is opted out.
+func isEnrolledValue(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	case *bool:
+		return v != nil && *v
+	case *string:
+		return v != nil && *v == "true"
+	case nil,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, json.Number,
+		[]interface{}, map[string]interface{}, Properties:
+		return false
+	}
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	encoded = bytes.TrimSpace(encoded)
+	if len(encoded) == 0 || (encoded[0] != 't' && encoded[0] != '"') {
+		return false
+	}
+	var decoded interface{}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return false
+	}
+	return decoded == true || decoded == "true"
 }
 
 // definitionUnresolvedReason returns the unresolved reason that comes from the flag's
