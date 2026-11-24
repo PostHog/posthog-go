@@ -272,12 +272,24 @@ func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
 	}
 }
 
-// flushAndWaitForEvents flushes, then waits until every batch has finished
-// sending and returns what reached the callback. FlushWithContext returns once a
-// failed capture POST starts its retry backoff, before the retry delivers it.
+// flushAndWaitForEvents flushes, waits for every batch to finish sending, and
+// returns what reached the callback.
 func flushAndWaitForEvents(t *testing.T, cli Client, capture *eventCapture) []CaptureInApi {
 	t.Helper()
 	flushEvaluationEvents(t, cli)
+	return snapshotCapturedEvents(capture)
+}
+
+// flushEvaluationEvents flushes, then waits until every batch has finished
+// sending. FlushWithContext returns once a failed capture POST starts its retry
+// backoff, before the retry delivers it.
+func flushEvaluationEvents(t *testing.T, cli Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cli.FlushWithContext(ctx); err != nil {
+		t.Fatalf("flush event observations: %v", err)
+	}
 	c := cli.(*client)
 	lanes := []*lane{c.analytics}
 	if ai := c.ai.Load(); ai != nil {
@@ -291,16 +303,6 @@ func flushAndWaitForEvents(t *testing.T, cli Client, capture *eventCapture) []Ca
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-	}
-	return snapshotCapturedEvents(capture)
-}
-
-func flushEvaluationEvents(t *testing.T, client Client) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.FlushWithContext(ctx); err != nil {
-		t.Fatalf("flush event observations: %v", err)
 	}
 }
 
@@ -340,9 +342,8 @@ func TestIsEnabled_FiresEventWithFullMetadataAndDedupes(t *testing.T) {
 	}
 	// Second call should be deduped.
 	snap.IsEnabled("enabled-flag")
-	flushEvaluationEvents(t, client)
+	events := flushAndWaitForEvents(t, client, capture)
 
-	events := waitForEventCount(capture, 1, 5*time.Second)
 	matching := 0
 	var event *CaptureInApi
 	for i := range events {
