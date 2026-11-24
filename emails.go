@@ -75,6 +75,26 @@ type Emails interface {
 	// ID, when the email is older than 30 days, or for a few seconds after the
 	// send.
 	Get(ctx context.Context, messageID string) (*EmailStatus, error)
+
+	// Batch sends the same email to many recipients, one email each, from a
+	// TemplateEmailBatch, with TemplateData per recipient, or a
+	// CodeEmailBatch. The client sends at most 100 recipients and 4 MiB of
+	// JSON per request, one request after another, and waits at least 45
+	// seconds for each answer. Every retry of a request carries each
+	// recipient's IdempotencyKey, so a retry never queues an email twice.
+	//
+	// The result holds one BatchEmailResult per recipient, in order: check
+	// each Status. A request that fails as a whole, such as a rate limit past
+	// its retries, stops the batch: Batch returns that request's error with a
+	// result that still holds every recipient. Before it returns, it reads
+	// each email a lost answer left unconfirmed by its key. The error code
+	// "batch_unavailable" (409) means the project can't send batches yet, and
+	// "not_found" that the template doesn't exist or batch sends are off for
+	// the project: send each email the batch didn't queue with Send and its
+	// recipient's IdempotencyKey, within 24 hours so it goes out once. A
+	// result is nil only when the client sent nothing, such as for an
+	// argument it refuses before any request.
+	Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error)
 }
 
 // Email is the content of one send: a TemplateEmail or a CodeEmail.
@@ -364,28 +384,8 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	if err := checkRecipient(e.To); err != nil {
 		return emailSend{}, err
 	}
-	if !templateKeyPattern.MatchString(e.TemplateKey) {
-		return emailSend{}, invalidEmail("invalid_template_key", "TemplateKey", "TemplateKey can only have letters, digits, hyphens (-) and underscores (_), at most 400.")
-	}
-	if e.Subject == "" {
-		return emailSend{}, invalidEmail("invalid_form", "Subject", "A CodeEmail needs a Subject.")
-	}
-	if e.HTML == "" && e.Text == "" {
-		return emailSend{}, invalidEmail("invalid_form", "HTML", "A CodeEmail needs HTML, Text or both.")
-	}
-	for _, list := range []struct {
-		field, code string
-		addresses   []string
-	}{
-		{"ReplyTo", "invalid_reply_to", e.ReplyTo},
-		{"Cc", "invalid_cc", e.Cc},
-		{"Bcc", "invalid_bcc", e.Bcc},
-	} {
-		for _, address := range list.addresses {
-			if strings.TrimSpace(address) == "" {
-				return emailSend{}, invalidEmail(list.code, list.field, list.field+" must not hold a blank address.")
-			}
-		}
+	if err := checkCodeContent("CodeEmail", e.TemplateKey, e.Subject, e.HTML, e.Text, e.ReplyTo, e.Cc, e.Bcc); err != nil {
+		return emailSend{}, err
 	}
 	attachments, attachmentsErr := checkAttachments(e.Attachments, e.Subject, e.HTML, e.Text)
 	if attachmentsErr != nil {
@@ -415,6 +415,35 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	send, sendErr := newEmailSend(body, e.IdempotencyKey, e.MaxRetries, scheduledAt)
 	send.attachments = attachments
 	return send, sendErr
+}
+
+// checkCodeContent checks what a CodeEmail or a CodeEmailBatch, named by
+// form, sends to every recipient.
+func checkCodeContent(form, templateKey, subject, html, text string, replyTo, cc, bcc []string) *EmailError {
+	if !templateKeyPattern.MatchString(templateKey) {
+		return invalidEmail("invalid_template_key", "TemplateKey", "TemplateKey can only have letters, digits, hyphens (-) and underscores (_), at most 400.")
+	}
+	if subject == "" {
+		return invalidEmail("invalid_form", "Subject", "A "+form+" needs a Subject.")
+	}
+	if html == "" && text == "" {
+		return invalidEmail("invalid_form", "HTML", "A "+form+" needs HTML, Text or both.")
+	}
+	for _, list := range []struct {
+		field, code string
+		addresses   []string
+	}{
+		{"ReplyTo", "invalid_reply_to", replyTo},
+		{"Cc", "invalid_cc", cc},
+		{"Bcc", "invalid_bcc", bcc},
+	} {
+		for _, address := range list.addresses {
+			if strings.TrimSpace(address) == "" {
+				return invalidEmail(list.code, list.field, list.field+" must not hold a blank address.")
+			}
+		}
+	}
+	return nil
 }
 
 func checkRecipient(to string) *EmailError {
@@ -588,9 +617,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	if err != nil {
 		return nil, err
 	}
-	for _, warning := range result.Warnings {
-		s.logger.Warnf("PostHog email warning %s: %s", warning.Code, warning.Message)
-	}
+	s.logWarnings(result.Warnings)
 	if !send.scheduledAt.IsZero() {
 		if err := reply.checkSchedule(result, send.scheduledAt, answeredAt); err != nil {
 			return nil, err
@@ -635,8 +662,9 @@ func encodeEmailBody(body interface{}) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// isNilEmail reports a nil Email, including a nil *TemplateEmail or *CodeEmail.
-func isNilEmail(email Email) bool {
+// isNilEmail reports a nil Email or EmailBatch, including a nil pointer to
+// one of their forms.
+func isNilEmail(email interface{}) bool {
 	if email == nil {
 		return true
 	}
@@ -739,7 +767,12 @@ func asksForALongerWaitThanWeRetry(err *EmailError) bool {
 }
 
 func (s *emailSender) do(ctx context.Context, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	return s.doFor(ctx, s.timeout, method, url, header, body)
+}
+
+// doFor is one attempt that waits at most timeout for the answer.
+func (s *emailSender) doFor(ctx context.Context, timeout time.Duration, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var reader io.Reader
@@ -858,7 +891,11 @@ func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 		return nil, r.apiError("PostHog answered without a message ID.")
 	}
 	replayed, _ := r.fields["replayed"].(bool)
-	result := &SendEmailResult{ID: id, Replayed: replayed, Warnings: []EmailWarning{}, Status: "queued"}
+	return &SendEmailResult{ID: id, Replayed: replayed, Warnings: r.warnings(), Status: "queued"}, nil
+}
+
+func (r emailReply) warnings() []EmailWarning {
+	result := []EmailWarning{}
 	warnings, _ := r.fields["warnings"].([]interface{})
 	for _, item := range warnings {
 		fields, ok := item.(map[string]interface{})
@@ -874,9 +911,9 @@ func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 		if code == "" {
 			code = "warning"
 		}
-		result.Warnings = append(result.Warnings, EmailWarning{Code: code, Message: message, Fix: warning.text("fix")})
+		result = append(result, EmailWarning{Code: code, Message: message, Fix: warning.text("fix")})
 	}
-	return result, nil
+	return result
 }
 
 // checkSchedule accepts the answer to a scheduled send only when it confirms

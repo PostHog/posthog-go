@@ -184,3 +184,36 @@ func ExampleEmails_scheduled() {
 	}
 	fmt.Println(result.Status, result.ID, result.ScheduledAt)
 }
+
+// Send this week's digest to each subscriber, one email each. Keys derived
+// from the digest and the subscriber let a rerun of the job within 24 hours
+// replay the emails that went out instead of sending them twice.
+func ExampleEmails_batch() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{
+		Endpoint:  "https://eu.i.posthog.com",
+		SecretKey: "phs_...",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	result, err := client.Emails().Batch(context.Background(), posthog.TemplateEmailBatch{
+		TemplateID: "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+		Recipients: []posthog.BatchRecipient{
+			{To: "ada@example.com", IdempotencyKey: "digest-2026-48:user_1", TemplateData: map[string]interface{}{"name": "Ada"}},
+			{To: "alan@example.com", IdempotencyKey: "digest-2026-48:user_2", TemplateData: map[string]interface{}{"name": "Alan"}},
+		},
+	})
+	if result == nil {
+		log.Fatal(err)
+	}
+	for _, email := range result.Results {
+		if email.Status != "queued" {
+			fmt.Println(email.To, email.Status, email.Error)
+		}
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+}

@@ -194,6 +194,25 @@ func (b *Backoff) NewTicker() *Ticker
 
 func (b *Backoff) Sleep(attempt int)
 
+type BatchEmailResult struct {
+	Index          int
+	To             string
+	IdempotencyKey string
+	Status         string
+	MessageID string
+	Replayed bool
+	Error *EmailError
+	LaterError *EmailError
+}
+
+
+type BatchRecipient struct {
+	To string
+	DistinctID string
+	IdempotencyKey string
+	TemplateData map[string]interface{}
+}
+
 type BeforeSendFunc func(Message) Message
 
 
@@ -329,6 +348,20 @@ type CodeEmail struct {
 	IdempotencyKey string
 	MaxRetries *int
 	ScheduledAt time.Time
+}
+
+type CodeEmailBatch struct {
+	TemplateKey       string
+	Subject           string
+	HTML              string
+	Text              string
+	From              string
+	ReplyTo           []string
+	Sensitive         *bool
+	Tracking          *EmailTracking
+	CaptureEngagement *bool
+	Recipients []BatchRecipient
+	MaxRetries *int
 }
 
 type CommonResponseFields struct {
@@ -504,6 +537,9 @@ type EmailAttachment struct {
 	ContentID string
 }
 
+type EmailBatch interface {
+}
+
 type EmailError struct {
 	Name    EmailErrorName
 	Code    string
@@ -573,6 +609,8 @@ type Emails interface {
 	Send(ctx context.Context, email Email) (*SendEmailResult, error)
 
 	Get(ctx context.Context, messageID string) (*EmailStatus, error)
+
+	Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error)
 }
 
 
@@ -1047,6 +1085,11 @@ type RequiresServerEvaluationError struct {
 
 func (e *RequiresServerEvaluationError) Error() string
 
+type SendBatchResult struct {
+	Results []BatchEmailResult
+	Warnings []EmailWarning
+}
+
 type SendEmailResult struct {
 	ID string
 	Replayed bool
@@ -1140,6 +1183,13 @@ type TemplateEmail struct {
 	IdempotencyKey string
 	MaxRetries *int
 	ScheduledAt time.Time
+}
+
+type TemplateEmailBatch struct {
+	TemplateID string
+	TemplateData map[string]interface{}
+	Recipients []BatchRecipient
+	MaxRetries *int
 }
 
 type Ticker struct {
