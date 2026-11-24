@@ -149,15 +149,18 @@ func ExampleEmails_Get() {
 	}
 }
 
-// storedTrialEnd stands in for where your app keeps when a user's trial ends.
-func storedTrialEnd(string) time.Time {
-	return time.Date(2026, 12, 8, 9, 0, 0, 0, time.UTC)
+// trialEnds stands in for your database, where the time each user's trial
+// ends is stored once, when the trial starts.
+var trialEnds = map[string]time.Time{"user_123": time.Now().UTC().Truncate(time.Minute).AddDate(0, 0, 5)}
+
+func storedTrialEnd(userID string) time.Time {
+	return trialEnds[userID]
 }
 
 // Send a reminder a day before a trial ends. The time comes from a stored
-// fact, so a rerun of the job sends the same time with the same idempotency
-// key and gets the first send's answer. Only a client on PostHog Cloud
-// schedules emails.
+// fact, so a rerun of the job within 24 hours sends the same time with the
+// same idempotency key and gets the first send's answer. Only a client on
+// PostHog Cloud schedules emails.
 func ExampleEmails_scheduled() {
 	client, err := posthog.NewWithConfig("phc_...", posthog.Config{
 		Endpoint:  "https://eu.i.posthog.com",

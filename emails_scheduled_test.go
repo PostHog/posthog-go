@@ -80,7 +80,6 @@ func TestEmailsSendRoundsScheduledAtUpToTheMillisecond(t *testing.T) {
 		{name: "a nanosecond past a millisecond", at: testScheduledAt.Add(123*time.Millisecond + time.Nanosecond), want: "2026-12-01T09:00:00.124Z"},
 		{name: "a microsecond short of a second", at: testScheduledAt.Add(time.Second - time.Microsecond), want: "2026-12-01T09:00:01.000Z"},
 		{name: "a whole millisecond", at: testScheduledAt.Add(123 * time.Millisecond), want: "2026-12-01T09:00:00.123Z"},
-		{name: "a time just before Go's zero time", at: time.Time{}.Add(-time.Nanosecond), want: "0001-01-01T00:00:00.001Z"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,6 +99,21 @@ func TestEmailsSendRoundsScheduledAtUpToTheMillisecond(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmailsSendRoundsATimeBeforeGosZeroTimeToOnePostHogAccepts(t *testing.T) {
+	server := newEmailServer(t, stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","replayed":false,"status":"queued","scheduled_at":null}`})
+	client := newCloudEmailClient(t, server)
+	email := templateEmail()
+	email.ScheduledAt = time.Time{}.Add(-time.Nanosecond)
+
+	result, err := client.Emails().Send(context.Background(), email)
+
+	require.NoError(t, err)
+	require.Equal(t, "queued", result.Status, "PostHog sends a past time now")
+	requests := server.received()
+	require.Len(t, requests, 1)
+	require.Equal(t, "0001-01-01T00:00:00.001Z", requests[0].Body["scheduled_at"])
 }
 
 func TestEmailsSendKeepsATimeThatRoundsToTheZeroTime(t *testing.T) {
@@ -179,6 +193,7 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 		reply       stubReply
 		wantStatus  string
 		wantAt      time.Time
+		key         string
 		unconfirmed bool
 	}{
 		{name: "the requested time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.000Z"`), wantStatus: "scheduled", wantAt: testScheduledAt},
@@ -186,10 +201,10 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 		{name: "a past time sent now", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
 		{name: "a time a minute ahead sent now", at: testClientNow.Add(time.Minute), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
 		{name: "a time more than a minute ahead sent now", at: testClientNow.Add(time.Minute + time.Millisecond), reply: reply(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
-		{name: "a replay of a send now, for a time a minute ahead", at: testClientNow.Add(time.Minute), reply: replay(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
-		{name: "a replay of a send now, for a past time", at: testClientNow.Add(-time.Hour), reply: replay(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
-		{name: "a replay of a send now, for a time more than a minute ahead", at: testClientNow.Add(time.Minute + time.Millisecond), reply: replay(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
-		{name: "a replay of the requested time", reply: replay(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.000Z"`), wantStatus: "scheduled", wantAt: testScheduledAt},
+		{name: "a replay of a send now, for a time a minute ahead", at: testClientNow.Add(time.Minute), reply: replay(`,"status":"queued","scheduled_at":null`), wantStatus: "queued", key: "trial-ending:user_123"},
+		{name: "a replay of a send now, for a past time", at: testClientNow.Add(-time.Hour), reply: replay(`,"status":"queued","scheduled_at":null`), wantStatus: "queued", key: "trial-ending:user_123"},
+		{name: "a replay of a send now, for a time more than a minute ahead", at: testClientNow.Add(time.Minute + time.Millisecond), reply: replay(`,"status":"queued","scheduled_at":null`), unconfirmed: true, key: "trial-ending:user_123"},
+		{name: "a replay of the requested time", reply: replay(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.000Z"`), wantStatus: "scheduled", wantAt: testScheduledAt, key: "trial-ending:user_123"},
 		{name: "another time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.001Z"`), unconfirmed: true},
 		{name: "no scheduled_at", reply: reply(``), unconfirmed: true},
 		{name: "no scheduled_at with status queued", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued"`), unconfirmed: true},
@@ -201,17 +216,34 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := newEmailServer(t, tt.reply)
+			replies := []stubReply{tt.reply}
+			if tt.key != "" {
+				first := tt.reply
+				first.body = strings.Replace(first.body, `"replayed":true`, `"replayed":false`, 1)
+				replies = []stubReply{first, tt.reply}
+			}
+			server := newEmailServer(t, replies...)
 			client := newCloudEmailClient(t, server)
 			email := templateEmail()
 			email.ScheduledAt = testScheduledAt
 			if !tt.at.IsZero() {
 				email.ScheduledAt = tt.at
 			}
+			email.IdempotencyKey = tt.key
+			if tt.key != "" {
+				_, _ = client.Emails().Send(context.Background(), email)
+			}
 
 			result, err := client.Emails().Send(context.Background(), email)
 
-			require.Len(t, server.received(), 1)
+			requests := server.received()
+			require.Len(t, requests, len(replies))
+			for _, request := range requests {
+				require.Equal(t, requests[0].Body, request.Body, "a replay repeats the first send")
+				if tt.key != "" {
+					require.Equal(t, tt.key, request.Header.Get("Idempotency-Key"))
+				}
+			}
 			if tt.unconfirmed {
 				require.Nil(t, result)
 				emailErr := requireEmailError(t, err)
