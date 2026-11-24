@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -29,6 +30,9 @@ func dependentOnBetaFeature() string {
 }
 
 func TestFeatureEnrollmentValues(t *testing.T) {
+	type namedBool bool
+	type namedString string
+	enrolled, optedOut := true, false
 	for _, tt := range []struct {
 		name       string
 		enrollment interface{}
@@ -46,6 +50,13 @@ func TestFeatureEnrollmentValues(t *testing.T) {
 		{"empty string", "", everyoneOn, false},
 		{"empty array", []interface{}{}, everyoneOn, false},
 		{"empty object", map[string]interface{}{}, everyoneOn, false},
+		{"pointer to true", &enrolled, everyoneOff, true},
+		{"pointer to false", &optedOut, everyoneOn, false},
+		{"nil pointer", (*bool)(nil), everyoneOn, false},
+		{"named boolean", namedBool(true), everyoneOff, true},
+		{"named string", namedString("true"), everyoneOff, true},
+		{"raw JSON", json.RawMessage(`true`), everyoneOff, true},
+		{"array with true", []bool{true}, everyoneOn, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := computeDefinedFlag(t, localDefinitions(enrollmentFlagDefinition(tt.groups)), "beta-feature",
@@ -267,6 +278,34 @@ func TestFeatureEnrollmentMissingFallsBackToFlags(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 	require.Equal(t, int32(1), remoteCalls.Load())
+}
+
+func TestFeatureEnrollmentResolvesPayloadsLocally(t *testing.T) {
+	client, _, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(enrollmentFlagDefinition(
+		`"multivariate": {"variants": [{"key": "test", "rollout_percentage": 100}]}, "payloads": {"true": "{\"color\": \"blue\"}"}, `+everyoneOff)), "")
+
+	for _, tt := range []struct {
+		enrolled bool
+		payload  string
+	}{
+		{true, `{"color": "blue"}`},
+		{false, ""},
+	} {
+		result, err := client.GetFeatureFlagResult(FeatureFlagPayload{
+			Key:              "beta-feature",
+			DistinctId:       "user-123",
+			PersonProperties: Properties{enrollmentKey: tt.enrolled},
+		})
+		require.NoError(t, err)
+		require.Equal(t, tt.enrolled, result.Enabled)
+		require.Nil(t, result.Variant)
+		if tt.payload == "" {
+			require.Nil(t, result.RawPayload)
+		} else {
+			require.JSONEq(t, tt.payload, *result.RawPayload)
+		}
+	}
+	require.Zero(t, remoteCalls.Load())
 }
 
 func TestFeatureEnrollmentMissingLeavesOnlyDependentsUnresolved(t *testing.T) {

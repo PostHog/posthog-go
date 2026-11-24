@@ -1146,14 +1146,9 @@ func matchFeatureEnrollment(flag FeatureFlag, personProperties Properties) (bool
 			Reason: UnresolvedFlagReasonMissingContext,
 		}
 	}
-	switch enrollment := value.(type) {
-	case bool:
-		return enrollment, nil
-	case string:
-		return enrollment == "true", nil
-	default:
-		return false, nil
-	}
+	// The string form of JSON true and "true" is the same, and it is what exact matching
+	// compares, so pointers and named types read as they are sent to /flags.
+	return exactValueToString(value) == "true", nil
 }
 
 // definitionUnresolvedReason returns the unresolved reason that comes from the flag's
