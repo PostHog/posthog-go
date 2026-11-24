@@ -272,6 +272,15 @@ func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
 	}
 }
 
+// flushAndWaitForEvents flushes, then waits until at least want events reached
+// the callback. FlushWithContext returns once a failed capture POST starts its
+// retry backoff, before the retried event is delivered.
+func flushAndWaitForEvents(t *testing.T, client Client, capture *eventCapture, want int) []CaptureInApi {
+	t.Helper()
+	flushEvaluationEvents(t, client)
+	return waitForEventCount(capture, want, 5*time.Second)
+}
+
 func flushEvaluationEvents(t *testing.T, client Client) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1081,8 +1090,7 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	snap, _ := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
 	snap.IsEnabled("enabled-flag")
 
-	flushEvaluationEvents(t, client)
-	events := snapshotCapturedEvents(capture)
+	events := flushAndWaitForEvents(t, client, capture, 1)
 
 	count := countFlagCalledEvents(events, "enabled-flag")
 	if count != 1 {
@@ -1123,8 +1131,7 @@ func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
 		})
 	}
 
-	flushEvaluationEvents(t, clientIface)
-	events := snapshotCapturedEvents(capture)
+	events := flushAndWaitForEvents(t, clientIface, capture, len(testCases))
 
 	count := countFlagCalledEvents(events, "changing-flag")
 	if count != len(testCases) {
@@ -1219,11 +1226,9 @@ func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 
 			// Wait for the first (and only) event to arrive, then briefly
 			// pause to catch any stragglers that would indicate broken dedup.
-			flushEvaluationEvents(t, client)
-			capture.mu.Lock()
-			defer capture.mu.Unlock()
+			events := flushAndWaitForEvents(t, client, capture, 1)
 			count := 0
-			for _, ev := range capture.events {
+			for _, ev := range events {
 				if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
 					count++
 				}
@@ -1476,8 +1481,7 @@ func newUnresolvedFlagsClient(t *testing.T, definitions, remote string) (Client,
 
 func flagCalledError(t *testing.T, client Client, capture *eventCapture, key string) string {
 	t.Helper()
-	flushEvaluationEvents(t, client)
-	event := findEvent(snapshotCapturedEvents(capture), "$feature_flag_called", key)
+	event := findEvent(flushAndWaitForEvents(t, client, capture, 1), "$feature_flag_called", key)
 	require.NotNil(t, event, "expected $feature_flag_called for %s", key)
 	errorString, _ := event.Properties["$feature_flag_error"].(string)
 	return errorString
@@ -1723,8 +1727,7 @@ func TestEvaluateFlags_RemoteFallbackResolvesUnresolvedFlag(t *testing.T) {
 	require.Empty(t, snapshot.UnresolvedFlags())
 
 	require.True(t, snapshot.IsEnabled("checkout"))
-	flushEvaluationEvents(t, client)
-	event := findEvent(snapshotCapturedEvents(capture), "$feature_flag_called", "checkout")
+	event := findEvent(flushAndWaitForEvents(t, client, capture, 1), "$feature_flag_called", "checkout")
 	require.NotNil(t, event)
 	require.Equal(t, true, event.Properties["$feature_flag_response"])
 	require.NotContains(t, event.Properties, "$feature_flag_error")
