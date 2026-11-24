@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -70,17 +69,17 @@ type TemplateEmailBatch struct {
 
 // CodeEmailBatch sends content your code rendered, the same for every
 // recipient. Its fields work as CodeEmail's do. A batch takes no Cc, Bcc,
-// Attachments or ScheduledAt: send those emails with Send.
+// Attachments or ScheduledAt: send those emails with Send. It takes no
+// CaptureEngagement either: use Tracking.
 type CodeEmailBatch struct {
-	TemplateKey       string
-	Subject           string
-	HTML              string
-	Text              string
-	From              string
-	ReplyTo           []string
-	Sensitive         *bool
-	Tracking          *EmailTracking
-	CaptureEngagement *bool
+	TemplateKey string
+	Subject     string
+	HTML        string
+	Text        string
+	From        string
+	ReplyTo     []string
+	Sensitive   *bool
+	Tracking    *EmailTracking
 	// Recipients are 1 or more recipients, without TemplateData. The client
 	// sends at most 100, and at most 4 MiB of JSON, per request.
 	Recipients []BatchRecipient
@@ -146,16 +145,15 @@ type templateBatchBody struct {
 }
 
 type codeBatchBody struct {
-	TemplateKey       string            `json:"template_key"`
-	Subject           string            `json:"subject"`
-	HTML              string            `json:"html,omitempty"`
-	Text              string            `json:"text,omitempty"`
-	From              string            `json:"from,omitempty"`
-	ReplyTo           []string          `json:"reply_to,omitempty"`
-	Sensitive         *bool             `json:"sensitive,omitempty"`
-	Tracking          *EmailTracking    `json:"tracking,omitempty"`
-	CaptureEngagement *bool             `json:"capture_engagement,omitempty"`
-	Recipients        []json.RawMessage `json:"recipients"`
+	TemplateKey string            `json:"template_key"`
+	Subject     string            `json:"subject"`
+	HTML        string            `json:"html,omitempty"`
+	Text        string            `json:"text,omitempty"`
+	From        string            `json:"from,omitempty"`
+	ReplyTo     []string          `json:"reply_to,omitempty"`
+	Sensitive   *bool             `json:"sensitive,omitempty"`
+	Tracking    *EmailTracking    `json:"tracking,omitempty"`
+	Recipients  []json.RawMessage `json:"recipients"`
 }
 
 func (b TemplateEmailBatch) prepareBatch() (*batchRun, *EmailError) {
@@ -174,20 +172,19 @@ func (b TemplateEmailBatch) prepareBatch() (*batchRun, *EmailError) {
 }
 
 func (b CodeEmailBatch) prepareBatch() (*batchRun, *EmailError) {
-	if err := checkCodeContent("CodeEmailBatch", b.TemplateKey, b.Subject, b.HTML, b.Text, b.ReplyTo, nil, nil); err != nil {
+	if err := checkCodeContent("CodeEmailBatch", b.TemplateKey, b.Subject, b.HTML, b.Text, b.ReplyTo); err != nil {
 		return nil, err
 	}
 	empty, err := encodeEmailBody(codeBatchBody{
-		TemplateKey:       b.TemplateKey,
-		Subject:           b.Subject,
-		HTML:              b.HTML,
-		Text:              b.Text,
-		From:              b.From,
-		ReplyTo:           b.ReplyTo,
-		Sensitive:         b.Sensitive,
-		Tracking:          b.Tracking,
-		CaptureEngagement: b.CaptureEngagement,
-		Recipients:        []json.RawMessage{},
+		TemplateKey: b.TemplateKey,
+		Subject:     b.Subject,
+		HTML:        b.HTML,
+		Text:        b.Text,
+		From:        b.From,
+		ReplyTo:     b.ReplyTo,
+		Sensitive:   b.Sensitive,
+		Tracking:    b.Tracking,
+		Recipients:  []json.RawMessage{},
 	})
 	if err != nil {
 		return nil, newEmailError("unexpected_error", "The client could not encode the email.", err)
@@ -200,32 +197,27 @@ type batchMember struct {
 	wire    []byte
 }
 
-type batchChunk struct {
-	body    []byte
-	indices []int
-}
-
 // batchRun is one Batch call: its recipients split into requests, and what
-// PostHog answered for each recipient so far.
+// PostHog answered for each recipient so far. A recipient whose result reads
+// "unconfirmed" may have been queued, and keeps that status until an answer
+// queues it.
 type batchRun struct {
 	members    []batchMember
-	chunks     []batchChunk
+	empty      []byte
+	chunks     [][]int
 	maxRetries *int
 	results    []BatchEmailResult
 	warnings   []EmailWarning
-	// maybeQueued are recipients an attempt may have queued without an
-	// answer that says so. They stay "unconfirmed" until an answer queues them.
-	maybeQueued map[int]bool
 }
 
 func newBatchRun(empty []byte, recipients []BatchRecipient, isTemplate bool, maxRetries *int) (*batchRun, *EmailError) {
 	if len(recipients) == 0 {
 		return nil, invalidEmail("invalid_recipients", "Recipients", "Recipients must hold at least one recipient.")
 	}
-	if maxRetries != nil && (*maxRetries < 0 || *maxRetries > maxEmailRetries) {
-		return nil, invalidEmail("invalid_max_retries", "MaxRetries", "MaxRetries must be 0 to 9.")
+	if err := checkMaxRetries(maxRetries); err != nil {
+		return nil, err
 	}
-	run := &batchRun{maxRetries: maxRetries, results: make([]BatchEmailResult, len(recipients)), warnings: []EmailWarning{}, maybeQueued: map[int]bool{}}
+	run := &batchRun{empty: empty, maxRetries: maxRetries, results: make([]BatchEmailResult, len(recipients)), warnings: []EmailWarning{}}
 	firstWithKey := map[string]int{}
 	for i, recipient := range recipients {
 		member, err := newBatchMember(i, recipient, isTemplate)
@@ -239,30 +231,30 @@ func newBatchRun(empty []byte, recipients []BatchRecipient, isTemplate bool, max
 		firstWithKey[member.key] = i
 		run.members = append(run.members, member)
 	}
-	run.split(empty)
+	run.split()
 	return run, nil
 }
 
 func newBatchMember(i int, recipient BatchRecipient, isTemplate bool) (batchMember, *EmailError) {
 	where := "Recipients[" + strconv.Itoa(i) + "]"
-	refuse := func(code, field, message string) (batchMember, *EmailError) {
-		return batchMember{}, invalidEmail(code, where+"."+field, message)
+	atPosition := func(err *EmailError) (batchMember, *EmailError) {
+		err.Field = where + "." + err.Field
+		err.Message = where + ": " + err.Message
+		return batchMember{}, err
 	}
-	if strings.TrimSpace(recipient.To) == "" {
-		return refuse("invalid_recipient", "To", where+": To must be one email address.")
+	if err := checkRecipient(recipient.To); err != nil {
+		return atPosition(err)
 	}
-	key := recipient.IdempotencyKey
-	if key == "" {
-		key = uuid.NewString()
-	} else if !idempotencyKeyPattern.MatchString(key) {
-		return refuse("invalid_idempotency_key", "IdempotencyKey", where+": IdempotencyKey must be 1 to 255 visible ASCII characters without spaces.")
+	key, err := idempotencyKeyOrNew(recipient.IdempotencyKey)
+	if err != nil {
+		return atPosition(err)
 	}
 	if recipient.TemplateData != nil && !isTemplate {
-		return refuse("invalid_form", "TemplateData", where+" has TemplateData, but a CodeEmailBatch sends the same content to every recipient. Send personalized content with a TemplateEmailBatch or with Send.")
+		return batchMember{}, invalidEmail("invalid_form", where+".TemplateData", where+" has TemplateData, but a CodeEmailBatch sends the same content to every recipient. Send personalized content with a TemplateEmailBatch or with Send.")
 	}
-	wire, err := encodeEmailBody(batchRecipientBody{To: recipient.To, DistinctID: recipient.DistinctID, IdempotencyKey: key, MessageData: recipient.TemplateData})
-	if err != nil {
-		return refuse("invalid_template_data", "TemplateData", where+": TemplateData must encode as JSON.")
+	wire, encodeErr := encodeEmailBody(batchRecipientBody{To: recipient.To, DistinctID: recipient.DistinctID, IdempotencyKey: key, MessageData: recipient.TemplateData})
+	if encodeErr != nil {
+		return atPosition(invalidEmail("invalid_template_data", "TemplateData", "TemplateData must encode as JSON."))
 	}
 	return batchMember{to: recipient.To, key: key, wire: wire}, nil
 }
@@ -270,17 +262,11 @@ func newBatchMember(i int, recipient BatchRecipient, isTemplate bool) (batchMemb
 // split packs the recipients, in order, into requests of at most 100
 // recipients and maxBatchBodyBytes. A recipient too large for any request
 // fails alone.
-func (r *batchRun) split(empty []byte) {
+func (r *batchRun) split() {
 	var current []int
-	size := len(empty)
-	flush := func() {
-		if len(current) > 0 {
-			r.chunks = append(r.chunks, r.chunk(empty, current))
-		}
-		current, size = nil, len(empty)
-	}
+	size := len(r.empty)
 	for i, member := range r.members {
-		if len(empty)+len(member.wire) > maxBatchBodyBytes {
+		if len(r.empty)+len(member.wire) > maxBatchBodyBytes {
 			r.set(i, "failed", BatchEmailResult{Error: recipientTooLarge()})
 			continue
 		}
@@ -289,22 +275,31 @@ func (r *batchRun) split(empty []byte) {
 			added++
 		}
 		if len(current) > 0 && (len(current) == maxBatchRecipients || size+added > maxBatchBodyBytes) {
-			flush()
-			added = len(member.wire)
+			r.chunks = append(r.chunks, current)
+			current, size, added = nil, len(r.empty), len(member.wire)
 		}
 		current = append(current, i)
 		size += added
 	}
-	flush()
+	if len(current) > 0 {
+		r.chunks = append(r.chunks, current)
+	}
 }
 
-func (r *batchRun) chunk(empty []byte, indices []int) batchChunk {
-	wires := make([][]byte, len(indices))
-	for n, i := range indices {
+// halve replaces the request at position with two requests of half its
+// recipients each.
+func (r *batchRun) halve(position int) {
+	chunk := r.chunks[position]
+	half := len(chunk) / 2
+	r.chunks = append(r.chunks[:position], append([][]int{chunk[:half:half], chunk[half:]}, r.chunks[position+1:]...)...)
+}
+
+func (r *batchRun) body(chunk []int) []byte {
+	wires := make([][]byte, len(chunk))
+	for n, i := range chunk {
 		wires[n] = r.members[i].wire
 	}
-	body := append(append(append([]byte{}, empty[:len(empty)-len("]}")]...), bytes.Join(wires, []byte(","))...), "]}"...)
-	return batchChunk{body: body, indices: indices}
+	return append(append(append([]byte{}, r.empty[:len(r.empty)-len("]}")]...), bytes.Join(wires, []byte(","))...), "]}"...)
 }
 
 func (r *batchRun) set(i int, status string, result BatchEmailResult) {
@@ -312,11 +307,10 @@ func (r *batchRun) set(i int, status string, result BatchEmailResult) {
 	r.results[i] = result
 }
 
-// lost marks a chunk whose attempt may have queued emails without an answer
-// that says so.
-func (r *batchRun) lost(chunk batchChunk) {
-	for _, i := range chunk.indices {
-		r.maybeQueued[i] = true
+func (r *batchRun) unconfirmed(i int) bool { return r.results[i].Status == "unconfirmed" }
+
+func (r *batchRun) lost(chunk []int) {
+	for _, i := range chunk {
 		messageID := r.results[i].MessageID
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: unconfirmedEmail(messageID)})
 	}
@@ -324,24 +318,20 @@ func (r *batchRun) lost(chunk batchChunk) {
 
 // answer settles each recipient of the chunk from PostHog's answer, or
 // returns why the request failed as a whole.
-func (r *batchRun) answer(chunk batchChunk, reply emailReply) *EmailError {
+func (r *batchRun) answer(chunk []int, reply emailReply) *EmailError {
 	if !reply.accepted() {
-		if reply.status >= http.StatusInternalServerError {
-			r.lost(chunk)
-		}
-		return batchReplyError(reply, chunk.indices)
+		return batchReplyError(reply, chunk)
 	}
 	slots, _ := reply.fields["results"].([]interface{})
-	if len(slots) != len(chunk.indices) {
-		r.lost(chunk)
+	if len(slots) != len(chunk) {
 		return reply.apiError("PostHog answered the batch without a result for each recipient.")
 	}
-	for n, i := range chunk.indices {
+	for n, i := range chunk {
 		fields, _ := slots[n].(map[string]interface{})
 		r.settle(i, emailReply{fields: fields})
 	}
 	for _, warning := range reply.warnings() {
-		if !containsWarning(r.warnings, warning) {
+		if !slices.Contains(r.warnings, warning) {
 			r.warnings = append(r.warnings, warning)
 		}
 	}
@@ -350,39 +340,38 @@ func (r *batchRun) answer(chunk batchChunk, reply emailReply) *EmailError {
 
 func (r *batchRun) settle(i int, slot emailReply) {
 	messageID := slot.text("message_id")
-	_, hasError := slot.fields["error"]
-	if !hasError && slot.text("status") == "queued" && messageID != "" {
-		delete(r.maybeQueued, i)
+	if slot.fields["error"] == nil && slot.text("status") == "queued" && messageID != "" {
 		replayed, _ := slot.fields["replayed"].(bool)
 		r.set(i, "queued", BatchEmailResult{MessageID: messageID, Replayed: replayed})
 		return
 	}
 	answer := slotError(slot.fields["error"], messageID)
 	switch {
-	case r.maybeQueued[i]:
+	case r.unconfirmed(i):
 		earlier := r.results[i]
 		if messageID == "" {
 			messageID = earlier.MessageID
 		}
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: earlier.Error, LaterError: answer})
 	case answer.Code == "delivery_unavailable" || answer.Code == "idempotency_key_in_flight" || answer.Code == "api_error":
-		r.maybeQueued[i] = true
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: answer})
 	default:
 		r.set(i, "failed", BatchEmailResult{MessageID: messageID, Error: answer})
 	}
 }
 
-// stop records that the request of chunk position failed as a whole with
-// err, so the batch stops there.
-func (r *batchRun) stop(position int, err *EmailError) {
-	for _, i := range r.chunks[position].indices {
+// stop records that the request at position failed as a whole with err, so
+// the batch stops there. A recipient an earlier attempt may have queued stays
+// "unconfirmed", with err as its LaterError when err refused a later attempt.
+func (r *batchRun) stop(position int, err *EmailError, mayHaveQueued bool) {
+	for _, i := range r.chunks[position] {
 		switch {
-		case !r.maybeQueued[i]:
-			r.set(i, "failed", BatchEmailResult{Error: err})
-		case err.StatusCode != 0 && err.StatusCode < http.StatusInternalServerError:
+		case mayHaveQueued:
+		case r.unconfirmed(i):
 			earlier := r.results[i]
 			r.set(i, "unconfirmed", BatchEmailResult{MessageID: earlier.MessageID, Error: earlier.Error, LaterError: err})
+		default:
+			r.set(i, "failed", BatchEmailResult{Error: err})
 		}
 	}
 	r.skipFrom(position+1, &EmailError{Name: EmailErrorApplication, Code: "not_attempted", Message: "An earlier request of the batch failed, so the client sent nothing for this recipient."})
@@ -390,7 +379,7 @@ func (r *batchRun) stop(position int, err *EmailError) {
 
 func (r *batchRun) skipFrom(position int, err *EmailError) {
 	for _, chunk := range r.chunks[position:] {
-		for _, i := range chunk.indices {
+		for _, i := range chunk {
 			r.set(i, "not_attempted", BatchEmailResult{Error: err})
 		}
 	}
@@ -400,13 +389,11 @@ func (r *batchRun) result() *SendBatchResult {
 	return &SendBatchResult{Results: r.results, Warnings: r.warnings}
 }
 
-func containsWarning(warnings []EmailWarning, warning EmailWarning) bool {
-	for _, w := range warnings {
-		if w == warning {
-			return true
-		}
-	}
-	return false
+// mayHaveQueued is an attempt's error after which PostHog may still have
+// queued the emails: no answer, a cut-off answer, a 5xx, or a 2xx the client
+// couldn't read.
+func mayHaveQueued(err *EmailError) bool {
+	return err.Code == "network_error" || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
 }
 
 func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error) {
@@ -429,29 +416,54 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 	}
 	header := s.header()
 	header.Set("Content-Type", "application/json")
-	for position, chunk := range run.chunks {
+	for position := 0; position < len(run.chunks); position++ {
+		if ctx.Err() != nil {
+			ended := newEmailError("network_error", "The call's context ended, so the rest of the batch wasn't sent.", ctx.Err())
+			run.skipFrom(position, ended)
+			return s.batchFailed(run, ended)
+		}
 		if position > 0 && s.isClosed() {
 			closed := newEmailError("client_closed", "The PostHog client is shut down, so the rest of the batch wasn't sent.", ErrClosed)
 			run.skipFrom(position, closed)
 			return s.batchFailed(run, closed)
 		}
-		attempts := 0
+		chunk, body := run.chunks[position], run.body(run.chunks[position])
+		attempts, uncertain := 0, false
 		err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
+			if uncertain {
+				run.lost(chunk)
+			}
+			uncertain = false
 			if attempts++; attempts > 1 && s.isClosed() {
 				return newEmailError("client_closed", "The PostHog client is shut down, so it didn't retry this request of the batch.", ErrClosed)
 			}
-			reply, err := s.doFor(ctx, s.batchAttemptTimeout(), http.MethodPost, s.appHost+emailBatchPath, header, chunk.body)
-			if err != nil {
-				run.lost(chunk)
-				return err
+			reply, err := s.doFor(ctx, s.batchAttemptTimeout(), http.MethodPost, s.appHost+emailBatchPath, header, body)
+			if err == nil {
+				err = run.answer(chunk, reply)
 			}
-			return run.answer(chunk, reply)
+			uncertain = err != nil && mayHaveQueued(err)
+			return err
 		})
-		if err != nil {
-			run.stop(position, err)
-			s.readLost(ctx, run)
-			return s.batchFailed(run, err)
+		if err == nil {
+			continue
 		}
+		if uncertain {
+			run.lost(chunk)
+		}
+		if err.Code == "content_too_large" && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
+			// PostHog refused the request for the data its pipeline copies to
+			// every recipient, so smaller requests can still go out.
+			if len(chunk) > 1 {
+				run.halve(position)
+				position--
+				continue
+			}
+			run.set(chunk[0], "failed", BatchEmailResult{Error: err})
+			continue
+		}
+		run.stop(position, err, uncertain)
+		s.readLost(ctx, run)
+		return s.batchFailed(run, err)
 	}
 	s.logWarnings(run.warnings)
 	return run.result(), nil
@@ -472,10 +484,11 @@ func (s *emailSender) isClosed() bool {
 
 // readLost reads each email a lost answer left without a message ID by its
 // key, once and without retries. A 404 leaves it "unconfirmed"; any other
-// failure stops the reads.
+// failure stops the reads. PostHog writes a "failed" row for a recipient it
+// refused, so only another status queues the email.
 func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 	for i := range run.members {
-		if !run.maybeQueued[i] || run.results[i].MessageID != "" {
+		if !run.unconfirmed(i) || run.results[i].MessageID != "" {
 			continue
 		}
 		if s.isClosed() {
@@ -493,7 +506,11 @@ func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 		if err != nil {
 			return
 		}
-		delete(run.maybeQueued, i)
+		if status.Status == "failed" {
+			earlier := run.results[i]
+			run.set(i, "unconfirmed", BatchEmailResult{MessageID: status.ID, Error: earlier.Error, LaterError: earlier.LaterError})
+			continue
+		}
 		run.set(i, "queued", BatchEmailResult{MessageID: status.ID})
 	}
 }
@@ -518,6 +535,8 @@ func batchReplyError(reply emailReply, indices []int) *EmailError {
 		err.Code, err.Name = "not_found", EmailErrorNotFound
 		err.Message = "PostHog found no batch send for this request, so no email was sent."
 		err.Why = "The template doesn't exist, or batch sends are off for this project or this PostHog version."
+	}
+	if err.Code == "not_found" && err.Fix == "" {
 		err.Fix = "Check TemplateID, or send each email the batch didn't queue with Emails.Send and its recipient's IdempotencyKey."
 	}
 	if err.Code == "batch_unavailable" {

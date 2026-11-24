@@ -351,15 +351,14 @@ type CodeEmail struct {
 }
 
 type CodeEmailBatch struct {
-	TemplateKey       string
-	Subject           string
-	HTML              string
-	Text              string
-	From              string
-	ReplyTo           []string
-	Sensitive         *bool
-	Tracking          *EmailTracking
-	CaptureEngagement *bool
+	TemplateKey string
+	Subject     string
+	HTML        string
+	Text        string
+	From        string
+	ReplyTo     []string
+	Sensitive   *bool
+	Tracking    *EmailTracking
 	Recipients []BatchRecipient
 	MaxRetries *int
 }

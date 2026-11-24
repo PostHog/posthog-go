@@ -44,7 +44,8 @@ var (
 )
 
 // Emails sends transactional email, such as a password reset or a receipt, to
-// one recipient per call, and reads the status of an email it sent.
+// one recipient with Send or to many with Batch, and reads the status of an
+// email it sent.
 //
 // It needs Config.SecretKey, a project secret API key (phs_...) with the
 // transactional_email:write scope, the "Send transactional email" preset in
@@ -84,8 +85,11 @@ type Emails interface {
 	// recipient's IdempotencyKey, so a retry never queues an email twice.
 	//
 	// The result holds one BatchEmailResult per recipient, in order: check
-	// each Status. A request that fails as a whole, such as a rate limit past
-	// its retries, stops the batch: Batch returns that request's error with a
+	// each Status. A request PostHog refuses as too large for its email
+	// pipeline goes out again as two requests of half its recipients, down to
+	// one recipient, who then fails with "content_too_large". Any other
+	// request that fails as a whole, such as a rate limit past its retries,
+	// stops the batch: Batch returns that request's error with a
 	// result that still holds every recipient. Before it returns, it reads
 	// each email a lost answer left unconfirmed by its key. The error code
 	// "batch_unavailable" (409) means the project can't send batches yet, and
@@ -384,7 +388,13 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	if err := checkRecipient(e.To); err != nil {
 		return emailSend{}, err
 	}
-	if err := checkCodeContent("CodeEmail", e.TemplateKey, e.Subject, e.HTML, e.Text, e.ReplyTo, e.Cc, e.Bcc); err != nil {
+	if err := checkCodeContent("CodeEmail", e.TemplateKey, e.Subject, e.HTML, e.Text, e.ReplyTo); err != nil {
+		return emailSend{}, err
+	}
+	if err := checkAddresses("Cc", "invalid_cc", e.Cc); err != nil {
+		return emailSend{}, err
+	}
+	if err := checkAddresses("Bcc", "invalid_bcc", e.Bcc); err != nil {
 		return emailSend{}, err
 	}
 	attachments, attachmentsErr := checkAttachments(e.Attachments, e.Subject, e.HTML, e.Text)
@@ -419,7 +429,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 
 // checkCodeContent checks what a CodeEmail or a CodeEmailBatch, named by
 // form, sends to every recipient.
-func checkCodeContent(form, templateKey, subject, html, text string, replyTo, cc, bcc []string) *EmailError {
+func checkCodeContent(form, templateKey, subject, html, text string, replyTo []string) *EmailError {
 	if !templateKeyPattern.MatchString(templateKey) {
 		return invalidEmail("invalid_template_key", "TemplateKey", "TemplateKey can only have letters, digits, hyphens (-) and underscores (_), at most 400.")
 	}
@@ -429,18 +439,13 @@ func checkCodeContent(form, templateKey, subject, html, text string, replyTo, cc
 	if html == "" && text == "" {
 		return invalidEmail("invalid_form", "HTML", "A "+form+" needs HTML, Text or both.")
 	}
-	for _, list := range []struct {
-		field, code string
-		addresses   []string
-	}{
-		{"ReplyTo", "invalid_reply_to", replyTo},
-		{"Cc", "invalid_cc", cc},
-		{"Bcc", "invalid_bcc", bcc},
-	} {
-		for _, address := range list.addresses {
-			if strings.TrimSpace(address) == "" {
-				return invalidEmail(list.code, list.field, list.field+" must not hold a blank address.")
-			}
+	return checkAddresses("ReplyTo", "invalid_reply_to", replyTo)
+}
+
+func checkAddresses(field, code string, addresses []string) *EmailError {
+	for _, address := range addresses {
+		if strings.TrimSpace(address) == "" {
+			return invalidEmail(code, field, field+" must not hold a blank address.")
 		}
 	}
 	return nil
@@ -480,15 +485,31 @@ func formatScheduledAt(at time.Time) string {
 }
 
 func newEmailSend(body []byte, idempotencyKey string, maxRetries *int, scheduledAt time.Time) (emailSend, *EmailError) {
-	if idempotencyKey == "" {
-		idempotencyKey = uuid.NewString()
-	} else if !idempotencyKeyPattern.MatchString(idempotencyKey) {
-		return emailSend{}, invalidEmail("invalid_idempotency_key", "IdempotencyKey", "IdempotencyKey must be 1 to 255 visible ASCII characters without spaces.")
+	idempotencyKey, err := idempotencyKeyOrNew(idempotencyKey)
+	if err != nil {
+		return emailSend{}, err
 	}
-	if maxRetries != nil && (*maxRetries < 0 || *maxRetries > maxEmailRetries) {
-		return emailSend{}, invalidEmail("invalid_max_retries", "MaxRetries", "MaxRetries must be 0 to 9.")
+	if err := checkMaxRetries(maxRetries); err != nil {
+		return emailSend{}, err
 	}
 	return emailSend{body: body, idempotencyKey: idempotencyKey, maxRetries: maxRetries, scheduledAt: scheduledAt}, nil
+}
+
+func idempotencyKeyOrNew(key string) (string, *EmailError) {
+	if key == "" {
+		return uuid.NewString(), nil
+	}
+	if !idempotencyKeyPattern.MatchString(key) {
+		return "", invalidEmail("invalid_idempotency_key", "IdempotencyKey", "IdempotencyKey must be 1 to 255 visible ASCII characters without spaces.")
+	}
+	return key, nil
+}
+
+func checkMaxRetries(maxRetries *int) *EmailError {
+	if maxRetries != nil && (*maxRetries < 0 || *maxRetries > maxEmailRetries) {
+		return invalidEmail("invalid_max_retries", "MaxRetries", "MaxRetries must be 0 to 9.")
+	}
+	return nil
 }
 
 // emailSender implements Emails. It owns the attempt loop, so every attempt of
@@ -770,7 +791,6 @@ func (s *emailSender) do(ctx context.Context, method, url string, header http.He
 	return s.doFor(ctx, s.timeout, method, url, header, body)
 }
 
-// doFor is one attempt that waits at most timeout for the answer.
 func (s *emailSender) doFor(ctx context.Context, timeout time.Duration, method, url string, header http.Header, body []byte) (emailReply, *EmailError) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
