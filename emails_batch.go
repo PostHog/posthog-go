@@ -286,14 +286,6 @@ func (r *batchRun) split() {
 	}
 }
 
-// halve replaces the request at position with two requests of half its
-// recipients each.
-func (r *batchRun) halve(position int) {
-	chunk := r.chunks[position]
-	half := len(chunk) / 2
-	r.chunks = append(r.chunks[:position], append([][]int{chunk[:half:half], chunk[half:]}, r.chunks[position+1:]...)...)
-}
-
 func (r *batchRun) body(chunk []int) []byte {
 	wires := make([][]byte, len(chunk))
 	for n, i := range chunk {
@@ -360,25 +352,30 @@ func (r *batchRun) settle(i int, slot emailReply) {
 	}
 }
 
-// stop records that the request at position failed as a whole with err, so
-// the batch stops there. A recipient an earlier attempt may have queued stays
-// "unconfirmed", with err as its LaterError when err refused a later attempt.
-func (r *batchRun) stop(position int, err *EmailError, mayHaveQueued bool) {
-	for _, i := range r.chunks[position] {
+// stop records that chunk failed as a whole with err, so the batch sends none
+// of the pending requests. A recipient an earlier attempt may have queued
+// stays "unconfirmed", with err as its LaterError when PostHog answered a
+// later attempt with it.
+func (r *batchRun) stop(chunk []int, pending [][]int, err *EmailError, mayHaveQueued bool) {
+	for _, i := range chunk {
 		switch {
 		case mayHaveQueued:
 		case r.unconfirmed(i):
 			earlier := r.results[i]
-			r.set(i, "unconfirmed", BatchEmailResult{MessageID: earlier.MessageID, Error: earlier.Error, LaterError: err})
+			later := err
+			if err.StatusCode == 0 {
+				later = nil
+			}
+			r.set(i, "unconfirmed", BatchEmailResult{MessageID: earlier.MessageID, Error: earlier.Error, LaterError: later})
 		default:
 			r.set(i, "failed", BatchEmailResult{Error: err})
 		}
 	}
-	r.skipFrom(position+1, &EmailError{Name: EmailErrorApplication, Code: "not_attempted", Message: "An earlier request of the batch failed, so the client sent nothing for this recipient."})
+	r.skip(pending, &EmailError{Name: EmailErrorApplication, Code: "not_attempted", Message: "An earlier request of the batch failed, so the client sent nothing for this recipient."})
 }
 
-func (r *batchRun) skipFrom(position int, err *EmailError) {
-	for _, chunk := range r.chunks[position:] {
+func (r *batchRun) skip(pending [][]int, err *EmailError) {
+	for _, chunk := range pending {
 		for _, i := range chunk {
 			r.set(i, "not_attempted", BatchEmailResult{Error: err})
 		}
@@ -416,18 +413,24 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 	}
 	header := s.header()
 	header.Set("Content-Type", "application/json")
-	for position := 0; position < len(run.chunks); position++ {
+	// pending is a stack, so the next request is last and a split request's
+	// halves go out next, in order.
+	pending := slices.Clone(run.chunks)
+	slices.Reverse(pending)
+	for sent := false; len(pending) > 0; sent = true {
+		chunk := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
 		if ctx.Err() != nil {
 			ended := newEmailError("network_error", "The call's context ended, so the rest of the batch wasn't sent.", ctx.Err())
-			run.skipFrom(position, ended)
+			run.skip(append(pending, chunk), ended)
 			return s.batchFailed(run, ended)
 		}
-		if position > 0 && s.isClosed() {
+		if sent && s.isClosed() {
 			closed := newEmailError("client_closed", "The PostHog client is shut down, so the rest of the batch wasn't sent.", ErrClosed)
-			run.skipFrom(position, closed)
+			run.skip(append(pending, chunk), closed)
 			return s.batchFailed(run, closed)
 		}
-		chunk, body := run.chunks[position], run.body(run.chunks[position])
+		body := run.body(chunk)
 		attempts, uncertain := 0, false
 		err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 			if uncertain {
@@ -450,18 +453,18 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if uncertain {
 			run.lost(chunk)
 		}
-		if err.Code == "content_too_large" && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
-			// PostHog refused the request for the data its pipeline copies to
-			// every recipient, so smaller requests can still go out.
-			if len(chunk) > 1 {
-				run.halve(position)
-				position--
+		if err.StatusCode == http.StatusRequestEntityTooLarge && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
+			// The pipeline refused the data it copies to every recipient, so
+			// smaller requests can still go out. A 400 content_too_large is the
+			// content they all share, which no split makes smaller.
+			if half := len(chunk) / 2; half > 0 {
+				pending = append(pending, chunk[half:], chunk[:half:half])
 				continue
 			}
 			run.set(chunk[0], "failed", BatchEmailResult{Error: err})
 			continue
 		}
-		run.stop(position, err, uncertain)
+		run.stop(chunk, pending, err, uncertain)
 		s.readLost(ctx, run)
 		return s.batchFailed(run, err)
 	}
@@ -482,10 +485,14 @@ func (s *emailSender) isClosed() bool {
 	return s.closed
 }
 
+// emailSkipReasons are the reasons PostHog gives a recipient it refused
+// before queueing, which it records as a "failed" email.
+var emailSkipReasons = []string{"recipient_suppressed", "sending_paused", "sending_suspended", "recipient_unreachable", "missing_recipient", "recipient_opted_out", "frequency_capped"}
+
 // readLost reads each email a lost answer left without a message ID by its
 // key, once and without retries. A 404 leaves it "unconfirmed"; any other
-// failure stops the reads. PostHog writes a "failed" row for a recipient it
-// refused, so only another status queues the email.
+// failure stops the reads. A "failed" row with a skip reason is a recipient
+// PostHog refused before it queued the email; any other row was queued.
 func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 	for i := range run.members {
 		if !run.unconfirmed(i) || run.results[i].MessageID != "" {
@@ -506,9 +513,14 @@ func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 		if err != nil {
 			return
 		}
-		if status.Status == "failed" {
-			earlier := run.results[i]
-			run.set(i, "unconfirmed", BatchEmailResult{MessageID: status.ID, Error: earlier.Error, LaterError: earlier.LaterError})
+		if status.Status == "failed" && slices.Contains(emailSkipReasons, status.Reason) {
+			run.set(i, "failed", BatchEmailResult{MessageID: status.ID, Error: &EmailError{
+				Name:       emailErrorName(http.StatusUnprocessableEntity, status.Reason),
+				Code:       status.Reason,
+				Message:    "PostHog didn't send this email: " + status.Reason + ".",
+				StatusCode: http.StatusUnprocessableEntity,
+				MessageID:  status.ID,
+			}})
 			continue
 		}
 		run.set(i, "queued", BatchEmailResult{MessageID: status.ID})

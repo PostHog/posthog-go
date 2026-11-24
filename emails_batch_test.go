@@ -554,16 +554,18 @@ func TestEmailsBatchReadsLostEmailsByTheirKeys(t *testing.T) {
 			return stubReply{status: http.StatusOK, body: `{"id":"m-0","status":"delivered","created_at":"2026-11-24T05:00:00Z","status_at":"2026-11-24T05:00:01Z"}`}
 		case "digest:2":
 			return stubReply{status: http.StatusOK, body: `{"id":"m-2","status":"failed","created_at":"2026-11-24T05:00:00Z","status_at":"2026-11-24T05:00:00Z","reason":"recipient_suppressed"}`}
+		case "digest:3":
+			return stubReply{status: http.StatusOK, body: `{"id":"m-3","status":"failed","created_at":"2026-11-24T05:00:00Z","status_at":"2026-11-24T05:00:02Z","reason":"provider_error"}`}
 		}
 		return stubReply{status: http.StatusNotFound, body: `{"code":"not_found","detail":"Not found."}`}
 	})
 	client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(1) })
 
-	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(3)...))
+	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(4)...))
 
 	require.Equal(t, "network_error", requireEmailError(t, err).Code)
 	requests := server.received()
-	require.Len(t, requests, 5)
+	require.Len(t, requests, 6)
 	for n, read := range requests[2:] {
 		require.Equal(t, http.MethodGet, read.Method)
 		require.Equal(t, fmt.Sprintf("digest:%d", n), read.Query.Get("idempotency_key"))
@@ -572,9 +574,14 @@ func TestEmailsBatchReadsLostEmailsByTheirKeys(t *testing.T) {
 	require.Equal(t, "unconfirmed", result.Results[1].Status)
 	require.Equal(t, "delivery_unavailable", result.Results[1].Error.Code)
 	require.Empty(t, result.Results[1].MessageID)
-	require.Equal(t, "unconfirmed", result.Results[2].Status, "PostHog writes a failed row for a recipient it refused")
-	require.Equal(t, "m-2", result.Results[2].MessageID)
-	require.Equal(t, "delivery_unavailable", result.Results[2].Error.Code)
+	require.Equal(t, BatchEmailResult{Index: 2, To: "user2@example.com", IdempotencyKey: "digest:2", Status: "failed", MessageID: "m-2", Error: &EmailError{
+		Name:       EmailErrorValidation,
+		Code:       "recipient_suppressed",
+		Message:    "PostHog didn't send this email: recipient_suppressed.",
+		StatusCode: http.StatusUnprocessableEntity,
+		MessageID:  "m-2",
+	}}, result.Results[2], "PostHog writes a failed row for a recipient it refused before queueing")
+	require.Equal(t, BatchEmailResult{Index: 3, To: "user3@example.com", IdempotencyKey: "digest:3", Status: "queued", MessageID: "m-3"}, result.Results[3], "the email went out to the provider, which failed it")
 }
 
 func TestEmailsBatchStopsReadingWhenPostHogStaysUnreachable(t *testing.T) {
@@ -736,30 +743,46 @@ func TestEmailsBatchNamesTheCallersPositionInARefusedField(t *testing.T) {
 	}
 }
 
-// closeDuringAnswer starts client.Close while the fake answers a request and
-// returns once Close stopped new email requests. Close waits for the batch,
-// so it ends on closed.
-func closeDuringAnswer(t *testing.T, client Client, closed chan<- error) {
-	go func() { closed <- client.Close() }()
-	giveUp := time.Now().Add(5 * time.Second)
-	for !senderOf(client).isClosed() {
-		if time.Now().After(giveUp) {
-			t.Errorf("Close didn't stop new email requests")
-			return
-		}
-		time.Sleep(time.Millisecond)
+// closingLogger reports when Close has shut the lanes down, which it does
+// only after it stopped new email requests and before it waits for them.
+type closingLogger struct {
+	testLogger
+	once     sync.Once
+	shutDown chan struct{}
+}
+
+func (l *closingLogger) Debugf(format string, args ...interface{}) {
+	if strings.Contains(format, "shutdown completed") {
+		l.once.Do(func() { close(l.shutDown) })
 	}
+}
+
+// closingClient is a test email client whose close starts Close and returns
+// once Close stopped new email requests. Close waits for the batch, so it
+// ends on closed.
+func closingClient(t *testing.T, url string) (client Client, close func(), closed <-chan error) {
+	logger := &closingLogger{testLogger: testLogger{t.Logf, t.Logf}, shutDown: make(chan struct{})}
+	client = newEmailClientFor(t, url, func(config *Config) { config.Logger = logger })
+	done := make(chan error, 1)
+	close = func() {
+		go func() { done <- client.Close() }()
+		select {
+		case <-logger.shutDown:
+		case <-time.After(5 * time.Second):
+			t.Errorf("Close didn't stop new email requests")
+		}
+	}
+	return client, close, done
 }
 
 func TestEmailsBatchStopsWhenTheClientShutsDown(t *testing.T) {
 	t.Run("between requests", func(t *testing.T) {
-		var client Client
-		closed := make(chan error, 1)
+		var closeClient func()
 		server := newBatchServer(t, func(n int, r batchRequest) stubReply {
-			closeDuringAnswer(t, client, closed)
+			closeClient()
 			return queuedAll(n, r)
 		})
-		client = newEmailClientFor(t, server.URL)
+		client, closeClient, closed := closingClient(t, server.URL)
 
 		result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(150)...))
 
@@ -770,23 +793,60 @@ func TestEmailsBatchStopsWhenTheClientShutsDown(t *testing.T) {
 		require.Equal(t, "not_attempted", result.Results[100].Status)
 		require.Equal(t, "client_closed", result.Results[100].Error.Code)
 	})
-	t.Run("during a retry wait", func(t *testing.T) {
-		var client Client
-		closed := make(chan error, 1)
+	t.Run("after a lost answer", func(t *testing.T) {
+		var closeClient func()
 		server := newBatchServer(t, func(int, batchRequest) stubReply {
-			closeDuringAnswer(t, client, closed)
-			return failed(http.StatusServiceUnavailable, "delivery_unavailable")
+			closeClient()
+			return stubReply{status: dropConnection}
 		})
-		client = newEmailClientFor(t, server.URL)
+		client, closeClient, closed := closingClient(t, server.URL)
 
 		result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(150)...))
 
 		require.NoError(t, <-closed)
 		require.Equal(t, "client_closed", requireEmailError(t, err).Code)
 		require.Len(t, server.received(), 1, "no retry and no read by key")
-		require.Equal(t, "unconfirmed", result.Results[0].Status)
-		require.Equal(t, "delivery_unavailable", result.Results[0].Error.Code)
+		got := result.Results[0]
+		require.Equal(t, "unconfirmed", got.Status)
+		require.Equal(t, "delivery_unavailable", got.Error.Code)
+		require.Nil(t, got.LaterError, "no later attempt reached PostHog")
 		require.Equal(t, "not_attempted", result.Results[100].Status)
+	})
+	t.Run("during a retry wait", func(t *testing.T) {
+		server := newBatchServer(t, func(int, batchRequest) stubReply {
+			return failed(http.StatusServiceUnavailable, "delivery_unavailable")
+		})
+		client, closeClient, closed := closingClient(t, server.URL)
+		senderOf(client).backoff = func(int) time.Duration {
+			closeClient()
+			return 0
+		}
+
+		result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(150)...))
+
+		require.NoError(t, <-closed)
+		require.Equal(t, "client_closed", requireEmailError(t, err).Code)
+		require.Len(t, server.received(), 1, "no retry and no read by key")
+		got := result.Results[0]
+		require.Equal(t, "unconfirmed", got.Status)
+		require.Equal(t, "delivery_unavailable", got.Error.Code)
+		require.Nil(t, got.LaterError, "no later attempt reached PostHog")
+		require.Equal(t, "not_attempted", result.Results[100].Status)
+	})
+	t.Run("before the halves of a request too large for the pipeline", func(t *testing.T) {
+		var closeClient func()
+		server := newBatchServer(t, func(int, batchRequest) stubReply {
+			closeClient()
+			return stubReply{status: http.StatusRequestEntityTooLarge, body: `{"code":"content_too_large","detail":"The batch is larger than PostHog can send at once, so PostHog didn't send it."}`}
+		})
+		client, closeClient, closed := closingClient(t, server.URL)
+
+		result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(4)...))
+
+		require.NoError(t, <-closed)
+		require.Equal(t, "client_closed", requireEmailError(t, err).Code)
+		require.Len(t, server.received(), 1, "neither half is sent")
+		require.Equal(t, []string{"not_attempted", "not_attempted", "not_attempted", "not_attempted"}, statuses(result))
 	})
 }
 
@@ -846,6 +906,18 @@ func TestEmailsBatchHalvesARequestTooLargeForThePipeline(t *testing.T) {
 		require.Equal(t, [][]string{{"user0", "user1", "user2", "user3", "user4"}, {"user0", "user1"}, {"user2", "user3", "user4"}, {"user2"}, {"user3", "user4"}, {"user3"}, {"user4"}}, sent)
 		require.Equal(t, []string{"queued", "queued", "queued", "failed", "queued"}, statuses(result))
 		require.Equal(t, "content_too_large", result.Results[3].Error.Code)
+	})
+	t.Run("not when every recipient shares the content that is too large", func(t *testing.T) {
+		server := newBatchServer(t, func(int, batchRequest) stubReply {
+			return stubReply{status: http.StatusBadRequest, body: `{"code":"content_too_large","detail":"The batch's shared content is too large."}`}
+		})
+		client := newEmailClientFor(t, server.URL)
+
+		result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(4)...))
+
+		require.Equal(t, "content_too_large", requireEmailError(t, err).Code)
+		require.Len(t, server.received(), 1)
+		require.Equal(t, []string{"failed", "failed", "failed", "failed"}, statuses(result))
 	})
 	t.Run("not after a lost answer", func(t *testing.T) {
 		server := newBatchServer(t, func(n int, r batchRequest) stubReply {
