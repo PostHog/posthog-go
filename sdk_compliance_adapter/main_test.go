@@ -491,14 +491,20 @@ func TestFlushSendsSpacedCapturesInOneBatch(t *testing.T) {
 	var mu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Batch []map[string]interface{} `json:"batch"`
+			Batch []struct {
+				UUID string `json:"uuid"`
+			} `json:"batch"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
 		batchSizes = append(batchSizes, len(body.Batch))
 		mu.Unlock()
+		results := make(map[string]map[string]string, len(body.Batch))
+		for _, event := range body.Batch {
+			results[event.UUID] = map[string]string{"result": "ok"}
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": results})
 	}))
 	defer server.Close()
 
@@ -527,6 +533,15 @@ func TestFlushSendsSpacedCapturesInOneBatch(t *testing.T) {
 	flushHandler(recorder, httptest.NewRequest(http.MethodPost, "/flush?test_id=t-spaced", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("/flush = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var flushed struct {
+		EventsFlushed int `json:"events_flushed"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&flushed); err != nil {
+		t.Fatal(err)
+	}
+	if flushed.EventsFlushed != 5 {
+		t.Fatalf("events_flushed = %d, want 5", flushed.EventsFlushed)
 	}
 
 	mu.Lock()
