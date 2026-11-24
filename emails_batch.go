@@ -41,9 +41,9 @@ type BatchRecipient struct {
 	// batch may be cut off and run again: a rerun within 24 hours replays the
 	// emails that went out instead of sending them twice. A single send and a
 	// batch recipient with the same key and the same email replay each other.
-	// Never reuse a key for another email: after a lost answer, the client
-	// reads the email by its key, and an earlier email with that key reads as
-	// this one, "queued".
+	// Never reuse a key for another email: the client reads an unconfirmed
+	// email by its key, and an earlier email with that key gives its message
+	// ID as this one's.
 	IdempotencyKey string
 	// TemplateData is only for a TemplateEmailBatch: values for this
 	// recipient, merged over the batch's TemplateData. A top-level key set
@@ -387,10 +387,10 @@ func (r *batchRun) result() *SendBatchResult {
 }
 
 // mayHaveQueued is an attempt's error after which PostHog may still have
-// queued the emails: no answer, a cut-off answer, a 5xx, or a 2xx the client
-// couldn't read.
+// queued the emails: no answer, a cut-off answer, a 5xx, a 2xx the client
+// couldn't read, or keys an earlier request still holds.
 func mayHaveQueued(err *EmailError) bool {
-	return err.Code == "network_error" || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
+	return err.Code == "network_error" || err.Code == "idempotency_key_in_flight" || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
 }
 
 func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error) {
@@ -423,11 +423,13 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if ctx.Err() != nil {
 			ended := newEmailError("network_error", "The call's context ended, so the rest of the batch wasn't sent.", ctx.Err())
 			run.skip(append(pending, chunk), ended)
+			s.readLost(ctx, run)
 			return s.batchFailed(run, ended)
 		}
 		if sent && s.isClosed() {
 			closed := newEmailError("client_closed", "The PostHog client is shut down, so the rest of the batch wasn't sent.", ErrClosed)
 			run.skip(append(pending, chunk), closed)
+			s.readLost(ctx, run)
 			return s.batchFailed(run, closed)
 		}
 		body := run.body(chunk)
@@ -469,6 +471,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		s.readLost(ctx, run)
 		return s.batchFailed(run, err)
 	}
+	s.readLost(ctx, run)
 	s.logWarnings(run.warnings)
 	return run.result(), nil
 }
@@ -486,12 +489,11 @@ func (s *emailSender) isClosed() bool {
 	return s.closed
 }
 
-// readLost reads each email a lost answer left without a message ID by its
-// key, once and without retries. A 404 leaves it "unconfirmed"; any other
-// failure stops the reads. PostHog writes a "failed" row both for a recipient
-// it refused and for an email it queued and failed later, with the same
-// reasons, so a failed row leaves the email "unconfirmed" with its message ID.
-// Any other row means PostHog queued it.
+// readLost reads each unconfirmed email without a message ID by its key, once
+// and without retries, when the batch ends. A row gives the email's message ID
+// for Emails.Get and leaves it "unconfirmed": PostHog writes the same rows for
+// an email it queued and for a recipient it refused. A 404 skips the email;
+// any other failure stops the reads.
 func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 	for i := range run.members {
 		if !run.unconfirmed(i) || run.results[i].MessageID != "" {
@@ -512,12 +514,8 @@ func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 		if err != nil {
 			return
 		}
-		if status.Status == "failed" {
-			earlier := run.results[i]
-			run.set(i, "unconfirmed", BatchEmailResult{MessageID: status.ID, Error: earlier.Error, LaterError: earlier.LaterError})
-			continue
-		}
-		run.set(i, "queued", BatchEmailResult{MessageID: status.ID})
+		earlier := run.results[i]
+		run.set(i, "unconfirmed", BatchEmailResult{MessageID: status.ID, Error: earlier.Error, LaterError: earlier.LaterError})
 	}
 }
 

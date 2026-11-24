@@ -570,16 +570,61 @@ func TestEmailsBatchReadsLostEmailsByTheirKeys(t *testing.T) {
 		require.Equal(t, http.MethodGet, read.Method)
 		require.Equal(t, fmt.Sprintf("digest:%d", n), read.Query.Get("idempotency_key"))
 	}
-	require.Equal(t, BatchEmailResult{Index: 0, To: "user0@example.com", IdempotencyKey: "digest:0", Status: "queued", MessageID: "m-0"}, result.Results[0])
-	require.Equal(t, "unconfirmed", result.Results[1].Status)
-	require.Equal(t, "delivery_unavailable", result.Results[1].Error.Code)
-	require.Empty(t, result.Results[1].MessageID)
-	for i, messageID := range map[int]string{2: "m-2", 3: "m-3"} {
+	for i, messageID := range []string{"m-0", "", "m-2", "m-3"} {
 		got := result.Results[i]
-		require.Equal(t, "unconfirmed", got.Status, "a failed row may be a refusal or an email PostHog queued and failed later")
+		require.Equal(t, "unconfirmed", got.Status, "a read by key gives the message ID and leaves the status")
 		require.Equal(t, messageID, got.MessageID)
 		require.Equal(t, "delivery_unavailable", got.Error.Code)
 	}
+}
+
+func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testing.T) {
+	server := newBatchServer(t, func(n int, r batchRequest) stubReply {
+		switch {
+		case r.Method == http.MethodGet:
+			return stubReply{status: http.StatusNotFound}
+		case n == 0:
+			return failed(http.StatusConflict, "idempotency_key_in_flight")
+		default:
+			return stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}
+		}
+	})
+	client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(1) })
+
+	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+
+	require.Equal(t, "quota_limited", requireEmailError(t, err).Code)
+	require.Equal(t, []string{"unconfirmed", "unconfirmed"}, statuses(result), "an earlier request with these keys may still queue them")
+	for _, r := range result.Results {
+		require.Equal(t, "quota_limited", r.LaterError.Code)
+	}
+	require.Len(t, server.received(), 4, "two sends, then a read of each email by its key")
+}
+
+func TestEmailsBatchReadsUnconfirmedEmailsWhenItEnds(t *testing.T) {
+	server := newBatchServer(t, func(_ int, r batchRequest) stubReply {
+		if r.Method == http.MethodGet {
+			return stubReply{status: http.StatusOK, body: `{"id":"m-1","status":"queued","created_at":"2026-11-24T05:00:00Z","status_at":"2026-11-24T05:00:00Z"}`}
+		}
+		return slots(r, func(recipient map[string]interface{}) string {
+			if recipient["idempotency_key"] == "digest:1" {
+				return `{"error":{"code":"delivery_unavailable","detail":"PostHog couldn't confirm this email.","status":503,"retryable":true}}`
+			}
+			return queuedSlot(recipient)
+		}, "")
+	})
+	client := newEmailClientFor(t, server.URL)
+
+	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+
+	require.NoError(t, err)
+	requests := server.received()
+	require.Len(t, requests, 2)
+	require.Equal(t, "digest:1", requests[1].Query.Get("idempotency_key"))
+	require.Equal(t, "queued", result.Results[0].Status)
+	require.Equal(t, "unconfirmed", result.Results[1].Status)
+	require.Equal(t, "m-1", result.Results[1].MessageID)
+	require.Equal(t, "delivery_unavailable", result.Results[1].Error.Code)
 }
 
 func TestEmailsBatchStopsReadingWhenPostHogStaysUnreachable(t *testing.T) {
