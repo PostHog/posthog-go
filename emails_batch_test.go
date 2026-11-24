@@ -565,8 +565,10 @@ func TestEmailsBatchKeepsPostHogsRefusalBetweenLostAnswers(t *testing.T) {
 	inFlight := failed(http.StatusConflict, "idempotency_key_in_flight")
 	for _, tt := range []struct {
 		name, code, later string
+		laterStatus       int
 		second, last      stubReply
 	}{
+		{name: "then a refusal without a body", code: "api_error", laterStatus: http.StatusForbidden, second: rateLimited, last: stubReply{status: http.StatusForbidden}},
 		{name: "then a lost answer", code: "network_error", later: "rate_limited", second: rateLimited, last: stubReply{status: dropConnection}},
 		{name: "then a 503", code: "delivery_unavailable", later: "rate_limited", second: rateLimited, last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
 		{name: "keys in flight, then a 503", code: "delivery_unavailable", later: "idempotency_key_in_flight", second: inFlight, last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
@@ -595,7 +597,12 @@ func TestEmailsBatchKeepsPostHogsRefusalBetweenLostAnswers(t *testing.T) {
 			got := result.Results[0]
 			require.Equal(t, "unconfirmed", got.Status)
 			require.NotNil(t, got.LaterError, "PostHog answered the second attempt")
-			require.Equal(t, tt.later, got.LaterError.Code)
+			if tt.later != "" {
+				require.Equal(t, tt.later, got.LaterError.Code)
+			}
+			if tt.laterStatus != 0 {
+				require.Equal(t, tt.laterStatus, got.LaterError.StatusCode)
+			}
 		})
 	}
 	t.Run("then a shutdown", func(t *testing.T) {
@@ -664,6 +671,39 @@ func TestEmailsBatchLeavesUnconfirmedEmailsToAResendWithTheirKeys(t *testing.T) 
 		require.Empty(t, got.MessageID)
 		require.Equal(t, wantResendFix, got.Error.Fix)
 	})
+}
+
+func TestEmailsBatchKeepsTheInFlightAnswerAsTheReasonAfterALostOne(t *testing.T) {
+	server := newBatchServer(t, func(n int, r batchRequest) stubReply {
+		if n == 0 {
+			return failed(http.StatusConflict, "idempotency_key_in_flight")
+		}
+		return failed(http.StatusServiceUnavailable, "delivery_unavailable")
+	})
+	client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(1) })
+
+	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+
+	require.Equal(t, "delivery_unavailable", requireEmailError(t, err).Code)
+	for _, r := range result.Results {
+		require.Equal(t, "unconfirmed", r.Status)
+		require.Equal(t, "idempotency_key_in_flight", r.Error.Code, "another request held the keys")
+		require.Equal(t, http.StatusConflict, r.Error.StatusCode)
+		require.Equal(t, wantResendFix, r.Error.Fix)
+	}
+}
+
+func TestEmailsBatchTakesKeysInFlightOnlyFromA409(t *testing.T) {
+	server := newBatchServer(t, func(int, batchRequest) stubReply {
+		return failed(http.StatusUnauthorized, "idempotency_key_in_flight")
+	})
+	client := newEmailClientFor(t, server.URL)
+
+	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+
+	require.Equal(t, http.StatusUnauthorized, requireEmailError(t, err).StatusCode)
+	require.Len(t, server.received(), 1)
+	require.Equal(t, []string{"failed", "failed"}, statuses(result), "a 401 refused the request before PostHog queued anything")
 }
 
 func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testing.T) {

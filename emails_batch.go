@@ -304,10 +304,20 @@ func (r *batchRun) set(i int, status string, result BatchEmailResult) {
 
 func (r *batchRun) unconfirmed(i int) bool { return r.results[i].Status == "unconfirmed" }
 
-func (r *batchRun) lost(chunk []int) {
+// lost marks chunk "unconfirmed" after cause, an answer that may have queued
+// its emails. A recipient keeps the reason it first became unconfirmed: keys
+// in flight name another request, anything else that PostHog didn't confirm.
+func (r *batchRun) lost(chunk []int, cause *EmailError) {
 	for _, i := range chunk {
+		if r.unconfirmed(i) {
+			continue
+		}
 		messageID := r.results[i].MessageID
-		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: unconfirmedEmail(messageID)})
+		reason := unconfirmedEmail(messageID)
+		if keysInFlight(cause) {
+			reason = cause
+		}
+		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: reason})
 	}
 }
 
@@ -389,17 +399,22 @@ func laterAnswer(earlier, answer *EmailError) *EmailError {
 	if answer == nil {
 		return earlier
 	}
-	if earlier == nil || answer.Code == "idempotency_key_in_flight" || (!mayHaveQueued(answer) && answer.Code != "api_error") {
+	if earlier == nil || keysInFlight(answer) || (!mayHaveQueued(answer) && (answer.Code != "api_error" || answer.StatusCode != 0)) {
 		return answer
 	}
 	return earlier
+}
+
+// keysInFlight is PostHog's 409 for keys an earlier request still holds.
+func keysInFlight(err *EmailError) bool {
+	return err.Code == "idempotency_key_in_flight" && err.StatusCode == http.StatusConflict
 }
 
 // mayHaveQueued is an attempt's error after which PostHog may still have
 // queued the emails: no answer, a cut-off answer, a 5xx, a 2xx the client
 // couldn't read, or keys an earlier request still holds.
 func mayHaveQueued(err *EmailError) bool {
-	return err.Code == "network_error" || err.Code == "idempotency_key_in_flight" || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
+	return err.Code == "network_error" || keysInFlight(err) || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
 }
 
 func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error) {
@@ -442,10 +457,10 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		body := run.body(chunk)
 		attempts, uncertain, lostBefore := 0, false, false
 		// answered is what PostHog answered the attempts after a lost one.
-		var answered *EmailError
+		var answered, cause *EmailError
 		err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 			if uncertain {
-				run.lost(chunk)
+				run.lost(chunk, cause)
 				lostBefore = true
 			}
 			uncertain = false
@@ -464,6 +479,9 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 				}
 			}
 			uncertain = err != nil && mayHaveQueued(err)
+			if uncertain {
+				cause = err
+			}
 			if lostBefore && err != nil && err.StatusCode != 0 {
 				answered = laterAnswer(answered, err)
 			}
@@ -473,7 +491,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 			continue
 		}
 		if uncertain {
-			run.lost(chunk)
+			run.lost(chunk, err)
 		}
 		if err.StatusCode == http.StatusRequestEntityTooLarge && err.Code == "content_too_large" && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
 			// The pipeline refused the data it copies to every recipient, so
