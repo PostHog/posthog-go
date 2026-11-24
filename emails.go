@@ -87,10 +87,10 @@ type Emails interface {
 	// The result holds one BatchEmailResult per recipient, in order: check
 	// each Status. When PostHog refuses the request as a whole, Batch returns
 	// that error with a result that holds every recipient, such as
-	// "too_large" (413), whose Fix says to split the recipients into smaller
-	// batches. The client checks only the recipient count, not the size. An
-	// "unconfirmed" email's Error says to send it again with the same
-	// IdempotencyKey. The error code "batch_unavailable" (409) means the
+	// "content_too_large" (413), whose Fix says to split the recipients into
+	// smaller batches. The client checks only the recipient count, not the
+	// size. An "unconfirmed" email's Error says to send it again with the
+	// same IdempotencyKey. The error code "batch_unavailable" (409) means the
 	// project can't send batches yet, and "not_found" that the template
 	// doesn't exist or batch sends are off for the project: send each email
 	// the batch didn't queue with Send and its recipient's IdempotencyKey,

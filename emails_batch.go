@@ -370,6 +370,11 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if attempts++; attempts > 1 && s.isClosed() {
 			return newEmailError("client_closed", "The PostHog client is shut down, so it didn't retry the batch.", ErrClosed)
 		}
+		if attempts > 1 && ctx.Err() != nil {
+			// The retry wait and the context can end together. A retry that
+			// never went out leaves PostHog's last answer standing.
+			return sent.interruptedBy(ctx.Err())
+		}
 		reply, err := s.doFor(ctx, s.batchAttemptTimeout(), http.MethodPost, s.appHost+emailBatchPath, header, run.body)
 		if err == nil {
 			err = run.answer(reply)

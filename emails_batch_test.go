@@ -293,14 +293,14 @@ func TestEmailsBatchSendsOneRequestOf100Recipients(t *testing.T) {
 
 func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 	server := newBatchServer(t, func(int, batchRequest) stubReply {
-		return stubReply{status: http.StatusRequestEntityTooLarge, body: `{"code":"too_large","detail":"The batch is larger than PostHog takes."}`}
+		return stubReply{status: http.StatusRequestEntityTooLarge, body: `{"code":"content_too_large","detail":"The batch is larger than PostHog takes."}`}
 	})
 	client := newEmailClientFor(t, server.URL)
 
 	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(4)...))
 
 	emailErr := requireEmailError(t, err)
-	require.Equal(t, "too_large", emailErr.Code)
+	require.Equal(t, "content_too_large", emailErr.Code)
 	require.Equal(t, http.StatusRequestEntityTooLarge, emailErr.StatusCode)
 	require.Equal(t, "Split the recipients into smaller batches.", emailErr.Fix)
 	require.Len(t, server.received(), 1, "the client doesn't split the batch")
