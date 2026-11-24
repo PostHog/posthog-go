@@ -87,25 +87,82 @@ func TestMatchPropertyWithKnownAbsentKeepsDefinitionChecksFirst(t *testing.T) {
 		})
 	}
 
-	t.Run("invalid semver condition", func(t *testing.T) {
-		_, err := matchPropertyWithKnownAbsent(FlagProperty{Key: "plan", Operator: "semver_neq", Value: "not-a-version"}, Properties{}, listed)
-		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
-	})
-	t.Run("invalid regex fails both operators", func(t *testing.T) {
-		for _, operator := range []string{"regex", "not_regex"} {
-			got, err := matchPropertyWithKnownAbsent(FlagProperty{Key: "plan", Operator: operator, Value: "(unclosed"}, Properties{}, listed)
-			require.NoError(t, err)
-			require.False(t, got)
+}
+
+// knownAbsentUnreadConditionValues pairs operators with condition values that local
+// evaluation can't parse, compile or compare. A known-absent key resolves without
+// reading them, as the flags service does.
+var knownAbsentUnreadConditionValues = []struct {
+	name     string
+	operator string
+	value    interface{}
+	want     bool
+}{
+	{"not_regex invalid", "not_regex", "[", true},
+	{"regex invalid", "regex", "[", false},
+	{"not_regex lookahead", "not_regex", "(?=pro)", true},
+	{"regex lookahead", "regex", "(?=pro)", false},
+	{"not_regex unicode class", "not_regex", `\p{L}`, true},
+	{"regex unicode class", "regex", `\p{L}`, false},
+	{"is_not integer", "is_not", float64(0), true},
+	{"exact integer", "exact", float64(1), false},
+	{"gt", "gt", "not-a-number", false},
+	{"gte", "gte", "not-a-number", false},
+	{"lt", "lt", "not-a-number", false},
+	{"lte", "lte", "not-a-number", false},
+	{"semver_eq", "semver_eq", "not-a-version", false},
+	{"semver_neq", "semver_neq", "not-a-version", false},
+	{"semver_gt", "semver_gt", "not-a-version", false},
+	{"semver_gte", "semver_gte", "not-a-version", false},
+	{"semver_lt", "semver_lt", "not-a-version", false},
+	{"semver_lte", "semver_lte", "not-a-version", false},
+	{"semver_tilde", "semver_tilde", "not-a-version", false},
+	{"semver_caret", "semver_caret", "not-a-version", false},
+	{"semver_wildcard", "semver_wildcard", "not-a-version", false},
+	{"is_date_before", "is_date_before", "not-a-date", false},
+	{"is_date_after", "is_date_after", "not-a-date", false},
+}
+
+func TestKnownAbsentResolvesWithoutReadingTheConditionValue(t *testing.T) {
+	flags := make([]string, 0, len(knownAbsentUnreadConditionValues))
+	for i, tt := range knownAbsentUnreadConditionValues {
+		value, err := json.Marshal(tt.value)
+		require.NoError(t, err)
+		filter := fmt.Sprintf(`{"key": "plan", "type": "person", "operator": %q, "value": %s}`, tt.operator, value)
+		flags = append(flags, flagDefinition(fmt.Sprintf("flag-%d", i), flagCondition(100, filter)))
+	}
+	definitions := knownAbsentDefinitions(flags...)
+
+	for i, tt := range knownAbsentUnreadConditionValues {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, properties := range []Properties{nil, {"plan": "pro"}} {
+				got, err := computeKnownAbsentFlag(t, definitions, fmt.Sprintf("flag-%d", i), nil, properties, nil, newKnownAbsentPropertyKeys([]string{"plan"}, nil))
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			}
+		})
+	}
+
+	server := newKnownAbsentServer(t, definitions)
+	c, _, _ := newEvalClient(t, server.server, func(cfg *Config) { cfg.PersonalApiKey = "personal-key" })
+	waitForFlagDefinitions(t, c)
+
+	t.Run("local only", func(t *testing.T) {
+		evals, err := c.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1", PersonPropertyKeysKnownAbsent: []string{"plan"}, OnlyEvaluateLocally: true})
+		require.NoError(t, err)
+		require.Empty(t, evals.UnresolvedFlags())
+		for i, tt := range knownAbsentUnreadConditionValues {
+			require.Equal(t, tt.want, evals.GetFlag(fmt.Sprintf("flag-%d", i)), tt.name)
 		}
 	})
-	t.Run("non-numeric condition stays an error", func(t *testing.T) {
-		_, err := matchPropertyWithKnownAbsent(FlagProperty{Key: "plan", Operator: "gt", Value: "ten"}, Properties{}, listed)
-		require.Error(t, err)
+	t.Run("default getter", func(t *testing.T) {
+		for i, tt := range knownAbsentUnreadConditionValues {
+			got, err := c.GetFeatureFlag(FeatureFlagPayload{Key: fmt.Sprintf("flag-%d", i), DistinctId: "user-1", PersonPropertyKeysKnownAbsent: []string{"plan"}})
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got, tt.name)
+		}
 	})
-	t.Run("invalid date condition stays an error", func(t *testing.T) {
-		_, err := matchPropertyWithKnownAbsent(FlagProperty{Key: "plan", Operator: "is_date_before", Value: "not-a-date"}, Properties{}, listed)
-		require.Error(t, err)
-	})
+	require.Empty(t, server.requests(), "no /flags request")
 }
 
 func TestKnownAbsentLocalEvaluation(t *testing.T) {

@@ -1967,30 +1967,17 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 // hides a persons-table field read by a person_metadata filter.
 func matchPropertyWithKnownAbsent(property FlagProperty, properties Properties, knownAbsent propertyKeySet, matchingVersions ...int) (bool, error) {
 	if _, listed := knownAbsent[property.Key]; listed && property.Type != "person_metadata" {
-		// An unsupported operator or unusable filter value stays inconclusive.
-		if filterErr := filterDefinitionError(property, matchingVersions...); filterErr != nil {
-			return false, filterErr
+		// An operator that local evaluation doesn't implement stays inconclusive.
+		if _, ok := propertyOperators[property.Operator]; !ok {
+			return false, &InconclusiveMatchError{msg: "Unknown operator: " + property.Operator, Reason: UnresolvedFlagReasonUnsupportedDefinition}
 		}
 		// The flags service reads a JSON null condition value as omitted, and an omitted
 		// value for a value-requiring operator stays inconclusive.
 		if property.Value == nil && property.Operator != "is_set" && property.Operator != "is_not_set" {
 			return false, errMissingConditionValue
 		}
-		// A malformed condition value keeps the result it has for a present value.
-		switch property.Operator {
-		case "regex", "not_regex":
-			if _, regexErr := getOrCompileRegex(valueToString(property.Value)); regexErr != nil {
-				return false, nil
-			}
-		case "gt", "gte", "lt", "lte":
-			if _, numberErr := interfaceToFloat(property.Value); numberErr != nil {
-				return false, errors.New("value 1 is not orderable")
-			}
-		case "is_date_before", "is_date_after":
-			if _, dateErr := validateDates(property.Value); dateErr != nil {
-				return false, dateErr
-			}
-		}
+		// Like the flags service, resolve from the key's absence without parsing,
+		// compiling or validating a present condition value.
 		return knownAbsentPropertyMatch(property.Operator), nil
 	}
 	matched, err := matchPropertyValue(property, properties, matchingVersions...)

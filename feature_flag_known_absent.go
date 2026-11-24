@@ -112,8 +112,8 @@ func validateKnownAbsentPropertyKeys(personKeys []string, groupKeys map[string][
 	return nil
 }
 
-// knownAbsentPropertyMatch is the definitive result of a supported, valid filter
-// on a known-absent key: the negated operators match and every other operator does not.
+// knownAbsentPropertyMatch is the definitive result of a supported operator with a
+// condition value on a known-absent key: the negated operators match and every other operator does not.
 func knownAbsentPropertyMatch(operator string) bool {
 	switch operator {
 	case "is_not_set", "is_not", "not_icontains", "not_starts_with", "not_ends_with", "not_regex":
