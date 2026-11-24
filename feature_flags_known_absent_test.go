@@ -550,3 +550,31 @@ func TestKnownAbsentCaptureOverLimitSendsEventWithoutFlags(t *testing.T) {
 	require.NotContains(t, events[0].Properties, "$feature/profile-incomplete")
 	require.Empty(t, server.requests(), "an over-limit list must not reach /flags")
 }
+
+func TestKnownAbsentCohortLeafKeepsItsGroupScope(t *testing.T) {
+	cohortFlag := `{"key": "org-cohort", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
+		flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`) + `]}}`
+	definitions := func(leaf string) string {
+		return `{"flags": [` + cohortFlag + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
+			`, "cohorts": {"1": {"type": "AND", "values": [{"type": "AND", "values": [` + leaf + `]}]}}}`
+	}
+	groups := Groups{"organization": "acme", "project": "p1"}
+	orgTierAbsent := newKnownAbsentPropertyKeys(nil, map[string][]string{"organization": {"tier"}})
+
+	t.Run("leaf for another group type stays inconclusive", func(t *testing.T) {
+		defs := definitions(`{"key": "tier", "type": "group", "group_type_index": 1, "operator": "is_not_set"}`)
+		_, err := computeKnownAbsentFlag(t, defs, "org-cohort", groups, nil, map[string]Properties{"organization": {}}, orgTierAbsent)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+	t.Run("person leaf stays inconclusive", func(t *testing.T) {
+		defs := definitions(`{"key": "tier", "type": "person", "operator": "is_not_set"}`)
+		_, err := computeKnownAbsentFlag(t, defs, "org-cohort", groups, nil, map[string]Properties{"organization": {}}, orgTierAbsent)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+	t.Run("leaf for the flag's group type resolves", func(t *testing.T) {
+		defs := definitions(`{"key": "tier", "type": "group", "group_type_index": 0, "operator": "is_not_set"}`)
+		got, err := computeKnownAbsentFlag(t, defs, "org-cohort", groups, nil, map[string]Properties{"organization": {}}, orgTierAbsent)
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+}

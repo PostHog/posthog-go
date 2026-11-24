@@ -93,7 +93,11 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 			} else if fp.Type == "flag" {
 				matches, err = poller.evaluateFlagDependency(*fp, flagsByKey, evaluationCache, distinctId, deviceId, properties, knownAbsent, cohorts, aggregationGroupTypeIndex, state)
 			} else {
-				matches, err = matchPropertyWithKnownAbsent(*fp, properties, knownAbsent, state.propertyMatchingVersion)
+				leafKnownAbsent := knownAbsent
+				if !pv.usesKnownAbsentOf(aggregationGroupTypeIndex) {
+					leafKnownAbsent = nil
+				}
+				matches, err = matchPropertyWithKnownAbsent(*fp, properties, leafKnownAbsent, state.propertyMatchingVersion)
 			}
 
 			if err != nil {

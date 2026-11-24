@@ -434,6 +434,22 @@ type parsedPropertyValue struct {
 	IsGroup  bool
 	Group    PropertyGroup
 	Property FlagProperty
+	// GroupTypeIndex is a group leaf's group_type_index, so known-absent keys of
+	// another group type don't apply to it.
+	GroupTypeIndex *uint8
+}
+
+// usesKnownAbsentOf reports whether the leaf reads properties of the evaluated
+// aggregation, so that aggregation's known-absent keys apply to it. A person leaf
+// belongs to person aggregation and a group leaf to its own group type.
+func (pv *parsedPropertyValue) usesKnownAbsentOf(aggregationGroupTypeIndex *uint8) bool {
+	switch pv.Property.Type {
+	case "person":
+		return aggregationGroupTypeIndex == nil
+	case "group":
+		return pv.GroupTypeIndex != nil && uint8PtrEqual(pv.GroupTypeIndex, aggregationGroupTypeIndex)
+	}
+	return true
 }
 
 // FlagVariantMeta is a precomputed hash range for a feature flag variant.
@@ -3243,11 +3259,22 @@ func preParsePG(pg PropertyGroup) PropertyGroup {
 					Negation:        getSafeProp[bool](prop, "negation"),
 					DependencyChain: parseDependencyChain(prop["dependency_chain"]),
 				},
+				GroupTypeIndex: parseGroupTypeIndex(prop["group_type_index"]),
 			})
 		}
 	}
 	pg.ParsedValues = parsed
 	return pg
+}
+
+// parseGroupTypeIndex reads a JSON-decoded group_type_index. Anything else is nil.
+func parseGroupTypeIndex(raw any) *uint8 {
+	index, ok := raw.(float64)
+	if !ok || index < 0 || index > math.MaxUint8 || index != math.Trunc(index) {
+		return nil
+	}
+	value := uint8(index)
+	return &value
 }
 
 // parseDependencyChain handles both typed helper inputs and JSON-decoded cohort leaves.
