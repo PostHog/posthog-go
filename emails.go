@@ -60,9 +60,10 @@ var (
 // PostHog Cloud schedules emails: on any other app host, such as a
 // self-hosted PostHog, a reverse proxy or a custom domain, Send returns an
 // error with code "scheduling_requires_cloud" before any request. Get reads
-// "scheduled" until the email goes out. To stop scheduled emails before they
-// go out, disable the email's workflow in PostHog until they have reached a
-// final status.
+// "scheduled" until the email goes out. Send can't cancel or move a
+// scheduled email. To stop a scheduled TemplateEmail before it goes out,
+// disable its template's workflow in PostHog until the email reaches a final
+// status; a CodeEmail has no workflow, so once scheduled it goes out.
 type Emails interface {
 	// Send queues one email, from a TemplateEmail made in PostHog or from a
 	// CodeEmail your code rendered, or schedules it when it has a
