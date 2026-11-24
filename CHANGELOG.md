@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 2.2.0
+
+### Minor Changes
+
+- f619405: Add the `ai/evaluations` package for revision-pinned datasets, versioned reported and composite scorers, and resumable offline experiments with acknowledged uploads and revision-checked corrections.
+
 ## 2.1.1
 
 ### Patch Changes
