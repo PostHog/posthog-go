@@ -322,6 +322,30 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	require.Empty(t, l.deliveries)
 }
 
+func TestBatchSubmitTimeout_ExpiredTimerDoesNotDropWhenQueueHasRoom(t *testing.T) {
+	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
+		m := map[string]eventResult{}
+		for _, u := range uuids {
+			m[u] = eventResult{Result: resultOk}
+		}
+		return http.StatusOK, resultsBody(t, m), ""
+	}}
+	ts := httptest.NewServer(srv.handler(t))
+	defer ts.Close()
+	// A 1ns timeout has usually fired by the time sendBatch selects, so the
+	// timer and the free queue slot are both ready.
+	c := newCaptureTestClient(t, ts.URL, nil, 0, func(cfg *Config) {
+		cfg.BatchSubmitTimeout = time.Nanosecond
+	})
+	const batches = 100
+	l := newLane(analyticsLaneConfig(c.Config), batches, c.http.Transport)
+	for i := 0; i < batches; i++ {
+		require.True(t, c.sendBatch(l, captureBatch(t, cap1(uuidA))), "batch %d dropped with room in the queue", i)
+	}
+	require.Eventually(t, func() bool { return l.inFlight.Load() == 0 }, 5*time.Second, time.Millisecond)
+	require.Len(t, srv.snapshot(), batches)
+}
+
 func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
