@@ -40,7 +40,7 @@ type BatchRecipient struct {
 	// emails that went out instead of sending them twice. A single send and a
 	// batch recipient with the same key and the same email replay each other.
 	// Never reuse a key for another email: PostHog replays the earlier email
-	// instead of sending this one.
+	// or refuses this one with "idempotency_key_reused", and never sends it.
 	IdempotencyKey string
 	// TemplateData is only for a TemplateEmailBatch: values for this
 	// recipient, merged over the batch's TemplateData. A top-level key set
@@ -434,6 +434,8 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		}
 		body := run.body(chunk)
 		attempts, uncertain, lostBefore := 0, false, false
+		// answered is PostHog's latest answer to an attempt after a lost one.
+		var answered *EmailError
 		err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 			if uncertain {
 				run.lost(chunk)
@@ -448,6 +450,9 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 				err = run.answer(chunk, reply)
 			}
 			uncertain = err != nil && mayHaveQueued(err)
+			if lostBefore && err != nil && err.StatusCode != 0 {
+				answered = err
+			}
 			return err
 		})
 		if err == nil {
@@ -455,9 +460,9 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		}
 		if uncertain {
 			run.lost(chunk)
-			if lostBefore && err.StatusCode != 0 {
+			if answered != nil {
 				for _, i := range chunk {
-					run.results[i].LaterError = err
+					run.results[i].LaterError = answered
 				}
 			}
 		}
@@ -470,7 +475,9 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 				pending = append(pending, chunk[half:], chunk[:half:half])
 				continue
 			}
-			run.set(chunk[0], "failed", BatchEmailResult{Error: err})
+			alone := *err
+			alone.Fix = "Make this recipient's email smaller."
+			run.set(chunk[0], "failed", BatchEmailResult{Error: &alone})
 			continue
 		}
 		run.stop(chunk, pending, err, uncertain)

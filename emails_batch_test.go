@@ -560,6 +560,26 @@ func TestEmailsBatchKeepsALostEmailUnconfirmedWhenTheRetryIsRefused(t *testing.T
 	}
 }
 
+func TestEmailsBatchKeepsPostHogsAnswerBetweenLostAnswers(t *testing.T) {
+	server := newBatchServer(t, func(n int, r batchRequest) stubReply {
+		if n == 1 {
+			return stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
+		}
+		return stubReply{status: dropConnection}
+	})
+	client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(2) })
+
+	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
+
+	require.Equal(t, "network_error", requireEmailError(t, err).Code)
+	require.Len(t, server.received(), 3)
+	got := result.Results[0]
+	require.Equal(t, "unconfirmed", got.Status)
+	require.NotNil(t, got.LaterError, "PostHog answered the second attempt")
+	require.Equal(t, "rate_limited", got.LaterError.Code)
+	require.Equal(t, http.StatusTooManyRequests, got.LaterError.StatusCode)
+}
+
 func TestEmailsBatchLeavesUnconfirmedEmailsToAResendWithTheirKeys(t *testing.T) {
 	t.Run("after a batch that fails", func(t *testing.T) {
 		server := newBatchServer(t, func(int, batchRequest) stubReply { return stubReply{status: dropConnection} })
@@ -873,7 +893,7 @@ func TestEmailsBatchSendsNothingMoreOnceTheContextEnds(t *testing.T) {
 }
 
 func TestEmailsBatchHalvesARequestTooLargeForThePipeline(t *testing.T) {
-	tooLarge := stubReply{status: http.StatusRequestEntityTooLarge, body: `{"code":"content_too_large","detail":"The batch is larger than PostHog can send at once, so PostHog didn't send it."}`}
+	tooLarge := stubReply{status: http.StatusRequestEntityTooLarge, body: `{"code":"content_too_large","detail":"The batch is larger than PostHog can send at once, so PostHog didn't send it.","fix":"Split the recipients into smaller batches."}`}
 	t.Run("until each request fits", func(t *testing.T) {
 		server := newBatchServer(t, func(n int, r batchRequest) stubReply {
 			recipients := r.recipients()
@@ -903,6 +923,7 @@ func TestEmailsBatchHalvesARequestTooLargeForThePipeline(t *testing.T) {
 		require.Equal(t, [][]string{{"user0", "user1", "user2", "user3", "user4"}, {"user0", "user1"}, {"user2", "user3", "user4"}, {"user2"}, {"user3", "user4"}, {"user3"}, {"user4"}}, sent)
 		require.Equal(t, []string{"queued", "queued", "queued", "failed", "queued"}, statuses(result))
 		require.Equal(t, "content_too_large", result.Results[3].Error.Code)
+		require.Equal(t, "Make this recipient's email smaller.", result.Results[3].Error.Fix, "a recipient alone can't be split")
 	})
 	t.Run("not when every recipient shares the content that is too large", func(t *testing.T) {
 		server := newBatchServer(t, func(int, batchRequest) stubReply {
