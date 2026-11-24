@@ -163,17 +163,34 @@ func versionParser(definitionID, versionID string) func(Fields) (ScorerVersion, 
 	}
 }
 
+// CreateScorerOptions adds metadata and, for a composite scorer, its formula
+// and pinned input versions. Calculation defaults to "reported".
 type CreateScorerOptions struct {
 	Calculation string
 	Composition *Composition
 	Description Optional[string]
 	Tags        []string
 }
+
+func (o CreateScorerOptions) MarshalJSON() ([]byte, error) {
+	fields := Fields{"Calculation": o.Calculation, "Composition": o.Composition, "Tags": o.Tags}
+	o.Description.put(fields, "Description")
+	return encode(fields)
+}
+
+// CreateVersionOptions can update metadata with the version. Set BaseVersion
+// to the observed version number to reject a concurrent change.
 type CreateVersionOptions struct {
 	BaseVersion *int
 	Name        *string
 	Description Optional[string]
 	Composition *Composition
+}
+
+func (o CreateVersionOptions) MarshalJSON() ([]byte, error) {
+	fields := Fields{"BaseVersion": o.BaseVersion, "Name": o.Name, "Composition": o.Composition}
+	o.Description.put(fields, "Description")
+	return encode(fields)
 }
 
 // configFields snapshots the exact output configuration for the request.
@@ -233,6 +250,9 @@ func addDescription(f Fields, description Optional[string]) {
 		}
 	}
 }
+
+// Create creates a scorer definition and its first version. Use the returned
+// CurrentVersionID when reporting a result or pinning a composite input.
 func (s Scorers) Create(ctx context.Context, name string, config ScorerConfig, options CreateScorerOptions) (Scorer, error) {
 	selected := options.Calculation
 	if selected == "" {
@@ -265,6 +285,8 @@ func (s Scorers) Create(ctx context.Context, name string, config ScorerConfig, o
 		return r, nil
 	})
 }
+
+// Get retrieves a definition and its current scorer version.
 func (s Scorers) Get(ctx context.Context, id string) (Scorer, error) {
 	id, err := idString(id)
 	if err != nil {
@@ -289,11 +311,13 @@ func (s Scorers) Update(ctx context.Context, id string, fields Fields) (Scorer, 
 	return write(ctx, s.client, "PATCH", scorersPath+id+"/", f, false, s.scorer(id))
 }
 
+// ScorerListOptions filters definitions by output kind, calculation, or input definition.
 type ScorerListOptions struct {
 	ListOptions
 	Kind, Calculation, InputDefinitionID string
 }
 
+// List returns one page of matching scorer definitions.
 func (s Scorers) List(ctx context.Context, options ScorerListOptions) (Page[Scorer], error) {
 	q, err := options.PageOptions.query(100, math.MaxInt)
 	if err != nil {
@@ -323,6 +347,9 @@ func (s Scorers) List(ctx context.Context, options ScorerListOptions) (Page[Scor
 	}
 	return call(ctx, s.client, request{method: "GET", path: scorersPath, query: q}, pageParser(options.Offset, s.scorer("")))
 }
+
+// CreateVersion appends an immutable configuration version and returns the
+// updated definition. Existing results keep their original scorer version.
 func (s Scorers) CreateVersion(ctx context.Context, id string, config ScorerConfig, options CreateVersionOptions) (Scorer, error) {
 	id, err := idString(id)
 	if err != nil {
@@ -347,6 +374,8 @@ func (s Scorers) CreateVersion(ctx context.Context, id string, config ScorerConf
 	}
 	return write(ctx, s.client, "POST", scorersPath+id+"/new_version/", f, false, s.scorer(id))
 }
+
+// GetVersion retrieves an immutable version by its definition ID and version UUID.
 func (s Scorers) GetVersion(ctx context.Context, id, versionID string) (ScorerVersion, error) {
 	id, err := idString(id)
 	if err != nil {
@@ -359,6 +388,8 @@ func (s Scorers) GetVersion(ctx context.Context, id, versionID string) (ScorerVe
 	return call(ctx, s.client, request{method: "GET", path: scorersPath + id + "/versions/" + versionID + "/"}, versionParser(id, versionID))
 }
 
+// VersionListOptions selects a page of scorer versions. Use the previous
+// page's NextCursor to continue.
 type VersionListOptions struct {
 	Limit  int
 	Cursor string
@@ -369,6 +400,7 @@ type ScorerVersionPage struct {
 	NextCursor *string
 }
 
+// ListVersions returns one cursor-paginated page of a definition's versions.
 func (s Scorers) ListVersions(ctx context.Context, id string, options VersionListOptions) (ScorerVersionPage, error) {
 	id, err := idString(id)
 	if err != nil {

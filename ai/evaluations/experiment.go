@@ -35,6 +35,9 @@ type Experiment struct {
 
 func (e *Experiment) ID() string   { return e.id }
 func (e *Experiment) path() string { return experimentsPath + e.id + "/" }
+
+// Submission returns a detached copy of the original creation fields for replay.
+// A locally resumed handle has no creation submission.
 func (e *Experiment) Submission() Fields {
 	var f Fields
 	if e.submission != nil {
@@ -61,6 +64,8 @@ func (e *Experiment) Receipt() *ExperimentReceipt {
 	return r
 }
 
+// ResumeExperiment opens a local handle to an existing run ID. The next
+// request checks whether the run exists and the caller can access it.
 func (c *Client) ResumeExperiment(id string) (*Experiment, error) {
 	id, err := idString(id)
 	if err != nil {
@@ -73,6 +78,8 @@ func (c *Client) ResumeExperiment(id string) (*Experiment, error) {
 // started_at, run_source, expected_item_count, expected_result_count, suite_key,
 // dataset_source, dataset_identifier, dataset_revision_identifier, dataset_revision_id,
 // application_version, model_version and prompt_version.
+// When reloading a saved submission into Fields, use json.Decoder.UseNumber
+// to preserve integer counts above the safe float64 range.
 func (c *Client) CreateExperiment(ctx context.Context, fields Fields) (*Experiment, error) {
 	body := copyFields(fields)
 	textKeys := []string{"suite_key", "dataset_source", "dataset_identifier", "dataset_revision_identifier", "application_version", "model_version", "prompt_version"}
@@ -154,16 +161,17 @@ func serialized[T any](ctx context.Context, e *Experiment, fn func() (T, error))
 	var zero T
 	select {
 	case <-ctx.Done():
-		return zero, ctx.Err()
 	case <-e.client.closed.Done():
-		return zero, closedError()
 	case e.gate <- struct{}{}:
 		defer func() { <-e.gate }()
-		if e.client.closed.Err() != nil {
-			return zero, closedError()
-		}
-		return fn()
 	}
+	if e.client.closed.Err() != nil {
+		return zero, closedError()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	return fn()
 }
 func (e *Experiment) finish(ctx context.Context, action, status string) (ExperimentReceipt, error) {
 	return serialized(ctx, e, func() (ExperimentReceipt, error) {
@@ -175,9 +183,14 @@ func (e *Experiment) finish(ctx context.Context, action, status string) (Experim
 		return *e.Receipt(), nil
 	})
 }
+
+// Complete marks the run complete after the service verifies any expected counts.
+// Individual cases can have failed scores in a completed run.
 func (e *Experiment) Complete(ctx context.Context) (ExperimentReceipt, error) {
 	return e.finish(ctx, "complete", "completed")
 }
+
+// Fail marks the run failed and retains items and results already accepted.
 func (e *Experiment) Fail(ctx context.Context) (ExperimentReceipt, error) {
 	return e.finish(ctx, "fail", "failed")
 }
@@ -191,7 +204,11 @@ func (e *Experiment) tags(ctx context.Context, method string, body []byte) ([]st
 		})
 	})
 }
+
+// GetTags reads the current tags from the service.
 func (e *Experiment) GetTags(ctx context.Context) ([]string, error) { return e.tags(ctx, "GET", nil) }
+
+// SetTags replaces all experiment tags. Pass an empty slice to clear them.
 func (e *Experiment) SetTags(ctx context.Context, tags []string) ([]string, error) {
 	if tags == nil {
 		tags = []string{}

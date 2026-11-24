@@ -7,7 +7,12 @@ import (
 	"strings"
 )
 
+// PageOptions selects one page by limit and offset. A zero limit uses the
+// endpoint's default. Use the returned NextOffset to fetch the next page.
 type PageOptions struct{ Limit, Offset int }
+
+// ListOptions filters a dataset or scorer listing. Archived selects archived
+// records. TagMatch accepts "any" (the default) or "all".
 type ListOptions struct {
 	PageOptions
 	Search, OrderBy string

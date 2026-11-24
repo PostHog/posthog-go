@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -141,6 +142,94 @@ func TestUncertainCreationAndRecovery(t *testing.T) {
 	require.NotContains(t, err.Error(), "sensitive")
 	require.NotContains(t, err.Error(), "private")
 	require.NotContains(t, err.Error(), "test-key")
+}
+
+func TestSubmissionReplayAcrossJSON(t *testing.T) {
+	for _, tc := range []struct {
+		count      int64
+		useNumbers bool
+	}{
+		{999_999, false}, {1_000_000, false}, {1<<53 - 1, false},
+		{1<<53 + 1, true}, {math.MaxInt64, true},
+	} {
+		var submitted Fields
+		c := scripted(t,
+			exchange{"POST", experimentsPath, func(f Fields, _ url.Values) { submitted = f }, 503, nil},
+			exchange{"POST", experimentsPath, func(f Fields, _ url.Values) { require.Equal(t, submitted, f) }, 201, receipt(runID, "uploading")},
+		)
+		c.retries = 0
+		_, err := c.CreateExperiment(ctx, Fields{"id": runID, "name": "replay", "expected_result_count": tc.count})
+		failure := apiFailure(t, err, "", Unknown)
+		saved, err := json.Marshal(failure.Submission)
+		require.NoError(t, err)
+		var restored Fields
+		decoder := json.NewDecoder(bytes.NewReader(saved))
+		if tc.useNumbers {
+			decoder.UseNumber()
+		}
+		require.NoError(t, decoder.Decode(&restored))
+		_, err = c.CreateExperiment(ctx, restored)
+		require.NoError(t, err)
+	}
+	c := scripted(t)
+	for _, invalid := range []float64{-1, 1.5, 1 << 53, 1<<53 + 2, math.Inf(1), math.NaN()} {
+		_, err := c.CreateExperiment(ctx, Fields{"name": "invalid count", "expected_item_count": invalid})
+		require.Error(t, err)
+	}
+}
+
+func TestCanceledEmptyUpload(t *testing.T) {
+	c := scripted(t)
+	run, err := c.ResumeExperiment(runID)
+	require.NoError(t, err)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	for i := 0; i < 100; i++ {
+		_, err := run.UploadResults(canceled, nil)
+		require.ErrorIs(t, err, context.Canceled)
+	}
+	c.Close()
+	_, err = run.UploadResults(canceled, nil)
+	apiFailure(t, err, "client_closed", NotSent)
+	_, err = c.CreateExperiment(canceled, Fields{"name": "closed"})
+	apiFailure(t, err, "client_closed", NotSent)
+}
+
+// closeDuringSetup closes the client as the transport derives the request
+// context, before the first attempt can reach RoundTrip.
+type closeDuringSetup struct {
+	context.Context
+	close func()
+}
+
+func (c closeDuringSetup) Done() <-chan struct{} {
+	c.close()
+	return c.Context.Done()
+}
+
+func TestClientClosedBeforeFirstAttempt(t *testing.T) {
+	c := scripted(t)
+	parent, cancel := context.WithCancel(ctx)
+	defer cancel()
+	requestCtx := closeDuringSetup{parent, func() {
+		c.Close()
+		cancel()
+	}}
+	_, err := c.CreateExperiment(requestCtx, Fields{"name": "closed during setup"})
+	failure := apiFailure(t, err, "client_closed", NotSent)
+	require.NotEmpty(t, failure.Submission["id"])
+}
+
+func TestRetryJitter(t *testing.T) {
+	require.Equal(t, 400*time.Millisecond, retryDelay(0, nil, 0))
+	require.Equal(t, 600*time.Millisecond, retryDelay(0, nil, 1))
+	require.Equal(t, time.Second, retryDelay(1, nil, 0.5))
+	require.Equal(t, 30*time.Second, retryDelay(100, nil, 1))
+	minimum := 550 * time.Millisecond
+	require.Equal(t, minimum, retryDelay(0, &minimum, 0))
+	require.Equal(t, 600*time.Millisecond, retryDelay(0, &minimum, 1))
+	long := time.Minute
+	require.Equal(t, long, retryDelay(0, &long, 0.5))
 }
 func TestCanceledRetryPreservesUncertainCreation(t *testing.T) {
 	requestCtx, cancel := context.WithCancel(context.Background())

@@ -216,8 +216,15 @@ func number(v any) (json.Number, error) {
 	return "", errors.New("evaluations: expected a number")
 }
 func count(v any, minValue int64) (int64, error) {
-	n, err := number(v)
-	if err == nil {
+	// Standard JSON decoding into Fields produces float64. Beyond the safe
+	// integer range adjacent counts can decode to the same float.
+	r := reflect.ValueOf(v)
+	if r.Kind() == reflect.Float64 || r.Kind() == reflect.Float32 {
+		x := r.Float()
+		if math.Abs(x) < 1<<53 && math.Trunc(x) == x && int64(x) >= minValue {
+			return int64(x), nil
+		}
+	} else if n, err := number(v); err == nil {
 		i, err := n.Int64()
 		if err == nil && i >= minValue {
 			return i, nil

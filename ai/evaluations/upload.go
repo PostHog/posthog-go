@@ -217,6 +217,9 @@ func (e *Experiment) upload(ctx context.Context, chunk uploadChunk, results []Re
 		return parseUpload(f, results[chunk.start:chunk.end])
 	})
 }
+
+// UploadResult submits one result and its attached item, if any, and waits for
+// acknowledgment. Use UploadResults to send a composite with its inputs.
 func (e *Experiment) UploadResult(ctx context.Context, result Result) (UploadReceipt, error) {
 	results, chunks, err := prepareChunks([]Result{result})
 	if err != nil {

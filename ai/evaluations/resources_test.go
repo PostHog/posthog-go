@@ -240,6 +240,69 @@ func TestCategoricalConfig(t *testing.T) {
 	require.Equal(t, cfg, got)
 }
 
+func TestOptionalJSON(t *testing.T) {
+	for _, tc := range []struct {
+		value Optional[float64]
+		wire  string
+	}{
+		{Value(1.5), "1.5"}, {Value(0.0), "0"}, {Null[float64](), "null"},
+	} {
+		b, err := json.Marshal(tc.value)
+		require.NoError(t, err)
+		require.JSONEq(t, tc.wire, string(b))
+		var restored Optional[float64]
+		require.NoError(t, json.Unmarshal(b, &restored))
+		require.Equal(t, tc.value, restored)
+	}
+	b, err := json.Marshal(Optional[float64]{})
+	require.NoError(t, err)
+	require.Equal(t, "null", string(b))
+
+	for _, description := range []Optional[string]{{}, Null[string](), Value(""), Value("scorer")} {
+		one := 1
+		options := CreateScorerOptions{Calculation: "reported", Description: description, Tags: []string{"tag"}}
+		version := CreateVersionOptions{BaseVersion: &one, Description: description}
+		for _, tc := range []struct{ source, target any }{
+			{&options, &CreateScorerOptions{}}, {&version, &CreateVersionOptions{}},
+		} {
+			b, err := json.Marshal(tc.source)
+			require.NoError(t, err)
+			var fields Fields
+			require.NoError(t, json.Unmarshal(b, &fields))
+			_, present := fields["Description"]
+			require.Equal(t, description.Present, present)
+			require.NoError(t, json.Unmarshal(b, tc.target))
+			require.Equal(t, tc.source, tc.target)
+		}
+	}
+}
+
+func TestScorersRejectInvalidConfigTextBeforeSending(t *testing.T) {
+	c := scripted(t)
+	bad := string([]byte{0xff})
+	comp := Composition{Expression: "a", Inputs: []CompositionInput{{Alias: "a", ScorerVersionID: versionID}}}
+	for _, config := range []ScorerConfig{
+		BooleanConfig{TrueLabel: &bad}, &BooleanConfig{FalseLabel: &bad},
+		NumericConfig{PassingRule: Value(NumericPassingRule{Operator: bad})},
+		CategoricalConfig{SelectionMode: bad},
+		CategoricalConfig{Options: []CategoryOption{{Key: bad, Label: "Pass"}}},
+		&CategoricalConfig{Options: []CategoryOption{{Key: "pass", Label: bad}}},
+		CategoricalConfig{PassingRule: Value(CategoryPassingRule{Categories: []string{bad}})},
+	} {
+		_, err := c.Scorers.Create(ctx, "test", config, CreateScorerOptions{})
+		require.Error(t, err)
+		_, err = c.Scorers.CreateVersion(ctx, itemID, config, CreateVersionOptions{})
+		require.Error(t, err)
+		_, err = c.Scorers.ValidateComposition(ctx, config.Kind(), comp, config)
+		require.Error(t, err)
+	}
+	// A caller may intentionally use the Unicode replacement character.
+	label := "�"
+	b, err := json.Marshal(BooleanConfig{TrueLabel: &label})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"true_label":"�"}`, string(b))
+}
+
 func TestInvalidResourceAcknowledgments(t *testing.T) {
 	for _, override := range []Fields{
 		{"team_id": 43}, {"version_id": "x" + versionID + "y"}, {"version": true}, {"input": nil},

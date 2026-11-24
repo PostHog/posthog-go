@@ -1277,12 +1277,16 @@ type CreateScorerOptions struct {
 	Tags        []string
 }
 
+func (o CreateScorerOptions) MarshalJSON() ([]byte, error)
+
 type CreateVersionOptions struct {
 	BaseVersion *int
 	Name        *string
 	Description Optional[string]
 	Composition *Composition
 }
+
+func (o CreateVersionOptions) MarshalJSON() ([]byte, error)
 
 type Dataset struct {
 	DatasetAudit
@@ -1491,6 +1495,8 @@ type Optional[T any] struct {
 func Null[T any]() Optional[T]
 
 func Value[T any](v T) Optional[T]
+
+func (o Optional[T]) MarshalJSON() ([]byte, error)
 
 func (o *Optional[T]) UnmarshalJSON(b []byte) error
 

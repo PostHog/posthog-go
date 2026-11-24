@@ -8,7 +8,10 @@ import (
 )
 
 // Optional distinguishes an omitted property (zero value), explicit null, and
-// a supplied value, including false or zero.
+// a supplied value, including false or zero. A standalone JSON value cannot
+// express omission, so an unset Optional marshals as null. Enclosing SDK
+// configs and options omit unset properties when marshaling. For a custom
+// JSON object, omit the key when Present is false.
 type Optional[T any] struct {
 	Present bool
 	Value   *T
@@ -16,9 +19,19 @@ type Optional[T any] struct {
 
 func Value[T any](v T) Optional[T] { return Optional[T]{Present: true, Value: &v} }
 func Null[T any]() Optional[T]     { return Optional[T]{Present: true} }
+func (o Optional[T]) MarshalJSON() ([]byte, error) {
+	if !o.Present {
+		return []byte("null"), nil
+	}
+	return encode(o.Value)
+}
 func (o *Optional[T]) UnmarshalJSON(b []byte) error {
-	o.Present = true
-	return json.Unmarshal(b, &o.Value)
+	var value *T
+	if err := json.Unmarshal(b, &value); err != nil {
+		return err
+	}
+	*o = Optional[T]{Present: true, Value: value}
+	return nil
 }
 func (o Optional[T]) put(f Fields, k string) {
 	if o.Present {
@@ -39,6 +52,9 @@ type BooleanConfig struct {
 
 func (BooleanConfig) Kind() string { return "boolean" }
 func (c BooleanConfig) MarshalJSON() ([]byte, error) {
+	if (c.TrueLabel != nil && !validText(*c.TrueLabel)) || (c.FalseLabel != nil && !validText(*c.FalseLabel)) {
+		return nil, errors.New("evaluations: invalid boolean scorer label")
+	}
 	f := Fields{}
 	if c.TrueLabel != nil {
 		f["true_label"] = *c.TrueLabel
@@ -63,6 +79,9 @@ type NumericConfig struct {
 
 func (NumericConfig) Kind() string { return "numeric" }
 func (c NumericConfig) MarshalJSON() ([]byte, error) {
+	if rule := c.PassingRule; rule.Present && rule.Value != nil && !validText(rule.Value.Operator) {
+		return nil, errors.New("evaluations: invalid numeric passing rule operator")
+	}
 	f := Fields{}
 	c.Min.put(f, "min")
 	c.Max.put(f, "max")
@@ -88,6 +107,21 @@ type CategoricalConfig struct {
 
 func (CategoricalConfig) Kind() string { return "categorical" }
 func (c CategoricalConfig) MarshalJSON() ([]byte, error) {
+	if !validText(c.SelectionMode) {
+		return nil, errors.New("evaluations: invalid categorical selection mode")
+	}
+	for _, option := range c.Options {
+		if !validText(option.Key) || !validText(option.Label) {
+			return nil, errors.New("evaluations: invalid categorical option key or label")
+		}
+	}
+	if rule := c.PassingRule; rule.Present && rule.Value != nil {
+		for _, category := range rule.Value.Categories {
+			if !validText(category) {
+				return nil, errors.New("evaluations: invalid passing category")
+			}
+		}
+	}
 	f := Fields{"options": c.Options}
 	if c.SelectionMode != "" {
 		f["selection_mode"] = c.SelectionMode

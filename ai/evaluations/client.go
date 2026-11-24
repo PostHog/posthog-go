@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -53,6 +54,8 @@ type Client struct {
 	ownsTransport bool
 }
 
+// NewClient configures project-scoped dataset, scorer, and experiment operations.
+// It validates the configuration locally. Call Close to release its resources.
 func NewClient(cfg Config) (*Client, error) {
 	if cfg.ProjectID <= 0 || cfg.SecretKey == "" || !validText(cfg.SecretKey) || strings.IndexFunc(cfg.SecretKey, unicode.IsSpace) >= 0 {
 		return nil, errors.New("evaluations: positive project ID and a secret key without whitespace required")
@@ -170,9 +173,6 @@ func readResponseBody(body io.ReadCloser, limit int64) ([]byte, error) {
 // call parses each successful response exactly once. Parsing errors never trigger a retry.
 func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (T, error)) (T, error) {
 	var zero T
-	if c.closed.Err() != nil {
-		return zero, closedError()
-	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(c.closed, cancel)
@@ -183,9 +183,15 @@ func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (
 	}
 	hadUnknown := false
 	var lastFailure *APIError
-	delay := 500 * time.Millisecond
 	for attempt := 0; ; attempt++ {
-		if err := ctx.Err(); err != nil {
+		err := c.closed.Err()
+		if err != nil && lastFailure == nil {
+			return zero, closedError()
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
 			if lastFailure != nil {
 				lastFailure.cause = err
 				return zero, lastFailure
@@ -255,11 +261,8 @@ func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (
 		if !(r.retry || r.method == "GET") || attempt >= c.retries || !canRetry {
 			return zero, failure
 		}
-		wait := delay
-		if failure.RetryAfter != nil && *failure.RetryAfter > wait {
-			wait = *failure.RetryAfter
-		}
-		if wait > 30*time.Second {
+		wait := retryDelay(attempt, failure.RetryAfter, rand.Float64())
+		if wait > maxRetryWait {
 			return zero, failure
 		}
 		timer := time.NewTimer(wait)
@@ -270,8 +273,18 @@ func call[T any](ctx context.Context, c *Client, r request, parse func(Fields) (
 			return zero, failure
 		case <-timer.C:
 		}
-		delay = min(2*delay, 30*time.Second)
 	}
+}
+
+const maxRetryWait = 30 * time.Second
+
+func retryDelay(attempt int, retryAfter *time.Duration, random float64) time.Duration {
+	base := (500 * time.Millisecond) << min(attempt, 6)
+	wait := min(maxRetryWait, time.Duration(float64(base)*(0.8+0.4*random)))
+	if retryAfter != nil {
+		wait = max(wait, *retryAfter)
+	}
+	return wait
 }
 func retryable(status int) bool {
 	switch status {

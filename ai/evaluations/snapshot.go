@@ -17,6 +17,8 @@ type DatasetSnapshot struct {
 func (s *DatasetSnapshot) Revision() int      { return s.revision }
 func (s *DatasetSnapshot) RevisionID() string { return s.revisionID }
 
+// Snapshot pins a dataset revision for repeatable iteration. A nil revision
+// selects the current revision when the snapshot is opened.
 func (d Datasets) Snapshot(ctx context.Context, id string, revision *int) (*DatasetSnapshot, error) {
 	if revision != nil && *revision < 1 {
 		return nil, errors.New("evaluations: revision must be positive")

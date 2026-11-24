@@ -163,6 +163,8 @@ func (d Datasets) Create(ctx context.Context, fields Fields) (Dataset, error) {
 	}
 	return write(ctx, d.client, "POST", "datasets/", f, false, d.dataset(""))
 }
+
+// Get retrieves dataset metadata, including the current revision when one exists.
 func (d Datasets) Get(ctx context.Context, id string) (Dataset, error) {
 	id, err := idString(id)
 	if err != nil {
@@ -196,12 +198,18 @@ func (d Datasets) state(ctx context.Context, id, action string) (Dataset, error)
 		return row, nil
 	})
 }
+
+// Archive moves a dataset out of active listings and retains its history.
 func (d Datasets) Archive(ctx context.Context, id string) (Dataset, error) {
 	return d.state(ctx, id, "archive")
 }
+
+// Restore makes an archived dataset active again.
 func (d Datasets) Restore(ctx context.Context, id string) (Dataset, error) {
 	return d.state(ctx, id, "restore")
 }
+
+// List returns one page of datasets, ordered by creation time by default.
 func (d Datasets) List(ctx context.Context, options ListOptions) (Page[Dataset], error) {
 	q, err := options.PageOptions.query(50, 100)
 	if err != nil {
@@ -218,6 +226,8 @@ func (d Datasets) List(ctx context.Context, options ListOptions) (Page[Dataset],
 	}
 	return call(ctx, d.client, request{method: "GET", path: "datasets/", query: q}, pageParser(options.Offset, d.dataset("")))
 }
+
+// ListRevisions returns one page of the dataset's revision history.
 func (d Datasets) ListRevisions(ctx context.Context, id string, options PageOptions) (Page[DatasetRevision], error) {
 	id, err := idString(id)
 	if err != nil {
@@ -240,6 +250,8 @@ func (d Datasets) ListRevisions(ctx context.Context, id string, options PageOpti
 	return call(ctx, d.client, request{method: "GET", path: "datasets/" + id + "/revisions/", query: q}, pageParser(options.Offset, parse))
 }
 
+// ItemListOptions selects active or archived items at a dataset revision.
+// A nil Revision reads the latest state.
 type ItemListOptions struct {
 	PageOptions
 	Revision *int
@@ -255,6 +267,8 @@ func selectRevision(q url.Values, revision *int) error {
 	}
 	return nil
 }
+
+// ListItems returns one page of up to 25 cases from the selected dataset revision.
 func (d Datasets) ListItems(ctx context.Context, id string, options ItemListOptions) (Page[DatasetItem], error) {
 	id, err := idString(id)
 	if err != nil {
@@ -271,6 +285,8 @@ func (d Datasets) ListItems(ctx context.Context, id string, options ItemListOpti
 	q.Set("dataset", id)
 	return call(ctx, d.client, request{method: "GET", path: "dataset_items/", query: q}, pageParser(options.Offset, d.item(itemScope{dataset: id, archived: &options.Archived, revision: options.Revision})))
 }
+
+// GetItem retrieves the case at a dataset revision. Use nil for its latest state.
 func (d Datasets) GetItem(ctx context.Context, id string, revision *int) (DatasetItem, error) {
 	id, err := idString(id)
 	if err != nil {
@@ -363,9 +379,14 @@ func (d Datasets) changeItem(ctx context.Context, id string, version int, method
 	archived := suffix == "archive/"
 	return write(ctx, d.client, method, "dataset_items/"+id+"/"+suffix, fields, false, d.item(itemScope{id: id, archived: &archived}))
 }
+
+// ArchiveItem archives the case if baseVersion is still current.
 func (d Datasets) ArchiveItem(ctx context.Context, id string, baseVersion int) (DatasetItem, error) {
 	return d.changeItem(ctx, id, baseVersion, "POST", "archive/", Fields{})
 }
+
+// RestoreItem restores a case at its observed baseVersion. Supply sourceVersion
+// to restore the content of a specific historical item version.
 func (d Datasets) RestoreItem(ctx context.Context, id string, baseVersion int, sourceVersion *int) (DatasetItem, error) {
 	f := Fields{}
 	if sourceVersion != nil {
@@ -376,6 +397,8 @@ func (d Datasets) RestoreItem(ctx context.Context, id string, baseVersion int, s
 	}
 	return d.changeItem(ctx, id, baseVersion, "POST", "restore/", f)
 }
+
+// ListItemVersions returns one page of historical versions for an individual case.
 func (d Datasets) ListItemVersions(ctx context.Context, id string, options PageOptions) (Page[DatasetItem], error) {
 	id, err := idString(id)
 	if err != nil {
