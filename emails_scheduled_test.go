@@ -19,7 +19,7 @@ var (
 
 // newCloudEmailClient is a client on PostHog Cloud US, at testClientNow, whose
 // requests reach server, since only a Cloud client schedules.
-func newCloudEmailClient(t *testing.T, server *emailServer) Client {
+func newCloudEmailClient(t *testing.T, server *emailServer, options ...emailClientOption) Client {
 	target, err := url.Parse(server.URL)
 	require.NoError(t, err)
 	c := newEmailClientFor(t, server.URL, func(config *Config) {
@@ -29,6 +29,9 @@ func newCloudEmailClient(t *testing.T, server *emailServer) Client {
 			r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
 			return http.DefaultTransport.RoundTrip(r)
 		})
+		for _, option := range options {
+			option(config)
+		}
 	})
 	senderOf(c).now = func() time.Time { return testClientNow }
 	return c
@@ -233,25 +236,51 @@ func TestEmailsSendReplaysAScheduledSend(t *testing.T) {
 	require.Equal(t, requests[0].Raw, requests[1].Raw)
 }
 
+const sandboxSenderWarning = `"warnings":[{"code":"sandbox_sender","message":"Sent from the PostHog test sender."}]`
+
 func TestEmailsSendLogsWarningsOfAnUnconfirmedSchedule(t *testing.T) {
-	server := newEmailServer(t, stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","warnings":[{"code":"template_superseded","detail":"A newer version exists."}]}`})
+	server := newEmailServer(t, stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `",` + sandboxSenderWarning + `}`})
 	logs := &recordingLogger{}
-	client := newCloudEmailClient(t, server)
-	senderOf(client).logger = logs
+	client := newCloudEmailClient(t, server, func(config *Config) { config.Logger = logs })
 	email := templateEmail()
 	email.ScheduledAt = testScheduledAt
 
 	_, err := client.Emails().Send(context.Background(), email)
 
 	require.Equal(t, "schedule_not_confirmed", requireEmailError(t, err).Code)
-	require.Equal(t, []string{"PostHog email warning template_superseded: A newer version exists."}, logs.warnings())
+	require.Equal(t, []string{"PostHog email warning sandbox_sender: Sent from the PostHog test sender."}, logs.warnings())
+}
+
+// slowLogger moves the client's clock on while it logs, as a slow log sink
+// would.
+type slowLogger struct {
+	recordingLogger
+	clock *time.Time
+}
+
+func (l *slowLogger) Warnf(format string, args ...interface{}) {
+	*l.clock = l.clock.Add(2 * time.Second)
+	l.recordingLogger.Warnf(format, args...)
+}
+
+func TestEmailsSendChecksTheScheduleAgainstTheClockWhenTheAnswerArrives(t *testing.T) {
+	server := newEmailServer(t, stubReply{status: http.StatusAccepted, body: `{"message_id":"` + testMessageID + `","status":"queued","scheduled_at":null,` + sandboxSenderWarning + `}`})
+	clock := testClientNow
+	client := newCloudEmailClient(t, server, func(config *Config) { config.Logger = &slowLogger{clock: &clock} })
+	senderOf(client).now = func() time.Time { return clock }
+	email := templateEmail()
+	email.ScheduledAt = testClientNow.Add(maxEmailClockSkew + time.Second)
+
+	_, err := client.Emails().Send(context.Background(), email)
+
+	require.Equal(t, "schedule_not_confirmed", requireEmailError(t, err).Code)
 }
 
 func TestEmailsSendSurfacesARefusedScheduleWithoutSendingNow(t *testing.T) {
 	server := newEmailServer(t, stubReply{status: http.StatusBadRequest, body: `{"type":"validation_error","code":"scheduled_too_far","detail":"` + "`scheduled_at`" + ` is more than 7 days away, so PostHog didn't send the email.","attr":"scheduled_at","why":"PostHog holds a scheduled email for at most 7 days after the request.","fix":"Pick a time within 7 days, or send the email closer to the time."}`})
 	client := newCloudEmailClient(t, server)
 	email := codeEmail()
-	email.ScheduledAt = testScheduledAt
+	email.ScheduledAt = testClientNow.Add(8 * 24 * time.Hour)
 
 	result, err := client.Emails().Send(context.Background(), email)
 
@@ -264,5 +293,5 @@ func TestEmailsSendSurfacesARefusedScheduleWithoutSendingNow(t *testing.T) {
 	require.Empty(t, emailErr.MessageID)
 	requests := server.received()
 	require.Len(t, requests, 1)
-	require.Equal(t, "2026-12-01T09:00:00.000Z", requests[0].Body["scheduled_at"])
+	require.Equal(t, "2026-12-08T09:00:00.000Z", requests[0].Body["scheduled_at"])
 }

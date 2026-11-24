@@ -109,7 +109,8 @@ type TemplateEmail struct {
 	// ahead, on PostHog Cloud only. PostHog keeps the time to the
 	// millisecond, so the client rounds a finer time up to the next
 	// millisecond. A time that has passed sends the email now. The zero time
-	// sends now. Work out a relative time, such as an hour from now, once,
+	// sends now. When PostHog sends it now for a time more than a minute
+	// ahead of this client's clock, Send returns "schedule_not_confirmed". Work out a relative time, such as an hour from now, once,
 	// and send the same time when you send again with the same
 	// IdempotencyKey: another time with the same key is refused with
 	// "idempotency_key_reused".
@@ -575,6 +576,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	if err != nil {
 		return nil, err
 	}
+	answeredAt := s.now()
 	result, err := reply.sendResult()
 	if err != nil {
 		return nil, err
@@ -583,7 +585,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 		s.logger.Warnf("PostHog email warning %s: %s", warning.Code, warning.Message)
 	}
 	if !send.scheduledAt.IsZero() {
-		if err := reply.checkSchedule(result, send.scheduledAt, s.now()); err != nil {
+		if err := reply.checkSchedule(result, send.scheduledAt, answeredAt); err != nil {
 			return nil, err
 		}
 	}
@@ -873,7 +875,9 @@ func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 // checkSchedule accepts the answer to a scheduled send only when it confirms
 // the requested time, or says the email goes out now for a time that has
 // passed. A PostHog that dropped the time answers "queued" too, so a
-// "queued" for a time still ahead of the client's clock is unconfirmed.
+// "queued" for a time more than maxEmailClockSkew ahead of the client's
+// clock is unconfirmed. Within that minute, "queued" with a null
+// scheduled_at is accepted, because PostHog's clock may already be past it.
 func (r emailReply) checkSchedule(result *SendEmailResult, requested, now time.Time) *EmailError {
 	answered, hasTime := r.fields["scheduled_at"]
 	switch r.text("status") {
