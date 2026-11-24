@@ -95,7 +95,8 @@ type CodeEmailBatch struct {
 //     such as after a lost answer. It may still go out. Send it again with
 //     the same IdempotencyKey within 24 hours, so it goes out once.
 //     LaterError holds what a retry in the same call answered: PostHog's
-//     latest refusal, or else its latest answer. It describes only that retry.
+//     latest refusal, keys in flight included, or else its first other
+//     answer. It describes only that retry.
 //   - "not_attempted": an earlier request of the batch failed, so the client
 //     sent nothing for this recipient.
 type BatchEmailResult struct {
@@ -381,6 +382,19 @@ func (r *batchRun) result() *SendBatchResult {
 	return &SendBatchResult{Results: r.results, Warnings: r.warnings}
 }
 
+// laterAnswer is what LaterError keeps when PostHog answers again: a refusal
+// or keys in flight say why the email is unconfirmed, so they replace an
+// earlier answer, and a 5xx or an unreadable answer only fills an empty one.
+func laterAnswer(earlier, answer *EmailError) *EmailError {
+	if answer == nil {
+		return earlier
+	}
+	if earlier == nil || answer.Code == "idempotency_key_in_flight" || (!mayHaveQueued(answer) && answer.Code != "api_error") {
+		return answer
+	}
+	return earlier
+}
+
 // mayHaveQueued is an attempt's error after which PostHog may still have
 // queued the emails: no answer, a cut-off answer, a 5xx, a 2xx the client
 // couldn't read, or keys an earlier request still holds.
@@ -427,8 +441,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		}
 		body := run.body(chunk)
 		attempts, uncertain, lostBefore := 0, false, false
-		// answered is PostHog's latest answer to an attempt after a lost one. A
-		// refusal outlasts a later answer that may have queued the emails.
+		// answered is what PostHog answered the attempts after a lost one.
 		var answered *EmailError
 		err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 			if uncertain {
@@ -442,10 +455,17 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 			reply, err := s.doFor(ctx, s.batchAttemptTimeout(), http.MethodPost, s.appHost+emailBatchPath, header, body)
 			if err == nil {
 				err = run.answer(chunk, reply)
+				if err == nil && answered != nil {
+					for _, i := range chunk {
+						if run.unconfirmed(i) {
+							run.results[i].LaterError = laterAnswer(answered, run.results[i].LaterError)
+						}
+					}
+				}
 			}
 			uncertain = err != nil && mayHaveQueued(err)
-			if lostBefore && err != nil && err.StatusCode != 0 && (!uncertain || answered == nil || mayHaveQueued(answered)) {
-				answered = err
+			if lostBefore && err != nil && err.StatusCode != 0 {
+				answered = laterAnswer(answered, err)
 			}
 			return err
 		})

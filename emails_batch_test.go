@@ -562,12 +562,15 @@ func TestEmailsBatchKeepsALostEmailUnconfirmedWhenTheRetryIsRefused(t *testing.T
 
 func TestEmailsBatchKeepsPostHogsRefusalBetweenLostAnswers(t *testing.T) {
 	rateLimited := stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
+	inFlight := failed(http.StatusConflict, "idempotency_key_in_flight")
 	for _, tt := range []struct {
-		name, code string
-		last       stubReply
+		name, code, later string
+		second, last      stubReply
 	}{
-		{name: "then a lost answer", code: "network_error", last: stubReply{status: dropConnection}},
-		{name: "then a 503", code: "delivery_unavailable", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
+		{name: "then a lost answer", code: "network_error", later: "rate_limited", second: rateLimited, last: stubReply{status: dropConnection}},
+		{name: "then a 503", code: "delivery_unavailable", later: "rate_limited", second: rateLimited, last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
+		{name: "keys in flight, then a 503", code: "delivery_unavailable", later: "idempotency_key_in_flight", second: inFlight, last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
+		{name: "then an unreadable answer", later: "rate_limited", second: rateLimited, last: stubReply{status: http.StatusOK, body: `{"results":[null]}`}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newBatchServer(t, func(n int, r batchRequest) stubReply {
@@ -575,7 +578,7 @@ func TestEmailsBatchKeepsPostHogsRefusalBetweenLostAnswers(t *testing.T) {
 				case 0:
 					return stubReply{status: dropConnection}
 				case 1:
-					return rateLimited
+					return tt.second
 				}
 				return tt.last
 			})
@@ -583,13 +586,16 @@ func TestEmailsBatchKeepsPostHogsRefusalBetweenLostAnswers(t *testing.T) {
 
 			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
 
-			require.Equal(t, tt.code, requireEmailError(t, err).Code)
+			if tt.code == "" {
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, tt.code, requireEmailError(t, err).Code)
+			}
 			require.Len(t, server.received(), 3)
 			got := result.Results[0]
 			require.Equal(t, "unconfirmed", got.Status)
-			require.NotNil(t, got.LaterError, "PostHog refused the second attempt")
-			require.Equal(t, "rate_limited", got.LaterError.Code)
-			require.Equal(t, http.StatusTooManyRequests, got.LaterError.StatusCode)
+			require.NotNil(t, got.LaterError, "PostHog answered the second attempt")
+			require.Equal(t, tt.later, got.LaterError.Code)
 		})
 	}
 	t.Run("then a shutdown", func(t *testing.T) {
