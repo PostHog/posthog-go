@@ -41,6 +41,7 @@ var (
 	errMissingPropertyValue     = &InconclusiveMatchError{msg: "Can't match properties without a given property value", Reason: UnresolvedFlagReasonMissingContext}
 	errInconclusiveMatch        = newInconclusiveSentinels("Can't determine if feature flag is enabled or not with given properties")
 	errAmbiguousExactNumber     = &InconclusiveMatchError{msg: "Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float", Reason: UnresolvedFlagReasonUnsupportedDefinition}
+	errMissingConditionValue    = &InconclusiveMatchError{msg: "Can't match a known-absent property without a condition value", Reason: UnresolvedFlagReasonUnsupportedDefinition}
 	errCohortPropertyValue      = newInconclusiveSentinels("Can't match cohort without a given cohort property value")
 	errHoldoutMissingDeviceID   = newInconclusiveSentinels("Can't evaluate a device-bucketed holdout without a device id")
 	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation", Reason: UnresolvedFlagReasonUnsupportedDefinition}
@@ -1969,6 +1970,11 @@ func matchPropertyWithKnownAbsent(property FlagProperty, properties Properties, 
 		// An unsupported operator or unusable filter value stays inconclusive.
 		if filterErr := filterDefinitionError(property, matchingVersions...); filterErr != nil {
 			return false, filterErr
+		}
+		// The flags service reads a JSON null condition value as omitted, and an omitted
+		// value for a value-requiring operator stays inconclusive.
+		if property.Value == nil && property.Operator != "is_set" && property.Operator != "is_not_set" {
+			return false, errMissingConditionValue
 		}
 		// A malformed condition value keeps the result it has for a present value.
 		switch property.Operator {
