@@ -323,27 +323,24 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 }
 
 func TestBatchSubmitTimeout_ExpiredTimerDoesNotDropWhenQueueHasRoom(t *testing.T) {
-	srv := &captureTestServer{respond: func(_ int, uuids []string) (int, string, string) {
-		m := map[string]eventResult{}
-		for _, u := range uuids {
-			m[u] = eventResult{Result: resultOk}
-		}
-		return http.StatusOK, resultsBody(t, m), ""
-	}}
-	ts := httptest.NewServer(srv.handler(t))
-	defer ts.Close()
-	// A 1ns timeout has usually fired by the time sendBatch selects, so the
-	// timer and the free queue slot are both ready.
-	c := newCaptureTestClient(t, ts.URL, nil, 0, func(cfg *Config) {
-		cfg.BatchSubmitTimeout = time.Nanosecond
+	var delivered atomic.Int64
+	transport := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		delivered.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"results":{}}`)), Header: http.Header{}}, nil
 	})
-	const batches = 100
-	l := newLane(analyticsLaneConfig(c.Config), batches, c.http.Transport)
+	// A 1ns timeout has often fired by the time sendBatch selects, so the
+	// timer and the free queue slot are both ready.
+	c := newCaptureTestClient(t, "http://posthog.invalid", nil, 0, func(cfg *Config) {
+		cfg.BatchSubmitTimeout = time.Nanosecond
+		cfg.Transport = transport
+	})
+	const batches = 20000
+	l := newLane(analyticsLaneConfig(c.Config), batches, transport)
 	for i := 0; i < batches; i++ {
 		require.True(t, c.sendBatch(l, captureBatch(t, cap1(uuidA))), "batch %d dropped with room in the queue", i)
 	}
-	require.Eventually(t, func() bool { return l.inFlight.Load() == 0 }, 5*time.Second, time.Millisecond)
-	require.Len(t, srv.snapshot(), batches)
+	require.Eventually(t, func() bool { return l.inFlight.Load() == 0 }, 10*time.Second, time.Millisecond)
+	require.Equal(t, int64(batches), delivered.Load())
 }
 
 func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
