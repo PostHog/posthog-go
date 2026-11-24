@@ -155,9 +155,9 @@ func storedTrialEnd(string) time.Time {
 }
 
 // Send a reminder a day before a trial ends. The time comes from a stored
-// fact, so a rerun of the job sends the same time with the same idempotency
-// key and gets the first send's answer. Only a client on PostHog Cloud
-// schedules emails.
+// fact, so a rerun of the job within 24 hours sends the same time with the
+// same idempotency key and gets the first send's answer. Only a client on
+// PostHog Cloud schedules emails.
 func ExampleEmails_scheduled() {
 	client, err := posthog.NewWithConfig("phc_...", posthog.Config{
 		Endpoint:  "https://eu.i.posthog.com",
