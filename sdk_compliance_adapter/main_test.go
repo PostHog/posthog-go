@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -482,5 +483,67 @@ func TestOutboundRequestsCarryTestIDHeader(t *testing.T) {
 	got := []string{<-headers, <-headers}
 	if want := []string{"t-capture", "t-flags"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("%s headers = %v, want %v", testIDHeader, got, want)
+	}
+}
+
+func TestFlushSendsSpacedCapturesInOneBatch(t *testing.T) {
+	var batchSizes []int
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Batch []map[string]interface{} `json:"batch"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		batchSizes = append(batchSizes, len(body.Batch))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	state, testID := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-spaced", nil), true)
+	config := newClientConfig(state, testID, server.URL)
+	config.BatchSize = 10
+	client, err := posthog.NewWithConfig("phc_test", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.client = client
+	state.config = &config
+	state.lifecycleMu.Unlock()
+	defer resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-spaced", nil))
+
+	for i := 0; i < 5; i++ {
+		body := strings.NewReader(`{"distinct_id":"u","event":"e"}`)
+		recorder := httptest.NewRecorder()
+		captureHandler(recorder, httptest.NewRequest(http.MethodPost, "/capture?test_id=t-spaced", body))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("/capture = %d %s", recorder.Code, recorder.Body.String())
+		}
+		time.Sleep(6 * time.Millisecond)
+	}
+	recorder := httptest.NewRecorder()
+	flushHandler(recorder, httptest.NewRequest(http.MethodPost, "/flush?test_id=t-spaced", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("/flush = %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(batchSizes, []int{5}) {
+		t.Fatalf("batch sizes = %v, want one batch of 5", batchSizes)
+	}
+}
+
+func TestFlushOnDisabledClientSucceeds(t *testing.T) {
+	body := strings.NewReader(`{"api_key":"","host":"http://test-harness:8081"}`)
+	initHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/init?test_id=t-disabled", body))
+	defer resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-disabled", nil))
+
+	recorder := httptest.NewRecorder()
+	flushHandler(recorder, httptest.NewRequest(http.MethodPost, "/flush?test_id=t-disabled", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("/flush on a disabled client = %d %s", recorder.Code, recorder.Body.String())
 	}
 }

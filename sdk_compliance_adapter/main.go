@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -529,15 +530,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	state.clearDiagnostics()
 
 	// Create new client with tracked transport
-	config := posthog.Config{
-		Endpoint:  validatedHost,
-		Transport: &TrackedTransport{base: http.DefaultTransport, state: state, testID: testID},
-		Callback:  stateCallback{state: state},
-		Logger:    newStateLogger(state),
-		// Set test-friendly defaults
-		BatchSize: 1,                     // Flush after each event by default
-		Interval:  20 * time.Millisecond, // Short interval for tests
-	}
+	config := newClientConfig(state, testID, validatedHost)
 
 	// Override with request params if provided
 	if req.FlushAt != nil {
@@ -617,6 +610,21 @@ func lockRegisteredState(r *http.Request, register bool) (*AdapterState, string)
 			return state, testID
 		}
 		state.lifecycleMu.Unlock()
+	}
+}
+
+// newClientConfig is the SDK config /init starts from before applying the
+// request's overrides.
+func newClientConfig(state *AdapterState, testID, host string) posthog.Config {
+	return posthog.Config{
+		Endpoint:  host,
+		Transport: &TrackedTransport{base: http.DefaultTransport, state: state, testID: testID},
+		Callback:  stateCallback{state: state},
+		Logger:    newStateLogger(state),
+		// Send each event on its own unless the test sets flush_at. /flush
+		// sends partial batches, so the SDK's default interval stays in place:
+		// a short one splits batches when tests run in parallel.
+		BatchSize: 1,
 	}
 }
 
@@ -733,44 +741,33 @@ func buildCaptureWithPadding(req CaptureRequest) (posthog.Capture, error) {
 func flushHandler(w http.ResponseWriter, r *http.Request) {
 	state, _ := stateFor(r)
 	state.mu.Lock()
-	if state.client == nil {
-		state.mu.Unlock()
+	client := state.client
+	state.mu.Unlock()
+	if client == nil {
 		http.Error(w, "SDK not initialized", http.StatusBadRequest)
 		return
 	}
-	state.mu.Unlock()
 
-	eventsFlushed := waitForPendingEvents(state)
+	if err := flushClient(r.Context(), client); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	state.mu.Lock()
+	eventsFlushed := state.totalEventsSent
+	state.mu.Unlock()
 	jsonResponse(w, map[string]interface{}{
 		"success":        true,
 		"events_flushed": eventsFlushed,
 	})
 }
 
-func waitForPendingEvents(state *AdapterState) int {
-	state.mu.Lock()
-	interval := state.config.Interval
-	if interval == 0 {
-		interval = 5 * time.Second // Default
+// flushClient sends every queued event and waits for the attempt to finish.
+// A disabled client has nothing to send (fail_open).
+func flushClient(ctx context.Context, client posthog.Client) error {
+	if err := client.FlushWithContext(ctx); err != nil && !errors.Is(err, posthog.ErrSDKDisabled) {
+		return err
 	}
-	state.mu.Unlock()
-
-	// Wait only until the current queue drains, with a small cap. Most harness
-	// tests use BatchSize=1, while batch-format tests rely on the short interval
-	// above to flush partial batches. Avoid fixed sleeps per test: the compliance
-	// suite has many flushes and long retry waits of its own.
-	deadline := time.Now().Add(interval + (100 * time.Millisecond))
-	for {
-		state.mu.Lock()
-		pendingEvents := state.pendingEvents
-		eventsFlushed := state.totalEventsSent
-		state.mu.Unlock()
-
-		if pendingEvents == 0 || time.Now().After(deadline) {
-			return eventsFlushed
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	return nil
 }
 
 func stateHandler(w http.ResponseWriter, r *http.Request) {
@@ -906,7 +903,10 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	state.totalEventsCaptured++
 	state.pendingEvents++
 	state.mu.Unlock()
-	waitForPendingEvents(state)
+	if err := flushClient(r.Context(), client); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
 	log.Printf("Evaluated feature flag")
