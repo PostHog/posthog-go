@@ -149,6 +149,11 @@ func ExampleEmails_Get() {
 	}
 }
 
+// storedTrialEnd stands in for where your app keeps when a user's trial ends.
+func storedTrialEnd(string) time.Time {
+	return time.Date(2026, 12, 8, 9, 0, 0, 0, time.UTC)
+}
+
 // Send a reminder a day before a trial ends. The time comes from a stored
 // fact, so a rerun of the job sends the same time with the same idempotency
 // key and gets the first send's answer. Only a client on PostHog Cloud
@@ -163,7 +168,7 @@ func ExampleEmails_scheduled() {
 	}
 	defer client.Close()
 
-	trialEndsAt := time.Date(2026, 12, 8, 9, 0, 0, 0, time.UTC)
+	trialEndsAt := storedTrialEnd("user_123")
 	result, err := client.Emails().Send(context.Background(), posthog.TemplateEmail{
 		To:             "user@example.com",
 		TemplateID:     "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",

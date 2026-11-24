@@ -80,6 +80,7 @@ func TestEmailsSendRoundsScheduledAtUpToTheMillisecond(t *testing.T) {
 		{name: "a nanosecond past a millisecond", at: testScheduledAt.Add(123*time.Millisecond + time.Nanosecond), want: "2026-12-01T09:00:00.124Z"},
 		{name: "a microsecond short of a second", at: testScheduledAt.Add(time.Second - time.Microsecond), want: "2026-12-01T09:00:01.000Z"},
 		{name: "a whole millisecond", at: testScheduledAt.Add(123 * time.Millisecond), want: "2026-12-01T09:00:00.123Z"},
+		{name: "a time just before Go's zero time", at: time.Time{}.Add(-time.Nanosecond), want: "0001-01-01T00:00:00.001Z"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -185,8 +186,9 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 		{name: "a past time sent now", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
 		{name: "a time a minute ahead sent now", at: testClientNow.Add(time.Minute), reply: reply(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
 		{name: "a time more than a minute ahead sent now", at: testClientNow.Add(time.Minute + time.Millisecond), reply: reply(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
-		{name: "a replay of a send now, for a time a minute ahead", at: testClientNow.Add(time.Minute), reply: replay(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
-		{name: "a replay of a send now, for a past time", at: testClientNow.Add(-time.Hour), reply: replay(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
+		{name: "a replay of a send now, for a time a minute ahead", at: testClientNow.Add(time.Minute), reply: replay(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
+		{name: "a replay of a send now, for a past time", at: testClientNow.Add(-time.Hour), reply: replay(`,"status":"queued","scheduled_at":null`), wantStatus: "queued"},
+		{name: "a replay of a send now, for a time more than a minute ahead", at: testClientNow.Add(time.Minute + time.Millisecond), reply: replay(`,"status":"queued","scheduled_at":null`), unconfirmed: true},
 		{name: "a replay of the requested time", reply: replay(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.000Z"`), wantStatus: "scheduled", wantAt: testScheduledAt},
 		{name: "another time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.001Z"`), unconfirmed: true},
 		{name: "no scheduled_at", reply: reply(``), unconfirmed: true},
