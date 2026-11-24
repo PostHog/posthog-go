@@ -71,6 +71,7 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 					if singleFilterErr == nil {
 						singleFilterErr = serverErr
 					}
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, serverErr.Reason)
 					continue
 				} else if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok {
 					// An inconclusive entry is neither a match nor a mismatch, so it
@@ -111,6 +112,7 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 					if singleFilterErr == nil {
 						singleFilterErr = serverErr
 					}
+					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, serverErr.Reason)
 					continue
 				} else if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok {
 					// An inconclusive entry is neither a match nor a mismatch, so it

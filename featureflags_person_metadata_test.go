@@ -1,6 +1,7 @@
 package posthog
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -249,6 +250,33 @@ func TestPersonMetadataFilterInAnUndecidedCohortNeedsServer(t *testing.T) {
 				require.True(t, isServerEvalError(err))
 			})
 		}
+	}
+}
+
+// The reason follows the spec's precedence, whatever the order of the filters.
+func TestPersonMetadataFilterReasonDoesNotDependOnOrder(t *testing.T) {
+	dependency := `{"key": "dependency", "type": "flag", "value": true, "operator": "flag_evaluates_to", "dependency_chain": ["dependency"]}`
+	group := func(filter string) string { return `{"type": "AND", "values": [` + filter + `]}` }
+	flagsByKey := map[string]FeatureFlag{}
+	var flag FeatureFlag
+	require.NoError(t, json.Unmarshal([]byte(flagDefinition("dependency", flagCondition(100, firstSeenFilter))), &flag))
+	flagsByKey["dependency"] = flag
+
+	for _, values := range []string{
+		firstSeenFilter + "," + dependency,
+		dependency + "," + firstSeenFilter,
+		group(firstSeenFilter) + "," + group(dependency),
+		group(dependency) + "," + group(firstSeenFilter),
+	} {
+		t.Run(values, func(t *testing.T) {
+			var cohort PropertyGroup
+			require.NoError(t, json.Unmarshal([]byte(group(values)), &cohort))
+
+			_, err := (&FeatureFlagsPoller{}).matchPropertyGroup(cohort, Properties{}, nil, flagsByKey, map[string]interface{}{}, "user-123", nil, nil, &flagsState{})
+
+			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+			require.True(t, isServerEvalError(err))
+		})
 	}
 }
 
