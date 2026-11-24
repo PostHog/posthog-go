@@ -453,10 +453,11 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if uncertain {
 			run.lost(chunk)
 		}
-		if err.StatusCode == http.StatusRequestEntityTooLarge && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
+		if err.StatusCode == http.StatusRequestEntityTooLarge && err.Code == "content_too_large" && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
 			// The pipeline refused the data it copies to every recipient, so
 			// smaller requests can still go out. A 400 content_too_large is the
-			// content they all share, which no split makes smaller.
+			// content they all share, and a bare 413 is a proxy's limit, which no
+			// split is sure to meet.
 			if half := len(chunk) / 2; half > 0 {
 				pending = append(pending, chunk[half:], chunk[:half:half])
 				continue
@@ -485,14 +486,12 @@ func (s *emailSender) isClosed() bool {
 	return s.closed
 }
 
-// emailSkipReasons are the reasons PostHog gives a recipient it refused
-// before queueing, which it records as a "failed" email.
-var emailSkipReasons = []string{"recipient_suppressed", "sending_paused", "sending_suspended", "recipient_unreachable", "missing_recipient", "recipient_opted_out", "frequency_capped"}
-
 // readLost reads each email a lost answer left without a message ID by its
 // key, once and without retries. A 404 leaves it "unconfirmed"; any other
-// failure stops the reads. A "failed" row with a skip reason is a recipient
-// PostHog refused before it queued the email; any other row was queued.
+// failure stops the reads. PostHog writes a "failed" row both for a recipient
+// it refused and for an email it queued and failed later, with the same
+// reasons, so a failed row leaves the email "unconfirmed" with its message ID.
+// Any other row means PostHog queued it.
 func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 	for i := range run.members {
 		if !run.unconfirmed(i) || run.results[i].MessageID != "" {
@@ -513,14 +512,9 @@ func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
 		if err != nil {
 			return
 		}
-		if status.Status == "failed" && slices.Contains(emailSkipReasons, status.Reason) {
-			run.set(i, "failed", BatchEmailResult{MessageID: status.ID, Error: &EmailError{
-				Name:       emailErrorName(http.StatusUnprocessableEntity, status.Reason),
-				Code:       status.Reason,
-				Message:    "PostHog didn't send this email: " + status.Reason + ".",
-				StatusCode: http.StatusUnprocessableEntity,
-				MessageID:  status.ID,
-			}})
+		if status.Status == "failed" {
+			earlier := run.results[i]
+			run.set(i, "unconfirmed", BatchEmailResult{MessageID: status.ID, Error: earlier.Error, LaterError: earlier.LaterError})
 			continue
 		}
 		run.set(i, "queued", BatchEmailResult{MessageID: status.ID})
