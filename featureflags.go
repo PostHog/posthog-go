@@ -441,7 +441,8 @@ type parsedPropertyValue struct {
 
 // usesKnownAbsentOf reports whether the leaf reads properties of the evaluated
 // aggregation, so that aggregation's known-absent keys apply to it. A person leaf
-// belongs to person aggregation and a group leaf to its own group type.
+// belongs to person aggregation and a group leaf to its own group type. No other
+// leaf type, such as person_metadata, resolves from a listing.
 func (pv *parsedPropertyValue) usesKnownAbsentOf(aggregationGroupTypeIndex *uint8) bool {
 	switch pv.Property.Type {
 	case "person":
@@ -449,7 +450,23 @@ func (pv *parsedPropertyValue) usesKnownAbsentOf(aggregationGroupTypeIndex *uint
 	case "group":
 		return pv.GroupTypeIndex != nil && uint8PtrEqual(pv.GroupTypeIndex, aggregationGroupTypeIndex)
 	}
-	return true
+	return false
+}
+
+// conditionFilterUsesKnownAbsent reports whether a condition's filter of filterType
+// reads the properties of the condition's aggregation, so that aggregation's
+// known-absent keys apply to it. Condition filters carry no group_type_index, so a
+// group filter uses the keys of the group its condition aggregates on, the same
+// group whose properties it reads. No other filter type, such as person_metadata,
+// resolves from a listing.
+func conditionFilterUsesKnownAbsent(filterType string, aggregationGroupTypeIndex *uint8) bool {
+	switch filterType {
+	case "person":
+		return aggregationGroupTypeIndex == nil
+	case "group":
+		return aggregationGroupTypeIndex != nil
+	}
+	return false
 }
 
 // FlagVariantMeta is a precomputed hash range for a feature flag variant.
@@ -1919,7 +1936,11 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 			} else if prop.Type == "flag" {
 				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, knownAbsent, cohorts, aggregationGroupTypeIndex, state)
 			} else {
-				isMatch, err = matchPropertyWithKnownAbsent(prop, properties, knownAbsent, state.propertyMatchingVersion)
+				filterKnownAbsent := knownAbsent
+				if !conditionFilterUsesKnownAbsent(prop.Type, aggregationGroupTypeIndex) {
+					filterKnownAbsent = nil
+				}
+				isMatch, err = matchPropertyWithKnownAbsent(prop, properties, filterKnownAbsent, state.propertyMatchingVersion)
 			}
 
 			if err != nil {

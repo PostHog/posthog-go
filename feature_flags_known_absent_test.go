@@ -578,3 +578,84 @@ func TestKnownAbsentCohortLeafKeepsItsGroupScope(t *testing.T) {
 		require.Equal(t, true, got)
 	})
 }
+
+func TestKnownAbsentNeverHidesAPersonMetadataField(t *testing.T) {
+	cohortDefinitions := func(filter string) string {
+		return `{"flags": [` + flagDefinition("metadata-flag", flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`)) +
+			`], "group_type_mapping": {}, "cohorts": {"1": {"type": "AND", "values": [{"type": "AND", "values": [` + filter + `]}]}}}`
+	}
+	flagDefinitions := func(filter string) string {
+		return knownAbsentDefinitions(flagDefinition("metadata-flag", flagCondition(100, filter)))
+	}
+	listed := newKnownAbsentPropertyKeys([]string{"created_at"}, nil)
+
+	for level, definitions := range map[string]func(string) string{"flag filter": flagDefinitions, "cohort leaf": cohortDefinitions} {
+		for _, tt := range []struct {
+			operator string
+			value    string
+			want     bool
+		}{
+			{"is_not_set", `null`, false},
+			{"is_set", `null`, true},
+			{"is_date_before", `"2026-01-01"`, true},
+			{"is_date_after", `"2026-01-01"`, false},
+		} {
+			defs := definitions(fmt.Sprintf(`{"key": "created_at", "type": "person_metadata", "operator": %q, "value": %s}`, tt.operator, tt.value))
+			t.Run(level+"/"+tt.operator+"/value supplied", func(t *testing.T) {
+				got, err := computeKnownAbsentFlag(t, defs, "metadata-flag", nil, Properties{"created_at": "2025-06-01"}, nil, listed)
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			})
+			t.Run(level+"/"+tt.operator+"/value not supplied", func(t *testing.T) {
+				_, err := computeKnownAbsentFlag(t, defs, "metadata-flag", nil, nil, nil, listed)
+				requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+			})
+		}
+	}
+}
+
+func TestKnownAbsentKeysApplyOnlyToTheirFilterType(t *testing.T) {
+	groups := Groups{"organization": "acme"}
+
+	t.Run("person listing and a group filter in a person condition", func(t *testing.T) {
+		defs := knownAbsentDefinitions(flagDefinition("person-flag", flagCondition(100, `{"key": "tier", "type": "group", "group_type_index": 0, "operator": "is_not_set"}`)))
+		_, err := computeKnownAbsentFlag(t, defs, "person-flag", groups, nil, nil, newKnownAbsentPropertyKeys([]string{"tier"}, nil))
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+	t.Run("group listing and a person filter in a group condition", func(t *testing.T) {
+		orgFlag := `{"key": "org-flag", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
+			flagCondition(100, `{"key": "tier", "type": "person", "operator": "is_not_set"}`) + `]}}`
+		_, err := computeKnownAbsentFlag(t, knownAbsentDefinitions(orgFlag), "org-flag", groups, nil, map[string]Properties{"organization": {}}, newKnownAbsentPropertyKeys(nil, map[string][]string{"organization": {"tier"}}))
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+	t.Run("group listing and a person filter in a mixed-targeting group condition", func(t *testing.T) {
+		mixed := `{"key": "mixed", "active": true, "filters": {"groups": [{"aggregation_group_type_index": 0, "rollout_percentage": 100, "properties": [{"key": "tier", "type": "person", "operator": "is_not_set"}]}]}}`
+		_, err := computeKnownAbsentFlag(t, knownAbsentDefinitions(mixed), "mixed", groups, nil, map[string]Properties{"organization": {}}, newKnownAbsentPropertyKeys(nil, map[string][]string{"organization": {"tier"}}))
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+	t.Run("person listing and a filter without a type", func(t *testing.T) {
+		defs := knownAbsentDefinitions(flagDefinition("untyped", flagCondition(100, `{"key": "plan", "operator": "is_not_set"}`)))
+		_, err := computeKnownAbsentFlag(t, defs, "untyped", nil, nil, nil, newKnownAbsentPropertyKeys([]string{"plan"}, nil))
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+}
+
+func TestKnownAbsentFlagDependencyAcrossAggregationsStaysUnresolved(t *testing.T) {
+	orgIncomplete := `{"key": "org-incomplete", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
+		flagCondition(100, `{"key": "tier", "type": "group", "group_type_index": 0, "operator": "is_not_set"}`) + `]}}`
+	personOnGroup := flagDefinition("person-on-group", flagCondition(100, flagDependencyFilter("org-incomplete", true, "org-incomplete")))
+	profileIncomplete := flagDefinition("profile-incomplete", flagCondition(100, `{"key": "tier", "type": "person", "operator": "is_not_set"}`))
+	groupOnPerson := `{"key": "group-on-person", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
+		flagCondition(100, flagDependencyFilter("profile-incomplete", true, "profile-incomplete")) + `]}}`
+	definitions := knownAbsentDefinitions(orgIncomplete, personOnGroup, profileIncomplete, groupOnPerson)
+	groups := Groups{"organization": "acme"}
+	bothListed := newKnownAbsentPropertyKeys([]string{"tier"}, map[string][]string{"organization": {"tier"}})
+
+	for _, key := range []string{"person-on-group", "group-on-person"} {
+		t.Run(key, func(t *testing.T) {
+			_, err := computeKnownAbsentFlag(t, definitions, key, groups, nil, map[string]Properties{"organization": {}}, bothListed)
+			require.True(t, isServerEvalError(err), "got %v", err)
+			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+		})
+	}
+}
