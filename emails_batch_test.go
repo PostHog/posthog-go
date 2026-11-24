@@ -292,19 +292,43 @@ func TestEmailsBatchSendsOneRequestOf100Recipients(t *testing.T) {
 }
 
 func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
-	server := newBatchServer(t, func(int, batchRequest) stubReply {
-		return stubReply{status: http.StatusRequestEntityTooLarge, body: `{"code":"content_too_large","detail":"The batch is larger than PostHog takes."}`}
-	})
-	client := newEmailClientFor(t, server.URL)
+	tests := []struct {
+		name, body, fix string
+		status          int
+	}{
+		{
+			name:   "a 413 without a fix",
+			status: http.StatusRequestEntityTooLarge,
+			body:   `{"code":"content_too_large","detail":"The batch is larger than PostHog takes."}`,
+			fix:    "Split the recipients into smaller batches.",
+		},
+		{
+			name:   "a 413 with PostHog's fix",
+			status: http.StatusRequestEntityTooLarge,
+			body:   `{"code":"content_too_large","detail":"The batch is larger than PostHog takes.","fix":"Send fewer recipients in each batch."}`,
+			fix:    "Send fewer recipients in each batch.",
+		},
+		{
+			name:   "shared content too large, which splitting doesn't help",
+			status: http.StatusBadRequest,
+			body:   `{"code":"content_too_large","detail":"The shared content is larger than PostHog takes."}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newBatchServer(t, func(int, batchRequest) stubReply { return stubReply{status: tt.status, body: tt.body} })
+			client := newEmailClientFor(t, server.URL)
 
-	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(4)...))
+			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(4)...))
 
-	emailErr := requireEmailError(t, err)
-	require.Equal(t, "content_too_large", emailErr.Code)
-	require.Equal(t, http.StatusRequestEntityTooLarge, emailErr.StatusCode)
-	require.Equal(t, "Split the recipients into smaller batches.", emailErr.Fix)
-	require.Len(t, server.received(), 1, "the client doesn't split the batch")
-	require.Equal(t, []string{"failed", "failed", "failed", "failed"}, statuses(result))
+			emailErr := requireEmailError(t, err)
+			require.Equal(t, "content_too_large", emailErr.Code)
+			require.Equal(t, tt.status, emailErr.StatusCode)
+			require.Equal(t, tt.fix, emailErr.Fix)
+			require.Len(t, server.received(), 1, "the client doesn't split the batch")
+			require.Equal(t, []string{"failed", "failed", "failed", "failed"}, statuses(result))
+		})
+	}
 }
 
 func TestEmailsBatchWaitsLongerThanASend(t *testing.T) {
@@ -360,8 +384,8 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 				func(batchRequest) stubReply { return stubReply{status: dropConnection} },
 				func(r batchRequest) stubReply { return slots(r, refused, "") },
 			},
-			status:    "failed",
-			errorCode: "recipient_suppressed",
+			status:    "unconfirmed",
+			errorCode: "delivery_unavailable",
 		},
 		{
 			name: "a refusal after a 503",
@@ -369,8 +393,8 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 				func(batchRequest) stubReply { return failed(http.StatusServiceUnavailable, "delivery_unavailable") },
 				func(r batchRequest) stubReply { return slots(r, refused, "") },
 			},
-			status:    "failed",
-			errorCode: "recipient_suppressed",
+			status:    "unconfirmed",
+			errorCode: "delivery_unavailable",
 		},
 		{
 			name: "queued after a lost answer",
@@ -444,14 +468,15 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 	})
 }
 
-func TestEmailsBatchSettlesRecipientsFromTheLastAttempt(t *testing.T) {
+func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 	tests := []struct {
-		name, status, code string
-		last               stubReply
+		name, callCode, errorCode string
+		last                      stubReply
 	}{
-		{name: "a refusal", status: "failed", code: "quota_limited", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}},
-		{name: "keys still in flight", status: "unconfirmed", code: "idempotency_key_in_flight", last: failed(http.StatusConflict, "idempotency_key_in_flight")},
-		{name: "a 503", status: "unconfirmed", code: "delivery_unavailable", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
+		{name: "a rate limit", callCode: "rate_limited", errorCode: "delivery_unavailable", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}},
+		{name: "a refusal", callCode: "quota_limited", errorCode: "delivery_unavailable", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}},
+		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", last: failed(http.StatusConflict, "idempotency_key_in_flight")},
+		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -465,15 +490,13 @@ func TestEmailsBatchSettlesRecipientsFromTheLastAttempt(t *testing.T) {
 
 			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
 
-			require.Equal(t, tt.code, requireEmailError(t, err).Code)
+			require.Equal(t, tt.callCode, requireEmailError(t, err).Code)
 			require.Len(t, server.received(), 2, "a send and its retry, nothing more")
 			for i, got := range result.Results {
-				require.Equal(t, tt.status, got.Status)
-				require.Equal(t, tt.code, got.Error.Code)
+				require.Equal(t, "unconfirmed", got.Status, "the lost send may have queued it")
+				require.Equal(t, tt.errorCode, got.Error.Code)
+				require.Equal(t, wantResendFix, got.Error.Fix)
 				require.Equal(t, fmt.Sprintf("digest:%d", i), got.IdempotencyKey)
-				if tt.status == "unconfirmed" {
-					require.Equal(t, wantResendFix, got.Error.Fix)
-				}
 			}
 		})
 	}

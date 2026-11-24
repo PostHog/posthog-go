@@ -88,8 +88,8 @@ type CodeEmailBatch struct {
 //     to see whether it went out.
 //   - "failed": PostHog didn't queue the email, and Error says why.
 //   - "unconfirmed": the client can't tell whether PostHog queued the email,
-//     such as after a lost answer or while another request holds its key. It
-//     may still go out. Send it again with the same IdempotencyKey within 24
+//     such as after a lost answer, even when PostHog refused the retry, or
+//     while another request holds its key. It may still go out. Send it again with the same IdempotencyKey within 24
 //     hours, so it goes out once.
 type BatchEmailResult struct {
 	// Index is the recipient's position in Recipients.
@@ -199,8 +199,12 @@ type batchRun struct {
 	members    []batchMember
 	body       []byte
 	maxRetries *int
-	results    []BatchEmailResult
-	warnings   []EmailWarning
+	// lost is true once an attempt went out and PostHog may have queued the
+	// emails without saying so. Only an answer that queues an email settles
+	// it after that.
+	lost     bool
+	results  []BatchEmailResult
+	warnings []EmailWarning
 }
 
 func newBatchRun(recipients []BatchRecipient, isTemplate bool, maxRetries *int) (*batchRun, *EmailError) {
@@ -273,14 +277,14 @@ func (r *batchRun) set(i int, status string, result BatchEmailResult) {
 }
 
 // failAll settles every recipient after the request failed as a whole. They
-// stay "unconfirmed" when the last attempt that went out, sent, may have
-// queued the emails.
+// stay "unconfirmed" when an attempt that went out may have queued them;
+// sent is the last of those attempts.
 func (r *batchRun) failAll(err, sent *EmailError) {
 	reason, status := err, "failed"
-	if sent != nil && mayHaveQueued(sent) {
-		status, reason = "unconfirmed", sent
-		if !keysInFlight(sent) {
-			reason = unconfirmedEmail("")
+	if r.lost {
+		status, reason = "unconfirmed", unconfirmedEmail("")
+		if keysInFlight(sent) {
+			reason = sent
 		}
 	}
 	for i := range r.members {
@@ -318,6 +322,10 @@ func (r *batchRun) settle(i int, slot emailReply) {
 		return
 	}
 	answer := slotError(slot.fields["error"], messageID)
+	if r.lost {
+		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: unconfirmedEmail(messageID)})
+		return
+	}
 	switch answer.Code {
 	case "delivery_unavailable", "idempotency_key_in_flight", "api_error":
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: answer})
@@ -378,6 +386,9 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		reply, err := s.doFor(ctx, s.batchAttemptTimeout(), http.MethodPost, s.appHost+emailBatchPath, header, run.body)
 		if err == nil {
 			err = run.answer(reply)
+		}
+		if err != nil && mayHaveQueued(err) {
+			run.lost = true
 		}
 		sent = err
 		return err
