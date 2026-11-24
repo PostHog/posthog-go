@@ -149,9 +149,10 @@ func ExampleEmails_Get() {
 	}
 }
 
-// storedTrialEnd stands in for where your app keeps when a user's trial ends.
+// storedTrialEnd stands in for where your app keeps when a user's trial ends:
+// five days from today, at the start of the day in UTC.
 func storedTrialEnd(string) time.Time {
-	return time.Date(2026, 12, 8, 9, 0, 0, 0, time.UTC)
+	return time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 5)
 }
 
 // Send a reminder a day before a trial ends. The time comes from a stored

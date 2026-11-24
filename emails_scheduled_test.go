@@ -216,7 +216,13 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := newEmailServer(t, tt.reply)
+			replies := []stubReply{tt.reply}
+			if tt.key != "" {
+				first := tt.reply
+				first.body = strings.Replace(first.body, `"replayed":true`, `"replayed":false`, 1)
+				replies = []stubReply{first, tt.reply}
+			}
+			server := newEmailServer(t, replies...)
 			client := newCloudEmailClient(t, server)
 			email := templateEmail()
 			email.ScheduledAt = testScheduledAt
@@ -224,10 +230,20 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 				email.ScheduledAt = tt.at
 			}
 			email.IdempotencyKey = tt.key
+			if tt.key != "" {
+				_, _ = client.Emails().Send(context.Background(), email)
+			}
 
 			result, err := client.Emails().Send(context.Background(), email)
 
-			require.Len(t, server.received(), 1)
+			requests := server.received()
+			require.Len(t, requests, len(replies))
+			for _, request := range requests {
+				require.Equal(t, requests[0].Raw, request.Raw, "a replay repeats the first send")
+				if tt.key != "" {
+					require.Equal(t, tt.key, request.Header.Get("Idempotency-Key"))
+				}
+			}
 			if tt.unconfirmed {
 				require.Nil(t, result)
 				emailErr := requireEmailError(t, err)
