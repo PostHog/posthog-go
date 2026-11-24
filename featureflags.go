@@ -1931,13 +1931,14 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 // group properties the caller passes. Cohort and flag filters have their own matching. Any
 // other type, such as "person_metadata" (a value /flags reads from the persons table, not
 // from person properties), can't be evaluated locally: matching it against a caller
-// property with the same key could disagree with /flags.
-func propertyFilterTypeError(property FlagProperty) *InconclusiveMatchError {
+// property with the same key could disagree with /flags. No caller can supply the value,
+// so like a static cohort it must not let a later condition decide the flag.
+func propertyFilterTypeError(property FlagProperty) *RequiresServerEvaluationError {
 	switch property.Type {
 	case "", "person", "group":
 		return nil
 	}
-	return &InconclusiveMatchError{
+	return &RequiresServerEvaluationError{
 		msg:    fmt.Sprintf("Can't evaluate a '%s' filter on '%s' locally", property.Type, property.Key),
 		Reason: UnresolvedFlagReasonUnsupportedDefinition,
 	}
