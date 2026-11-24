@@ -18,6 +18,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    # OpenTelemetry v1.47.0 requires Go 1.26, and the otel module supports Go 1.25.
+    # Remove this when the otel module's minimum Go version is raised.
+    ignore:
+      - dependency-name: "go.opentelemetry.io/otel*"
+        versions: [">= 1.47.0"]
     groups:
       go-dependencies:
         patterns:
