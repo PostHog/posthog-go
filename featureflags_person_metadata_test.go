@@ -14,6 +14,8 @@ import (
 
 const firstSeenFilter = `{"key": "created_at", "type": "person_metadata", "operator": "is_date_after", "value": "2025-01-01"}`
 
+const planFilter = `{"key": "plan", "type": "person", "operator": "exact", "value": ["paid"]}`
+
 func TestPersonMetadataFilterInCohortIsUnsupported(t *testing.T) {
 	definitions := localDefinitionsWithCohorts(
 		`{"7": {"type": "AND", "values": [`+firstSeenFilter+`]}}`,
@@ -182,13 +184,72 @@ func TestPersonMetadataFilterIsNotInverted(t *testing.T) {
 
 // Another filter that does not match still rules the condition out locally.
 func TestPersonMetadataFilterDoesNotOutrankAMismatch(t *testing.T) {
-	const planFilter = `{"key": "plan", "type": "person", "operator": "exact", "value": ["paid"]}`
 	definitions := localDefinitions(flagDefinition("first-seen-flag", flagCondition(100, firstSeenFilter, planFilter)))
 
 	got, err := computeDefinedFlag(t, definitions, "first-seen-flag", Properties{"plan": "free"})
 
 	require.NoError(t, err)
 	require.Equal(t, false, got)
+}
+
+// Cohorts use three-valued logic, so another filter can still make the result certain.
+func TestPersonMetadataFilterDoesNotHideADecidedCohort(t *testing.T) {
+	dependency := `{"key": "dependency", "type": "flag", "value": true, "operator": "flag_evaluates_to", "dependency_chain": ["dependency"]}`
+	nested := `{"type": "AND", "values": [` + firstSeenFilter + `]}`
+	// The unknown operator's reason outranks the dependency's, which replaces the error.
+	nestedReasons := `{"type": "AND", "values": [{"key": "age", "type": "person", "operator": "unknown", "value": 1},` + dependency + `]}`
+	for _, tc := range []struct {
+		name      string
+		groupType string
+		operator  string
+		plan      string
+		want      interface{}
+	}{
+		{"AND", "AND", "in", "free", false},
+		{"AND not_in", "AND", "not_in", "free", true},
+		{"OR", "OR", "in", "paid", true},
+		{"OR not_in", "OR", "not_in", "paid", false},
+	} {
+		for _, values := range []string{
+			planFilter + "," + firstSeenFilter,
+			firstSeenFilter + "," + planFilter,
+			nested + "," + planFilter,
+			dependency + "," + planFilter,
+			nestedReasons + "," + planFilter,
+		} {
+			definitions := localDefinitionsWithCohorts(
+				`{"7": {"type": "`+tc.groupType+`", "values": [`+values+`]}}`,
+				flagDefinition("first-seen-flag", flagCondition(100, `{"key": "id", "type": "cohort", "operator": "`+tc.operator+`", "value": 7}`)),
+				flagDefinition("dependency", flagCondition(100, firstSeenFilter)),
+			)
+			for name, properties := range map[string]Properties{
+				"with created_at":    {"plan": tc.plan, "created_at": "2026-06-01"},
+				"without created_at": {"plan": tc.plan},
+			} {
+				t.Run(tc.name+"/"+name+"/"+values, func(t *testing.T) {
+					got, err := computeDefinedFlag(t, definitions, "first-seen-flag", properties)
+					require.NoError(t, err)
+					require.Equal(t, tc.want, got)
+				})
+			}
+		}
+	}
+}
+
+func TestPersonMetadataFilterInAnUndecidedCohortNeedsServer(t *testing.T) {
+	for _, tc := range []struct{ groupType, plan string }{{"AND", "paid"}, {"OR", "free"}} {
+		for _, values := range []string{planFilter + "," + firstSeenFilter, firstSeenFilter + "," + planFilter} {
+			t.Run(tc.groupType+"/"+values, func(t *testing.T) {
+				definitions := localDefinitionsWithCohorts(
+					`{"7": {"type": "`+tc.groupType+`", "values": [`+values+`]}}`,
+					flagDefinition("first-seen-flag", flagCondition(0, `{"key": "id", "type": "cohort", "value": 7}`), flagCondition(100)),
+				)
+				_, err := computeDefinedFlag(t, definitions, "first-seen-flag", Properties{"plan": tc.plan})
+				requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+				require.True(t, isServerEvalError(err))
+			})
+		}
+	}
 }
 
 func TestPersonMetadataFilterInEvaluateFlags(t *testing.T) {
