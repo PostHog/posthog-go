@@ -272,13 +272,27 @@ func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
 	}
 }
 
-// flushAndWaitForEvents flushes, then waits until at least want events reached
-// the callback. FlushWithContext returns once a failed capture POST starts its
-// retry backoff, before the retried event is delivered.
-func flushAndWaitForEvents(t *testing.T, client Client, capture *eventCapture, want int) []CaptureInApi {
+// flushAndWaitForEvents flushes, then waits until every batch has finished
+// sending and returns what reached the callback. FlushWithContext returns once a
+// failed capture POST starts its retry backoff, before the retry delivers it.
+func flushAndWaitForEvents(t *testing.T, cli Client, capture *eventCapture) []CaptureInApi {
 	t.Helper()
-	flushEvaluationEvents(t, client)
-	return waitForEventCount(capture, want, 5*time.Second)
+	flushEvaluationEvents(t, cli)
+	c := cli.(*client)
+	lanes := []*lane{c.analytics}
+	if ai := c.ai.Load(); ai != nil {
+		lanes = append(lanes, ai)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, l := range lanes {
+		for l.inFlight.Load() > 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: batches still sending after 5s", l.cfg.name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return snapshotCapturedEvents(capture)
 }
 
 func flushEvaluationEvents(t *testing.T, client Client) {
@@ -1090,7 +1104,7 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	snap, _ := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
 	snap.IsEnabled("enabled-flag")
 
-	events := flushAndWaitForEvents(t, client, capture, 1)
+	events := flushAndWaitForEvents(t, client, capture)
 
 	count := countFlagCalledEvents(events, "enabled-flag")
 	if count != 1 {
@@ -1131,7 +1145,7 @@ func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
 		})
 	}
 
-	events := flushAndWaitForEvents(t, clientIface, capture, len(testCases))
+	events := flushAndWaitForEvents(t, clientIface, capture)
 
 	count := countFlagCalledEvents(events, "changing-flag")
 	if count != len(testCases) {
@@ -1226,7 +1240,7 @@ func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 
 			// Wait for the first (and only) event to arrive, then briefly
 			// pause to catch any stragglers that would indicate broken dedup.
-			events := flushAndWaitForEvents(t, client, capture, 1)
+			events := flushAndWaitForEvents(t, client, capture)
 			count := 0
 			for _, ev := range events {
 				if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
@@ -1481,7 +1495,7 @@ func newUnresolvedFlagsClient(t *testing.T, definitions, remote string) (Client,
 
 func flagCalledError(t *testing.T, client Client, capture *eventCapture, key string) string {
 	t.Helper()
-	event := findEvent(flushAndWaitForEvents(t, client, capture, 1), "$feature_flag_called", key)
+	event := findEvent(flushAndWaitForEvents(t, client, capture), "$feature_flag_called", key)
 	require.NotNil(t, event, "expected $feature_flag_called for %s", key)
 	errorString, _ := event.Properties["$feature_flag_error"].(string)
 	return errorString
@@ -1727,7 +1741,7 @@ func TestEvaluateFlags_RemoteFallbackResolvesUnresolvedFlag(t *testing.T) {
 	require.Empty(t, snapshot.UnresolvedFlags())
 
 	require.True(t, snapshot.IsEnabled("checkout"))
-	event := findEvent(flushAndWaitForEvents(t, client, capture, 1), "$feature_flag_called", "checkout")
+	event := findEvent(flushAndWaitForEvents(t, client, capture), "$feature_flag_called", "checkout")
 	require.NotNil(t, event)
 	require.Equal(t, true, event.Properties["$feature_flag_response"])
 	require.NotContains(t, event.Properties, "$feature_flag_error")
