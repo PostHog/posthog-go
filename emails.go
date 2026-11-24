@@ -110,7 +110,8 @@ type TemplateEmail struct {
 	// millisecond, so the client rounds a finer time up to the next
 	// millisecond. A time that has passed sends the email now. The zero time
 	// sends now. When PostHog sends it now for a time more than a minute
-	// ahead of this client's clock, Send returns "schedule_not_confirmed". Work out a relative time, such as an hour from now, once,
+	// ahead of this client's clock, or replays a send it sent at once, Send
+	// returns "schedule_not_confirmed". Work out a relative time, such as an hour from now, once,
 	// and send the same time when you send again with the same
 	// IdempotencyKey: another time with the same key is refused with
 	// "idempotency_key_reused".
@@ -432,6 +433,11 @@ func ceilToMillisecond(at time.Time) time.Time {
 	truncated := at.Truncate(time.Millisecond)
 	if !truncated.Equal(at) {
 		truncated = truncated.Add(time.Millisecond)
+	}
+	if truncated.IsZero() {
+		// The zero time means "send now", which would drop the time and skip
+		// the Cloud check. Only a time in year 0 lands here, long past.
+		truncated = truncated.Add(-time.Millisecond)
 	}
 	return truncated.UTC()
 }
@@ -877,7 +883,9 @@ func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 // passed. A PostHog that dropped the time answers "queued" too, so a
 // "queued" for a time more than maxEmailClockSkew ahead of the client's
 // clock is unconfirmed. Within that minute, "queued" with a null
-// scheduled_at is accepted, because PostHog's clock may already be past it.
+// scheduled_at is accepted, because PostHog's clock may already be past it,
+// but not on a replay: the first send may have been answered at any earlier
+// time, so its "queued" can't show the email waited.
 func (r emailReply) checkSchedule(result *SendEmailResult, requested, now time.Time) *EmailError {
 	answered, hasTime := r.fields["scheduled_at"]
 	switch r.text("status") {
@@ -889,7 +897,7 @@ func (r emailReply) checkSchedule(result *SendEmailResult, requested, now time.T
 			return nil
 		}
 	case "queued":
-		if hasTime && answered == nil && !requested.After(now.Add(maxEmailClockSkew)) {
+		if hasTime && answered == nil && !result.Replayed && !requested.After(now.Add(maxEmailClockSkew)) {
 			return nil
 		}
 	}
