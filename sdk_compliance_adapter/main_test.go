@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/posthog/posthog-go/v2"
@@ -38,7 +40,7 @@ func TestPostFlagsWithRetryRetriesRetryableStatusThenSucceeds(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := postFlagsWithRetry(server.URL, []byte(`{"flag_keys_to_evaluate":["example"]}`))
+	resp, err := postFlagsWithRetry(server.URL, []byte(`{"flag_keys_to_evaluate":["example"]}`), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,7 @@ func TestPostFlagsWithRetryStopsAfterRetryableFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`))
+	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`), "")
 	if err == nil {
 		if resp != nil {
 			resp.Body.Close()
@@ -78,7 +80,7 @@ func TestPostFlagsWithRetryDoesNotRetryNonRetryableStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`))
+	resp, err := postFlagsWithRetry(server.URL, []byte(`{}`), "")
 	if err == nil {
 		if resp != nil {
 			resp.Body.Close()
@@ -310,5 +312,253 @@ func TestHealthDeclaresDiagnosticCapabilities(t *testing.T) {
 		if !have[want] {
 			t.Errorf("capability %q missing from %v", want, health.Capabilities)
 		}
+	}
+}
+
+func TestHealthDeclaresParallelSupport(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	healthHandler(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	var body map[string]interface{}
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["supports_parallel"] != true {
+		t.Fatalf("supports_parallel = %v, want true", body["supports_parallel"])
+	}
+}
+
+func TestStateIsIsolatedPerTestID(t *testing.T) {
+	stateA, idA := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-a", nil), true)
+	stateA.lifecycleMu.Unlock()
+	stateB, idB := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-b", nil), true)
+	stateB.lifecycleMu.Unlock()
+	again, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
+	global, idGlobal := stateFor(httptest.NewRequest(http.MethodGet, "/state", nil))
+	defer func() {
+		resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-b", nil))
+	}()
+
+	if idA != "t-a" || idB != "t-b" || idGlobal != "" {
+		t.Fatalf("test ids = %q, %q, %q", idA, idB, idGlobal)
+	}
+	if stateA == stateB || stateA == global || stateB == global {
+		t.Fatal("each test_id must get its own state, separate from the default state")
+	}
+	if again != stateA {
+		t.Fatal("requests with the same test_id must share state")
+	}
+
+	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-a", nil))
+	afterReset, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-a", nil))
+	if afterReset == stateA {
+		t.Fatal("/reset must drop the state for its test_id")
+	}
+}
+
+func TestOnlyInitRegistersTestIDs(t *testing.T) {
+	registered := func() bool {
+		statesMu.Lock()
+		defer statesMu.Unlock()
+		_, ok := states["t-unknown"]
+		return ok
+	}
+
+	stateHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/state?test_id=t-unknown", nil))
+	if registered() {
+		t.Fatal("/state must not register a test_id")
+	}
+	flushHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/flush?test_id=t-unknown", nil))
+	if registered() {
+		t.Fatal("/flush must not register a test_id")
+	}
+}
+
+func TestFailedInitForgetsItsRegistration(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	body := strings.NewReader(`{"api_key":"phc_test","host":"http://test-harness:8081","flush_at":-1}`)
+	initHandler(recorder, httptest.NewRequest(http.MethodPost, "/init?test_id=t-failed", body))
+	if recorder.Code == http.StatusOK {
+		t.Fatalf("expected /init to fail, got %d", recorder.Code)
+	}
+	statesMu.Lock()
+	_, kept := states["t-failed"]
+	statesMu.Unlock()
+	if kept {
+		t.Fatal("a failed /init must not keep its test_id registered")
+	}
+}
+
+func TestInitAfterOverlappingResetUsesARegisteredState(t *testing.T) {
+	removed, _ := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-turns", nil), true)
+	defer resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-turns", nil))
+
+	// Hold the lifecycle lock and then remove the state like /reset does, so
+	// /init waits on a state that is no longer registered.
+	done := make(chan int)
+	go func() {
+		body := strings.NewReader(`{"api_key":"phc_test","host":"http://test-harness:8081"}`)
+		recorder := httptest.NewRecorder()
+		initHandler(recorder, httptest.NewRequest(http.MethodPost, "/init?test_id=t-turns", body))
+		done <- recorder.Code
+	}()
+	time.Sleep(50 * time.Millisecond)
+	forgetState(removed, "t-turns")
+	removed.lifecycleMu.Unlock()
+
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("/init = %d", code)
+	}
+	if removed.client != nil {
+		removed.client.Close()
+		t.Fatal("/init stored its client on a state that /reset removed")
+	}
+	registered, _ := stateFor(httptest.NewRequest(http.MethodGet, "/state?test_id=t-turns", nil))
+	registered.mu.Lock()
+	defer registered.mu.Unlock()
+	if registered.client == nil {
+		t.Fatal("/init must store its client on the registered state")
+	}
+}
+
+// registryCheckingClient records whether its test_id was still registered when
+// /reset closed it.
+type registryCheckingClient struct {
+	posthog.Client
+	testID            string
+	registeredOnClose bool
+}
+
+func (c *registryCheckingClient) Close() error {
+	statesMu.Lock()
+	_, c.registeredOnClose = states[c.testID]
+	statesMu.Unlock()
+	return nil
+}
+
+func TestResetKeepsTestIDRegisteredUntilOldClientCloses(t *testing.T) {
+	state, _ := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-close", nil), true)
+	client := &registryCheckingClient{testID: "t-close"}
+	state.client = client
+	state.lifecycleMu.Unlock()
+
+	resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-close", nil))
+
+	if !client.registeredOnClose {
+		t.Fatal("/reset must keep the test_id registered until the old client has closed")
+	}
+	statesMu.Lock()
+	_, kept := states["t-close"]
+	statesMu.Unlock()
+	if kept {
+		t.Fatal("/reset must remove the test_id once it finishes")
+	}
+}
+
+func TestOutboundRequestsCarryTestIDHeader(t *testing.T) {
+	headers := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers <- r.Header.Get(testIDHeader)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	transport := &TrackedTransport{base: http.DefaultTransport, state: newAdapterState(), testID: "t-capture"}
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/batch/", strings.NewReader(`{"batch":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	resp, err = postFlagsWithRetry(server.URL, []byte(`{}`), "t-flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	got := []string{<-headers, <-headers}
+	if want := []string{"t-capture", "t-flags"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s headers = %v, want %v", testIDHeader, got, want)
+	}
+}
+
+func TestFlushSendsSpacedCapturesInOneBatch(t *testing.T) {
+	var batchSizes []int
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Batch []struct {
+				UUID string `json:"uuid"`
+			} `json:"batch"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		batchSizes = append(batchSizes, len(body.Batch))
+		mu.Unlock()
+		results := make(map[string]map[string]string, len(body.Batch))
+		for _, event := range body.Batch {
+			results[event.UUID] = map[string]string{"result": "ok"}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": results})
+	}))
+	defer server.Close()
+
+	state, testID := lockRegisteredState(httptest.NewRequest(http.MethodPost, "/init?test_id=t-spaced", nil), true)
+	config := newClientConfig(state, testID, server.URL)
+	config.BatchSize = 10
+	client, err := posthog.NewWithConfig("phc_test", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.client = client
+	state.config = &config
+	state.lifecycleMu.Unlock()
+	defer resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-spaced", nil))
+
+	for i := 0; i < 5; i++ {
+		body := strings.NewReader(`{"distinct_id":"u","event":"e"}`)
+		recorder := httptest.NewRecorder()
+		captureHandler(recorder, httptest.NewRequest(http.MethodPost, "/capture?test_id=t-spaced", body))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("/capture = %d %s", recorder.Code, recorder.Body.String())
+		}
+		time.Sleep(6 * time.Millisecond)
+	}
+	recorder := httptest.NewRecorder()
+	flushHandler(recorder, httptest.NewRequest(http.MethodPost, "/flush?test_id=t-spaced", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("/flush = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var flushed struct {
+		EventsFlushed int `json:"events_flushed"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&flushed); err != nil {
+		t.Fatal(err)
+	}
+	if flushed.EventsFlushed != 5 {
+		t.Fatalf("events_flushed = %d, want 5", flushed.EventsFlushed)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(batchSizes, []int{5}) {
+		t.Fatalf("batch sizes = %v, want one batch of 5", batchSizes)
+	}
+}
+
+func TestFlushOnDisabledClientSucceeds(t *testing.T) {
+	body := strings.NewReader(`{"api_key":"","host":"http://test-harness:8081"}`)
+	initHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/init?test_id=t-disabled", body))
+	defer resetHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/reset?test_id=t-disabled", nil))
+
+	recorder := httptest.NewRecorder()
+	flushHandler(recorder, httptest.NewRequest(http.MethodPost, "/flush?test_id=t-disabled", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("/flush on a disabled client = %d %s", recorder.Code, recorder.Body.String())
 	}
 }

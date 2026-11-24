@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,11 +46,16 @@ func compressionFromEnv() (string, bool) {
 
 // TrackedTransport wraps http.RoundTripper to track requests
 type TrackedTransport struct {
-	base  http.RoundTripper
-	state *AdapterState
+	base   http.RoundTripper
+	state  *AdapterState
+	testID string
 }
 
 func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.testID != "" {
+		req = req.Clone(req.Context())
+		req.Header.Set(testIDHeader, t.testID)
+	}
 	// Read and restore request body to extract UUIDs
 	var bodyBytes []byte
 	if req.Body != nil {
@@ -140,6 +146,9 @@ func (t *TrackedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 // AdapterState tracks SDK state for test assertions
 type AdapterState struct {
+	// lifecycleMu makes /init and /reset for the same state take turns, so an
+	// overlapping pair cannot leave a client unclosed or unreachable.
+	lifecycleMu         sync.Mutex
 	mu                  sync.Mutex
 	client              posthog.Client
 	config              *posthog.Config
@@ -153,6 +162,7 @@ type AdapterState struct {
 	pendingEvents       int
 	reportedDrops       []ReportedDrop
 	logLines            []string
+	testID              string
 }
 
 // ReportedDrop is one event the SDK reported as dropped through its Callback.
@@ -171,10 +181,53 @@ type RequestInfo struct {
 	UUIDList     []string `json:"uuid_list"`
 }
 
-var state = &AdapterState{
-	requestsMade:  []RequestInfo{},
-	reportedDrops: []ReportedDrop{},
-	logLines:      []string{},
+func newAdapterState() *AdapterState {
+	return &AdapterState{
+		requestsMade:  []RequestInfo{},
+		reportedDrops: []ReportedDrop{},
+		logLines:      []string{},
+	}
+}
+
+// testIDHeader tells the harness mock server which parallel test an outbound
+// request belongs to.
+const testIDHeader = "X-Test-Id"
+
+// In parallel mode the harness adds ?test_id= to every adapter request and
+// expects each test_id to get its own SDK client and state. Requests without a
+// test_id use defaultState.
+var (
+	defaultState = newAdapterState()
+	statesMu     sync.Mutex
+	states       = map[string]*AdapterState{}
+)
+
+// stateFor returns the state for the request's test_id. Only /init registers a
+// test_id. For an unknown test_id it returns an empty state that is not kept, so
+// the handler reports "SDK not initialized" without growing the registry.
+func stateFor(r *http.Request) (*AdapterState, string) {
+	testID := r.URL.Query().Get("test_id")
+	if testID == "" {
+		return defaultState, ""
+	}
+	statesMu.Lock()
+	defer statesMu.Unlock()
+	if s, ok := states[testID]; ok {
+		return s, testID
+	}
+	return newAdapterState(), testID
+}
+
+// forgetState removes testID from the registry if it still maps to state.
+func forgetState(state *AdapterState, testID string) {
+	if testID == "" {
+		return
+	}
+	statesMu.Lock()
+	if states[testID] == state {
+		delete(states, testID)
+	}
+	statesMu.Unlock()
 }
 
 // clearDiagnostics empties what /state reports from the SDK's own error and log
@@ -307,10 +360,11 @@ func padProperties(properties map[string]interface{}, size int, marker string) (
 
 // HealthResponse represents /health endpoint response
 type HealthResponse struct {
-	SDKName        string   `json:"sdk_name"`
-	SDKVersion     string   `json:"sdk_version"`
-	AdapterVersion string   `json:"adapter_version"`
-	Capabilities   []string `json:"capabilities"`
+	SDKName          string   `json:"sdk_name"`
+	SDKVersion       string   `json:"sdk_version"`
+	AdapterVersion   string   `json:"adapter_version"`
+	Capabilities     []string `json:"capabilities"`
+	SupportsParallel bool     `json:"supports_parallel"`
 }
 
 // InitRequest represents /init endpoint request
@@ -431,10 +485,11 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"encoding_" + compressionName,
 	}
 	response := HealthResponse{
-		SDKName:        "posthog-go",
-		SDKVersion:     posthog.Version,
-		AdapterVersion: VERSION,
-		Capabilities:   capabilities,
+		SDKName:          "posthog-go",
+		SDKVersion:       posthog.Version,
+		AdapterVersion:   VERSION,
+		Capabilities:     capabilities,
+		SupportsParallel: true,
 	}
 	jsonResponse(w, response)
 }
@@ -451,6 +506,8 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host must be the SDK harness mock URL", http.StatusBadRequest)
 		return
 	}
+	state, testID := lockRegisteredState(r, true)
+	defer state.lifecycleMu.Unlock()
 
 	state.mu.Lock()
 	oldClient := state.client
@@ -473,15 +530,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	state.clearDiagnostics()
 
 	// Create new client with tracked transport
-	config := posthog.Config{
-		Endpoint:  validatedHost,
-		Transport: &TrackedTransport{base: http.DefaultTransport, state: state},
-		Callback:  stateCallback{state: state},
-		Logger:    newStateLogger(state),
-		// Set test-friendly defaults
-		BatchSize: 1,                     // Flush after each event by default
-		Interval:  20 * time.Millisecond, // Short interval for tests
-	}
+	config := newClientConfig(state, testID, validatedHost)
 
 	// Override with request params if provided
 	if req.FlushAt != nil {
@@ -515,6 +564,7 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	// itself instead of failing (fail_open).
 	client, err := posthog.NewWithConfig(req.APIKey, config)
 	if err != nil {
+		forgetState(state, testID)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -524,9 +574,58 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 	state.config = &config
 	state.apiKey = req.APIKey
 	state.host = validatedHost
+	state.testID = testID
 	state.mu.Unlock()
 
 	jsonResponse(w, map[string]bool{"success": true})
+}
+
+// lockRegisteredState locks the lifecycle of the request's registered state,
+// registering a new one first when register is true. /reset removes a state
+// from the registry before unlocking it, so a request that waited on a removed
+// state retries against the registry. Without register it returns nil when the
+// test_id is not registered.
+func lockRegisteredState(r *http.Request, register bool) (*AdapterState, string) {
+	testID := r.URL.Query().Get("test_id")
+	if testID == "" {
+		defaultState.lifecycleMu.Lock()
+		return defaultState, ""
+	}
+	for {
+		statesMu.Lock()
+		state, ok := states[testID]
+		if !ok && register {
+			state = newAdapterState()
+			states[testID] = state
+		}
+		statesMu.Unlock()
+		if state == nil {
+			return nil, testID
+		}
+		state.lifecycleMu.Lock()
+		statesMu.Lock()
+		registered := states[testID] == state
+		statesMu.Unlock()
+		if registered {
+			return state, testID
+		}
+		state.lifecycleMu.Unlock()
+	}
+}
+
+// newClientConfig is the SDK config /init starts from before applying the
+// request's overrides.
+func newClientConfig(state *AdapterState, testID, host string) posthog.Config {
+	return posthog.Config{
+		Endpoint:  host,
+		Transport: &TrackedTransport{base: http.DefaultTransport, state: state, testID: testID},
+		Callback:  stateCallback{state: state},
+		Logger:    newStateLogger(state),
+		// Send each event on its own unless the test sets flush_at. /flush
+		// sends partial batches, so the SDK's default interval stays in place:
+		// a short one splits batches when tests run in parallel.
+		BatchSize: 1,
+	}
 }
 
 func captureHandler(w http.ResponseWriter, r *http.Request) {
@@ -545,6 +644,7 @@ func handleCapture(w http.ResponseWriter, r *http.Request, enqueue func(posthog.
 		return
 	}
 
+	state, _ := stateFor(r)
 	state.mu.Lock()
 	client := state.client
 	state.mu.Unlock()
@@ -639,48 +739,39 @@ func buildCaptureWithPadding(req CaptureRequest) (posthog.Capture, error) {
 }
 
 func flushHandler(w http.ResponseWriter, r *http.Request) {
+	state, _ := stateFor(r)
 	state.mu.Lock()
-	if state.client == nil {
-		state.mu.Unlock()
+	client := state.client
+	state.mu.Unlock()
+	if client == nil {
 		http.Error(w, "SDK not initialized", http.StatusBadRequest)
 		return
 	}
-	state.mu.Unlock()
 
-	eventsFlushed := waitForPendingEvents()
+	if err := flushClient(r.Context(), client); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	state.mu.Lock()
+	eventsFlushed := state.totalEventsSent
+	state.mu.Unlock()
 	jsonResponse(w, map[string]interface{}{
 		"success":        true,
 		"events_flushed": eventsFlushed,
 	})
 }
 
-func waitForPendingEvents() int {
-	state.mu.Lock()
-	interval := state.config.Interval
-	if interval == 0 {
-		interval = 5 * time.Second // Default
+// flushClient sends every queued event and waits for the attempt to finish.
+// A disabled client has nothing to send (fail_open).
+func flushClient(ctx context.Context, client posthog.Client) error {
+	if err := client.FlushWithContext(ctx); err != nil && !errors.Is(err, posthog.ErrSDKDisabled) {
+		return err
 	}
-	state.mu.Unlock()
-
-	// Wait only until the current queue drains, with a small cap. Most harness
-	// tests use BatchSize=1, while batch-format tests rely on the short interval
-	// above to flush partial batches. Avoid fixed sleeps per test: the compliance
-	// suite has many flushes and long retry waits of its own.
-	deadline := time.Now().Add(interval + (100 * time.Millisecond))
-	for {
-		state.mu.Lock()
-		pendingEvents := state.pendingEvents
-		eventsFlushed := state.totalEventsSent
-		state.mu.Unlock()
-
-		if pendingEvents == 0 || time.Now().After(deadline) {
-			return eventsFlushed
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	return nil
 }
 
 func stateHandler(w http.ResponseWriter, r *http.Request) {
+	state, _ := stateFor(r)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
@@ -721,6 +812,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	req.Key = sanitizeForLog(req.Key)
 	req.DistinctID = sanitizeForLog(req.DistinctID)
 
+	state, _ := stateFor(r)
 	state.mu.Lock()
 	client := state.client
 	state.mu.Unlock()
@@ -733,6 +825,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	state.mu.Lock()
 	apiKey := state.apiKey
 	host := state.host
+	testID := state.testID
 	state.mu.Unlock()
 
 	personProperties := map[string]interface{}{"distinct_id": req.DistinctID}
@@ -763,7 +856,7 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := json.Marshal(payload)
 	flagsURL := strings.TrimRight(host, "/") + "/flags/?v=2"
-	resp, err := postFlagsWithRetry(flagsURL, body)
+	resp, err := postFlagsWithRetry(flagsURL, body, testID)
 	if err != nil {
 		log.Printf("Error evaluating feature flag: %s", sanitizeForLog(err.Error()))
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -810,7 +903,10 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	state.totalEventsCaptured++
 	state.pendingEvents++
 	state.mu.Unlock()
-	waitForPendingEvents()
+	if err := flushClient(r.Context(), client); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	// Avoid logging user-controlled fields (req.Key, req.DistinctID, value) to prevent log injection.
 	log.Printf("Evaluated feature flag")
@@ -821,10 +917,18 @@ func featureFlagHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func postFlagsWithRetry(flagsURL string, body []byte) (*http.Response, error) {
+func postFlagsWithRetry(flagsURL string, body []byte, testID string) (*http.Response, error) {
 	var lastStatus int
 	for attempt := 0; attempt < 2; attempt++ {
-		resp, err := http.Post(flagsURL, "application/json", bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, flagsURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if testID != "" {
+			req.Header.Set(testIDHeader, testID)
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
@@ -864,11 +968,21 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 }
 
 func resetHandler(w http.ResponseWriter, r *http.Request) {
+	state, testID := lockRegisteredState(r, false)
+	if state == nil {
+		jsonResponse(w, map[string]bool{"success": true})
+		return
+	}
+	defer state.lifecycleMu.Unlock()
+	// Deferred calls run last-in first-out, so the test_id leaves the registry
+	// after the old client has closed but before /init can take the lock.
+	defer forgetState(state, testID)
 	state.mu.Lock()
 	oldClient := state.client
 	state.client = nil
 	state.apiKey = ""
 	state.host = ""
+	state.testID = ""
 	state.totalEventsCaptured = 0
 	state.totalEventsSent = 0
 	state.totalRetries = 0
