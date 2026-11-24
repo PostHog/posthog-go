@@ -1,7 +1,6 @@
 package posthog
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -253,29 +252,37 @@ func TestPersonMetadataFilterInAnUndecidedCohortNeedsServer(t *testing.T) {
 	}
 }
 
-// The reason follows the spec's precedence, whatever the order of the filters.
-func TestPersonMetadataFilterReasonDoesNotDependOnOrder(t *testing.T) {
-	dependency := `{"key": "dependency", "type": "flag", "value": true, "operator": "flag_evaluates_to", "dependency_chain": ["dependency"]}`
+// The reason follows the spec's precedence, whatever the order of the filters. The missing
+// property keeps the definition check, which would report the same reason, out of it.
+func TestPersonMetadataFilterKeepsTheHighestReason(t *testing.T) {
+	missing := `{"key": "region", "type": "person", "operator": "exact", "value": ["US"]}`
+	unknownOperator := `{"key": "age", "type": "person", "operator": "unknown", "value": 1}`
+	onFirstSeen := `{"key": "dep-pm", "type": "flag", "value": true, "operator": "flag_evaluates_to", "dependency_chain": ["dep-pm"]}`
+	onStatic := `{"key": "dep-static", "type": "flag", "value": true, "operator": "flag_evaluates_to", "dependency_chain": ["dep-static"]}`
 	group := func(filter string) string { return `{"type": "AND", "values": [` + filter + `]}` }
-	flagsByKey := map[string]FeatureFlag{}
-	var flag FeatureFlag
-	require.NoError(t, json.Unmarshal([]byte(flagDefinition("dependency", flagCondition(100, firstSeenFilter))), &flag))
-	flagsByKey["dependency"] = flag
-
 	for _, values := range []string{
-		firstSeenFilter + "," + dependency,
-		dependency + "," + firstSeenFilter,
-		group(firstSeenFilter) + "," + group(dependency),
-		group(dependency) + "," + group(firstSeenFilter),
+		onFirstSeen + "," + firstSeenFilter,
+		firstSeenFilter + "," + onFirstSeen,
+		group(onFirstSeen) + "," + group(firstSeenFilter),
+		group(firstSeenFilter) + "," + group(onFirstSeen),
+		firstSeenFilter + "," + onStatic,
+		group(firstSeenFilter) + "," + group(onStatic),
+		unknownOperator + "," + onStatic,
 	} {
 		t.Run(values, func(t *testing.T) {
-			var cohort PropertyGroup
-			require.NoError(t, json.Unmarshal([]byte(group(values)), &cohort))
+			client, _, remoteCalls := newUnresolvedFlagsClient(t, localDefinitionsWithCohorts(
+				`{"7": `+group(values)+`}`,
+				flagDefinition("dep-pm", flagCondition(100, firstSeenFilter)),
+				flagDefinition("dep-static", flagCondition(100, `{"key": "id", "type": "cohort", "value": 999}`)),
+				flagDefinition("target", flagCondition(100, missing, `{"key": "id", "type": "cohort", "value": 7}`)),
+			), `{}`)
 
-			_, err := (&FeatureFlagsPoller{}).matchPropertyGroup(cohort, Properties{}, nil, flagsByKey, map[string]interface{}{}, "user-123", nil, nil, &flagsState{})
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", OnlyEvaluateLocally: true})
 
-			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
-			require.True(t, isServerEvalError(err))
+			require.NoError(t, err)
+			require.Nil(t, snapshot.GetFlag("target"))
+			require.Equal(t, UnresolvedFlagReasonUnsupportedDefinition, snapshot.UnresolvedFlags()["target"])
+			require.Zero(t, remoteCalls.Load())
 		})
 	}
 }
