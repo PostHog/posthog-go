@@ -140,7 +140,7 @@ func TestEmailsSendScheduledAtOnlyOnPostHogCloud(t *testing.T) {
 				return
 			}
 			emailErr := requireEmailError(t, err)
-			require.Equal(t, "scheduling_unsupported", emailErr.Code)
+			require.Equal(t, "scheduling_requires_cloud", emailErr.Code)
 			require.Equal(t, EmailErrorValidation, emailErr.Name)
 			require.Equal(t, "ScheduledAt", emailErr.Field)
 			require.Equal(t, "This client sends email to "+tt.inError+", and only PostHog Cloud schedules emails, so no email was sent.", emailErr.Message)
@@ -170,6 +170,7 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 		{name: "another time", reply: reply(`,"status":"scheduled","scheduled_at":"2026-12-01T09:00:00.001Z"`), unconfirmed: true},
 		{name: "no scheduled_at", reply: reply(``), unconfirmed: true},
 		{name: "no scheduled_at with status queued", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued"`), unconfirmed: true},
+		{name: "no scheduled_at with status queued for a time ahead", at: testClientNow.Add(time.Minute + time.Millisecond), reply: reply(`,"status":"queued"`), unconfirmed: true},
 		{name: "scheduled without a time", reply: reply(`,"status":"scheduled","scheduled_at":null`), unconfirmed: true},
 		{name: "queued with a time", at: testClientNow.Add(-time.Hour), reply: reply(`,"status":"queued","scheduled_at":"2026-11-30T08:00:00.000Z"`), unconfirmed: true},
 		{name: "a time without a status", reply: reply(`,"scheduled_at":"2026-12-01T09:00:00.000Z"`), unconfirmed: true},
@@ -191,7 +192,7 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 			if tt.unconfirmed {
 				require.Nil(t, result)
 				emailErr := requireEmailError(t, err)
-				require.Equal(t, "scheduling_unconfirmed", emailErr.Code)
+				require.Equal(t, "schedule_not_confirmed", emailErr.Code)
 				require.Equal(t, EmailErrorApplication, emailErr.Name)
 				require.Equal(t, testMessageID, emailErr.MessageID)
 				require.Equal(t, http.StatusAccepted, emailErr.StatusCode)
@@ -242,7 +243,7 @@ func TestEmailsSendLogsWarningsOfAnUnconfirmedSchedule(t *testing.T) {
 
 	_, err := client.Emails().Send(context.Background(), email)
 
-	require.Equal(t, "scheduling_unconfirmed", requireEmailError(t, err).Code)
+	require.Equal(t, "schedule_not_confirmed", requireEmailError(t, err).Code)
 	require.Equal(t, []string{"PostHog email warning template_superseded: A newer version exists."}, logs.warnings())
 }
 

@@ -59,7 +59,7 @@ var (
 // A send with ScheduledAt waits until that time, at most 7 days ahead. Only
 // PostHog Cloud schedules emails: on any other app host, such as a
 // self-hosted PostHog, a reverse proxy or a custom domain, Send returns an
-// error with code "scheduling_unsupported" before any request. Get reads
+// error with code "scheduling_requires_cloud" before any request. Get reads
 // "scheduled" until the email goes out. To stop scheduled emails before they
 // go out, disable the email's workflow in PostHog until they have reached a
 // final status.
@@ -556,7 +556,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	}
 	defer finish()
 	if !send.scheduledAt.IsZero() && cloudAppHosts[s.appHost] != s.appHost {
-		return nil, schedulingUnsupported(s.appHost)
+		return nil, schedulingRequiresCloud(s.appHost)
 	}
 
 	maxRetries := s.maxRetries
@@ -889,7 +889,7 @@ func (r emailReply) checkSchedule(result *SendEmailResult, requested, now time.T
 			return nil
 		}
 	}
-	return schedulingUnconfirmed(result.ID, r.status)
+	return scheduleNotConfirmed(result.ID, r.status)
 }
 
 func (r emailReply) emailStatus() (*EmailStatus, *EmailError) {

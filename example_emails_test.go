@@ -171,7 +171,7 @@ func ExampleEmails_scheduled() {
 		ScheduledAt:    trialEndsAt.Add(-24 * time.Hour),
 	})
 	var emailErr *posthog.EmailError
-	if errors.As(err, &emailErr) && emailErr.Code == "scheduling_unconfirmed" {
+	if errors.As(err, &emailErr) && emailErr.Code == "schedule_not_confirmed" {
 		log.Fatalf("read email %s before sending it again: %s", emailErr.MessageID, emailErr.Fix)
 	}
 	if err != nil {
