@@ -239,7 +239,7 @@ func TestEmailsSendChecksTheScheduleInTheAnswer(t *testing.T) {
 			requests := server.received()
 			require.Len(t, requests, len(replies))
 			for _, request := range requests {
-				require.Equal(t, requests[0].Raw, request.Raw, "a replay repeats the first send")
+				require.Equal(t, requests[0].Body, request.Body, "a replay repeats the first send")
 				if tt.key != "" {
 					require.Equal(t, tt.key, request.Header.Get("Idempotency-Key"))
 				}
