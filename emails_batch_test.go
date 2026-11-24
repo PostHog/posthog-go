@@ -523,25 +523,37 @@ func TestEmailsBatchStopsAtARequestThatFailsAsAWhole(t *testing.T) {
 }
 
 func TestEmailsBatchKeepsALostEmailUnconfirmedWhenTheRetryIsRefused(t *testing.T) {
-	server := newBatchServer(t, func(n int, r batchRequest) stubReply {
-		switch {
-		case r.Method == http.MethodGet:
-			return stubReply{status: http.StatusNotFound}
-		case n == 0:
-			return stubReply{status: dropConnection}
-		default:
-			return stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}
-		}
-	})
-	client := newEmailClientFor(t, server.URL)
+	tests := []struct {
+		name, later string
+		refusal     stubReply
+	}{
+		{name: "a rate limit", later: "quota_limited", refusal: stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}},
+		{name: "keys still in flight", later: "idempotency_key_in_flight", refusal: failed(http.StatusConflict, "idempotency_key_in_flight")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newBatchServer(t, func(n int, r batchRequest) stubReply {
+				switch {
+				case r.Method == http.MethodGet:
+					return stubReply{status: http.StatusOK, body: `{"id":"m-0","status":"queued","created_at":"2026-11-24T05:00:00Z","status_at":"2026-11-24T05:00:00Z"}`}
+				case n == 0:
+					return failed(http.StatusServiceUnavailable, "delivery_unavailable")
+				default:
+					return tt.refusal
+				}
+			})
+			client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(1) })
 
-	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
+			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
 
-	require.Equal(t, "quota_limited", requireEmailError(t, err).Code)
-	got := result.Results[0]
-	require.Equal(t, "unconfirmed", got.Status)
-	require.Equal(t, "delivery_unavailable", got.Error.Code)
-	require.Equal(t, "quota_limited", got.LaterError.Code)
+			require.Equal(t, tt.later, requireEmailError(t, err).Code)
+			got := result.Results[0]
+			require.Equal(t, "unconfirmed", got.Status)
+			require.Equal(t, "delivery_unavailable", got.Error.Code)
+			require.Equal(t, tt.later, got.LaterError.Code, "PostHog answered the retry")
+			require.Equal(t, "m-0", got.MessageID, "the read by key keeps the later answer")
+		})
+	}
 }
 
 func TestEmailsBatchReadsLostEmailsByTheirKeys(t *testing.T) {

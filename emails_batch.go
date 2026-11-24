@@ -429,14 +429,14 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if sent && s.isClosed() {
 			closed := newEmailError("client_closed", "The PostHog client is shut down, so the rest of the batch wasn't sent.", ErrClosed)
 			run.skip(append(pending, chunk), closed)
-			s.readLost(ctx, run)
 			return s.batchFailed(run, closed)
 		}
 		body := run.body(chunk)
-		attempts, uncertain := 0, false
+		attempts, uncertain, lostBefore := 0, false, false
 		err := s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 			if uncertain {
 				run.lost(chunk)
+				lostBefore = true
 			}
 			uncertain = false
 			if attempts++; attempts > 1 && s.isClosed() {
@@ -454,6 +454,11 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		}
 		if uncertain {
 			run.lost(chunk)
+			if lostBefore && err.StatusCode != 0 {
+				for _, i := range chunk {
+					run.results[i].LaterError = err
+				}
+			}
 		}
 		if err.StatusCode == http.StatusRequestEntityTooLarge && err.Code == "content_too_large" && !uncertain && !slices.ContainsFunc(chunk, run.unconfirmed) {
 			// The pipeline refused the data it copies to every recipient, so
