@@ -90,9 +90,8 @@ type Emails interface {
 	// one recipient, who then fails with "content_too_large". Any other
 	// request that fails as a whole, such as a rate limit past its retries,
 	// stops the batch: Batch returns that request's error with a
-	// result that still holds every recipient. Before it returns, on success
-	// and on error, it reads each unconfirmed email without a message ID by its
-	// key, which gives its MessageID and leaves it "unconfirmed". The error code
+	// result that still holds every recipient. An "unconfirmed" email's Error
+	// says to send it again with the same IdempotencyKey. The error code
 	// "batch_unavailable" (409) means the project can't send batches yet, and
 	// "not_found" that the template doesn't exist or batch sends are off for
 	// the project: send each email the batch didn't queue with Send and its

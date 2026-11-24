@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,10 +12,9 @@ import (
 )
 
 const (
-	emailBatchPath       = "/api/messaging/send/email_batch/"
-	emailStatusByKeyPath = "/api/messaging/emails/status/"
-	maxBatchRecipients   = 100
-	maxBatchBodyBytes    = 4 << 20
+	emailBatchPath     = "/api/messaging/send/email_batch/"
+	maxBatchRecipients = 100
+	maxBatchBodyBytes  = 4 << 20
 	// minBatchAttemptTimeout outlasts the 30 seconds PostHog waits on its
 	// email pipeline for a batch, so the client doesn't give up on an answer
 	// that is still coming.
@@ -41,9 +39,8 @@ type BatchRecipient struct {
 	// batch may be cut off and run again: a rerun within 24 hours replays the
 	// emails that went out instead of sending them twice. A single send and a
 	// batch recipient with the same key and the same email replay each other.
-	// Never reuse a key for another email: the client reads an unconfirmed
-	// email by its key, and an earlier email with that key gives its message
-	// ID as this one's.
+	// Never reuse a key for another email: PostHog replays the earlier email
+	// instead of sending this one.
 	IdempotencyKey string
 	// TemplateData is only for a TemplateEmailBatch: values for this
 	// recipient, merged over the batch's TemplateData. A top-level key set
@@ -295,6 +292,11 @@ func (r *batchRun) body(chunk []int) []byte {
 }
 
 func (r *batchRun) set(i int, status string, result BatchEmailResult) {
+	if status == "unconfirmed" && result.Error != nil && result.Error.Fix == "" {
+		withFix := *result.Error
+		withFix.Fix = resendWithTheSameKey
+		result.Error = &withFix
+	}
 	result.Index, result.To, result.IdempotencyKey, result.Status = i, r.members[i].to, r.members[i].key, status
 	r.results[i] = result
 }
@@ -423,7 +425,6 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if ctx.Err() != nil {
 			ended := newEmailError("network_error", "The call's context ended, so the rest of the batch wasn't sent.", ctx.Err())
 			run.skip(append(pending, chunk), ended)
-			s.readLost(ctx, run)
 			return s.batchFailed(run, ended)
 		}
 		if sent && s.isClosed() {
@@ -473,10 +474,8 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 			continue
 		}
 		run.stop(chunk, pending, err, uncertain)
-		s.readLost(ctx, run)
 		return s.batchFailed(run, err)
 	}
-	s.readLost(ctx, run)
 	s.logWarnings(run.warnings)
 	return run.result(), nil
 }
@@ -492,36 +491,6 @@ func (s *emailSender) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
-}
-
-// readLost reads each unconfirmed email without a message ID by its key, once
-// and without retries, when the batch ends. A row gives the email's message ID
-// for Emails.Get and leaves it "unconfirmed": PostHog writes the same rows for
-// an email it queued and for a recipient it refused. A 404 skips the email;
-// any other failure stops the reads.
-func (s *emailSender) readLost(ctx context.Context, run *batchRun) {
-	for i := range run.members {
-		if !run.unconfirmed(i) || run.results[i].MessageID != "" {
-			continue
-		}
-		if s.isClosed() {
-			return
-		}
-		url := s.appHost + emailStatusByKeyPath + "?" + url.Values{"idempotency_key": {run.members[i].key}}.Encode()
-		reply, err := s.request(ctx, 0, http.MethodGet, url, s.header(), nil)
-		if err != nil && err.StatusCode == http.StatusNotFound {
-			continue
-		}
-		if err != nil {
-			return
-		}
-		status, err := reply.emailStatus()
-		if err != nil {
-			return
-		}
-		earlier := run.results[i]
-		run.set(i, "unconfirmed", BatchEmailResult{MessageID: status.ID, Error: earlier.Error, LaterError: earlier.LaterError})
-	}
 }
 
 func (s *emailSender) batchFailed(run *batchRun, err *EmailError) (*SendBatchResult, error) {
@@ -594,8 +563,10 @@ func slotError(raw interface{}, messageID string) *EmailError {
 	return &EmailError{Name: emailErrorName(status, code), Code: code, Message: message, StatusCode: status, MessageID: messageID}
 }
 
+const resendWithTheSameKey = "Send it again with the same IdempotencyKey within 24 hours, so it goes out once."
+
 func unconfirmedEmail(messageID string) *EmailError {
-	return &EmailError{Name: EmailErrorServiceUnavailable, Code: "delivery_unavailable", Message: "PostHog didn't confirm this email, so it may still go out. Send it again with the same IdempotencyKey within 24 hours, so it goes out once.", MessageID: messageID}
+	return &EmailError{Name: EmailErrorServiceUnavailable, Code: "delivery_unavailable", Message: "PostHog didn't confirm this email, so it may still go out.", Fix: resendWithTheSameKey, MessageID: messageID}
 }
 
 func recipientTooLarge() *EmailError {
