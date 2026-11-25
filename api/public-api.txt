@@ -840,6 +840,7 @@ type FlagProperty struct {
 	Type string `json:"type"`
 	Negation bool `json:"negation"`
 	DependencyChain []string `json:"dependency_chain"`
+	GroupTypeIndex *int `json:"group_type_index,omitempty"`
 }
 
 type FlagReason struct {

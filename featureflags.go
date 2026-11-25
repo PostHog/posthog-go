@@ -412,6 +412,9 @@ type FlagProperty struct {
 	Negation bool `json:"negation"`
 	// DependencyChain tracks feature flag dependencies while evaluating nested flag properties.
 	DependencyChain []string `json:"dependency_chain"`
+	// GroupTypeIndex is the group type a "group" filter reads. When nil, the filter
+	// reads the group type its condition aggregates on.
+	GroupTypeIndex *int `json:"group_type_index,omitempty"`
 }
 
 // PropertyGroup describes a nested property group used by cohorts and flag conditions.
@@ -461,10 +464,10 @@ func (pv *parsedPropertyValue) usesKnownAbsentOf(aggregationGroupTypeIndex *uint
 
 // conditionFilterUsesKnownAbsent reports whether a condition's filter of filterType
 // reads the properties of the condition's aggregation, so that aggregation's
-// known-absent keys apply to it. Condition filters carry no group_type_index, so a
-// group filter uses the keys of the group its condition aggregates on, the same
-// group whose properties it reads. No other filter type, such as person_metadata,
-// resolves from a listing.
+// known-absent keys apply to it. A group filter here has no group_type_index of
+// another group type, so it uses the keys of the group its condition aggregates on,
+// the same group whose properties it reads. No other filter type, such as
+// person_metadata, resolves from a listing.
 func conditionFilterUsesKnownAbsent(filterType string, aggregationGroupTypeIndex *uint8) bool {
 	switch filterType {
 	case "person":
@@ -2006,6 +2009,8 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 				isMatch, err = poller.matchCohort(prop, properties, knownAbsent, cohorts, flagsByKey, evaluationCache, inputs, aggregationGroupTypeIndex, state)
 			} else if prop.Type == "flag" {
 				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, inputs, state)
+			} else if readsOtherGroupType(prop, aggregationGroupTypeIndex) {
+				isMatch, err = inputs.matchGroupFilterOfOtherGroupType(prop, state)
 			} else {
 				filterKnownAbsent := knownAbsent
 				if !conditionFilterUsesKnownAbsent(prop.Type, aggregationGroupTypeIndex) {
@@ -2064,6 +2069,77 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	}
 
 	return conditionMatch, nil
+}
+
+// readsOtherGroupType reports a group filter whose group_type_index names a group type
+// other than the condition's aggregation.
+func readsOtherGroupType(property FlagProperty, aggregationGroupTypeIndex *uint8) bool {
+	if property.Type != "group" || property.GroupTypeIndex == nil {
+		return false
+	}
+	return aggregationGroupTypeIndex == nil || *property.GroupTypeIndex != int(*aggregationGroupTypeIndex)
+}
+
+// matchGroupFilterOfOtherGroupType matches a group filter against the properties and
+// known-absent keys of the group type its group_type_index names, as the flags service
+// routes it in PropertyContext::resolve_for_filter and filter_needs_partial_props.
+func (inputs *flagEvaluationInputs) matchGroupFilterOfOtherGroupType(property FlagProperty, state *flagsState) (bool, error) {
+	groupType, mapped := state.groups[strconv.Itoa(*property.GroupTypeIndex)]
+	if !mapped {
+		// The flags service can't tell which supplied group has this index, so with any
+		// group context the filter doesn't match. Without it, the filter reads no properties.
+		if inputs.hasGroupContext() {
+			return false, nil
+		}
+		return matchPropertyWithKnownAbsent(property, nil, propertyKeySet{property.Key: {}}, state.propertyMatchingVersion)
+	}
+	properties := inputs.groupProperties[groupType]
+	knownAbsent := inputs.knownAbsent.groupSet(groupType)
+	// Like the flags service, every supplied group key is the group's $group_key,
+	// an unusable one included.
+	if groupKey, supplied := inputs.groups[groupType]; supplied {
+		if _, ok := properties["$group_key"]; !ok {
+			properties = Properties{"$group_key": groupKey}.Merge(properties)
+		}
+	}
+	// Without a usable key there is no group to load properties for, so the flags service
+	// reads the supplied properties as complete and a missing key as absent.
+	if _, usable := inputs.groupKey(groupType); !usable {
+		if _, present := properties[property.Key]; !present {
+			knownAbsent = propertyKeySet{property.Key: {}}
+		}
+	}
+	return matchPropertyWithKnownAbsent(property, properties, knownAbsent, state.propertyMatchingVersion)
+}
+
+// hasGroupContext reports a usable group key, or a group property other than an
+// unusable $group_key, as the flags service decides request_has_group_context.
+func (inputs *flagEvaluationInputs) hasGroupContext() bool {
+	for groupType := range inputs.groups {
+		if _, usable := inputs.groupKey(groupType); usable {
+			return true
+		}
+	}
+	for _, properties := range inputs.groupProperties {
+		for key, value := range properties {
+			if key != "$group_key" || isUsableGroupKeyValue(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isUsableGroupKeyValue reports a non-empty string or a number, the group keys the
+// flags service accepts.
+func isUsableGroupKeyValue(value interface{}) bool {
+	switch v := value.(type) {
+	case string:
+		return v != ""
+	case json.Number, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return true
+	}
+	return false
 }
 
 func matchProperty(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {

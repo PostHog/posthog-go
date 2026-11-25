@@ -864,3 +864,111 @@ func TestFlagDependencyBucketsByItsOwnIdentifier(t *testing.T) {
 		}
 	})
 }
+
+// A group filter with an explicit group_type_index reads that group type, as the flags
+// service routes it in PropertyContext::resolve_for_filter and filter_needs_partial_props.
+func TestGroupFilterWithIndexReadsItsOwnGroupType(t *testing.T) {
+	projectTier := func(operator, value string) string {
+		return `{"key": "tier", "type": "group", "group_type_index": 1, "operator": "` + operator + `", "value": ` + value + `}`
+	}
+	orgFlag := func(filter string) string {
+		return knownAbsentDefinitions(orgFlagDefinition("org-flag", flagCondition(100, filter)))
+	}
+	bothGroups := Groups{"organization": "acme", "project": "p1"}
+	orgOnly := Groups{"organization": "acme"}
+
+	t.Run("the condition's group listing doesn't resolve a filter on another group type", func(t *testing.T) {
+		_, err := computeKnownAbsentFlag(t, orgFlag(projectTier("is_not_set", "null")), "org-flag", bothGroups, nil,
+			map[string]Properties{"organization": {}}, newKnownAbsentPropertyKeys(nil, map[string][]string{"organization": {"tier"}}))
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+	t.Run("the filter's group type listing applies", func(t *testing.T) {
+		got, err := computeKnownAbsentFlag(t, orgFlag(projectTier("is_not_set", "null")), "org-flag", bothGroups, nil,
+			map[string]Properties{"organization": {}}, newKnownAbsentPropertyKeys(nil, map[string][]string{"project": {"tier"}}))
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+	t.Run("the filter's group type properties apply", func(t *testing.T) {
+		groupProperties := map[string]Properties{"organization": {"tier": "silver"}, "project": {"tier": "gold"}}
+		got, err := computeKnownAbsentFlag(t, orgFlag(projectTier("exact", `"gold"`)), "org-flag", bothGroups, nil, groupProperties, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+	t.Run("person condition reads the filter's group type", func(t *testing.T) {
+		defs := knownAbsentDefinitions(flagDefinition("person-flag", flagCondition(100, projectTier("exact", `"gold"`))))
+		got, err := computeKnownAbsentFlag(t, defs, "person-flag", Groups{"project": "p1"}, Properties{"tier": "silver"},
+			map[string]Properties{"project": {"tier": "gold"}}, newKnownAbsentPropertyKeys([]string{"tier"}, nil))
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+	// Without a usable key for the filter's group type, the flags service reads the
+	// supplied properties as complete, so a missing key is absent.
+	t.Run("no key for the filter's group type", func(t *testing.T) {
+		for _, tt := range []struct {
+			name            string
+			filter          string
+			groupProperties map[string]Properties
+			want            bool
+		}{
+			{"no properties, is_not_set", projectTier("is_not_set", "null"), nil, true},
+			{"no properties, exact", projectTier("exact", `"gold"`), nil, false},
+			{"properties without the key, is_not_set", projectTier("is_not_set", "null"), map[string]Properties{"project": {}}, true},
+			{"properties with the key, exact", projectTier("exact", `"gold"`), map[string]Properties{"project": {"tier": "gold"}}, true},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				for _, groups := range []Groups{orgOnly, {"organization": "acme", "project": ""}} {
+					got, err := computeKnownAbsentFlag(t, orgFlag(tt.filter), "org-flag", groups, nil, tt.groupProperties, nil)
+					require.NoError(t, err, "groups %v", groups)
+					require.Equal(t, tt.want, got, "groups %v", groups)
+				}
+			})
+		}
+		t.Run("listed key overrides a supplied value", func(t *testing.T) {
+			got, err := computeKnownAbsentFlag(t, orgFlag(projectTier("is_not_set", "null")), "org-flag", orgOnly, nil,
+				map[string]Properties{"project": {"tier": "gold"}}, newKnownAbsentPropertyKeys(nil, map[string][]string{"project": {"tier"}}))
+			require.NoError(t, err)
+			require.Equal(t, true, got)
+		})
+		t.Run("an unusable key is still the $group_key", func(t *testing.T) {
+			filter := `{"key": "$group_key", "type": "group", "group_type_index": 1, "operator": "is_set"}`
+			got, err := computeKnownAbsentFlag(t, orgFlag(filter), "org-flag", Groups{"organization": "acme", "project": ""}, nil, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, true, got)
+		})
+	})
+	t.Run("index without a group type", func(t *testing.T) {
+		unmappedTier := `{"key": "tier", "type": "group", "group_type_index": 5, "operator": "is_not_set"}`
+		t.Run("with group context the filter doesn't match", func(t *testing.T) {
+			got, err := computeKnownAbsentFlag(t, orgFlag(unmappedTier), "org-flag", orgOnly, nil, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, false, got)
+
+			defs := knownAbsentDefinitions(flagDefinition("person-flag", flagCondition(100, unmappedTier)))
+			got, err = computeKnownAbsentFlag(t, defs, "person-flag", nil, Properties{"tier": "gold"}, map[string]Properties{"other": {"plan": "pro"}}, nil)
+			require.NoError(t, err)
+			require.Equal(t, false, got)
+		})
+		t.Run("without group context the filter reads no properties", func(t *testing.T) {
+			defs := knownAbsentDefinitions(flagDefinition("person-flag", flagCondition(100, unmappedTier)))
+			for _, groupProperties := range []map[string]Properties{nil, {"organization": {"$group_key": ""}}} {
+				got, err := computeKnownAbsentFlag(t, defs, "person-flag", Groups{"organization": ""}, Properties{"tier": "gold"}, groupProperties, nil)
+				require.NoError(t, err)
+				require.Equal(t, true, got)
+			}
+		})
+	})
+	t.Run("the client falls back to /flags", func(t *testing.T) {
+		server := newKnownAbsentServer(t, knownAbsentDefinitions(`{"key": "profile-incomplete", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [`+
+			flagCondition(100, projectTier("is_not_set", "null"))+`]}}`))
+		c, _, _ := newEvalClient(t, server.server, func(cfg *Config) { cfg.PersonalApiKey = "personal-key" })
+		waitForFlagDefinitions(t, c)
+		got, err := c.GetFeatureFlag(FeatureFlagPayload{
+			Key: "profile-incomplete", DistinctId: "user-1", Groups: bothGroups,
+			GroupProperties:              map[string]Properties{"organization": {}},
+			GroupPropertyKeysKnownAbsent: map[string][]string{"organization": {"tier"}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, got, "the /flags result")
+		require.Len(t, server.requests(), 1, "falls back to /flags")
+	})
+}
