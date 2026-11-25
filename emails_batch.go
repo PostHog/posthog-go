@@ -91,9 +91,7 @@ type CodeEmailBatch struct {
 //     such as after a lost answer, even when PostHog refused the retry, or
 //     while another request holds its key. It may still go out. Send it
 //     again with the same IdempotencyKey within 24 hours of the first
-//     request that used it, so it goes out once. A refused retry of an email
-//     whose key belongs to another email is "failed": no attempt could have
-//     queued it.
+//     request that used it, so it goes out once.
 type BatchEmailResult struct {
 	// Index is the recipient's position in Recipients.
 	Index          int
@@ -287,8 +285,11 @@ func (r *batchRun) failAll(err, sent *EmailError) {
 	reason, status := err, "failed"
 	if r.lost {
 		status, reason = "unconfirmed", unconfirmedEmail("")
-		if keysInFlight(sent) {
-			reason = sent
+		if !mayHaveQueued(sent) || keysInFlight(sent) {
+			// PostHog answered the last attempt: keep its answer.
+			kept := *sent
+			kept.Fix = resendWithTheSameKey
+			reason = &kept
 		}
 	}
 	for i := range r.members {
@@ -326,9 +327,7 @@ func (r *batchRun) settle(i int, slot emailReply) {
 		return
 	}
 	answer := slotError(slot.fields["error"], messageID)
-	// A reused key belongs to another email, so no attempt of this one
-	// could have queued it.
-	if r.lost && answer.Code != "idempotency_key_reused" {
+	if r.lost {
 		kept := *answer
 		kept.Fix = resendWithTheSameKey
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: &kept})

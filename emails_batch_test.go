@@ -416,10 +416,10 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 			answers: []func(batchRequest) stubReply{
 				func(batchRequest) stubReply { return stubReply{status: dropConnection} },
 				func(r batchRequest) stubReply {
-					return slots(r, refusedSlot("idempotency_key_reused", http.StatusConflict), "")
+					return slots(r, refusedSlot("idempotency_key_reused", http.StatusUnprocessableEntity), "")
 				},
 			},
-			status:    "failed",
+			status:    "unconfirmed",
 			errorCode: "idempotency_key_reused",
 		},
 		{
@@ -499,11 +499,11 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 
 func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 	tests := []struct {
-		name, callCode, errorCode string
-		last                      stubReply
+		name, callCode, errorCode, detail string
+		last                              stubReply
 	}{
-		{name: "a rate limit", callCode: "rate_limited", errorCode: "delivery_unavailable", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}},
-		{name: "a refusal", callCode: "quota_limited", errorCode: "delivery_unavailable", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}},
+		{name: "a rate limit", callCode: "rate_limited", errorCode: "rate_limited", detail: "Slow down.", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}},
+		{name: "a refusal", callCode: "quota_limited", errorCode: "quota_limited", detail: "Over quota.", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}},
 		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", last: failed(http.StatusConflict, "idempotency_key_in_flight")},
 		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
 	}
@@ -524,6 +524,9 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 			for i, got := range result.Results {
 				require.Equal(t, "unconfirmed", got.Status, "the lost send may have queued it")
 				require.Equal(t, tt.errorCode, got.Error.Code)
+				if tt.detail != "" {
+					require.Equal(t, tt.detail, got.Error.Message, "PostHog's refusal is kept")
+				}
 				require.Equal(t, wantResendFix, got.Error.Fix)
 				require.Equal(t, fmt.Sprintf("digest:%d", i), got.IdempotencyKey)
 			}
