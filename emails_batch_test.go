@@ -522,14 +522,18 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 }
 
 func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
+	rateLimited := stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
 	tests := []struct {
 		name, callCode, errorCode, detail string
-		last                              stubReply
+		// retries answer the attempts after the first, whose answer is lost.
+		retries []stubReply
 	}{
-		{name: "a rate limit", callCode: "rate_limited", errorCode: "rate_limited", detail: "Slow down.", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}},
-		{name: "a refusal", callCode: "quota_limited", errorCode: "quota_limited", detail: "Over quota.", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}},
-		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", last: failed(http.StatusConflict, "idempotency_key_in_flight")},
-		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", detail: "PostHog said no.", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
+		{name: "a rate limit", callCode: "rate_limited", errorCode: "rate_limited", detail: "Slow down.", retries: []stubReply{rateLimited}},
+		{name: "a rate limit, then another lost answer", callCode: "network_error", errorCode: "rate_limited", detail: "Slow down.", retries: []stubReply{rateLimited, {status: dropConnection}}},
+		{name: "a refusal", callCode: "quota_limited", errorCode: "quota_limited", detail: "Over quota.", retries: []stubReply{{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}}},
+		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", retries: []stubReply{failed(http.StatusConflict, "idempotency_key_in_flight")}},
+		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", detail: "PostHog said no.", retries: []stubReply{failed(http.StatusServiceUnavailable, "delivery_unavailable")}},
+		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", detail: "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", retries: []stubReply{{status: http.StatusNotFound}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -537,14 +541,14 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 				if n == 0 {
 					return stubReply{status: dropConnection}
 				}
-				return tt.last
+				return tt.retries[n-1]
 			})
-			client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(1) })
+			client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(len(tt.retries)) })
 
 			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
 
 			require.Equal(t, tt.callCode, requireEmailError(t, err).Code)
-			require.Len(t, server.received(), 2, "a send and its retry, nothing more")
+			require.Len(t, server.received(), 1+len(tt.retries), "a send and its retries, nothing more")
 			for i, got := range result.Results {
 				require.Equal(t, "unconfirmed", got.Status, "the lost send may have queued it")
 				require.Equal(t, tt.errorCode, got.Error.Code)

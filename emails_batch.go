@@ -280,15 +280,18 @@ func (r *batchRun) set(i int, status string, result BatchEmailResult) {
 
 // failAll settles every recipient after the request failed as a whole. They
 // stay "unconfirmed" when an attempt that went out may have queued them;
-// sent is the last of those attempts.
-func (r *batchRun) failAll(err, sent *EmailError) {
+// answered is PostHog's last answer to an attempt, if any.
+func (r *batchRun) failAll(err, answered *EmailError) {
 	reason, status := err, "failed"
 	if r.lost {
 		status, reason = "unconfirmed", unconfirmedEmail("")
-		if sent.StatusCode >= http.StatusMultipleChoices {
-			// PostHog answered the last attempt: keep its answer.
-			kept := *sent
+		if answered != nil {
+			kept := *answered
 			kept.Fix = resendWithTheSameKey
+			if kept.StatusCode == http.StatusNotFound {
+				// The 404 answered only the retry, not the attempt that may have queued.
+				kept.Message = "PostHog found no batch send for the retry, but an earlier attempt may have queued this email."
+			}
 			reason = &kept
 		}
 	}
@@ -379,8 +382,9 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 	attempts := 0
 	// sent is the outcome of the last attempt that went out. A retry the
 	// client stops before sending it doesn't change what PostHog may have
-	// queued.
-	var sent *EmailError
+	// queued. answered is PostHog's last answer, which a later lost answer
+	// doesn't erase.
+	var sent, answered *EmailError
 	err = s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 		if attempts++; attempts > 1 && s.isClosed() {
 			return newEmailError("client_closed", "The PostHog client is shut down, so it didn't retry the batch.", ErrClosed)
@@ -397,11 +401,14 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if err != nil && mayHaveQueued(err) {
 			run.lost = true
 		}
+		if err != nil && err.StatusCode >= http.StatusMultipleChoices {
+			answered = err
+		}
 		sent = err
 		return err
 	})
 	if err != nil {
-		run.failAll(err, sent)
+		run.failAll(err, answered)
 	}
 	s.logWarnings(run.warnings)
 	if err != nil {

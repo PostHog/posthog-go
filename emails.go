@@ -88,17 +88,18 @@ type Emails interface {
 	// each Status. When PostHog refuses the request as a whole, Batch returns
 	// that error with a result that holds every recipient. A 413
 	// "content_too_large" means the batch is too large: its Fix says to split
-	// the recipients into smaller batches. A 400 "content_too_large" means
-	// the shared content is too large, which splitting doesn't help. The
-	// client checks only the recipient count, not the size. After a lost
-	// answer, recipients stay "unconfirmed" even when PostHog refuses the
-	// retry, since the lost attempt may have queued them. An "unconfirmed"
-	// email's Error says to send it again with the same IdempotencyKey. The
-	// error code "batch_unavailable" (409) means the project can't send
-	// batches yet, and "not_found" that the template doesn't exist or batch
-	// sends are off for the project: send each email the batch didn't queue
-	// with Send and its recipient's IdempotencyKey, within 24 hours of the
-	// first request that used the key, so it goes out once. A result is nil
+	// the recipients into smaller batches, or, for one recipient, to make
+	// that email smaller. A 400 "content_too_large" means the shared content
+	// is too large, which splitting doesn't help. The client checks only the
+	// recipient count, not the size. After a lost answer, recipients stay
+	// "unconfirmed" even when PostHog refuses the retry, since the lost
+	// attempt may have queued them. An "unconfirmed" email's Error says to
+	// send it again with the same IdempotencyKey. The error code
+	// "batch_unavailable" (409) means the project can't send batches yet,
+	// and "not_found" that the template doesn't exist or batch sends are off
+	// for the project: send each email the batch didn't queue with Send and
+	// its recipient's IdempotencyKey, within 24 hours of the first request
+	// that used the key, so it goes out once. A result is nil
 	// only when the client sent nothing, such as for an argument it refuses
 	// before any request.
 	Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error)
