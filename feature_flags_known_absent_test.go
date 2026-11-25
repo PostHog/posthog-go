@@ -698,6 +698,26 @@ func TestKnownAbsentGroupFilterWithoutIndexUsesConditionGroupType(t *testing.T) 
 			require.Equal(t, tt.want, got)
 		})
 	}
+	for _, index := range []string{`256`, `-1`, `"0"`} {
+		t.Run("cohort leaf with an unusable group_type_index "+index, func(t *testing.T) {
+			legacyTier := `{"key": "legacy-tier", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
+				flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`) + `]}}`
+			definitions := `{"flags": [` + legacyTier + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
+				`, "cohorts": {"1": {"type": "AND", "values": [{"key": "tier", "type": "group", "group_type_index": ` + index + `, "operator": "is_not_set"}]}}}`
+			got, err := computeKnownAbsentFlag(t, definitions, "legacy-tier", groups, nil, enterprise, orgTierAbsent)
+			require.NoError(t, err)
+			require.Equal(t, false, got, "the supplied value decides, not the listing")
+		})
+	}
+	t.Run("cohort leaf with a null group_type_index", func(t *testing.T) {
+		legacyTier := `{"key": "legacy-tier", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
+			flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`) + `]}}`
+		definitions := `{"flags": [` + legacyTier + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
+			`, "cohorts": {"1": {"type": "AND", "values": [{"key": "tier", "type": "group", "group_type_index": null, "operator": "is_not_set"}]}}}`
+		got, err := computeKnownAbsentFlag(t, definitions, "legacy-tier", groups, nil, enterprise, orgTierAbsent)
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
 	t.Run("cohort leaf in a person condition", func(t *testing.T) {
 		personFlag := flagDefinition("person-flag", flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`))
 		definitions := `{"flags": [` + personFlag + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
