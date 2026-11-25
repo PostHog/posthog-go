@@ -721,7 +721,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// A group flag whose group isn't supplied is false whatever its prerequisites
 	// resolve to, so they aren't evaluated.
-	if _, cached := evaluationCache[property.Key]; !cached && poller.dependencyGroupIsMissing(flagsByKey[property.Key], inputs, state) {
+	if poller.dependencyGroupIsMissing(flagsByKey[property.Key], inputs, state) {
 		evaluationCache[property.Key] = false
 		return checkFlagDependencyValue(property.Value, false)
 	}
