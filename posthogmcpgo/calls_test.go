@@ -45,11 +45,11 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 	}
 }
 
-func TestEvictingACallEndsIt(t *testing.T) {
+func TestEvictingACallDoesNotEndIt(t *testing.T) {
 	calls := newCallsInFlight()
 	var ended atomic.Int32
 	for i := range maxCallsInFlight + 1 {
 		calls.start(&mcp.CallToolRequest{}, arrival{headers: uintptr(i + 1)}, newCallStart(func() { ended.Add(1) }))
 	}
-	assert.Equal(t, int32(1), ended.Load(), "the evicted call ended")
+	assert.Equal(t, int32(0), ended.Load(), "an evicted call may still be running")
 }

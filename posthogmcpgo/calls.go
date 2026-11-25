@@ -47,8 +47,9 @@ type callStart struct {
 	session         callSession
 	identity        Identity
 	tool            toolInfo
-	// end finishes the call's session, once, from whichever of the hooks,
-	// the middleware, or eviction gets there first.
+	// end finishes the call's session, once: from the handler middleware when
+	// the handler returns or panics, else from the hooks for a call the
+	// handler never ran, such as one that failed validation.
 	end func()
 }
 
@@ -84,7 +85,7 @@ func (c *callsInFlight) start(req *mcp.CallToolRequest, arrived arrival, call ca
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.started) >= maxCallsInFlight {
-		c.remove(c.order.Front()).end()
+		c.remove(c.order.Front())
 	}
 	element := c.order.PushBack(trackedCall{req: req, arrival: arrived, start: call})
 	c.started[req] = element

@@ -101,11 +101,10 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 			return next(ctx, dispatch)
 		}
 		if !in.capturesInMiddleware(ctx) {
-			arrived := arrivalOf(ctx, req)
-			if started, ok := in.calls.startOf(arrived); ok {
+			if started, ok := in.calls.startOf(arrivalOf(ctx, req)); ok {
 				ctx = started.scoped(ctx)
+				defer started.end()
 			}
-			defer in.endPanickingCall(ctx, arrived)
 			return next(ctx, dispatch)
 		}
 		tool, _ := in.registeredTool(ctx, req.Params.Name)
@@ -115,21 +114,6 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 		in.observe(ctx, req, result, err, started)
 		return result, err
 	}
-}
-
-// endPanickingCall ends the call a panicking handler leaves behind, since
-// neither call hook runs once a transport recovers the panic, and panics again.
-// The call stays tracked for the hooks, which run when a recovery middleware
-// outside Instrument turns the panic into an error.
-func (in *instrumentation) endPanickingCall(ctx context.Context, arrived arrival) {
-	recovered := recover()
-	if recovered == nil {
-		return
-	}
-	if started, ok := in.calls.startOf(arrived); ok {
-		started.end()
-	}
-	panic(recovered)
 }
 
 // strip returns req without the analytics arguments the called tool was
