@@ -55,6 +55,7 @@ type config struct {
 	captureResponses  bool
 	contextParameter  bool
 	captureModel      bool
+	conversationID    bool
 	serverName        string
 	serverVersion     string
 	now               func() time.Time
@@ -67,6 +68,7 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 		captureResponses:  true,
 		contextParameter:  true,
 		captureModel:      true,
+		conversationID:    true,
 		now:               time.Now,
 	}
 }
@@ -101,6 +103,22 @@ func WithCaptureResponses(enabled bool) Option {
 // intent. It is enabled by default.
 func WithContextParameter(enabled bool) Option {
 	return func(cfg *config) { cfg.contextParameter = enabled }
+}
+
+// WithConversationID controls conversation anchoring, which keeps the calls
+// of one agent conversation in one $session_id where the transport carries no
+// session, as on stateless HTTP. Tools are advertised with an optional
+// conversation_id argument. A call that arrives with neither a transport
+// session nor a valid handle gets a new UUIDv7 handle, appended to its result
+// as a {"conversation_id": ...} text block, and the agent echoes it on later
+// calls. A valid handle sets $mcp_conversation_id and the $session_id derived
+// from it. A client conversation id, such as ChatGPT's openai/session, outranks
+// the handle, and ChatGPT, which sends one on every call, is advertised no
+// conversation_id and minted no handle. The argument is removed before the
+// tool's handler sees the call, and tools that declare their own
+// conversation_id keep it. It is enabled by default.
+func WithConversationID(enabled bool) Option {
+	return func(cfg *config) { cfg.conversationID = enabled }
 }
 
 // WithCaptureModel controls capture of the model that made each call. The
@@ -148,6 +166,9 @@ func (cfg *config) injectedArguments() []analyticsArgument {
 	}
 	if cfg.captureModel {
 		arguments = append(arguments, modelParameter)
+	}
+	if cfg.conversationID {
+		arguments = append(arguments, conversationParameter)
 	}
 	return arguments
 }

@@ -76,7 +76,7 @@ func TestSessionIDPerTransport(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			queue := &fakeQueue{}
-			c := test.connect(t, newInstrumentedServer(queue, weatherTool(), &weatherHandler{}))
+			c := test.connect(t, newInstrumentedServer(queue, weatherTool(), &weatherHandler{}, WithConversationID(false)))
 
 			for range 2 {
 				_, err := callTool(t, c, "weather", map[string]any{"city": "Melbourne"})

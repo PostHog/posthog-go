@@ -265,3 +265,12 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+// ConversationSessionID is the $session_id a conversation handle derives, or
+// "" when handle is not a UUIDv7.
+func ConversationSessionID(handle string) string {
+	if handle = normalizeConversationID(handle); handle == "" {
+		return ""
+	}
+	return deriveSessionID(handle)
+}

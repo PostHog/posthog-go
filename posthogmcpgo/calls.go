@@ -3,8 +3,11 @@ package posthogmcpgo
 import (
 	"container/list"
 	"context"
+	"encoding/json"
 	"reflect"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -61,6 +64,10 @@ type callStart struct {
 	session  callSession
 	identity Identity
 	tool     toolInfo
+	// conversation is the call's handle; delivered says whether the result
+	// carried one minted for this call.
+	conversation conversation
+	delivered    *atomic.Bool
 	// end finishes the call's session, once: from the handler middleware when
 	// the handler returns or panics, else from the hooks for a call the
 	// handler never ran, such as one that failed validation.
@@ -69,7 +76,36 @@ type callStart struct {
 
 func newCallStart(end func()) callStart {
 	var once sync.Once
-	return callStart{end: func() { once.Do(end) }}
+	return callStart{end: func() { once.Do(end) }, delivered: new(atomic.Bool)}
+}
+
+// conversation is a call's conversation handle, and whether the
+// instrumentation minted it for this call, so the agent has yet to receive it.
+type conversation struct {
+	id     string
+	minted bool
+}
+
+// handle is the call's conversation handle as its events record it: an echoed
+// one, or a minted one once its result delivered it.
+func (call callStart) handle() string {
+	if call.conversation.minted && !call.delivered.Load() {
+		return ""
+	}
+	return call.conversation.id
+}
+
+// deliver appends a handle minted for this call to the result the agent
+// receives, which cannot carry it alongside an error.
+func (call callStart) deliver(result *mcp.CallToolResult, err error) *mcp.CallToolResult {
+	if !call.conversation.minted || err != nil || result == nil {
+		return result
+	}
+	block, _ := json.Marshal(map[string]string{conversationArgument: call.conversation.id})
+	delivered := *result
+	delivered.Content = append(slices.Clip(delivered.Content), mcp.NewTextContent(string(block)))
+	call.delivered.Store(true)
+	return &delivered
 }
 
 type callSession struct {
@@ -77,8 +113,15 @@ type callSession struct {
 	source posthogmcp.SessionSource
 }
 
+// scoped returns ctx carrying the call's session and identity. A handle minted
+// for this call counts as delivered: that is known only once the handler
+// returns, and the host's client sends a custom event at once.
 func (call callStart) scoped(ctx context.Context) context.Context {
-	return posthogmcp.WithCallContext(ctx, call.session.id, call.session.source, call.identity.DistinctID)
+	session := call.session
+	if session.source != posthogmcp.SessionSourceClientMetadata && call.conversation.id != "" {
+		session = callSession{id: posthogmcp.ConversationSessionID(call.conversation.id), source: posthogmcp.SessionSourceConversation}
+	}
+	return posthogmcp.WithCallContext(ctx, session.id, session.source, call.identity.DistinctID)
 }
 
 type trackedCall struct {

@@ -182,4 +182,8 @@ func TestASessionTokenIgnoresOptionalFieldsThatAreNotStrings(t *testing.T) {
 		assert.True(t, ok, payload)
 		assert.Equal(t, SessionToken{SessionID: "ses_x"}, got, payload)
 	}
+
+func TestConversationSessionID(t *testing.T) {
+	assert.Equal(t, "ses_6df45f0102a182bcd5e8dd5dad6c65a0", ConversationSessionID("0190F0E8-7A6B-7C3D-9E4F-5A6B7C8D9E0F"))
+	assert.Empty(t, ConversationSessionID("not-a-handle"))
 }

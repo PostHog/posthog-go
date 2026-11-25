@@ -71,6 +71,13 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) c
 // session id "stdio" for any process.
 const stdioSessionType = "*server.stdioSession"
 
+// carriesSession reports whether session groups a client's calls: a one-client
+// connection, or one with a transport session id. A stateless streamable HTTP
+// request has neither.
+func carriesSession(session server.ClientSession) bool {
+	return session != nil && (oneClient(session) || session.SessionID() != "")
+}
+
 // oneClient is whether a session is a connection with a single client, whose
 // transport has no session id of its own to derive from.
 func oneClient(session server.ClientSession) bool {

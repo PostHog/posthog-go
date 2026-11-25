@@ -69,7 +69,7 @@ func TestClientConversationIDs(t *testing.T) {
 		{name: "an invalid chatgpt id is a fresh session", userAgent: chatGPTUserAgent, meta: map[string]any{"openai/session": ""}, wantSession: generated, wantSource: "generated"},
 		{name: "a codex id sets the session", userAgent: "codex-mcp-client/0.50.0", meta: map[string]any{"sessionId": "019A4F2E-1C3D-7B8A-9E0F-1A2B3C4D5E6F"}, wantSession: codexSession, wantSource: "client_metadata"},
 		{name: "a vs code id sets the session by client name", clientName: "Visual Studio Code", stateful: true, meta: map[string]any{"vscode.conversationId": "3f1c2b7e-8d4a-4c6b-9a1e-5f2d7c8b9a0e"}, wantSession: vsCodeSession, wantSource: "client_metadata"},
-		{name: "a key is read only from the client that defines it", userAgent: "example-client/1.0", meta: map[string]any{"sessionId": "019a4f2e-1c3d-7b8a-9e0f-1a2b3c4d5e6f", "openai/session": "v1/conv-example-0001"}, wantSession: generated, wantSource: "generated"},
+		{name: "a key is read only from the client that defines it", userAgent: "example-client/1.0", meta: map[string]any{"sessionId": "019a4f2e-1c3d-7b8a-9e0f-1a2b3c4d5e6f", "openai/session": "v1/conv-example-0001"}, wantSession: "handle", wantSource: "conversation"},
 		{name: "a transport session", userAgent: "example-client/1.0", stateful: true, wantSession: "transport", wantSource: "transport"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -90,6 +90,9 @@ func TestClientConversationIDs(t *testing.T) {
 			switch test.wantSession {
 			case generated:
 				assert.Regexp(t, generatedSessionID, properties["$session_id"])
+			case "handle":
+				handle, _ := properties["$mcp_conversation_id"].(string)
+				assert.Equal(t, posthogmcp.ConversationSessionID(handle), properties["$session_id"])
 			case "transport":
 				assert.Equal(t, posthogmcp.TransportSessionID(c.GetSessionId()), properties["$session_id"])
 			default:

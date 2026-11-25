@@ -27,11 +27,19 @@ const modelParameterDescription = "The exact model identifier you (the assistant
 type analyticsArgument struct {
 	name        string
 	description string
+	// optional leaves the argument out of the schema's required list.
+	optional bool
 }
+
+const conversationParameterDescription = "The conversation_id this server returned earlier in this conversation, " +
+	"unchanged, including after later user messages. Omit it if you have none. Recorded for the server " +
+	"developer's analytics."
 
 var (
 	contextParameter = analyticsArgument{name: contextArgument, description: contextParameterDescription}
 	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription}
+	// The agent has no handle on its first call.
+	conversationParameter = analyticsArgument{name: conversationArgument, description: conversationParameterDescription, optional: true}
 )
 
 func (argument analyticsArgument) schema() map[string]any {
@@ -85,8 +93,8 @@ func inputSchema(tool mcp.Tool) json.RawMessage {
 	return encoded
 }
 
-// withArguments returns tool with arguments added to its input schema, all
-// required, in the representation the tool uses. schema is the decoded raw
+// withArguments returns tool with arguments added to its input schema,
+// required unless optional, in the representation the tool uses. schema is the decoded raw
 // schema, which it may change.
 func withArguments(tool mcp.Tool, schema map[string]any, arguments []analyticsArgument) (mcp.Tool, error) {
 	if tool.RawInputSchema != nil {
@@ -98,7 +106,9 @@ func withArguments(tool mcp.Tool, schema map[string]any, arguments []analyticsAr
 		required, _ := schema["required"].([]any)
 		for _, argument := range arguments {
 			properties[argument.name] = argument.schema()
-			required = append(required, argument.name)
+			if !argument.optional {
+				required = append(required, argument.name)
+			}
 		}
 		schema["required"] = required
 		encoded, err := json.Marshal(schema)
@@ -112,7 +122,9 @@ func withArguments(tool mcp.Tool, schema map[string]any, arguments []analyticsAr
 	required := slices.Clone(tool.InputSchema.Required)
 	for _, argument := range arguments {
 		properties[argument.name] = argument.schema()
-		required = append(required, argument.name)
+		if !argument.optional {
+			required = append(required, argument.name)
+		}
 	}
 	tool.InputSchema.Properties, tool.InputSchema.Required = properties, required
 	return tool, nil
@@ -203,4 +215,25 @@ func extensibleSchema(raw json.RawMessage) (map[string]any, bool) {
 		}
 	}
 	return schema, true
+}
+
+// withoutConversationArgument returns advertised without the conversation_id
+// argument the instrumentation added, for a handle-free client's listing.
+func withoutConversationArgument(advertised mcp.Tool) mcp.Tool {
+	if advertised.RawInputSchema != nil {
+		var schema map[string]any
+		if json.Unmarshal(advertised.RawInputSchema, &schema) != nil {
+			return advertised
+		}
+		properties, _ := schema["properties"].(map[string]any)
+		delete(properties, conversationArgument)
+		if encoded, err := json.Marshal(schema); err == nil {
+			advertised.RawInputSchema = encoded
+		}
+		return advertised
+	}
+	properties := maps.Clone(advertised.InputSchema.Properties)
+	delete(properties, conversationArgument)
+	advertised.InputSchema.Properties = properties
+	return advertised
 }

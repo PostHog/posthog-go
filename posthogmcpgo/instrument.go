@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/posthog/posthog-go/v2/posthogmcp"
@@ -52,6 +54,7 @@ func Instrument(analytics *posthogmcp.Analytics, opts ...Option) server.ServerOp
 			server.WithHooks(in.hooks)(s)
 		}
 		in.hooks.AddAfterInitialize(in.initialized)
+		in.hooks.AddAfterListTools(in.listed)
 		in.hooks.AddOnUnregisterSession(in.unregistered)
 		in.hooks.AddBeforeCallTool(in.beforeCall)
 		in.hooks.AddAfterCallTool(in.afterCall)
@@ -100,16 +103,19 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 			return next(ctx, dispatch)
 		}
 		if !in.capturesInMiddleware(ctx) {
-			if started, ok := in.calls.startOf(arrivalOf(ctx, req)); ok {
-				ctx = started.scoped(ctx)
-				defer started.end()
+			started, ok := in.calls.startOf(arrivalOf(ctx, req))
+			if !ok {
+				return next(ctx, dispatch)
 			}
-			return next(ctx, dispatch)
+			defer started.end()
+			result, err := next(started.scoped(ctx), dispatch)
+			return started.deliver(result, err), err
 		}
 		tool, _ := in.registeredTool(ctx, req.Params.Name)
 		started := in.startCall(ctx, tool, req)
 		defer started.end()
 		result, err := next(started.scoped(ctx), dispatch)
+		result = started.deliver(result, err)
 		in.observe(ctx, req, result, err, started)
 		return result, err
 	}
@@ -192,6 +198,30 @@ func (in *instrumentation) ours(ctx context.Context) bool {
 	return server.ServerFromContext(ctx) == in.server
 }
 
+// listed leaves conversation_id out of a handle-free client's listing, which
+// names the conversation in _meta instead.
+func (in *instrumentation) listed(ctx context.Context, _ any, req *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
+	defer in.recoverHook(ctx, "after tools/list")
+	if !in.conversationID || !in.ours(ctx) || req == nil || result == nil {
+		return
+	}
+	var meta map[string]any
+	if req.Params.Meta != nil {
+		meta = req.Params.Meta.AdditionalFields
+	}
+	client := in.requestClient(server.ClientSessionFromContext(ctx), req.Header, meta)
+	if !posthogmcp.ReadClientConversation(req.Header.Get("User-Agent"), client.Name, nil).HandleFree {
+		return
+	}
+	registered := in.registeredTools(ctx)
+	for i, tool := range result.Tools {
+		original, _ := registered(tool.Name)
+		if _, info := present(original, in.inject); info.injects(conversationArgument) {
+			result.Tools[i] = withoutConversationArgument(tool)
+		}
+	}
+}
+
 func (in *instrumentation) initialized(ctx context.Context, _ any, _ *mcp.InitializeRequest, result *mcp.InitializeResult) {
 	defer in.recoverHook(ctx, "after initialize")
 	if result != nil && in.ours(ctx) {
@@ -233,25 +263,46 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool, req mcp
 	if req.Params.Meta != nil {
 		meta = req.Params.Meta.AdditionalFields
 	}
-	call.client = in.requestClient(session, req, meta)
+	call.client = in.requestClient(session, req.Header, meta)
 	client := posthogmcp.ReadClientConversation(req.Header.Get("User-Agent"), call.client.Name, meta)
 	if client.SessionID != "" {
 		call.session = callSession{id: client.SessionID, source: posthogmcp.SessionSourceClientMetadata}
 	}
+	if info.injects(conversationArgument) {
+		call.conversation = resolveConversation(session, parseArguments(rawArguments(req.Params)), client)
+	}
 	return call
+}
+
+// resolveConversation keeps an echoed handle only if it is UUIDv7-shaped,
+// since its derived $session_id would otherwise merge every caller that
+// invents the same string. Without one, a call on no transport session gets a
+// new handle, unless its client sends its own conversation id on every call. A
+// client's conversation id outranks any handle.
+func resolveConversation(session server.ClientSession, arguments toolArguments, client posthogmcp.ClientConversation) conversation {
+	if client.SessionID != "" {
+		return conversation{}
+	}
+	if echoed := arguments.text(conversationArgument); posthogmcp.ConversationSessionID(echoed) != "" {
+		return conversation{id: strings.ToLower(echoed)}
+	}
+	if carriesSession(session) || client.HandleFree {
+		return conversation{}
+	}
+	return conversation{id: uuid.Must(uuid.NewV7()).String(), minted: true}
 }
 
 // requestClient is the client req identifies: from its _meta, a replayed
 // session token, or the initialize of a session that made it, which mcp-go
 // binds to one client.
-func (in *instrumentation) requestClient(session server.ClientSession, req mcp.CallToolRequest, meta map[string]any) posthogmcp.Client {
-	token, _ := posthogmcp.ReadSessionToken(req.Header.Get("Mcp-Session-Id"))
+func (in *instrumentation) requestClient(session server.ClientSession, header http.Header, meta map[string]any) posthogmcp.Client {
+	token, _ := posthogmcp.ReadSessionToken(header.Get("Mcp-Session-Id"))
 	initialize := posthogmcp.Client{ProtocolVersion: in.protocols.of(session)}
 	if session, ok := session.(server.SessionWithClientInfo); ok {
 		info := session.GetClientInfo()
 		initialize.Name, initialize.Version = info.Name, info.Version
 	}
-	return posthogmcp.ResolveClient(meta, req.Header.Get("Mcp-Protocol-Version"), token, initialize)
+	return posthogmcp.ResolveClient(meta, header.Get("Mcp-Protocol-Version"), token, initialize)
 }
 
 func (in *instrumentation) resolveIdentity(ctx context.Context, req mcp.CallToolRequest) Identity {
@@ -341,6 +392,7 @@ func (in *instrumentation) captureToolCall(
 		DistinctID:      started.identity.DistinctID,
 		SessionID:       started.session.id,
 		SessionSource:   started.session.source,
+		ConversationID:  started.handle(),
 		Groups:          started.identity.Groups,
 		SetProperties:   started.identity.SetProperties,
 		ServerName:      in.serverName,
@@ -362,7 +414,7 @@ func (in *instrumentation) captureToolCall(
 	}
 	// mcp-go answers a handler error alone and drops the result.
 	if in.captureResponses && result != nil && handlerErr == nil {
-		call.Response = result
+		call.Response = withoutDeliveredHandle(result, started)
 	}
 	if in.captureModel {
 		call.LLMModel, call.LLMModelSource = callModel(req.Params.Meta, arguments, info)
@@ -481,4 +533,15 @@ func (cfg *config) report(ctx context.Context, err error) {
 	}
 	defer func() { _ = recover() }()
 	cfg.errorHandler(ctx, err)
+}
+
+// withoutDeliveredHandle is result as the tool returned it, without the
+// handle block the instrumentation appended.
+func withoutDeliveredHandle(result *mcp.CallToolResult, started callStart) *mcp.CallToolResult {
+	if !started.conversation.minted || !started.delivered.Load() || len(result.Content) == 0 {
+		return result
+	}
+	returned := *result
+	returned.Content = result.Content[:len(result.Content)-1]
+	return &returned
 }
