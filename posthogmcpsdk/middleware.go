@@ -77,7 +77,9 @@ func NewMiddleware(analytics *posthogmcp.Analytics, opts ...Option) Middleware {
 	tools := newToolCatalog(cfg.injectedArguments(), cfg.now)
 	m := &middleware{config: cfg, tools: tools, sessions: newSessionResolver(cfg.now)}
 	if cfg.missingCapabilityTool != "" {
-		m.virtual, m.virtualInfo = tools.present(missingCapabilityTool(cfg.missingCapabilityTool))
+		virtual := missingCapabilityTool(cfg.missingCapabilityTool)
+		m.virtual, m.virtualInfo = tools.present(virtual, false)
+		m.handleFreeVirtual, _ = tools.present(virtual, true)
 	}
 	return Middleware{Receiving: m.receive, Sending: m.send}
 }
@@ -88,6 +90,8 @@ type middleware struct {
 	sessions    *sessionResolver
 	virtual     *mcpsdk.Tool
 	virtualInfo toolInfo
+	// handleFreeVirtual is virtual as a handle-free client is shown it.
+	handleFreeVirtual *mcpsdk.Tool
 }
 
 func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
@@ -97,7 +101,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			gen := m.tools.generation()
 			result, err := next(ctx, method, req)
 			if page, ok := result.(*mcpsdk.ListToolsResult); ok && err == nil {
-				return m.advertise(ctx, gen, page), nil
+				return m.advertise(ctx, gen, page, clientConversation(req, nil).HandleFree), nil
 			}
 			return result, err
 		case methodCallTool:
@@ -108,7 +112,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			}
 			call := m.prepare(ctx, next, toolRequest)
 			started := time.Now()
-			result, handlerErr := next(ctx, method, call.dispatch)
+			result, handlerErr := next(call.scoped(ctx), method, call.dispatch)
 			if call.missingCapability {
 				// go-sdk answers a name it does not know with its unknown tool
 				// error, after the middleware inside Instrument has run.
@@ -119,6 +123,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				}
 			}
 			delivered := m.deliverConversation(ctx, &call, result, handlerErr)
+			m.sessions.touch(toolRequest.Session)
 			m.observeSafely(ctx, call, result, handlerErr, started)
 			return delivered, handlerErr
 		default:
@@ -146,8 +151,34 @@ type preparedCall struct {
 	dispatch          *mcpsdk.CallToolRequest
 	arguments         toolArguments
 	tool              toolInfo
+	client            posthogmcp.ClientConversation
 	conversation      conversation
+	session           callSession
+	identity          Identity
 	missingCapability bool
+}
+
+type callSession struct {
+	id     string
+	source posthogmcp.SessionSource
+}
+
+func (call preparedCall) eventSession() callSession {
+	switch {
+	case call.client.SessionID != "":
+		return callSession{id: call.client.SessionID, source: posthogmcp.SessionSourceClientMetadata}
+	case call.conversation.id != "":
+		return callSession{id: deterministicSessionID(call.conversation.id), source: posthogmcp.SessionSourceConversation}
+	default:
+		return call.session
+	}
+}
+
+// A handle minted for this call counts as delivered: that is known only once
+// the handler returns, and the host's client sends the custom event at once.
+func (call preparedCall) scoped(ctx context.Context) context.Context {
+	session := call.eventSession()
+	return posthogmcp.WithCallContext(ctx, session.id, session.source, call.identity.DistinctID)
 }
 
 // conversation is the conversation handle of a tools/call, and whether the
@@ -163,14 +194,36 @@ var conversationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7
 // since its derived $session_id would otherwise merge every caller that
 // invents the same string. Without one, a request that carries no transport
 // session gets a new handle.
-func resolveConversation(req *mcpsdk.CallToolRequest, arguments toolArguments) conversation {
+func resolveConversation(req *mcpsdk.CallToolRequest, arguments toolArguments, client posthogmcp.ClientConversation) conversation {
+	if client.SessionID != "" {
+		return conversation{}
+	}
 	if echoed := echoedConversation(arguments); echoed.id != "" {
 		return echoed
 	}
-	if carriesSession(req) {
+	if carriesSession(req) || client.HandleFree {
 		return conversation{}
 	}
 	return conversation{id: uuid.Must(uuid.NewV7()).String(), minted: true}
+}
+
+func clientConversation(req mcpsdk.Request, meta mcpsdk.Meta) posthogmcp.ClientConversation {
+	var userAgent string
+	if extra := req.GetExtra(); extra != nil {
+		userAgent = extra.Header.Get("User-Agent")
+	}
+	return posthogmcp.ReadClientConversation(userAgent, clientInfo(req).Name, meta)
+}
+
+func clientInfo(req mcpsdk.Request) mcpsdk.Implementation {
+	session, _ := req.GetSession().(*mcpsdk.ServerSession)
+	if session == nil {
+		return mcpsdk.Implementation{}
+	}
+	if initialize := session.InitializeParams(); initialize != nil && initialize.ClientInfo != nil {
+		return *initialize.ClientInfo
+	}
+	return mcpsdk.Implementation{}
 }
 
 // echoedConversation is the handle the agent sent, if it is UUIDv7-shaped.
@@ -181,7 +234,7 @@ func echoedConversation(arguments toolArguments) conversation {
 	return conversation{}
 }
 
-func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page *mcpsdk.ListToolsResult) (advertised *mcpsdk.ListToolsResult) {
+func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page *mcpsdk.ListToolsResult, handleFree bool) (advertised *mcpsdk.ListToolsResult) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			m.report(ctx, fmt.Errorf("posthogmcpsdk: tools/list panic (%T)", recovered))
@@ -189,9 +242,13 @@ func (m *middleware) advertise(ctx context.Context, gen *catalogGeneration, page
 		}
 	}()
 	copied := *page
-	copied.Tools = m.tools.advertise(gen, page.Tools)
+	copied.Tools = m.tools.advertise(gen, page.Tools, handleFree)
 	if m.virtual != nil && page.NextCursor == "" && !m.serverRegistersVirtualName(gen, page.Tools) {
-		copied.Tools = append(copied.Tools, m.virtual)
+		virtual := m.virtual
+		if handleFree {
+			virtual = m.handleFreeVirtual
+		}
+		copied.Tools = append(copied.Tools, virtual)
 	}
 	return &copied
 }
@@ -220,8 +277,11 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 	if m.virtual != nil && !tool.registered && req.Params.Name == m.missingCapabilityTool {
 		call.tool, call.missingCapability = m.virtualInfo, true
 	}
+	call.client = clientConversation(req, req.Params.Meta)
+	call.session = m.sessions.resolve(req.Session, !carriesSession(req))
+	call.identity = m.resolveIdentity(ctx, req)
 	if call.tool.injects(conversationArgument) {
-		call.conversation = resolveConversation(req, call.arguments)
+		call.conversation = resolveConversation(req, call.arguments, call.client)
 	}
 	if call.arguments.hasAny(call.tool.injected) {
 		arguments, err := json.Marshal(call.arguments.without(call.tool.injected...))
@@ -248,7 +308,8 @@ func (m *middleware) deliverConversation(ctx context.Context, call *preparedCall
 	if handle.minted {
 		call.conversation = conversation{}
 	}
-	if handle.id == "" || handlerErr != nil || !(handle.minted || call.tool.instructions) {
+	mirror := call.tool.instructions && !call.client.HandleFree
+	if handle.id == "" || handlerErr != nil || !(handle.minted || mirror) {
 		return result
 	}
 	defer func() {
@@ -262,7 +323,7 @@ func (m *middleware) deliverConversation(ctx context.Context, call *preparedCall
 		return result
 	}
 	copied := *toolResult
-	if call.tool.instructions {
+	if mirror {
 		copied.StructuredContent = withConversationInstructions(copied.StructuredContent, handle.id)
 	}
 	if handle.minted {
@@ -387,7 +448,7 @@ func (m *middleware) observe(
 	}
 
 	unknown := isUnknownTool(handlerErr, toolRequest.Params.Name)
-	if unknown && prepared.conversation.id == "" {
+	if unknown && prepared.conversation.id == "" && prepared.client.SessionID == "" {
 		// The catalog has no entry to say the tool carries a handle, but an
 		// echoed one still names the conversation. One is never minted.
 		prepared.conversation = echoedConversation(prepared.arguments)
@@ -446,42 +507,43 @@ func (m *middleware) captureInputRequired(
 // server it describes, its session, and the caller's identity.
 func (m *middleware) eventContext(ctx context.Context, prepared preparedCall, started time.Time) posthogmcp.EventContext {
 	toolRequest := prepared.request
+	session := prepared.eventSession()
+	client := clientInfo(toolRequest)
 	event := posthogmcp.EventContext{
+		DistinctID:     prepared.identity.DistinctID,
+		SessionID:      session.id,
+		SessionSource:  session.source,
+		Groups:         prepared.identity.Groups,
+		SetProperties:  prepared.identity.SetProperties,
 		ServerName:     m.serverName,
 		ServerVersion:  m.serverVersion,
+		ClientName:     client.Name,
+		ClientVersion:  client.Version,
 		ConversationID: prepared.conversation.id,
 		Timestamp:      started,
 	}
-
-	if session := toolRequest.Session; session != nil {
-		if initialize := session.InitializeParams(); initialize != nil {
+	if toolRequest.Session != nil {
+		if initialize := toolRequest.Session.InitializeParams(); initialize != nil {
 			event.ProtocolVersion = initialize.ProtocolVersion
-			if initialize.ClientInfo != nil {
-				event.ClientName = initialize.ClientInfo.Name
-				event.ClientVersion = initialize.ClientInfo.Version
-			}
 		}
-	}
-
-	if event.ConversationID == "" {
-		event.SessionID = m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
 	}
 	if extra := toolRequest.Extra; extra != nil {
 		event.ClientUserAgent = extra.Header.Get("User-Agent")
 		event.VendorClient = extra.Header.Get("X-Anthropic-Client")
 	}
-
-	if m.identity != nil {
-		identity, err := callIdentityResolver(ctx, m.identity, toolRequest)
-		if err != nil {
-			m.report(ctx, fmt.Errorf("posthogmcpsdk: identity resolver: %w", err))
-		} else {
-			event.DistinctID = identity.DistinctID
-			event.Groups = identity.Groups
-			event.SetProperties = identity.SetProperties
-		}
-	}
 	return event
+}
+
+func (m *middleware) resolveIdentity(ctx context.Context, req *mcpsdk.CallToolRequest) Identity {
+	if m.identity == nil {
+		return Identity{}
+	}
+	identity, err := callIdentityResolver(ctx, m.identity, req)
+	if err != nil {
+		m.report(ctx, fmt.Errorf("posthogmcpsdk: identity resolver: %w", err))
+		return Identity{}
+	}
+	return identity
 }
 
 func (m *middleware) captureToolCall(
@@ -499,6 +561,7 @@ func (m *middleware) captureToolCall(
 		ToolCategory:    prepared.tool.category,
 		DistinctID:      event.DistinctID,
 		SessionID:       event.SessionID,
+		SessionSource:   event.SessionSource,
 		Groups:          event.Groups,
 		SetProperties:   event.SetProperties,
 		ServerName:      event.ServerName,

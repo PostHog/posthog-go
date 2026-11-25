@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 const (
@@ -41,12 +42,12 @@ func newSessionResolver(now func() time.Time) *sessionResolver {
 	return &sessionResolver{now: now, generated: map[*mcpsdk.ServerSession]generatedSession{}}
 }
 
-func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped bool) string {
+func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped bool) callSession {
 	if requestScoped {
-		return newGeneratedSessionID()
+		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}
 	}
 	if session != nil && session.ID() != "" {
-		return deterministicSessionID(session.ID())
+		return callSession{id: deterministicSessionID(session.ID()), source: posthogmcp.SessionSourceTransport}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -61,7 +62,7 @@ func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped b
 	}
 	entry.lastActivity = now
 	r.generated[session] = entry
-	return entry.id
+	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}
 }
 
 // carriesSession reports whether req arrived on a transport session: a
@@ -122,4 +123,15 @@ func fnv1aHex(input string) string {
 		lane2 = (lane2 ^ uint32(char)) * 0x00000193
 	}
 	return fmt.Sprintf("%08x%08x", lane1, lane2)
+}
+
+// touch records a call's end as activity on a one-client session, so the
+// inactivity timeout counts from when the last call ended.
+func (r *sessionResolver) touch(session *mcpsdk.ServerSession) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.generated[session]; ok {
+		entry.lastActivity = r.now()
+		r.generated[session] = entry
+	}
 }

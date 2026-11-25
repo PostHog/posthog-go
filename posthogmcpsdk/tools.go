@@ -154,11 +154,11 @@ func (c *toolCatalog) generation() *catalogGeneration {
 // advertise remembers tools in gen unless gen has been invalidated, and
 // returns them as clients should see them. The registered tools are never
 // modified.
-func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []*mcpsdk.Tool {
+func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool, handleFree bool) []*mcpsdk.Tool {
 	advertised := make([]*mcpsdk.Tool, len(tools))
 	infos := make([]toolInfo, len(tools))
 	for i, tool := range tools {
-		advertised[i], infos[i] = c.present(tool)
+		advertised[i], infos[i] = c.present(tool, handleFree)
 		infos[i].registered = true
 	}
 
@@ -172,7 +172,10 @@ func (c *toolCatalog) advertise(gen *catalogGeneration, tools []*mcpsdk.Tool) []
 	return advertised
 }
 
-func (c *toolCatalog) present(tool *mcpsdk.Tool) (*mcpsdk.Tool, toolInfo) {
+// present returns tool as a client sees it, and what the middleware does with
+// its calls, which does not depend on the client: a handle-free client is
+// shown neither conversation_id nor _mcp_instructions.
+func (c *toolCatalog) present(tool *mcpsdk.Tool, handleFree bool) (*mcpsdk.Tool, toolInfo) {
 	info := toolInfo{description: tool.Description}
 	info.category, _ = tool.Meta["category"].(string)
 	schema, injected := withArguments(tool.InputSchema, c.inject)
@@ -184,6 +187,10 @@ func (c *toolCatalog) present(tool *mcpsdk.Tool) (*mcpsdk.Tool, toolInfo) {
 	info.injected = injected
 	if slices.Contains(injected, conversationArgument) {
 		copied.OutputSchema, info.instructions = withInstructions(tool.OutputSchema)
+		if handleFree {
+			delete(schema["properties"].(map[string]any), conversationArgument)
+			copied.OutputSchema = tool.OutputSchema
+		}
 	}
 	return &copied, info
 }
@@ -280,7 +287,7 @@ func (c *toolCatalog) walk(
 		if !ok {
 			return fmt.Errorf("posthogmcpsdk: tools/list through inner handler returned %T", result)
 		}
-		c.advertise(gen, page.Tools)
+		c.advertise(gen, page.Tools, false)
 		if page.NextCursor == "" {
 			finished = true
 			return nil

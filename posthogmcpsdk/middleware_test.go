@@ -157,6 +157,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 		"$mcp_is_error": false,
 		"$mcp_parameters": {"request": {"method": "tools/call", "params": {"name": "weather", "arguments": {"city": "Melbourne"}}}},
 		"$mcp_resource_name": "weather",
+		"$mcp_session_source": "generated",
 		"$mcp_server_name": "weather-server",
 		"$mcp_server_version": "1.2.3",
 		"$mcp_source": "posthog_mcp_analytics",

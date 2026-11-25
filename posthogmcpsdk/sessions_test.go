@@ -131,7 +131,7 @@ func TestRequestScopedSessionsAreNotRetained(t *testing.T) {
 	resolver := newSessionResolver(time.Now)
 	ids := map[string]bool{}
 	for range 10_000 {
-		id := resolver.resolve(&mcpsdk.ServerSession{}, true)
+		id := resolver.resolve(&mcpsdk.ServerSession{}, true).id
 		assert.Regexp(t, generatedSessionID, id)
 		ids[id] = true
 	}
@@ -188,4 +188,28 @@ func TestStatelessHTTPRequestsAreRequestScoped(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, []string{`id="" extra=true`}, seen)
+}
+
+func TestGeneratedSessionIdleIsMeasuredFromTheEndOfTheLastCall(t *testing.T) {
+	queue := &fakeQueue{}
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	server := newServer()
+	Instrument(server, posthogmcp.New(queue), withClock(clock))
+	server.AddTool(&mcpsdk.Tool{Name: "slow", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+			clock.advance(25 * time.Minute)
+			return &mcpsdk.CallToolResult{}, nil
+		})
+	client := connectInMemory(t, server)
+
+	for range 2 {
+		_, err := client.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "slow"})
+		require.NoError(t, err)
+		clock.advance(10 * time.Minute)
+	}
+
+	captures := queue.toolCalls()
+	require.Len(t, captures, 2)
+	assert.Equal(t, captures[0].Properties["$session_id"], captures[1].Properties["$session_id"],
+		"10 minutes after the last call ended is the same session")
 }
