@@ -640,7 +640,7 @@ func TestKnownAbsentKeysApplyOnlyToTheirFilterType(t *testing.T) {
 	})
 }
 
-func TestKnownAbsentFlagDependencyAcrossAggregationsStaysUnresolved(t *testing.T) {
+func TestKnownAbsentFlagDependencyAcrossAggregationsUsesItsOwnListing(t *testing.T) {
 	orgIncomplete := `{"key": "org-incomplete", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
 		flagCondition(100, `{"key": "tier", "type": "group", "group_type_index": 0, "operator": "is_not_set"}`) + `]}}`
 	personOnGroup := flagDefinition("person-on-group", flagCondition(100, flagDependencyFilter("org-incomplete", true, "org-incomplete")))
@@ -653,9 +653,19 @@ func TestKnownAbsentFlagDependencyAcrossAggregationsStaysUnresolved(t *testing.T
 
 	for _, key := range []string{"person-on-group", "group-on-person"} {
 		t.Run(key, func(t *testing.T) {
-			_, err := computeKnownAbsentFlag(t, definitions, key, groups, nil, map[string]Properties{"organization": {}}, bothListed)
-			require.True(t, isServerEvalError(err), "got %v", err)
-			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+			got, err := computeKnownAbsentFlag(t, definitions, key, groups, nil, map[string]Properties{"organization": {}}, bothListed)
+			require.NoError(t, err)
+			require.Equal(t, true, got)
+		})
+	}
+	// Each dependency reads only the listing for its own aggregation.
+	for key, listing := range map[string]*knownAbsentPropertyKeys{
+		"person-on-group": newKnownAbsentPropertyKeys([]string{"tier"}, nil),
+		"group-on-person": newKnownAbsentPropertyKeys(nil, map[string][]string{"organization": {"tier"}}),
+	} {
+		t.Run(key+"/listing for the dependent's aggregation only", func(t *testing.T) {
+			_, err := computeKnownAbsentFlag(t, definitions, key, groups, nil, map[string]Properties{"organization": {}}, listing)
+			requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
 		})
 	}
 }
@@ -694,5 +704,110 @@ func TestKnownAbsentGroupFilterWithoutIndexUsesConditionGroupType(t *testing.T) 
 			`, "cohorts": {"1": {"type": "AND", "values": [{"key": "tier", "type": "group", "operator": "is_not_set"}]}}}`
 		_, err := computeKnownAbsentFlag(t, definitions, "person-flag", groups, nil, enterprise, orgTierAbsent)
 		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+}
+
+// orgFlagDefinition is a flag aggregated by the organization group type of knownAbsentGroupTypeMapping.
+func orgFlagDefinition(key string, conditions ...string) string {
+	return `{"key": "` + key + `", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` + strings.Join(conditions, ",") + `]}}`
+}
+
+func TestFlagDependencyIsEvaluatedInItsOwnContext(t *testing.T) {
+	const regionIsUS = `"key": "region", "operator": "exact", "value": "us"`
+	personChild := flagDefinition("person-child", flagCondition(100, flagDependencyFilter("org-parent", true, "org-parent")))
+	evaluate := func(t *testing.T, definitions string, payload EvaluateFlagsPayload) (*FeatureFlagEvaluations, int32) {
+		t.Helper()
+		client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, remoteNoFlags)
+		payload.DistinctId = "user-123"
+		snapshot, err := client.EvaluateFlags(payload)
+		require.NoError(t, err)
+		return snapshot, remoteCalls.Load()
+	}
+
+	t.Run("a group dependency reads its group properties", func(t *testing.T) {
+		orgParent := orgFlagDefinition("org-parent", flagCondition(100, `{`+regionIsUS+`, "type": "group", "group_type_index": 0}`))
+		snapshot, remoteCalls := evaluate(t, knownAbsentDefinitions(orgParent, personChild), EvaluateFlagsPayload{
+			FlagKeys:         []string{"person-child", "org-parent"},
+			Groups:           Groups{"organization": "acme"},
+			PersonProperties: Properties{"region": "us"},
+			GroupProperties:  map[string]Properties{"organization": {"region": "eu"}},
+		})
+		require.Zero(t, remoteCalls)
+		require.Empty(t, snapshot.UnresolvedFlags())
+		require.Equal(t, false, snapshot.GetFlag("org-parent"))
+		require.Equal(t, false, snapshot.GetFlag("person-child"))
+	})
+
+	t.Run("a group dependency without its group is false", func(t *testing.T) {
+		orgParent := orgFlagDefinition("org-parent", flagCondition(100, `{"key": "tier", "type": "group", "group_type_index": 0, "operator": "is_not_set"}`))
+		personChildExpectsFalse := flagDefinition("person-child-expects-false", flagCondition(100, flagDependencyFilter("org-parent", false, "org-parent")))
+		definitions := knownAbsentDefinitions(orgParent, personChild, personChildExpectsFalse)
+		orgTierAbsent := map[string][]string{"organization": {"tier"}}
+
+		snapshot, remoteCalls := evaluate(t, definitions, EvaluateFlagsPayload{FlagKeys: []string{"person-child", "person-child-expects-false"}, GroupPropertyKeysKnownAbsent: orgTierAbsent})
+		require.Zero(t, remoteCalls)
+		require.Empty(t, snapshot.UnresolvedFlags())
+		require.Equal(t, false, snapshot.GetFlag("person-child"))
+		require.Equal(t, true, snapshot.GetFlag("person-child-expects-false"))
+
+		// Evaluated directly, the group flag without its group stays inconclusive.
+		snapshot, remoteCalls = evaluate(t, definitions, EvaluateFlagsPayload{FlagKeys: []string{"org-parent"}, GroupPropertyKeysKnownAbsent: orgTierAbsent, OnlyEvaluateLocally: true})
+		require.Zero(t, remoteCalls)
+		require.Equal(t, map[string]UnresolvedFlagReason{"org-parent": UnresolvedFlagReasonMissingContext}, snapshot.UnresolvedFlags())
+	})
+
+	t.Run("a person dependency reads person properties", func(t *testing.T) {
+		personParent := flagDefinition("person-parent", flagCondition(100, `{`+regionIsUS+`, "type": "person"}`))
+		orgChild := orgFlagDefinition("org-child", flagCondition(100, flagDependencyFilter("person-parent", true, "person-parent")))
+		snapshot, remoteCalls := evaluate(t, knownAbsentDefinitions(personParent, orgChild), EvaluateFlagsPayload{
+			FlagKeys:         []string{"org-child", "person-parent"},
+			Groups:           Groups{"organization": "acme"},
+			PersonProperties: Properties{"region": "us"},
+			GroupProperties:  map[string]Properties{"organization": {"region": "eu"}},
+		})
+		require.Zero(t, remoteCalls)
+		require.Empty(t, snapshot.UnresolvedFlags())
+		require.Equal(t, true, snapshot.GetFlag("person-parent"))
+		require.Equal(t, true, snapshot.GetFlag("org-child"))
+	})
+}
+
+func TestFlagDependencyBucketsByItsOwnIdentifier(t *testing.T) {
+	const distinctId = "user-123"
+	// Organizations whose hash for the dependency is on the other side of a 50% rollout from the distinct id.
+	contrasting := func(t *testing.T, flagKey string) []string {
+		t.Helper()
+		var orgs []string
+		for i := 0; len(orgs) < 5 && i < 200; i++ {
+			org := fmt.Sprintf("org-%d", i)
+			if checkIfSimpleFlagEnabled(flagKey, org, 50) != checkIfSimpleFlagEnabled(flagKey, distinctId, 50) {
+				orgs = append(orgs, org)
+			}
+		}
+		require.Len(t, orgs, 5)
+		return orgs
+	}
+
+	t.Run("a group dependency hashes the group key", func(t *testing.T) {
+		definitions := knownAbsentDefinitions(
+			orgFlagDefinition("org-parent", flagCondition(50)),
+			flagDefinition("person-child", flagCondition(100, flagDependencyFilter("org-parent", true, "org-parent"))),
+		)
+		for _, org := range contrasting(t, "org-parent") {
+			got, err := computeKnownAbsentFlag(t, definitions, "person-child", Groups{"organization": org}, nil, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, checkIfSimpleFlagEnabled("org-parent", org, 50), got, org)
+		}
+	})
+	t.Run("a person dependency hashes the distinct id", func(t *testing.T) {
+		definitions := knownAbsentDefinitions(
+			flagDefinition("person-parent", flagCondition(50)),
+			orgFlagDefinition("org-child", flagCondition(100, flagDependencyFilter("person-parent", true, "person-parent"))),
+		)
+		for _, org := range contrasting(t, "person-parent") {
+			got, err := computeKnownAbsentFlag(t, definitions, "org-child", Groups{"organization": org}, nil, map[string]Properties{"organization": {}}, nil)
+			require.NoError(t, err)
+			require.Equal(t, checkIfSimpleFlagEnabled("person-parent", distinctId, 50), got, org)
+		}
 	})
 }

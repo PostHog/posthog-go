@@ -578,7 +578,6 @@ func TestFlagDependencyUnresolvedReasons(t *testing.T) {
 	inactiveContinuity := `{"key": "checkout", "active": false, "ensure_experience_continuity": true, "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]}}`
 	needsPlan := flagDefinition("checkout", flagCondition(100, planIsProFilter))
 	needsServer := flagDefinition("checkout", flagCondition(100, staticCohortFilter))
-	groupFlag := `{"key": "checkout", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [{"properties": [], "rollout_percentage": 100}]}}`
 	dependent := func(properties ...string) string {
 		return flagDefinition("beta-ui", flagCondition(100, properties...))
 	}
@@ -625,12 +624,6 @@ func TestFlagDependencyUnresolvedReasons(t *testing.T) {
 			flags:      []string{continuityCheckoutDefinition, dependent(flagDependencyFilter("checkout", true))},
 			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
 		},
-		{
-			name:       "dependency needs a different aggregation",
-			flags:      []string{groupFlag, dependent(flagDependencyFilter("checkout", true, "checkout"))},
-			wantReason: UnresolvedFlagReasonUnsupportedDefinition,
-			wantServer: true,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -652,7 +645,7 @@ func TestRepeatedReferenceToMissingDependencyKeepsReason(t *testing.T) {
 	property := FlagProperty{Key: "gone", Type: "flag", Operator: "flag_evaluates_to", Value: true, DependencyChain: []string{"gone"}}
 	cache := map[string]interface{}{}
 	for i := 0; i < 2; i++ {
-		_, err := poller.evaluateFlagDependency(property, state.flagsByKey, cache, "user-123", nil, nil, nil, state.cohorts, nil, state)
+		_, err := poller.evaluateFlagDependency(property, state.flagsByKey, cache, &flagEvaluationInputs{distinctId: "user-123", cohorts: state.cohorts}, state)
 		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
 	}
 }

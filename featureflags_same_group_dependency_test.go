@@ -110,7 +110,7 @@ func TestSameGroupFlagDependency(t *testing.T) {
 	}
 }
 
-func TestGroupFlagDependencyRejectsDifferentAggregationBeforeCache(t *testing.T) {
+func TestGroupFlagDependencyOnAnotherGroupTypeReadsThatGroup(t *testing.T) {
 	for _, version := range []int{1, 2} {
 		for _, aggregation := range []string{"flag", "condition"} {
 			t.Run(fmt.Sprintf("v%d/%s", version, aggregation), func(t *testing.T) {
@@ -137,15 +137,12 @@ func TestGroupFlagDependencyRejectsDifferentAggregationBeforeCache(t *testing.T)
 				poller.fetchNewFeatureFlags()
 				close(poller.firstFeatureFlagRequestFinished)
 				config := FeatureFlagPayload{DistinctId: "person", Groups: Groups{"company": "acme", "team": "engineering"}, GroupProperties: map[string]Properties{"company": {"plan": "free"}, "team": {"plan": "pro"}}, OnlyEvaluateLocally: true}
+				// dep reads the team's plan, not the company's, as when it is evaluated directly.
 				for _, key := range []string{"dep", "target"} {
 					config.Key = key
 					got, local, err := poller.GetFeatureFlag(config)
-					if key == "dep" {
-						if err != nil || !local || got != true {
-							t.Fatalf("control=%v local=%v err=%v", got, local, err)
-						}
-					} else if !isServerEvalError(err) || local {
-						t.Errorf("target=%v local=%v err=%v; must require server", got, local, err)
+					if err != nil || !local || got != true {
+						t.Errorf("%s=%v local=%v err=%v; want local true", key, got, local, err)
 					}
 				}
 				var raw FeatureFlagsResponse
@@ -155,13 +152,12 @@ func TestGroupFlagDependencyRejectsDifferentAggregationBeforeCache(t *testing.T)
 				state := poller.state.Load()
 				company := uint8(0)
 				for _, cohorts := range []map[string]PropertyGroup{raw.Cohorts, state.cohorts} {
-					for _, cached := range []interface{}{nil, false, true} {
-						cache := map[string]interface{}{"dep": cached}
-						for i := 0; i < 2; i++ {
-							got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], nil, cohorts, state.flagsByKey, cache, "acme", nil, &company, state)
-							if !isServerEvalError(err) {
-								t.Errorf("negated cohort=%v err=%v cached=%v; must require server", got, err, cached)
-							}
+					inputs := &flagEvaluationInputs{distinctId: config.DistinctId, groups: config.Groups, groupProperties: config.GroupProperties, cohorts: cohorts}
+					cache := map[string]interface{}{}
+					for i := 0; i < 2; i++ {
+						got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], nil, cohorts, state.flagsByKey, cache, inputs, &company, state)
+						if err != nil || got != false {
+							t.Errorf("negated cohort=%v err=%v; want false on call %d", got, err, i)
 						}
 					}
 				}

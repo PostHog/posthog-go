@@ -55,8 +55,6 @@ var regexCache sync.Map // map[string]*flagRegex
 // A later matching condition cannot decide the variant while an earlier regex is unresolved.
 var errRegexRequiresServer = &RequiresServerEvaluationError{msg: "Regex requires server evaluation", Reason: UnresolvedFlagReasonUnsupportedDefinition}
 
-var errDependencyAggregationRequiresServer = &RequiresServerEvaluationError{msg: "Flag dependency requires different aggregation context", Reason: UnresolvedFlagReasonUnsupportedDefinition}
-
 type flagRegex struct {
 	*regexp.Regexp
 	asciiClasses bool
@@ -696,16 +694,11 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	property FlagProperty,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
-	distinctId string,
-	deviceId *string,
-	properties Properties,
-	knownAbsent propertyKeySet,
-	cohorts map[string]PropertyGroup,
-	aggregationGroupTypeIndex *uint8,
+	inputs *flagEvaluationInputs,
 	snapshots ...*flagsState,
 ) (bool, error) {
 	state := poller.evaluationState(snapshots)
-	if flagsByKey == nil || evaluationCache == nil {
+	if flagsByKey == nil || evaluationCache == nil || inputs == nil {
 		// Cannot evaluate flag dependencies without required context
 		return false, &InconclusiveMatchError{
 			msg:    fmt.Sprintf("Cannot evaluate flag dependency on '%s' without flagsByKey and evaluationCache", property.Key),
@@ -715,7 +708,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// A problem in the definitions of the chain outranks a dependency that is only
 	// inconclusive, so check the whole chain before evaluating any of it.
-	if err := flagDependencyDefinitionError(property, flagsByKey, aggregationGroupTypeIndex); err != nil {
+	if err := flagDependencyDefinitionError(property, flagsByKey); err != nil {
 		if property.DependencyChain != nil && len(property.DependencyChain) == 0 && poller.Logger != nil {
 			poller.Logger.Debugf("Circular dependency detected for flag: %s", property.Key)
 		}
@@ -739,8 +732,9 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{msg: "Flag dependency has experience continuity enabled", Reason: UnresolvedFlagReasonUnresolvedDependency}
 			}
-			// Recursively evaluate the dependency
-			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, knownAbsent, cohorts, flagsByKey, evaluationCache, nil, nil, nil, state)
+			// Evaluate the dependency as if it were evaluated directly with the same inputs,
+			// so it uses its own aggregation, properties and bucketing identifier.
+			result, err := poller.computeFlagFromInputs(depFlag, inputs, evaluationCache, true, state)
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
@@ -785,7 +779,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 // flagDependencyDefinitionError reports a flag dependency filter that local evaluation
 // cannot use whatever the call passes. Evaluation and the load-time warning share it so
 // they agree on which dependencies are unsupported.
-func flagDependencyDefinitionError(property FlagProperty, flagsByKey map[string]FeatureFlag, aggregationGroupTypeIndex *uint8) error {
+func flagDependencyDefinitionError(property FlagProperty, flagsByKey map[string]FeatureFlag) error {
 	switch {
 	case property.Value == nil:
 		return &InconclusiveMatchError{msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
@@ -797,32 +791,16 @@ func flagDependencyDefinitionError(property FlagProperty, flagsByKey map[string]
 		// The server sends an empty chain for a circular dependency.
 		return &InconclusiveMatchError{msg: fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key), Reason: UnresolvedFlagReasonUnsupportedDefinition}
 	}
-	return dependencyChainDefinitionError(property.DependencyChain, flagsByKey, aggregationGroupTypeIndex)
+	return dependencyChainDefinitionError(property.DependencyChain, flagsByKey)
 }
 
-// dependencyChainDefinitionError reports a dependency with no loaded definition, or one
-// that needs a different aggregation context than the dependent condition.
-// Dependencies can reuse the caller's key and properties only for the same
-// aggregation type. This runs before the evaluation cache is read so repeated cohort
-// references cannot bypass the cross-type server boundary.
-func dependencyChainDefinitionError(dependencyChain []string, flagsByKey map[string]FeatureFlag, aggregationGroupTypeIndex *uint8) error {
+// dependencyChainDefinitionError reports a dependency with no loaded definition.
+func dependencyChainDefinitionError(dependencyChain []string, flagsByKey map[string]FeatureFlag) error {
 	for _, depFlagKey := range dependencyChain {
-		depFlag, flagExists := flagsByKey[depFlagKey]
-		if !flagExists {
+		if _, flagExists := flagsByKey[depFlagKey]; !flagExists {
 			return &InconclusiveMatchError{
 				msg:    fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
 				Reason: UnresolvedFlagReasonUnsupportedDefinition,
-			}
-		}
-		if !depFlag.Active {
-			continue
-		}
-		if !uint8PtrEqual(depFlag.Filters.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
-			return errDependencyAggregationRequiresServer
-		}
-		for _, condition := range depFlag.Filters.Groups {
-			if condition.AggregationGroupTypeIndex != nil && !uint8PtrEqual(condition.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
-				return errDependencyAggregationRequiresServer
 			}
 		}
 	}
@@ -1169,12 +1147,8 @@ func definitionUnresolvedReason(flag FeatureFlag, flagsByKey map[string]FeatureF
 	// makes the definition unsupported.
 	visitedCohorts := map[string]struct{}{}
 	for _, condition := range flag.Filters.Groups {
-		aggregation := condition.AggregationGroupTypeIndex
-		if aggregation == nil {
-			aggregation = flag.Filters.AggregationGroupTypeIndex
-		}
 		for _, property := range condition.Properties {
-			if isUnsupportedProperty(property, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
+			if isUnsupportedProperty(property, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
 				return UnresolvedFlagReasonUnsupportedDefinition
 			}
 		}
@@ -1182,10 +1156,10 @@ func definitionUnresolvedReason(flag FeatureFlag, flagsByKey map[string]FeatureF
 	return ""
 }
 
-func isUnsupportedProperty(property FlagProperty, aggregation *uint8, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int, visitedCohorts map[string]struct{}) bool {
+func isUnsupportedProperty(property FlagProperty, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int, visitedCohorts map[string]struct{}) bool {
 	switch property.Type {
 	case "flag":
-		return flagDependencyDefinitionError(property, flagsByKey, aggregation) != nil
+		return flagDependencyDefinitionError(property, flagsByKey) != nil
 	case "cohort":
 		cohortID := valueToString(property.Value)
 		cohort, ok := cohorts[cohortID]
@@ -1199,20 +1173,20 @@ func isUnsupportedProperty(property FlagProperty, aggregation *uint8, flagsByKey
 		if len(cohort.ParsedValues) == 0 {
 			cohort = preParsePG(cohort)
 		}
-		return isUnsupportedPropertyGroup(cohort, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts)
+		return isUnsupportedPropertyGroup(cohort, flagsByKey, cohorts, matchingVersion, visitedCohorts)
 	default:
 		return filterDefinitionError(property, matchingVersion) != nil
 	}
 }
 
-func isUnsupportedPropertyGroup(group PropertyGroup, aggregation *uint8, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int, visitedCohorts map[string]struct{}) bool {
+func isUnsupportedPropertyGroup(group PropertyGroup, flagsByKey map[string]FeatureFlag, cohorts map[string]PropertyGroup, matchingVersion int, visitedCohorts map[string]struct{}) bool {
 	for i := range group.ParsedValues {
 		value := &group.ParsedValues[i]
 		if value.IsGroup {
-			if isUnsupportedPropertyGroup(value.Group, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
+			if isUnsupportedPropertyGroup(value.Group, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
 				return true
 			}
-		} else if isUnsupportedProperty(value.Property, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
+		} else if isUnsupportedProperty(value.Property, flagsByKey, cohorts, matchingVersion, visitedCohorts) {
 			return true
 		}
 	}
@@ -1615,6 +1589,19 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 
 	return response, nil
 }
+
+// flagEvaluationInputs are the inputs of a top-level flag evaluation. A flag dependency
+// is evaluated from the same inputs, as if it were evaluated directly.
+type flagEvaluationInputs struct {
+	distinctId       string
+	deviceId         *string
+	groups           Groups
+	personProperties Properties
+	groupProperties  map[string]Properties
+	knownAbsent      *knownAbsentPropertyKeys
+	cohorts          map[string]PropertyGroup
+}
+
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,
 	distinctId string,
@@ -1627,6 +1614,34 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 	snapshots ...*flagsState,
 ) (interface{}, error) {
 	state := poller.evaluationState(snapshots)
+	// evaluationCache is created lazily — only allocated when flag has dependencies.
+	// For simple flags (no dependencies), this avoids a map allocation per evaluation.
+	var evaluationCache map[string]interface{}
+	if flagHasDependencies(flag) {
+		evaluationCache = make(map[string]interface{})
+	}
+	inputs := flagEvaluationInputs{
+		distinctId:       distinctId,
+		deviceId:         deviceId,
+		groups:           groups,
+		personProperties: personProperties,
+		groupProperties:  groupProperties,
+		knownAbsent:      knownAbsent,
+		cohorts:          cohorts,
+	}
+	return poller.computeFlagFromInputs(flag, &inputs, evaluationCache, false, state)
+}
+
+// computeFlagFromInputs evaluates flag with its own aggregation. A dependency shares
+// evaluationCache with the flag that references it, and a dependency aggregated by a
+// group type without a supplied group is false, as the flags service resolves it.
+func (poller *FeatureFlagsPoller) computeFlagFromInputs(
+	flag FeatureFlag,
+	inputs *flagEvaluationInputs,
+	evaluationCache map[string]interface{},
+	isDependency bool,
+	state *flagsState,
+) (interface{}, error) {
 	if !flag.Active {
 		return false, nil
 	}
@@ -1637,13 +1652,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 
 	// Use pre-built flagsByKey index (built once when flags are fetched, not per evaluation)
 	flagsByKey := state.flagsByKey
-
-	// evaluationCache is created lazily — only allocated when flag has dependencies.
-	// For simple flags (no dependencies), this avoids a map allocation per evaluation.
-	var evaluationCache map[string]interface{}
-	if flagHasDependencies(flag) {
-		evaluationCache = make(map[string]interface{})
-	}
+	cohorts := inputs.cohorts
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
 		groupType, exists := state.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
@@ -1653,9 +1662,12 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			return nil, errors.New(errMessage)
 		}
 
-		groupKey, exists := groups[groupType]
+		groupKey, exists := inputs.groups[groupType]
 
 		if !exists {
+			if isDependency {
+				return false, nil
+			}
 			// No condition can be checked without the group key, so a cause in the
 			// definition outranks the missing key.
 			return nil, &InconclusiveMatchError{
@@ -1664,29 +1676,30 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 			}
 		}
 
-		focusedGroupProperties := groupProperties[groupType]
+		focusedGroupProperties := inputs.groupProperties[groupType]
 		if _, ok := focusedGroupProperties["$group_key"]; !ok {
 			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
 		}
-		return poller.matchFeatureFlagProperties(flag, groupKey, nil, focusedGroupProperties, knownAbsent.groupSet(groupType), cohorts, flagsByKey, evaluationCache, groups, groupProperties, knownAbsent, state)
+		return poller.matchFeatureFlagProperties(flag, groupKey, nil, focusedGroupProperties, inputs.knownAbsent.groupSet(groupType), flagsByKey, evaluationCache, inputs, state)
 	} else {
+		personProperties := inputs.personProperties
 		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
 		// For simple flags (no property conditions), this avoids creating a map that's never read.
 		if flagHasPersonProperties(flag) {
 			if _, ok := localPersonProperties["distinct_id"]; !ok {
 				if personProperties == nil {
-					localPersonProperties = Properties{"distinct_id": distinctId}
+					localPersonProperties = Properties{"distinct_id": inputs.distinctId}
 				} else {
 					localPersonProperties = make(Properties, len(personProperties)+1)
-					localPersonProperties["distinct_id"] = distinctId
+					localPersonProperties["distinct_id"] = inputs.distinctId
 					for k, v := range personProperties {
 						localPersonProperties[k] = v
 					}
 				}
 			}
 		}
-		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, knownAbsent.personSet(), cohorts, flagsByKey, evaluationCache, groups, groupProperties, knownAbsent, state)
+		return poller.matchFeatureFlagProperties(flag, inputs.distinctId, inputs.deviceId, localPersonProperties, inputs.knownAbsent.personSet(), flagsByKey, evaluationCache, inputs, state)
 	}
 }
 
@@ -1747,15 +1760,12 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	deviceId *string,
 	properties Properties,
 	propertiesKnownAbsent propertyKeySet,
-	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
-	groups Groups,
-	groupProperties map[string]Properties,
-	knownAbsent *knownAbsentPropertyKeys,
-	snapshots ...*flagsState,
+	inputs *flagEvaluationInputs,
+	state *flagsState,
 ) (interface{}, error) {
-	state := poller.evaluationState(snapshots)
+	cohorts := inputs.cohorts
 	conditions := flag.Filters.Groups
 	// Holdouts precede release conditions: a held-out identifier is excluded from
 	// the flag's targeting entirely rather than bucketed into one of its variants.
@@ -1798,12 +1808,12 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 				if !exists {
 					continue
 				}
-				groupKey, hasGroup := groups[groupType]
+				groupKey, hasGroup := inputs.groups[groupType]
 				if !hasGroup {
 					continue
 				}
-				focusedGroupProperties, hasProps := groupProperties[groupType]
-				focusedKnownAbsent := knownAbsent.groupSet(groupType)
+				focusedGroupProperties, hasProps := inputs.groupProperties[groupType]
+				focusedKnownAbsent := inputs.knownAbsent.groupSet(groupType)
 				// Keys listed as known absent are context, so they stand in for missing group properties.
 				if !hasProps && len(focusedKnownAbsent) == 0 {
 					inconclusiveReason = pickUnresolvedReason(inconclusiveReason, UnresolvedFlagReasonMissingContext)
@@ -1818,7 +1828,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			}
 		}
 
-		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, effectiveKnownAbsent, cohorts, flagsByKey, evaluationCache, state)
+		matchResult, err := poller.isConditionMatch(flag, effectiveBucketingId, condition, effectiveProperties, effectiveKnownAbsent, cohorts, flagsByKey, evaluationCache, inputs, state)
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
@@ -1903,18 +1913,16 @@ const (
 
 func (poller *FeatureFlagsPoller) isConditionMatch(
 	flag FeatureFlag,
-	distinctId string,
 	bucketingId string,
-	deviceId *string,
 	condition FeatureFlagCondition,
 	properties Properties,
 	knownAbsent propertyKeySet,
 	cohorts map[string]PropertyGroup,
 	flagsByKey map[string]FeatureFlag,
 	evaluationCache map[string]interface{},
-	snapshots ...*flagsState,
+	inputs *flagEvaluationInputs,
+	state *flagsState,
 ) (conditionMatchResult, error) {
-	state := poller.evaluationState(snapshots)
 	if len(condition.Properties) > 0 {
 		var (
 			isMatch bool
@@ -1924,12 +1932,6 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 		if aggregationGroupTypeIndex == nil {
 			aggregationGroupTypeIndex = flag.Filters.AggregationGroupTypeIndex
 		}
-		dependencyDistinctId, dependencyDeviceId := distinctId, deviceId
-		if aggregationGroupTypeIndex != nil {
-			// A condition-level group override uses the group's key, not the
-			// original person's ID or device, for dependent flag bucketing.
-			dependencyDistinctId, dependencyDeviceId = bucketingId, nil
-		}
 		// Filters in a condition have no defined order, so an inconclusive filter does not
 		// stop the loop: a later filter can still rule the condition out or carry a
 		// higher-precedence reason.
@@ -1937,9 +1939,9 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 		var serverEvaluationErr *RequiresServerEvaluationError
 		for _, prop := range condition.Properties {
 			if prop.Type == "cohort" {
-				isMatch, err = poller.matchCohort(prop, properties, knownAbsent, cohorts, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, aggregationGroupTypeIndex, state)
+				isMatch, err = poller.matchCohort(prop, properties, knownAbsent, cohorts, flagsByKey, evaluationCache, inputs, aggregationGroupTypeIndex, state)
 			} else if prop.Type == "flag" {
-				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, knownAbsent, cohorts, aggregationGroupTypeIndex, state)
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, inputs, state)
 			} else {
 				filterKnownAbsent := knownAbsent
 				if !conditionFilterUsesKnownAbsent(prop.Type, aggregationGroupTypeIndex) {
