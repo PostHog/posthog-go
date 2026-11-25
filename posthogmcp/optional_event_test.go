@@ -87,6 +87,7 @@ func TestCaptureOptionalEventsCarryIdentityAndSession(t *testing.T) {
 			want := map[string]any{
 				"$mcp_conversation_id":   optionalEventHandle,
 				"$session_id":            deriveSessionID(optionalEventHandle),
+				"$mcp_session_source":    "conversation",
 				"$mcp_server_name":       "server",
 				"$mcp_server_version":    "1.0",
 				"$mcp_client_name":       "client",
@@ -360,4 +361,16 @@ func TestCaptureOptionalEventsValidateAndStayBounded(t *testing.T) {
 		require.Error(t, a.CaptureInputRequired(context.Background(), InputRequired{ToolName: "deploy"}))
 		require.Error(t, a.CaptureMissingCapability(context.Background(), MissingCapability{ToolName: "get_more_tools"}))
 	})
+}
+
+func TestCaptureOptionalEventsCarryTheSessionSource(t *testing.T) {
+	capture := captureOptional(t, func(a *Analytics) error {
+		return a.CaptureUnknownTool(context.Background(), UnknownTool{
+			EventContext: EventContext{SessionID: "s1", SessionSource: SessionSourceClientMetadata, ConversationID: optionalEventHandle},
+			ToolName:     "nope",
+		})
+	})
+	assert.Equal(t, "s1", capture.Properties["$session_id"])
+	assert.Equal(t, "client_metadata", capture.Properties["$mcp_session_source"])
+	assert.NotContains(t, capture.Properties, "$mcp_conversation_id")
 }

@@ -15,6 +15,7 @@ type preparedToolCall struct {
 	distinctID            string
 	explicitID            bool
 	sessionID             string
+	sessionSource         SessionSource
 	conversationID        string
 	clientUserAgent       string
 	vendorClient          string
@@ -80,14 +81,10 @@ func prepareToolCall(call ToolCall, captureErrorMessages bool) (preparedToolCall
 		propertyProfileOptOut: personProfileOptOut(call.Properties),
 		toolName:              truncateUTF8(sanitizeResourceName(call.ToolName), maxResourceNameBytes),
 	}
-	prepared.conversationID = normalizeConversationID(call.ConversationID)
-	prepared.sessionID = call.SessionID
-	if prepared.conversationID != "" {
-		prepared.sessionID = deriveSessionID(prepared.conversationID)
+	if !call.SessionSource.valid() {
+		return preparedToolCall{}, errors.New("posthogmcp: invalid SessionSource")
 	}
-	if prepared.sessionID == "" {
-		prepared.sessionID = mintSessionID()
-	}
+	prepared.sessionID, prepared.sessionSource, prepared.conversationID = resolveSession(call)
 	switch {
 	case call.DistinctID != "":
 		prepared.distinctID = call.DistinctID
@@ -338,8 +335,7 @@ func (p preparedToolCall) setModelAndIntentProperties(properties posthog.Propert
 // setIdentityProperties sets the session, conversation, client and server
 // identity every MCP event carries.
 func (p preparedToolCall) setIdentityProperties(properties posthog.Properties) {
-	setStringProperty(properties, propertySessionID, p.sessionID)
-	setStringProperty(properties, propertyConversationID, p.conversationID)
+	p.setSessionProperties(properties)
 	setStringProperty(properties, propertyClientUserAgent, p.clientUserAgent)
 	setStringProperty(properties, propertyVendorClient, p.vendorClient)
 	setStringProperty(properties, propertyServerName, truncateUTF8(p.call.ServerName, maxMetadataBytes))
@@ -347,6 +343,12 @@ func (p preparedToolCall) setIdentityProperties(properties posthog.Properties) {
 	setStringProperty(properties, propertyClientName, truncateUTF8(p.call.ClientName, maxMetadataBytes))
 	setStringProperty(properties, propertyClientVersion, truncateUTF8(p.call.ClientVersion, maxMetadataBytes))
 	setStringProperty(properties, propertyProtocolVersion, truncateUTF8(p.call.ProtocolVersion, maxMetadataBytes))
+}
+
+func (p preparedToolCall) setSessionProperties(properties posthog.Properties) {
+	setStringProperty(properties, propertySessionID, p.sessionID)
+	setStringProperty(properties, propertySessionSource, string(p.sessionSource))
+	setStringProperty(properties, propertyConversationID, p.conversationID)
 }
 
 func setStringProperty(properties posthog.Properties, key, value string) {

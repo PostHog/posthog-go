@@ -1293,3 +1293,52 @@ func TestCaptureToolCallWithoutErrorMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestCaptureToolCallSessionSource(t *testing.T) {
+	const handle = "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"
+	const derived = "ses_6df45f0102a182bcd5e8dd5dad6c65a0"
+	tests := []struct {
+		name               string
+		call               ToolCall
+		wantSessionID      string
+		wantSource         any
+		wantConversationID any
+	}{
+		{name: "a minted session is generated", wantSessionID: minted, wantSource: "generated"},
+		{name: "a session without a source has none", call: ToolCall{SessionID: "s1"}, wantSessionID: "s1"},
+		{name: "a transport session", call: ToolCall{SessionID: "s1", SessionSource: SessionSourceTransport}, wantSessionID: "s1", wantSource: "transport"},
+		{name: "a generated session", call: ToolCall{SessionID: "s1", SessionSource: SessionSourceGenerated}, wantSessionID: "s1", wantSource: "generated"},
+		{name: "a handle is a conversation", call: ToolCall{ConversationID: handle}, wantSessionID: derived, wantSource: "conversation", wantConversationID: handle},
+		{name: "a handle wins over a transport session", call: ToolCall{ConversationID: handle, SessionID: "s1", SessionSource: SessionSourceTransport}, wantSessionID: derived, wantSource: "conversation", wantConversationID: handle},
+		{name: "a client conversation id wins over a handle and drops it", call: ToolCall{ConversationID: handle, SessionID: "s1", SessionSource: SessionSourceClientMetadata}, wantSessionID: "s1", wantSource: "client_metadata"},
+		{name: "a host session wins over a handle and keeps it", call: ToolCall{ConversationID: handle, SessionID: "s1", SessionSource: SessionSourceHost}, wantSessionID: "s1", wantSource: "host", wantConversationID: handle},
+		{name: "a host source without a session falls through to the handle", call: ToolCall{ConversationID: handle, SessionSource: SessionSourceHost}, wantSessionID: derived, wantSource: "conversation", wantConversationID: handle},
+		{name: "a source without a session is minted", call: ToolCall{SessionSource: SessionSourceTransport}, wantSessionID: minted, wantSource: "generated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			tt.call.ToolName = "query"
+			tt.call.Error = errors.New("boom")
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), tt.call))
+			require.Len(t, client.messages, 2)
+			for _, properties := range []posthog.Properties{
+				requireCapture(t, client.messages[0]).Properties,
+				requireException(t, client.messages[1]).Properties,
+			} {
+				if tt.wantSessionID == minted {
+					assert.Regexp(t, mintedSessionPattern, properties[propertySessionID])
+				} else {
+					assert.Equal(t, tt.wantSessionID, properties[propertySessionID])
+				}
+				assert.Equal(t, tt.wantSource, properties["$mcp_session_source"])
+				assert.Equal(t, tt.wantConversationID, properties[propertyConversationID])
+			}
+		})
+	}
+}
+
+func TestCaptureToolCallRejectsAnUnknownSessionSource(t *testing.T) {
+	err := New(&fakeEnqueueClient{}).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", SessionID: "s1", SessionSource: "mcp"})
+	require.EqualError(t, err, "posthogmcp: invalid SessionSource")
+}

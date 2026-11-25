@@ -1656,6 +1656,11 @@ properties can set either one, key by key like other properties, so set both
 together. A $lib that is not a non-empty string gets the MCP pair. BeforeSend
 can change either.
 
+FUNCTIONS
+
+func WithCallContext(ctx context.Context, sessionID string, source SessionSource, distinctID string) context.Context
+
+
 TYPES
 
 type Analytics struct {
@@ -1672,9 +1677,17 @@ func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error
 
 func (a *Analytics) CaptureUnknownTool(ctx context.Context, event UnknownTool) error
 
+type ClientConversation struct {
+	SessionID string
+	HandleFree bool
+}
+
+func ReadClientConversation(userAgent, clientName string, meta map[string]any) ClientConversation
+
 type EventContext struct {
 	DistinctID string
 	SessionID string
+	SessionSource SessionSource
 	Groups posthog.Groups
 	SetProperties posthog.Properties
 
@@ -1725,6 +1738,15 @@ func WithCaptureErrorMessages(enabled bool) Option
 
 func WithExceptionAutocapture(enabled bool) Option
 
+type SessionSource string
+
+const (
+	SessionSourceHost SessionSource = "host"
+	SessionSourceClientMetadata SessionSource = "client_metadata"
+	SessionSourceConversation SessionSource = "conversation"
+	SessionSourceTransport SessionSource = "transport"
+	SessionSourceGenerated SessionSource = "generated"
+)
 type ToolCall struct {
 	ToolName string
 	ToolDescription string
@@ -1732,6 +1754,7 @@ type ToolCall struct {
 
 	DistinctID string
 	SessionID string
+	SessionSource SessionSource
 	Groups posthog.Groups
 	SetProperties posthog.Properties
 

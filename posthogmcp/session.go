@@ -1,11 +1,14 @@
 package posthogmcp
 
 import (
+	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
+	posthog "github.com/posthog/posthog-go/v2"
 )
 
 var conversationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -39,8 +42,136 @@ func fnv1a(seed, prime uint32, x string) uint32 {
 	return lane
 }
 
+func resolveSession(call ToolCall) (sessionID string, source SessionSource, conversationID string) {
+	conversationID = normalizeConversationID(call.ConversationID)
+	switch {
+	case call.SessionID != "" && call.SessionSource == SessionSourceHost:
+		return call.SessionID, SessionSourceHost, conversationID
+	case call.SessionID != "" && call.SessionSource == SessionSourceClientMetadata:
+		return call.SessionID, SessionSourceClientMetadata, ""
+	case conversationID != "":
+		return deriveSessionID(conversationID), SessionSourceConversation, conversationID
+	case call.SessionID != "":
+		return call.SessionID, call.SessionSource, ""
+	default:
+		return mintSessionID(), SessionSourceGenerated, ""
+	}
+}
+
+func (s SessionSource) valid() bool {
+	switch s {
+	case "", SessionSourceHost, SessionSourceClientMetadata, SessionSourceConversation, SessionSourceTransport, SessionSourceGenerated:
+		return true
+	}
+	return false
+}
+
 // mintSessionID is a new "ses_" + UUIDv7, the session of a call that carries
 // neither a transport session nor a conversation handle.
 func mintSessionID() string {
 	return "ses_" + uuid.Must(uuid.NewV7()).String()
+}
+
+// ClientConversation is what a tools/call request says about its client's
+// conversation.
+type ClientConversation struct {
+	// SessionID is the $session_id derived from the client conversation id,
+	// or "" when the request carries none.
+	SessionID string
+	// HandleFree reports a client that sends its conversation id on every
+	// call, so it is advertised no conversation_id argument and minted no
+	// handle.
+	HandleFree bool
+}
+
+// ReadClientConversation reads the client conversation id of a tools/call
+// request from its _meta, given the request's HTTP User-Agent and the client
+// name from initialize or the request's own client info. Each key is read only
+// from the client that defines it: ChatGPT's openai/session, Codex's
+// sessionId, and VS Code's vscode.conversationId. Pass the SessionID as
+// ToolCall.SessionID with SessionSourceClientMetadata. The value itself is
+// never captured.
+func ReadClientConversation(userAgent, clientName string, meta map[string]any) ClientConversation {
+	for _, client := range conversationClients {
+		if !client.recognizes(userAgent, clientName) {
+			continue
+		}
+		conversation := ClientConversation{HandleFree: client.handleFree}
+		value, _ := meta[client.key].(string)
+		if id, ok := client.normalize(value); ok {
+			conversation.SessionID = deriveSessionID(client.key + ":" + id)
+		}
+		return conversation
+	}
+	return ClientConversation{}
+}
+
+type conversationClient struct {
+	key        string
+	userAgent  *regexp.Regexp
+	names      []string
+	normalize  func(string) (string, bool)
+	handleFree bool
+}
+
+var conversationClients = []conversationClient{
+	{
+		key:        "openai/session",
+		userAgent:  regexp.MustCompile(`(?i)^openai-mcp/[^\s(]*\s*\(\s*chatgpt\s*[;,)]`),
+		normalize:  printableASCII,
+		handleFree: true,
+	},
+	{
+		key:       "sessionId",
+		userAgent: regexp.MustCompile(`(?i)^codex-mcp-client/`),
+		names:     []string{"codex-mcp-client"},
+		normalize: lowercaseUUID,
+	},
+	{
+		key:       "vscode.conversationId",
+		userAgent: regexp.MustCompile(`(?i)^visual studio code( - insiders)?/`),
+		names:     []string{"Visual Studio Code", "Visual Studio Code - Insiders"},
+		normalize: lowercaseUUID,
+	},
+}
+
+func (c conversationClient) recognizes(userAgent, clientName string) bool {
+	return c.userAgent.MatchString(userAgent) ||
+		slices.ContainsFunc(c.names, func(name string) bool { return strings.EqualFold(name, clientName) })
+}
+
+func printableASCII(value string) (string, bool) {
+	if len(value) < 1 || len(value) > 128 {
+		return "", false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] > 0x7e {
+			return "", false
+		}
+	}
+	return value, true
+}
+
+func lowercaseUUID(value string) (string, bool) {
+	value = strings.ToLower(value)
+	return value, uuidPattern.MatchString(value) && value != "00000000-0000-0000-0000-000000000000"
+}
+
+// WithCallContext returns ctx carrying a tool call's session and identity as a
+// posthog.RequestContext, so a custom event the call's handler captures with
+// posthog.EnqueueWithContext carries the call's $session_id,
+// $mcp_session_source, and distinct ID. Without a distinctID, the session is
+// the distinct ID and no person profile is processed, as on the call's own
+// events, unless ctx already carries a distinct ID.
+func WithCallContext(ctx context.Context, sessionID string, source SessionSource, distinctID string) context.Context {
+	scope := posthog.RequestContext{
+		DistinctId: distinctID,
+		SessionId:  sessionID,
+		Properties: posthog.Properties{propertySessionSource: string(source)},
+	}
+	if outer, _ := posthog.RequestContextFromContext(ctx); distinctID == "" && outer.DistinctId == "" {
+		scope.DistinctId = sessionID
+		scope.Options = posthog.Options{optionProcessProfile: false}
+	}
+	return posthog.WithRequestContext(ctx, scope)
 }

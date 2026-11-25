@@ -45,6 +45,12 @@ type ToolCall struct {
 	// SessionID is captured as $session_id and is the distinct ID fallback. A
 	// valid ConversationID replaces it with the session derived from the handle.
 	SessionID string
+	// SessionSource is captured as $mcp_session_source. A valid
+	// ConversationID replaces SessionID and sets it to SessionSourceConversation,
+	// unless it is SessionSourceHost, which keeps SessionID and the handle, or
+	// SessionSourceClientMetadata, which keeps SessionID and drops the handle.
+	// A call with no session at all gets a generated one.
+	SessionSource SessionSource
 	// Groups is captured as $groups on both events.
 	Groups posthog.Groups
 	// SetProperties is captured as $set on $mcp_tool_call. It needs an explicit
@@ -122,3 +128,22 @@ type ToolCall struct {
 	// the time it enqueues the event.
 	Timestamp time.Time
 }
+
+// SessionSource says what produced an event's $session_id, captured as
+// $mcp_session_source.
+type SessionSource string
+
+const (
+	// SessionSourceHost means the server's own session resolver chose the session.
+	SessionSourceHost SessionSource = "host"
+	// SessionSourceClientMetadata means a client conversation id in the
+	// request's _meta chose it. See ReadClientConversation.
+	SessionSourceClientMetadata SessionSource = "client_metadata"
+	// SessionSourceConversation means a conversation handle chose it.
+	SessionSourceConversation SessionSource = "conversation"
+	// SessionSourceTransport means a transport session id chose it.
+	SessionSourceTransport SessionSource = "transport"
+	// SessionSourceGenerated means the SDK generated it, for a one-client
+	// connection or a single request.
+	SessionSourceGenerated SessionSource = "generated"
+)

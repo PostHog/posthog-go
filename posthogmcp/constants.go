@@ -31,6 +31,7 @@ const (
 	propertyProtocolVersion     = "$mcp_protocol_version"
 	propertyInputRequestMethods = "$mcp_input_request_methods"
 	propertySessionID           = "$session_id"
+	propertySessionSource       = "$mcp_session_source"
 	propertyExceptionLevel      = "$exception_level"
 	propertyExceptionSource     = "$exception_source"
 	propertyGroups              = "$groups"
