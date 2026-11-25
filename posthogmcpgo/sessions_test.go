@@ -3,6 +3,7 @@ package posthogmcpgo
 import (
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -169,4 +171,58 @@ func TestGeneratedSessionSpansALongCall(t *testing.T) {
 			assert.Equal(t, test.wantSame, first == next)
 		})
 	}
+}
+
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// mcp-go's stdio worker recovers a handler's panic, so neither call hook
+// runs, and the call must still end.
+func TestAPanickingCallStillEndsItsSession(t *testing.T) {
+	queue := &fakeQueue{}
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	s := server.NewMCPServer("weather-server", "1.2.3",
+		Instrument(posthogmcp.New(queue), func(cfg *config) { cfg.now = clock.Now }))
+	var calls atomic.Int32
+	s.AddTool(weatherTool(), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if calls.Add(1) == 1 {
+			panic("boom")
+		}
+		return mcp.NewToolResultText("sunny"), nil
+	})
+	c := connectStdio(t, s)
+
+	// The recovered panic is answered without the request's id, so the client
+	// never sees it.
+	timeout, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	panicking := mcp.CallToolRequest{}
+	panicking.Params.Name = "weather"
+	panicking.Params.Arguments = map[string]any{"city": "Melbourne"}
+	_, err := c.CallTool(timeout, panicking)
+	require.Error(t, err)
+	for range 2 {
+		clock.advance(sessionInactivityTimeout + time.Minute)
+		_, err = callTool(t, c, "weather", map[string]any{"city": "Melbourne"})
+		require.NoError(t, err)
+	}
+
+	captures := queue.toolCalls()
+	require.Len(t, captures, 2)
+	assert.NotEqual(t, captures[0].Properties["$session_id"], captures[1].Properties["$session_id"],
+		"a call after the timeout starts a new session")
 }

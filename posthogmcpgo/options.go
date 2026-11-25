@@ -2,6 +2,7 @@ package posthogmcpgo
 
 import (
 	"context"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	posthog "github.com/posthog/posthog-go/v2"
@@ -56,6 +57,7 @@ type config struct {
 	captureModel      bool
 	serverName        string
 	serverVersion     string
+	now               func() time.Time
 }
 
 func defaultConfig(analytics *posthogmcp.Analytics) *config {
@@ -65,6 +67,7 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 		captureResponses:  true,
 		contextParameter:  true,
 		captureModel:      true,
+		now:               time.Now,
 	}
 }
 
