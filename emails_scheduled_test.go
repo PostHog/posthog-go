@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -337,14 +338,34 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 	}
 	type attempt struct {
 		reply func() *http.Response
+		fail  error
 		takes time.Duration
 	}
 	tests := []struct {
 		name     string
+		key      string
 		after    time.Duration
 		attempts []attempt
 		wantCode string
 	}{
+		{
+			// PostHog chose to send at once when the request arrived, before the
+			// answer came back 15 seconds later.
+			name:     "a slow first answer",
+			after:    70 * time.Second,
+			attempts: []attempt{{reply: queuedNow("false"), takes: 15 * time.Second}},
+			wantCode: "schedule_not_confirmed",
+		},
+		{
+			// No answer at all may still mean PostHog queued the email.
+			name:  "no answer, then a replay close to the time",
+			after: 80 * time.Second,
+			attempts: []attempt{
+				{fail: errors.New("timeout awaiting response headers"), takes: 30 * time.Second},
+				{reply: queuedNow("true"), takes: time.Second},
+			},
+			wantCode: "schedule_not_confirmed",
+		},
 		{
 			// The cut-off first answer may have sent the email at once, 90 seconds
 			// before ScheduledAt minus the allowed skew.
@@ -372,9 +393,10 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 			wantCode: "schedule_not_confirmed",
 		},
 		{
-			// An earlier request still holds the key, so it may have queued the
-			// email before this send's retry.
+			// An earlier send with the caller's key still holds it, so it may have
+			// queued the email before this send's retry.
 			name:  "keys in flight, then a replay close to the time",
+			key:   "trial-ending:user_123",
 			after: 80 * time.Second,
 			attempts: []attempt{
 				{reply: func() *http.Response {
@@ -440,11 +462,18 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 					next := tt.attempts[n]
 					n++
 					clock = clock.Add(next.takes)
+					if next.fail != nil {
+						return nil, next.fail
+					}
 					return next.reply(), nil
 				})
+				// The fake's attempts take minutes on the sender's clock, not on
+				// the request deadline's.
+				config.EmailRequestTimeout = 5 * time.Minute
 			})
 			senderOf(client).now = func() time.Time { return clock }
 			email := templateEmail()
+			email.IdempotencyKey = tt.key
 			email.ScheduledAt = testClientNow.Add(tt.after)
 
 			_, err := client.Emails().Send(context.Background(), email)
