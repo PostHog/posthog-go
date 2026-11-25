@@ -721,7 +721,10 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
-		if _, exists := evaluationCache[depFlagKey]; exists {
+		if cached, exists := evaluationCache[depFlagKey]; exists {
+			if serverErr, ok := cached.(*RequiresServerEvaluationError); ok {
+				return false, serverErr
+			}
 			continue
 		}
 
@@ -735,17 +738,30 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{msg: "Flag dependency has experience continuity enabled", Reason: UnresolvedFlagReasonUnresolvedDependency}
 			}
+			// A cycle the dependency chains don't report, or a very long chain, would
+			// otherwise recurse without bound.
+			if inputs.dependencyDepth >= maxFlagDependencyDepth {
+				evaluationCache[depFlagKey] = nil
+				return false, &InconclusiveMatchError{
+					msg:    fmt.Sprintf("Flag dependency chain is deeper than the limit of %d", maxFlagDependencyDepth),
+					Reason: UnresolvedFlagReasonUnresolvedDependency,
+				}
+			}
 			// Evaluate the dependency as if it were evaluated directly with the same inputs,
 			// so it uses its own aggregation, properties and bucketing identifier.
+			inputs.dependencyDepth++
 			result, err := poller.computeFlagFromInputs(depFlag, inputs, evaluationCache, true, state)
+			inputs.dependencyDepth--
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
 				if isServerEvalError(err) {
-					return false, &RequiresServerEvaluationError{
+					serverErr := &RequiresServerEvaluationError{
 						msg:    fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
 						Reason: UnresolvedFlagReasonUnresolvedDependency,
 					}
+					evaluationCache[depFlagKey] = serverErr
+					return false, serverErr
 				}
 				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{
@@ -759,6 +775,9 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 
 	// Check if the dependency result matches the expected value and operator
 	cachedResult, exists := evaluationCache[property.Key]
+	if serverErr, ok := cachedResult.(*RequiresServerEvaluationError); ok {
+		return false, serverErr
+	}
 	if exists && cachedResult != nil {
 		match, err := checkFlagDependencyValue(property.Value, cachedResult)
 		if err != nil {
@@ -1603,7 +1622,14 @@ type flagEvaluationInputs struct {
 	groupProperties  map[string]Properties
 	knownAbsent      *knownAbsentPropertyKeys
 	cohorts          map[string]PropertyGroup
+	// dependencyDepth counts the flag dependencies being evaluated, so a chain is
+	// capped at maxFlagDependencyDepth.
+	dependencyDepth int
 }
+
+// maxFlagDependencyDepth caps nested flag dependency evaluation. A deeper chain is
+// inconclusive.
+const maxFlagDependencyDepth = 100
 
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,

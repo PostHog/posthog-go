@@ -1,10 +1,12 @@
 package posthog
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -647,5 +649,71 @@ func TestRepeatedReferenceToMissingDependencyKeepsReason(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		_, err := poller.evaluateFlagDependency(property, state.flagsByKey, cache, &flagEvaluationInputs{distinctId: "user-123", cohorts: state.cohorts}, state)
 		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+	}
+}
+
+// dependencyChainDefinitions defines flag-0 to flag-<length-1>, where each flag depends
+// only on the previous one and lists only it in its dependency chain.
+func dependencyChainDefinitions(length int) string {
+	flags := []string{flagDefinition("flag-0", flagCondition(100))}
+	for i := 1; i < length; i++ {
+		parent := fmt.Sprintf("flag-%d", i-1)
+		flags = append(flags, flagDefinition(fmt.Sprintf("flag-%d", i), flagCondition(100, flagDependencyFilter(parent, true, parent))))
+	}
+	return localDefinitions(flags...)
+}
+
+func TestFlagDependencyDepthLimit(t *testing.T) {
+	t.Run("a chain at the limit resolves", func(t *testing.T) {
+		got, err := computeDefinedFlag(t, dependencyChainDefinitions(maxFlagDependencyDepth+1), fmt.Sprintf("flag-%d", maxFlagDependencyDepth), nil)
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+	t.Run("a chain deeper than the limit is inconclusive", func(t *testing.T) {
+		_, err := computeDefinedFlag(t, dependencyChainDefinitions(maxFlagDependencyDepth+2), fmt.Sprintf("flag-%d", maxFlagDependencyDepth+1), nil)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
+	})
+	t.Run("a cycle the dependency chains don't report is inconclusive", func(t *testing.T) {
+		definitions := localDefinitions(
+			flagDefinition("first", flagCondition(100, flagDependencyFilter("second", true, "second"))),
+			flagDefinition("second", flagCondition(100, flagDependencyFilter("first", true, "first"))),
+		)
+		_, err := computeDefinedFlag(t, definitions, "first", nil)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
+	})
+}
+
+func TestFlagDependencyGraphEvaluatesEachDependencyOnce(t *testing.T) {
+	// Each flag requires the previous two, so evaluating a shared dependency again on
+	// every reference doubles the work with every flag.
+	branchingGraph := func(root string) string {
+		flags := []string{flagDefinition("flag-0", root), flagDefinition("flag-1", flagCondition(100))}
+		for i := 2; i < 30; i++ {
+			previous, beforePrevious := fmt.Sprintf("flag-%d", i-1), fmt.Sprintf("flag-%d", i-2)
+			flags = append(flags, flagDefinition(fmt.Sprintf("flag-%d", i), flagCondition(100,
+				flagDependencyFilter(previous, true, previous), flagDependencyFilter(beforePrevious, true, beforePrevious))))
+		}
+		return localDefinitions(flags...)
+	}
+	for _, tt := range []struct {
+		name       string
+		root       string
+		wantServer bool
+	}{
+		{"conclusive", flagCondition(100), false},
+		{"requires the server", flagCondition(100, staticCohortFilter), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			start := time.Now()
+			got, err := computeDefinedFlag(t, branchingGraph(tt.root), "flag-29", nil)
+			require.Less(t, time.Since(start), 200*time.Millisecond)
+			if tt.wantServer {
+				require.True(t, isServerEvalError(err), "%v", err)
+				requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, true, got)
+		})
 	}
 }
