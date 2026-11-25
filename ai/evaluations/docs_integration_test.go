@@ -114,17 +114,23 @@ func finish(t *testing.T, ctx context.Context, run *ev.Experiment, items, scores
 
 // TestDocumentedFlows runs the support-agent examples from posthog.com/docs/ai-evals.
 // Use a disposable project with dataset access. It leaves its scorers, dataset,
-// and experiments in that project. The personal key manages these resources.
-// The project secret key must have only offline_evaluation_ingestion:write.
+// and experiments in that project. Set POSTHOG_MANAGEMENT_API_KEY to a project
+// secret or personal key with dataset:write, llm_analytics:write, evaluation:write,
+// and offline_evaluation_ingestion:write. POSTHOG_PERSONAL_API_KEY is also accepted.
+// Set POSTHOG_PROJECT_SECRET_API_KEY to a second key with only offline_evaluation_ingestion:write.
 // Run with go test -tags=integration -run '^TestDocumentedFlows$' ./ai/evaluations.
 func TestDocumentedFlows(t *testing.T) {
 	host := os.Getenv("POSTHOG_HOST")
 	require.NotEmpty(t, host, "set POSTHOG_HOST to the host of your disposable PostHog project")
 	id, err := strconv.Atoi(os.Getenv("POSTHOG_PROJECT_ID"))
 	require.NoError(t, err)
-	personal, err := ev.NewClient(ev.Config{ProjectID: id, Host: host, SecretKey: os.Getenv("POSTHOG_PERSONAL_API_KEY")})
+	managementKey := os.Getenv("POSTHOG_MANAGEMENT_API_KEY")
+	if managementKey == "" {
+		managementKey = os.Getenv("POSTHOG_PERSONAL_API_KEY")
+	}
+	management, err := ev.NewClient(ev.Config{ProjectID: id, Host: host, SecretKey: managementKey})
 	require.NoError(t, err)
-	defer personal.Close()
+	defer management.Close()
 	ci, err := ev.NewClient(ev.Config{ProjectID: id, Host: host, SecretKey: os.Getenv("POSTHOG_PROJECT_SECRET_API_KEY")})
 	require.NoError(t, err)
 	defer ci.Close()
@@ -135,14 +141,14 @@ func TestDocumentedFlows(t *testing.T) {
 	var versions [2]string
 	var scorerIDs [2]string
 	for i, name := range []string{"Correct tool", "Correct arguments"} {
-		scorer, err := personal.Scorers.Create(ctx, name, config, ev.CreateScorerOptions{})
+		scorer, err := management.Scorers.Create(ctx, name, config, ev.CreateScorerOptions{})
 		require.NoError(t, err)
-		scorer, err = personal.Scorers.Get(ctx, scorer.ID)
+		scorer, err = management.Scorers.Get(ctx, scorer.ID)
 		require.NoError(t, err)
 		versions[i] = scorer.CurrentVersionID
 		scorerIDs[i] = scorer.ID
 	}
-	baseline, err := personal.CreateExperiment(ctx, ev.Fields{
+	baseline, err := management.CreateExperiment(ctx, ev.Fields{
 		"name": "Support agent baseline", "suite_key": "support-agent", "run_source": "local",
 		"expected_item_count": 6, "expected_result_count": 12,
 	})
@@ -156,14 +162,14 @@ func TestDocumentedFlows(t *testing.T) {
 	}
 	finish(t, ctx, baseline, 6, 12)
 
-	dataset, err := personal.Datasets.Create(ctx, ev.Fields{"name": "Go docs cases " + baseline.ID()})
+	dataset, err := management.Datasets.Create(ctx, ev.Fields{"name": "Go docs cases " + baseline.ID()})
 	require.NoError(t, err)
 	t.Run("pinned dataset", func(t *testing.T) {
-		runDataset(t, ctx, personal, dataset.ID, versions)
+		runDataset(t, ctx, management, dataset.ID, versions)
 	})
-	composite, inputs := createComposite(t, ctx, personal, versions)
+	composite, inputs := createComposite(t, ctx, management, versions)
 	t.Run("composite scorer", func(t *testing.T) {
-		grouped, err := personal.CreateExperiment(ctx, ev.Fields{
+		grouped, err := management.CreateExperiment(ctx, ev.Fields{
 			"name": "Support agent with composite", "suite_key": "support-agent", "run_source": "local",
 			"expected_item_count": 6, "expected_result_count": 18,
 		})
@@ -174,22 +180,22 @@ func TestDocumentedFlows(t *testing.T) {
 		finish(t, ctx, grouped, 6, 18)
 	})
 	t.Run("ingestion key and corrections", func(t *testing.T) {
-		runCI(t, ctx, ci, personal, scorerIDs[0], dataset.ID, inputs, composite)
+		runCI(t, ctx, ci, management, scorerIDs[0], dataset.ID, inputs, composite)
 	})
 	t.Run("score types and evaluator errors", func(t *testing.T) {
-		runScoreTypes(t, ctx, personal, inputs)
+		runScoreTypes(t, ctx, management, inputs)
 	})
 }
 
-func runDataset(t *testing.T, ctx context.Context, personal *ev.Client, datasetID string, versions [2]string) {
+func runDataset(t *testing.T, ctx context.Context, management *ev.Client, datasetID string, versions [2]string) {
 	t.Helper()
 	for _, c := range cases {
-		_, err := personal.Datasets.CreateItem(ctx, datasetID, ev.Fields{
+		_, err := management.Datasets.CreateItem(ctx, datasetID, ev.Fields{
 			"client_item_id": c.key, "input": c.input, "expected_output": c.expected.jsonFields(),
 		})
 		require.NoError(t, err)
 	}
-	snapshot, err := personal.Datasets.Snapshot(ctx, datasetID, nil)
+	snapshot, err := management.Datasets.Snapshot(ctx, datasetID, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, len(cases), snapshot.Revision())
 	t.Logf("dataset %s pinned at revision %d (%s)", datasetID, snapshot.Revision(), snapshot.RevisionID())
@@ -200,7 +206,7 @@ func runDataset(t *testing.T, ctx context.Context, personal *ev.Client, datasetI
 	})
 	require.NoError(t, err)
 	require.Len(t, items, 6)
-	pinned, err := personal.CreateExperiment(ctx, ev.Fields{
+	pinned, err := management.CreateExperiment(ctx, ev.Fields{
 		"name": "Support agent from a dataset", "suite_key": "support-agent", "run_source": "local",
 		"dataset_revision_id": snapshot.RevisionID(),
 	})
@@ -223,7 +229,7 @@ func runDataset(t *testing.T, ctx context.Context, personal *ev.Client, datasetI
 	finish(t, ctx, pinned, 6, 12)
 }
 
-func createComposite(t *testing.T, ctx context.Context, personal *ev.Client, versions [2]string) (string, [2]string) {
+func createComposite(t *testing.T, ctx context.Context, management *ev.Client, versions [2]string) (string, [2]string) {
 	t.Helper()
 	comp := ev.Composition{
 		Expression: "tool_correct and arguments_correct",
@@ -232,12 +238,12 @@ func createComposite(t *testing.T, ctx context.Context, personal *ev.Client, ver
 			{Alias: "arguments_correct", ScorerVersionID: versions[1]},
 		},
 	}
-	valid, err := personal.Scorers.ValidateComposition(ctx, "boolean", comp, nil)
+	valid, err := management.Scorers.ValidateComposition(ctx, "boolean", comp, nil)
 	require.NoError(t, err)
 	require.True(t, valid)
-	composite, err := personal.Scorers.Create(ctx, "Support task passed", ev.BooleanConfig{TrueIsFailure: ev.Value(false)}, ev.CreateScorerOptions{Calculation: "composite", Composition: &comp})
+	composite, err := management.Scorers.Create(ctx, "Support task passed", ev.BooleanConfig{TrueIsFailure: ev.Value(false)}, ev.CreateScorerOptions{Calculation: "composite", Composition: &comp})
 	require.NoError(t, err)
-	composite, err = personal.Scorers.Get(ctx, composite.ID)
+	composite, err = management.Scorers.Get(ctx, composite.ID)
 	require.NoError(t, err)
 	aliases := map[string]string{}
 	for _, input := range composite.InputScorers {
@@ -248,7 +254,7 @@ func createComposite(t *testing.T, ctx context.Context, personal *ev.Client, ver
 	return composite.CurrentVersionID, compositeVersions
 }
 
-func runCI(t *testing.T, ctx context.Context, ci, personal *ev.Client, scorerID, datasetID string, inputs [2]string, composite string) {
+func runCI(t *testing.T, ctx context.Context, ci, management *ev.Client, scorerID, datasetID string, inputs [2]string, composite string) {
 	t.Helper()
 	// An ingestion-only CI job receives the pinned versions from the setup job.
 	requireRejectedRead := func(err error) {
@@ -272,8 +278,8 @@ func runCI(t *testing.T, ctx context.Context, ci, personal *ev.Client, scorerID,
 	second, _ := uploadGroup(t, ctx, ciRun, cases[1], inputs, composite, nil)
 	finish(t, ctx, ciRun, 2, 6)
 
-	// Corrections use the stored IDs and the current revision from a personal key.
-	edit, err := personal.ResumeExperiment(ciRun.ID())
+	// Corrections use the stored IDs and the current revision from the management client.
+	edit, err := management.ResumeExperiment(ciRun.ID())
 	require.NoError(t, err)
 	rev, err := edit.GetItemRevision(ctx, first.ID())
 	require.NoError(t, err)

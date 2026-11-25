@@ -1,7 +1,9 @@
 // Package evaluations manages AI datasets, scorer definitions, and offline
 // experiments through the acknowledged PostHog project API.
 //
-// Use a personal API key to manage datasets and scorers. An ingestion key with
+// Set Config.SecretKey to a project secret API key for the configured project or a
+// personal API key. Dataset and scorer management use dataset and llm_analytics
+// scopes respectively. A key with
 // offline_evaluation_ingestion:write can create runs, submit outcomes and close
 // runs using previously saved dataset and scorer version IDs. All network calls
 // take a context and return after acknowledgment. Use errors.As to inspect an
