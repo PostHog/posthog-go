@@ -153,6 +153,7 @@ func TestGeneratedSessionSpansALongCall(t *testing.T) {
 	}{
 		{name: "a call that runs past the timeout keeps its session", completedAt: 40 * time.Minute, nextArriveAt: 41 * time.Minute, wantSame: true},
 		{name: "inactivity after a completed call rotates the session", completedAt: time.Minute, nextArriveAt: 32 * time.Minute},
+		{name: "a call arriving while another runs past the timeout keeps its session", completedAt: 50 * time.Minute, nextArriveAt: 35 * time.Minute, wantSame: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sessions := newSessionResolver()
@@ -160,7 +161,9 @@ func TestGeneratedSessionSpansALongCall(t *testing.T) {
 			arrived := time.Now()
 
 			first := sessions.resolve(session, arrived)
-			sessions.touch(session, arrived.Add(test.completedAt))
+			if test.nextArriveAt > test.completedAt {
+				sessions.finish(session, arrived.Add(test.completedAt))
+			}
 			next := sessions.resolve(session, arrived.Add(test.nextArriveAt))
 
 			assert.Equal(t, test.wantSame, first == next)

@@ -114,14 +114,18 @@ func TestIdleGeneratedSessionsAreEvicted(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
 	resolver := newSessionResolver(clock.Now)
 	idle, active := &mcpsdk.ServerSession{}, &mcpsdk.ServerSession{}
-	resolver.resolve(idle, false)
-	resolver.resolve(active, false)
+	call := func(session *mcpsdk.ServerSession) {
+		resolver.resolve(session, false)
+		resolver.finish(session)
+	}
+	call(idle)
+	call(active)
 	require.Len(t, resolver.generated, 2)
 
 	clock.advance(sessionInactivityTimeout - time.Minute)
-	resolver.resolve(active, false)
+	call(active)
 	clock.advance(2 * time.Minute)
-	resolver.resolve(active, false)
+	call(active)
 
 	assert.Len(t, resolver.generated, 1)
 	assert.Contains(t, resolver.generated, active)
@@ -212,4 +216,36 @@ func TestGeneratedSessionIdleIsMeasuredFromTheEndOfTheLastCall(t *testing.T) {
 	require.Len(t, captures, 2)
 	assert.Equal(t, captures[0].Properties["$session_id"], captures[1].Properties["$session_id"],
 		"10 minutes after the last call ended is the same session")
+}
+
+func TestGeneratedSessionSpansACallStillRunning(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		completedAt  time.Duration
+		nextArriveAt time.Duration
+		wantSame     bool
+	}{
+		{name: "a call arriving while another runs past the timeout keeps its session", completedAt: 50 * time.Minute, nextArriveAt: 35 * time.Minute, wantSame: true},
+		{name: "a call that runs past the timeout keeps its session", completedAt: 40 * time.Minute, nextArriveAt: 41 * time.Minute, wantSame: true},
+		{name: "inactivity after a completed call rotates the session", completedAt: time.Minute, nextArriveAt: 32 * time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			arrived := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+			clock := &fakeClock{now: arrived}
+			sessions := newSessionResolver(clock.Now)
+			session := &mcpsdk.ServerSession{}
+
+			first := sessions.resolve(session, false)
+			if test.nextArriveAt > test.completedAt {
+				clock.advance(test.completedAt)
+				sessions.finish(session)
+				clock.advance(test.nextArriveAt - test.completedAt)
+			} else {
+				clock.advance(test.nextArriveAt)
+			}
+			next := sessions.resolve(session, false)
+
+			assert.Equal(t, test.wantSame, first == next)
+		})
+	}
 }

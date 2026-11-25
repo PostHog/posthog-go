@@ -265,3 +265,18 @@ func TestAnonymousCustomEventsUseTheCallsDistinctID(t *testing.T) {
 		})
 	}
 }
+
+// go-sdk v1.8 and later read a 2026-07-28 request's own clientInfo, which can
+// name a different client than the session's initialize did.
+func TestClientConversationPrefersTheRequestsClientInfo(t *testing.T) {
+	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Meta: mcpsdk.Meta{
+		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "Visual Studio Code", "version": "1.105.0"},
+		"vscode.conversationId":                   "3f1c2b7e-8d4a-4c6b-9a1e-5f2d7c8b9a0e",
+	}}}
+	if _, ok := any(req).(interface{ ClientInfo() *mcpsdk.Implementation }); !ok {
+		t.Skip("this go-sdk version reads client info only from initialize")
+	}
+	assert.Equal(t, "Visual Studio Code", clientInfo(req).Name)
+	assert.Equal(t, vsCodeSession, clientConversation(req, req.Params.Meta).SessionID)
+}

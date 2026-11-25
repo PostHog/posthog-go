@@ -108,6 +108,7 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 		}
 		tool, _ := in.registeredTool(ctx, req.Params.Name)
 		started := in.startCall(ctx, tool, req)
+		defer func() { in.sessions.finish(server.ClientSessionFromContext(ctx), time.Now()) }()
 		result, err := next(started.scoped(ctx), dispatch)
 		in.observe(ctx, req, result, err, started)
 		return result, err
@@ -265,6 +266,9 @@ func (in *instrumentation) resolveIdentity(ctx context.Context, req mcp.CallTool
 func (in *instrumentation) afterCall(ctx context.Context, _ any, req *mcp.CallToolRequest, result any) {
 	defer in.recoverHook(ctx, "after tools/call")
 	started, ok := in.calls.finish(req)
+	if ok {
+		in.sessions.finish(server.ClientSessionFromContext(ctx), time.Now())
+	}
 	if toolResult, isToolResult := result.(*mcp.CallToolResult); ok && isToolResult {
 		in.observe(ctx, *req, toolResult, nil, started)
 	}
@@ -281,6 +285,7 @@ func (in *instrumentation) callFailed(ctx context.Context, _ any, method mcp.MCP
 	}
 	started, ok := in.calls.finish(req)
 	if ok {
+		in.sessions.finish(server.ClientSessionFromContext(ctx), time.Now())
 		// mcp-go wraps the handler's error in its own request error.
 		if handlerErr := errors.Unwrap(err); handlerErr != nil {
 			err = handlerErr
@@ -322,7 +327,6 @@ func (in *instrumentation) captureToolCall(
 	started callStart,
 ) error {
 	session := server.ClientSessionFromContext(ctx)
-	in.sessions.touch(session, time.Now())
 	info := started.tool
 	raw := rawArguments(req.Params)
 	arguments := parseArguments(raw)

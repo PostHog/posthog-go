@@ -36,6 +36,9 @@ type sessionResolver struct {
 type generatedSession struct {
 	id           string
 	lastActivity time.Time
+	// running counts the calls in flight, during which the session never
+	// expires: the timeout counts from when the last call ended.
+	running int
 }
 
 func newSessionResolver(now func() time.Time) *sessionResolver {
@@ -57,10 +60,11 @@ func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped b
 	if entry.id == "" && len(r.generated) >= maxGeneratedSessions {
 		r.evictOldest()
 	}
-	if entry.id == "" || now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+	if entry.id == "" || entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
 		entry.id = newGeneratedSessionID()
 	}
 	entry.lastActivity = now
+	entry.running++
 	r.generated[session] = entry
 	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}
 }
@@ -99,7 +103,7 @@ func (r *sessionResolver) sweep(now time.Time) {
 	}
 	r.lastSweep = now
 	for session, entry := range r.generated {
-		if now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+		if entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
 			delete(r.generated, session)
 		}
 	}
@@ -125,13 +129,14 @@ func fnv1aHex(input string) string {
 	return fmt.Sprintf("%08x%08x", lane1, lane2)
 }
 
-// touch records a call's end as activity on a one-client session, so the
-// inactivity timeout counts from when the last call ended.
-func (r *sessionResolver) touch(session *mcpsdk.ServerSession) {
+// finish records the end of a call that resolve started on a one-client
+// session.
+func (r *sessionResolver) finish(session *mcpsdk.ServerSession) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if entry, ok := r.generated[session]; ok {
 		entry.lastActivity = r.now()
+		entry.running = max(entry.running-1, 0)
 		r.generated[session] = entry
 	}
 }

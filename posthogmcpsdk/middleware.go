@@ -111,6 +111,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				return next(ctx, method, req)
 			}
 			call := m.prepare(ctx, next, toolRequest)
+			defer m.sessions.finish(toolRequest.Session)
 			started := time.Now()
 			result, handlerErr := next(call.scoped(ctx), method, call.dispatch)
 			if call.missingCapability {
@@ -123,7 +124,6 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				}
 			}
 			delivered := m.deliverConversation(ctx, &call, result, handlerErr)
-			m.sessions.touch(toolRequest.Session)
 			m.observeSafely(ctx, call, result, handlerErr, started)
 			return delivered, handlerErr
 		default:
@@ -215,7 +215,17 @@ func clientConversation(req mcpsdk.Request, meta mcpsdk.Meta) posthogmcp.ClientC
 	return posthogmcp.ReadClientConversation(userAgent, clientInfo(req).Name, meta)
 }
 
+// clientInfo is the client req names itself, which go-sdk v1.8 and later read
+// from a 2026-07-28 request's _meta, else the one that initialized its session.
+// The accessor is asserted by name so the adapter still builds against
+// go-sdk v1.6.1.
 func clientInfo(req mcpsdk.Request) mcpsdk.Implementation {
+	if request, ok := req.(interface{ ClientInfo() *mcpsdk.Implementation }); ok {
+		if info := request.ClientInfo(); info != nil {
+			return *info
+		}
+		return mcpsdk.Implementation{}
+	}
 	session, _ := req.GetSession().(*mcpsdk.ServerSession)
 	if session == nil {
 		return mcpsdk.Implementation{}
