@@ -441,14 +441,19 @@ type parsedPropertyValue struct {
 
 // usesKnownAbsentOf reports whether the leaf reads properties of the evaluated
 // aggregation, so that aggregation's known-absent keys apply to it. A person leaf
-// belongs to person aggregation and a group leaf to its own group type. No other
-// leaf type, such as person_metadata, resolves from a listing.
+// belongs to person aggregation and a group leaf to its own group type. Like the
+// flags service, a group leaf without a group_type_index reads the group the
+// condition aggregates on. No other leaf type, such as person_metadata, resolves
+// from a listing.
 func (pv *parsedPropertyValue) usesKnownAbsentOf(aggregationGroupTypeIndex *uint8) bool {
 	switch pv.Property.Type {
 	case "person":
 		return aggregationGroupTypeIndex == nil
 	case "group":
-		return pv.GroupTypeIndex != nil && uint8PtrEqual(pv.GroupTypeIndex, aggregationGroupTypeIndex)
+		if pv.GroupTypeIndex == nil {
+			return aggregationGroupTypeIndex != nil
+		}
+		return uint8PtrEqual(pv.GroupTypeIndex, aggregationGroupTypeIndex)
 	}
 	return false
 }

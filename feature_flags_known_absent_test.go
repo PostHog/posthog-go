@@ -659,3 +659,40 @@ func TestKnownAbsentFlagDependencyAcrossAggregationsStaysUnresolved(t *testing.T
 		})
 	}
 }
+
+func TestKnownAbsentGroupFilterWithoutIndexUsesConditionGroupType(t *testing.T) {
+	groups := Groups{"organization": "acme"}
+	enterprise := map[string]Properties{"organization": {"tier": "enterprise"}}
+	orgTierAbsent := newKnownAbsentPropertyKeys(nil, map[string][]string{"organization": {"tier"}})
+	for _, tt := range []struct {
+		name   string
+		filter string
+		want   bool
+	}{
+		{"exact", `{"key": "tier", "type": "group", "operator": "exact", "value": "enterprise"}`, false},
+		{"is_not_set", `{"key": "tier", "type": "group", "operator": "is_not_set"}`, true},
+	} {
+		t.Run("condition filter/"+tt.name, func(t *testing.T) {
+			legacyTier := `{"key": "legacy-tier", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` + flagCondition(100, tt.filter) + `]}}`
+			got, err := computeKnownAbsentFlag(t, knownAbsentDefinitions(legacyTier), "legacy-tier", groups, nil, enterprise, orgTierAbsent)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+		t.Run("cohort leaf/"+tt.name, func(t *testing.T) {
+			legacyTier := `{"key": "legacy-tier", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [` +
+				flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`) + `]}}`
+			definitions := `{"flags": [` + legacyTier + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
+				`, "cohorts": {"1": {"type": "AND", "values": [{"type": "AND", "values": [` + tt.filter + `]}]}}}`
+			got, err := computeKnownAbsentFlag(t, definitions, "legacy-tier", groups, nil, enterprise, orgTierAbsent)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+	t.Run("cohort leaf in a person condition", func(t *testing.T) {
+		personFlag := flagDefinition("person-flag", flagCondition(100, `{"key": "id", "type": "cohort", "value": 1}`))
+		definitions := `{"flags": [` + personFlag + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
+			`, "cohorts": {"1": {"type": "AND", "values": [{"key": "tier", "type": "group", "operator": "is_not_set"}]}}}`
+		_, err := computeKnownAbsentFlag(t, definitions, "person-flag", groups, nil, enterprise, orgTierAbsent)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
+	})
+}
