@@ -343,18 +343,6 @@ func (r *batchRun) settle(i int, slot emailReply) {
 	}
 }
 
-// keysInFlight is PostHog's 409 for keys an earlier request still holds.
-func keysInFlight(err *EmailError) bool {
-	return err.Code == "idempotency_key_in_flight" && err.StatusCode == http.StatusConflict
-}
-
-// mayHaveQueued is an attempt's error after which PostHog may still have
-// queued the emails: no answer, a cut-off answer, a 5xx, a 2xx the client
-// couldn't read, or keys an earlier request still holds.
-func mayHaveQueued(err *EmailError) bool {
-	return err.Code == "network_error" || keysInFlight(err) || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
-}
-
 func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error) {
 	if isNilEmail(batch) {
 		return nil, newEmailError("invalid_form", "Batch needs a TemplateEmailBatch or a CodeEmailBatch.", nil)
