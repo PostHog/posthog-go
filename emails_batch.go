@@ -105,8 +105,8 @@ type BatchEmailResult struct {
 	Replayed bool
 	// Error says why the email is not "queued". For an "unconfirmed" email,
 	// its Code is "delivery_unavailable", "idempotency_key_in_flight" or
-	// "api_error", or PostHog's refusal of a retry after a lost answer, and
-	// its Fix says to send it again with the same key.
+	// "api_error", or PostHog's answer to a retry after a lost one, and its
+	// Fix says to send it again with the same key.
 	Error *EmailError
 }
 
@@ -285,7 +285,7 @@ func (r *batchRun) failAll(err, sent *EmailError) {
 	reason, status := err, "failed"
 	if r.lost {
 		status, reason = "unconfirmed", unconfirmedEmail("")
-		if !mayHaveQueued(sent) || keysInFlight(sent) {
+		if sent.StatusCode >= http.StatusMultipleChoices {
 			// PostHog answered the last attempt: keep its answer.
 			kept := *sent
 			kept.Fix = resendWithTheSameKey
@@ -432,10 +432,12 @@ func (s *emailSender) logWarnings(warnings []EmailWarning) {
 // batchReplyError is a batch request that failed as a whole.
 func batchReplyError(reply emailReply, recipients int) *EmailError {
 	err := reply.error()
-	if reply.status == http.StatusRequestEntityTooLarge && err.Fix == "" {
-		err.Fix = "Split the recipients into smaller batches."
+	if reply.status == http.StatusRequestEntityTooLarge {
+		// Splitting can't shrink a batch of one, whatever PostHog advises.
 		if recipients == 1 {
 			err.Fix = "Make this recipient's email smaller."
+		} else if err.Fix == "" {
+			err.Fix = "Split the recipients into smaller batches."
 		}
 	}
 	if reply.status == http.StatusNotFound && reply.text("code") == "" {

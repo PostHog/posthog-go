@@ -317,6 +317,13 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 			recipients: 1,
 		},
 		{
+			name:       "a 413 for one recipient with PostHog's split fix",
+			status:     http.StatusRequestEntityTooLarge,
+			body:       `{"code":"content_too_large","detail":"The batch is larger than PostHog takes.","fix":"Split the recipients into smaller batches."}`,
+			fix:        "Make this recipient's email smaller.",
+			recipients: 1,
+		},
+		{
 			name:   "shared content too large, which splitting doesn't help",
 			status: http.StatusBadRequest,
 			body:   `{"code":"content_too_large","detail":"The shared content is larger than PostHog takes."}`,
@@ -344,6 +351,23 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 			require.Len(t, result.Results, count)
 		})
 	}
+}
+
+func TestEmailsBatchSendsAnOversizedBatchToPostHogInOneRequest(t *testing.T) {
+	server := newBatchServer(t, func(int, batchRequest) stubReply {
+		return stubReply{status: http.StatusRequestEntityTooLarge, body: `{"code":"content_too_large","detail":"The batch is larger than PostHog takes."}`}
+	})
+	client := newEmailClientFor(t, server.URL)
+	recipients := recipientsTo(2)
+	for i := range recipients {
+		recipients[i].TemplateData = map[string]interface{}{"pad": strings.Repeat("x", 3<<20)}
+	}
+
+	_, err := client.Emails().Batch(context.Background(), templateBatch(recipients...))
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, requireEmailError(t, err).StatusCode, "PostHog, not the client, judges the size")
+	require.Len(t, server.received(), 1)
+	require.Len(t, server.received()[0].recipients(), 2)
 }
 
 func TestEmailsBatchWaitsLongerThanASend(t *testing.T) {
@@ -505,7 +529,7 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 		{name: "a rate limit", callCode: "rate_limited", errorCode: "rate_limited", detail: "Slow down.", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}},
 		{name: "a refusal", callCode: "quota_limited", errorCode: "quota_limited", detail: "Over quota.", last: stubReply{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}},
 		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", last: failed(http.StatusConflict, "idempotency_key_in_flight")},
-		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
+		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", detail: "PostHog said no.", last: failed(http.StatusServiceUnavailable, "delivery_unavailable")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
