@@ -151,7 +151,7 @@ func ExampleEmails_Get() {
 
 // trialEnds stands in for your database, where the time each user's trial
 // ends is stored once, when the trial starts.
-var trialEnds = map[string]time.Time{"user_123": time.Now().UTC().Truncate(time.Minute).AddDate(0, 0, 5)}
+var trialEnds = map[string]time.Time{"user_123": time.Date(2027, time.March, 6, 9, 0, 0, 0, time.UTC)}
 
 func storedTrialEnd(userID string) time.Time {
 	return trialEnds[userID]
