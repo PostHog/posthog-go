@@ -616,6 +616,7 @@ func TestEmailsBatchFailsRecipientsOfARefusalWithoutKeysInFlight(t *testing.T) {
 	}{
 		{name: "a 401 with the in-flight code", reply: failed(http.StatusUnauthorized, "idempotency_key_in_flight")},
 		{name: "a 409 with a readable code", reply: failed(http.StatusConflict, "api_error")},
+		{name: "a 409 with the SDK's network_error code", reply: failed(http.StatusConflict, "network_error")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
