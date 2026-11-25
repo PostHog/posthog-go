@@ -524,6 +524,36 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 	})
 }
 
+func TestEmailsBatchWordsAnUndecidedSlotWithoutDetailAsUnconfirmed(t *testing.T) {
+	slotsWithoutDetail := []struct{ name, code, slot string }{
+		{name: "an empty error", code: "api_error", slot: `{"message_id":"m-1","error":{}}`},
+		{name: "a 503", code: "delivery_unavailable", slot: `{"message_id":"m-1","error":{"code":"delivery_unavailable","status":503}}`},
+		{name: "keys in flight", code: "idempotency_key_in_flight", slot: `{"message_id":"m-1","error":{"code":"idempotency_key_in_flight","status":409}}`},
+	}
+	for _, lost := range []bool{false, true} {
+		for _, tt := range slotsWithoutDetail {
+			t.Run(fmt.Sprintf("%s, lost answer first: %v", tt.name, lost), func(t *testing.T) {
+				server := newBatchServer(t, func(n int, r batchRequest) stubReply {
+					if lost && n == 0 {
+						return stubReply{status: dropConnection}
+					}
+					return slots(r, func(map[string]interface{}) string { return tt.slot }, "")
+				})
+				client := newEmailClientFor(t, server.URL)
+
+				result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(1)...))
+
+				require.NoError(t, err)
+				got := result.Results[0]
+				require.Equal(t, "unconfirmed", got.Status)
+				require.Equal(t, tt.code, got.Error.Code)
+				require.Equal(t, "PostHog didn't confirm this email, so it may still go out.", got.Error.Message, "never that nothing was sent")
+				require.Equal(t, wantResendFix, got.Error.Fix)
+			})
+		}
+	}
+}
+
 func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 	const (
 		refusedEach = "PostHog didn't confirm this email, so it may still go out."

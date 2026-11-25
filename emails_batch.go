@@ -332,7 +332,7 @@ func (r *batchRun) settle(i int, slot emailReply) {
 		return
 	}
 	answer := slotError(slot.fields["error"], messageID)
-	undecided := answer.Code == "delivery_unavailable" || answer.Code == "idempotency_key_in_flight" || answer.Code == "api_error"
+	undecided := undecidedCode(answer.Code)
 	if r.lost {
 		kept := *answer
 		kept.Fix = resendWithTheSameKey
@@ -515,10 +515,20 @@ func slotError(raw interface{}, messageID string) *EmailError {
 		status = int(number)
 	}
 	message := slot.text("detail")
-	if message == "" {
+	switch {
+	case message != "":
+	case undecidedCode(code):
+		message = "PostHog didn't confirm this email, so it may still go out."
+	default:
 		message = "PostHog didn't queue this email: " + code + "."
 	}
 	return &EmailError{Name: emailErrorName(status, code), Code: code, Message: message, StatusCode: status, MessageID: messageID}
+}
+
+// undecidedCode is a slot error that leaves the email's fate open, so the
+// recipient stays unconfirmed.
+func undecidedCode(code string) bool {
+	return code == "delivery_unavailable" || code == "idempotency_key_in_flight" || code == "api_error"
 }
 
 const resendWithTheSameKey = "Send it again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
