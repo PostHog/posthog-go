@@ -167,7 +167,7 @@ func WithCallContext(ctx context.Context, sessionID string, source SessionSource
 	scope := posthog.RequestContext{
 		DistinctId: distinctID,
 		SessionId:  sessionID,
-		Properties: posthog.Properties{propertySessionSource: string(source)},
+		Properties: posthog.Properties{propertySessionID: sessionID, propertySessionSource: string(source)},
 	}
 	if outer, _ := posthog.RequestContextFromContext(ctx); distinctID == "" && outer.DistinctId == "" {
 		scope.DistinctId = sessionID

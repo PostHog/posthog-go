@@ -81,16 +81,21 @@ func TestWithCallContext(t *testing.T) {
 		{
 			name:       "an identified call",
 			distinctID: "user_1",
-			want:       posthog.RequestContext{DistinctId: "user_1", SessionId: "s1", Properties: posthog.Properties{"$mcp_session_source": "client_metadata"}},
+			want:       posthog.RequestContext{DistinctId: "user_1", SessionId: "s1", Properties: posthog.Properties{"$session_id": "s1", "$mcp_session_source": "client_metadata"}},
 		},
 		{
 			name: "an anonymous call is its session, without a person",
-			want: posthog.RequestContext{DistinctId: "s1", SessionId: "s1", Properties: posthog.Properties{"$mcp_session_source": "client_metadata"}, Options: posthog.Options{"process_person_profile": false}},
+			want: posthog.RequestContext{DistinctId: "s1", SessionId: "s1", Properties: posthog.Properties{"$session_id": "s1", "$mcp_session_source": "client_metadata"}, Options: posthog.Options{"process_person_profile": false}},
+		},
+		{
+			name: "the call's session replaces a host's $session_id property",
+			host: &posthog.RequestContext{DistinctId: "host_user", Properties: posthog.Properties{"$session_id": "host_session"}},
+			want: posthog.RequestContext{DistinctId: "host_user", SessionId: "s1", Properties: posthog.Properties{"$session_id": "s1", "$mcp_session_source": "client_metadata"}},
 		},
 		{
 			name: "an anonymous call keeps the host's distinct id and its session",
 			host: &posthog.RequestContext{DistinctId: "host_user", SessionId: "host_session"},
-			want: posthog.RequestContext{DistinctId: "host_user", SessionId: "s1", Properties: posthog.Properties{"$mcp_session_source": "client_metadata"}},
+			want: posthog.RequestContext{DistinctId: "host_user", SessionId: "s1", Properties: posthog.Properties{"$session_id": "s1", "$mcp_session_source": "client_metadata"}},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
