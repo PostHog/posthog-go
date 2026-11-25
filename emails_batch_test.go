@@ -503,7 +503,7 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 			require.Equal(t, tt.errorCode, got.Error.Code)
 			require.NotEmpty(t, got.MessageID)
 			if (strings.Contains(tt.name, "refusal") || strings.Contains(tt.name, "reused")) && tt.status == "unconfirmed" {
-				require.Equal(t, "PostHog refused the retry, but an earlier attempt may have queued this email.", got.Error.Message, "never that nothing was sent")
+				require.Equal(t, "PostHog didn't confirm this email, so it may still go out.", got.Error.Message, "never that nothing was sent")
 				require.Equal(t, "PostHog said: PostHog said no.", got.Error.Why, "PostHog's detail is kept")
 			} else if strings.Contains(tt.name, "refusal") {
 				require.Equal(t, "PostHog said no.", got.Error.Message, "PostHog's detail is kept")
@@ -526,8 +526,8 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 
 func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 	const (
-		refusedEach = "PostHog refused the retry, but an earlier attempt may have queued this email."
-		refusedAll  = "PostHog refused the retry, but an earlier attempt may have queued the emails."
+		refusedEach = "PostHog didn't confirm this email, so it may still go out."
+		refusedAll  = "PostHog didn't confirm the emails, so they may still go out."
 		noBatchEach = "PostHog found no batch send for the retry, but an earlier attempt may have queued this email."
 		noBatchAll  = "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails."
 	)
@@ -557,6 +557,7 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", message: noBatchEach, callMessage: noBatchAll, retries: []stubReply{{status: http.StatusNotFound}}},
 		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", message: noBatchEach, callMessage: noBatchAll, retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
 		{name: "a 404 that names a field", callCode: "not_found", errorCode: "not_found", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{{status: http.StatusNotFound, body: `{"code":"not_found","attr":"template_id","detail":"PostHog said no."}`}}},
+		{name: "a 413", callCode: "content_too_large", errorCode: "content_too_large", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{failed(http.StatusRequestEntityTooLarge, "content_too_large")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -576,6 +577,9 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 				require.Equal(t, tt.callMessage, callErr.Message, "the lost attempt may have queued the emails")
 			}
 			require.Len(t, server.received(), 1+len(tt.retries), "a send and its retries, nothing more")
+			if !callErr.transportFailed() {
+				require.Equal(t, "Send each unconfirmed email again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once.", callErr.Fix, "a changed email or key can send it twice")
+			}
 			for i, got := range result.Results {
 				require.Equal(t, "unconfirmed", got.Status, "the lost send may have queued it")
 				require.Equal(t, tt.errorCode, got.Error.Code)
@@ -588,6 +592,21 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmailsBatchNamesNoRetryThatDidNotHappen(t *testing.T) {
+	server := newBatchServer(t, func(int, batchRequest) stubReply {
+		return failed(http.StatusServiceUnavailable, "delivery_unavailable")
+	})
+	client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(0) })
+
+	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+
+	callErr := requireEmailError(t, err)
+	require.Equal(t, "delivery_unavailable", callErr.Code)
+	require.Equal(t, "PostHog didn't confirm the emails, so they may still go out.", callErr.Message)
+	require.Equal(t, []string{"unconfirmed", "unconfirmed"}, statuses(result))
+	require.Len(t, server.received(), 1)
 }
 
 func TestEmailsBatchLeavesUnconfirmedEmailsToAResendWithTheirKeys(t *testing.T) {
@@ -660,6 +679,7 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testi
 	}{
 		{name: "PostHog's answer", code: "idempotency_key_in_flight", reply: failed(http.StatusConflict, "idempotency_key_in_flight")},
 		{name: "an answer without a readable code", code: "api_error", reply: stubReply{status: http.StatusConflict, body: "<html>Conflict</html>"}},
+		{name: "a blank code", code: "api_error", reply: stubReply{status: http.StatusConflict, body: `{"code":" "}`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

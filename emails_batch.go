@@ -289,11 +289,12 @@ func (r *batchRun) failAll(err, answered *EmailError) {
 		if answered != nil {
 			kept := *answered
 			kept.Fix = resendWithTheSameKey
-			kept.Message, kept.Why = refusedRetry(answered, "this email")
+			kept.Message, kept.Why = unconfirmedAnswer(answered, true)
 			reason = &kept
 		}
 		if err.StatusCode >= http.StatusMultipleChoices && !err.transportFailed() {
-			err.Message, err.Why = refusedRetry(err, "the emails")
+			err.Message, err.Why = unconfirmedAnswer(err, false)
+			err.Fix = "Send each unconfirmed email again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
 		}
 	}
 	for i := range r.members {
@@ -336,7 +337,7 @@ func (r *batchRun) settle(i int, slot emailReply) {
 		kept := *answer
 		kept.Fix = resendWithTheSameKey
 		if !undecided {
-			kept.Message, kept.Why = refusedRetry(answer, "this email")
+			kept.Message, kept.Why = unconfirmedAnswer(answer, true)
 		}
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: &kept})
 		return
@@ -413,7 +414,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 // unreadConflict is a 409 without a code the client could read. It may be
 // PostHog's answer that an earlier request still holds the keys.
 func unreadConflict(reply emailReply, err *EmailError) bool {
-	return err.StatusCode == http.StatusConflict && reply.text("code") == ""
+	return err.StatusCode == http.StatusConflict && strings.TrimSpace(reply.text("code")) == ""
 }
 
 func (s *emailSender) batchAttemptTimeout() time.Duration {
@@ -435,18 +436,25 @@ func (s *emailSender) logWarnings(warnings []EmailWarning) {
 	}
 }
 
-// refusedRetry words PostHog's refusal of a retry after a lost answer. Its
-// detail can say nothing was sent, which holds only for the retry, so the
-// detail moves to Why and the message says what may have gone out.
-func refusedRetry(err *EmailError, what string) (message, why string) {
+// unconfirmedAnswer words PostHog's answer once an attempt may have queued
+// the emails. Its detail can say nothing was sent, which holds only for the
+// attempt it answered, so the detail moves to Why. one is a recipient's error,
+// not the call's.
+func unconfirmedAnswer(err *EmailError, one bool) (message, why string) {
 	if err.Message == noBatchForTheRetry {
-		return "PostHog found no batch send for the retry, but an earlier attempt may have queued " + what + ".", err.Why
+		if one {
+			return "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", err.Why
+		}
+		return noBatchForTheRetry, err.Why
 	}
 	why = "PostHog said: " + err.Message
 	if err.Why != "" {
 		why += " " + err.Why
 	}
-	return "PostHog refused the retry, but an earlier attempt may have queued " + what + ".", why
+	if one {
+		return "PostHog didn't confirm this email, so it may still go out.", why
+	}
+	return "PostHog didn't confirm the emails, so they may still go out.", why
 }
 
 // noBatchForTheRetry is a bare 404 after a lost answer: it answers only the

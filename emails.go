@@ -921,7 +921,7 @@ func (r emailReply) text(field string) string {
 }
 
 func (r emailReply) error() *EmailError {
-	code := r.text("code")
+	code := strings.TrimSpace(r.text("code"))
 	if code == "" {
 		code = "api_error"
 	}
