@@ -329,7 +329,12 @@ func TestEmailsSendChecksTheScheduleAgainstTheClockWhenTheAnswerArrives(t *testi
 }
 
 func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T) {
-	queuedNow := `{"message_id":"` + testMessageID + `","replayed":true,"status":"queued","scheduled_at":null}`
+	queuedNow := func(replayed string) func() *http.Response {
+		return func() *http.Response {
+			body := `{"message_id":"` + testMessageID + `","replayed":` + replayed + `,"status":"queued","scheduled_at":null}`
+			return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}
+		}
+	}
 	type attempt struct {
 		reply func() *http.Response
 		takes time.Duration
@@ -349,9 +354,7 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 				{reply: func() *http.Response {
 					return &http.Response{StatusCode: http.StatusAccepted, Body: cutOffBody{strings.NewReader(`{"message_id":"`)}, Header: http.Header{}}
 				}, takes: 30 * time.Second},
-				{reply: func() *http.Response {
-					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(queuedNow)), Header: http.Header{}}
-				}, takes: 2 * time.Minute},
+				{reply: queuedNow("true"), takes: 2 * time.Minute},
 			},
 			wantCode: "schedule_not_confirmed",
 		},
@@ -363,9 +366,19 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 				{reply: func() *http.Response {
 					return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(`{"code":"rate_limited","detail":"Slow down."}`)), Header: http.Header{}}
 				}, takes: 30 * time.Second},
+				{reply: queuedNow("false"), takes: 90 * time.Second},
+			},
+		},
+		{
+			// A first answer, not a replay, says this attempt queued the email, so a
+			// 503 before it doesn't move the minute back.
+			name:  "a 503, then a first answer after the time",
+			after: 100 * time.Second,
+			attempts: []attempt{
 				{reply: func() *http.Response {
-					return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(queuedNow)), Header: http.Header{}}
-				}, takes: 90 * time.Second},
+					return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(`{"code":"delivery_unavailable","detail":"Try again."}`)), Header: http.Header{}}
+				}, takes: 30 * time.Second},
+				{reply: queuedNow("false"), takes: 2 * time.Minute},
 			},
 		},
 	}

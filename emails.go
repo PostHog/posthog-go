@@ -62,10 +62,11 @@ var (
 // self-hosted PostHog, a reverse proxy or a custom domain, Send returns an
 // error with code "scheduling_requires_cloud" before any request. Get reads
 // "scheduled" until the email goes out. Send can't cancel or move a
-// scheduled email. To stop a scheduled TemplateEmail before it goes out,
-// disable its template's workflow in PostHog until the email reaches a final
-// status. A CodeEmail goes through a workflow PostHog keeps out of the
-// workflow list, so once scheduled it goes out.
+// scheduled email. To stop one before it goes out, disable its template's
+// workflow in PostHog until the email reaches a final status. A CodeEmail
+// uses the workflow of the saved template with its TemplateKey. Without
+// one, it goes through a workflow PostHog keeps out of the workflow list,
+// so once scheduled it goes out.
 type Emails interface {
 	// Send queues one email, from a TemplateEmail made in PostHog or from a
 	// CodeEmail your code rendered, or schedules it when it has a
@@ -141,9 +142,10 @@ type TemplateEmail struct {
 	// millisecond. A time that has passed sends the email now. The zero time
 	// sends now. When PostHog sends it now for a time more than a minute
 	// ahead of this client's clock, also on a replay, Send returns
-	// "schedule_not_confirmed". After a lost answer, that minute counts from
-	// the attempt that may have sent it, not from the retry. Work out a relative time, such as an hour
-	// from now, once, and send the same time when you send again with the
+	// "schedule_not_confirmed". When a retry gets a replay after a lost
+	// answer, that minute counts from the attempt that may have sent it, not
+	// from the retry. Work out a relative time, such as an hour from now,
+	// once, and send the same time when you send again with the
 	// same IdempotencyKey: another time with the same key is refused with
 	// "idempotency_key_reused".
 	ScheduledAt time.Time
@@ -637,18 +639,20 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	header.Set("Content-Type", "application/json")
 	header.Set("Idempotency-Key", send.idempotencyKey)
 	var reply emailReply
-	// queuedBy is when the first attempt that may have queued the email
-	// ended: PostHog chose to send it now or later by then, and a replay
-	// repeats that choice.
-	var queuedBy time.Time
+	// PostHog chooses to send now or later when it first accepts the key, and
+	// a replay repeats that choice. So a first answer is checked against the
+	// attempt that got it, and a replay against the first attempt that may
+	// have queued the email.
+	var queuedBy, answeredAt time.Time
 	err = s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 		var err *EmailError
 		reply, err = s.do(ctx, http.MethodPost, s.appHost+emailSendPath, header, send.body)
 		if err == nil && !reply.accepted() {
 			err = reply.error()
 		}
+		answeredAt = s.now()
 		if queuedBy.IsZero() && (err == nil || mayHaveQueued(err)) {
-			queuedBy = s.now()
+			queuedBy = answeredAt
 		}
 		return err
 	})
@@ -661,6 +665,9 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	}
 	s.logWarnings(result.Warnings)
 	if !send.scheduledAt.IsZero() {
+		if !result.Replayed {
+			queuedBy = answeredAt
+		}
 		if err := reply.checkSchedule(result, send.scheduledAt, queuedBy); err != nil {
 			return nil, err
 		}
