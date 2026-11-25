@@ -1,9 +1,13 @@
 package posthogmcpgo
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -157,4 +161,117 @@ func TestConversationHandlesWhenTheMiddlewareCaptures(t *testing.T) {
 	properties := queue.onlyToolCall(t)
 	assert.Equal(t, handle, properties["$mcp_conversation_id"])
 	assert.Equal(t, posthogmcp.ConversationSessionID(handle), properties["$session_id"])
+}
+
+// A handle counts only if the result the client receives carries it, whatever
+// happens to the result after the instrumentation appends it.
+func TestAHandleCountsOnlyIfTheClientReceivesIt(t *testing.T) {
+	footer := server.WithToolHandlerMiddleware(func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			result, err := next(ctx, req)
+			if result != nil {
+				result.Content = append(result.Content, mcp.NewTextContent("footer"))
+			}
+			return result, err
+		}
+	})
+	replace := server.WithToolHandlerMiddleware(func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			_, _ = next(ctx, req)
+			return mcp.NewToolResultError("quota exceeded"), nil
+		}
+	})
+	sunny := func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("sunny"), nil
+	}
+	for _, test := range []struct {
+		name         string
+		before       []server.ServerOption
+		after        []server.ServerOption
+		tool         mcp.Tool
+		handler      server.ToolHandlerFunc
+		wantHandle   bool
+		wantResponse string
+		wantError    any
+	}{
+		{name: "an outer footer keeps the handle", before: []server.ServerOption{footer}, tool: weatherTool(), handler: sunny, wantHandle: true, wantResponse: `[{"type":"text","text":"sunny"},{"type":"text","text":"footer"}]`},
+		{name: "an outer replacement drops it", before: []server.ServerOption{replace}, tool: weatherTool(), handler: sunny, wantResponse: `[{"type":"text","text":"quota exceeded"}]`, wantError: "quota exceeded"},
+		{
+			name:  "failed output validation drops it",
+			after: []server.ServerOption{server.WithOutputSchemaValidation()},
+			tool:  mcp.NewTool("weather", mcp.WithRawOutputSchema(json.RawMessage(`{"type":"object","properties":{"temp":{"type":"number"}},"required":["temp"]}`))),
+			handler: func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return mcp.NewToolResultStructured(map[string]any{"temp": "hot"}, "hot"), nil
+			},
+		},
+		{name: "an isError result's text stays its own", tool: weatherTool(), handler: func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultError("city not found"), nil
+		}, wantHandle: true, wantResponse: `[{"type":"text","text":"city not found"}]`, wantError: "city not found"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			opts := append(append(test.before, Instrument(posthogmcp.New(queue))), test.after...)
+			s := server.NewMCPServer("weather-server", "1.2.3", opts...)
+			s.AddTool(test.tool, test.handler)
+			c := connectHTTPAs(t, s, "example-client/1.0", "test-client", server.WithStateLess(true))
+			req := mcp.CallToolRequest{}
+			req.Params.Name = "weather"
+			req.Params.Arguments = map[string]any{"city": "Melbourne"}
+			result, err := c.CallTool(t.Context(), req)
+			require.NoError(t, err)
+
+			properties := queue.onlyToolCall(t)
+			received := ""
+			for _, content := range result.Content {
+				if text, ok := content.(mcp.TextContent); ok && conversationHandle.MatchString(handleIn(text.Text)) {
+					received = handleIn(text.Text)
+				}
+			}
+			if test.wantHandle {
+				require.Regexp(t, conversationHandle, received)
+				assert.Equal(t, received, properties["$mcp_conversation_id"])
+			} else {
+				assert.Empty(t, received)
+				assert.NotContains(t, properties, "$mcp_conversation_id", "a handle the client never received is not recorded")
+				assert.Equal(t, "generated", properties["$mcp_session_source"])
+			}
+			if test.wantResponse != "" {
+				assert.JSONEq(t, test.wantResponse, jsonString(t, properties["$mcp_response"].(map[string]any)["content"]))
+			}
+			if test.wantError != nil {
+				assert.Equal(t, test.wantError, properties["$mcp_error_message"])
+			}
+		})
+	}
+}
+
+func handleIn(text string) string {
+	var block map[string]string
+	if json.Unmarshal([]byte(text), &block) != nil || len(block) != 1 {
+		return ""
+	}
+	return block["conversation_id"]
+}
+
+func TestAHandleFreeListingKeepsLargeIntegers(t *testing.T) {
+	s := server.NewMCPServer("weather-server", "1.2.3", Instrument(posthogmcp.New(&fakeQueue{})))
+	s.AddTool(mcp.NewToolWithRawSchema("lookup", "", json.RawMessage(`{"type":"object","properties":{"id":{"const":9007199254740993}}}`)),
+		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText("ok"), nil
+		})
+	httpServer := server.NewTestStreamableHTTPServer(s, server.WithStateLess(true))
+	t.Cleanup(httpServer.Close)
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	require.NoError(t, err)
+	req.Header.Set("User-Agent", chatGPTUserAgent)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	assert.Contains(t, string(body), `"const":9007199254740993`)
+	assert.NotContains(t, string(body), "conversation_id")
 }

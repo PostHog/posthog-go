@@ -372,6 +372,7 @@ func (in *instrumentation) captureToolCall(
 	handlerErr error,
 	started callStart,
 ) error {
+	result, delivered := started.received(result)
 	info := started.tool
 	raw := rawArguments(req.Params)
 	arguments := parseArguments(raw)
@@ -382,7 +383,7 @@ func (in *instrumentation) captureToolCall(
 		DistinctID:      started.identity.DistinctID,
 		SessionID:       started.session.id,
 		SessionSource:   started.session.source,
-		ConversationID:  started.recordedHandle(),
+		ConversationID:  started.recordedHandle(delivered),
 		Groups:          started.identity.Groups,
 		SetProperties:   started.identity.SetProperties,
 		ServerName:      in.serverName,
@@ -404,7 +405,7 @@ func (in *instrumentation) captureToolCall(
 	}
 	// mcp-go answers a handler error alone and drops the result.
 	if in.captureResponses && result != nil && handlerErr == nil {
-		call.Response = withoutDeliveredHandle(result, started)
+		call.Response = result
 	}
 	if in.captureModel {
 		call.LLMModel, call.LLMModelSource = callModel(req.Params.Meta, arguments, info)
@@ -523,13 +524,4 @@ func (cfg *config) report(ctx context.Context, err error) {
 	}
 	defer func() { _ = recover() }()
 	cfg.errorHandler(ctx, err)
-}
-
-func withoutDeliveredHandle(result *mcp.CallToolResult, started callStart) *mcp.CallToolResult {
-	if !started.conversation.minted || !started.delivered.Load() || len(result.Content) == 0 {
-		return result
-	}
-	returned := *result
-	returned.Content = result.Content[:len(result.Content)-1]
-	return &returned
 }

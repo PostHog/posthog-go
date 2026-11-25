@@ -218,7 +218,9 @@ func extensibleSchema(raw json.RawMessage) (map[string]any, bool) {
 func withoutConversationArgument(advertised mcp.Tool) mcp.Tool {
 	if advertised.RawInputSchema != nil {
 		var schema map[string]any
-		if json.Unmarshal(advertised.RawInputSchema, &schema) != nil {
+		decoder := json.NewDecoder(bytes.NewReader(advertised.RawInputSchema))
+		decoder.UseNumber()
+		if decoder.Decode(&schema) != nil {
 			return advertised
 		}
 		properties, _ := schema["properties"].(map[string]any)

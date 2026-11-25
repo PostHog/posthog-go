@@ -114,7 +114,8 @@ func WithContextParameter(enabled bool) Option {
 // calls. A valid handle sets $mcp_conversation_id and the $session_id derived
 // from it. A client conversation id, such as ChatGPT's openai/session, outranks
 // the handle, and ChatGPT, which sends one on every call, is advertised no
-// conversation_id and minted no handle. The argument is removed before the
+// conversation_id and minted no handle, which needs the hooks Instrument adds:
+// pass it after server.WithHooks. The argument is removed before the
 // tool's handler sees the call, and tools that declare their own
 // conversation_id keep it. It is enabled by default.
 func WithConversationID(enabled bool) Option {
