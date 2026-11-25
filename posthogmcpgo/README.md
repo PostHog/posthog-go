@@ -195,7 +195,9 @@ so its `tools/list` has no `conversation_id` argument and its calls are minted
 no handle. Leaving it out of the listing needs the hooks `Instrument` adds, so
 pass `Instrument` after `server.WithHooks`, as for capture. A handle counts only
 if the result the client receives carries it, so one that output validation or
-middleware given before `Instrument` drops is not recorded. Like `context`, the argument is removed before the handler, and
+middleware given before `Instrument` drops is not recorded. A call answered
+before the handler runs, by input validation or by such middleware, gets no
+handle: that result is not the adapter's to change. Like `context`, the argument is removed before the handler, and
 tools that declare their own `conversation_id` keep it. Unlike
 `posthogmcpsdk`, the adapter does not mirror the handle into
 `structuredContent`. Turn anchoring off with `WithConversationID(false)`.

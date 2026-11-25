@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -65,8 +64,6 @@ type callStart struct {
 	identity     Identity
 	tool         toolInfo
 	conversation conversation
-	// handled reports that the handler middleware ran the call.
-	handled *atomic.Bool
 	// end finishes the call's session, once: from the handler middleware when
 	// the handler returns or panics, else from the hooks for a call the
 	// handler never ran, such as one that failed validation.
@@ -75,7 +72,7 @@ type callStart struct {
 
 func newCallStart(end func()) callStart {
 	var once sync.Once
-	return callStart{end: func() { once.Do(end) }, handled: new(atomic.Bool)}
+	return callStart{end: func() { once.Do(end) }}
 }
 
 type conversation struct {
@@ -112,22 +109,12 @@ func (call callStart) recordedHandle(delivered bool) string {
 }
 
 func (call callStart) deliver(result *mcp.CallToolResult, err error) *mcp.CallToolResult {
-	call.handled.Store(true)
 	if !call.conversation.minted || err != nil || result == nil {
 		return result
 	}
 	delivered := *result
 	delivered.Content = append(slices.Clip(delivered.Content), mcp.NewTextContent(call.handleBlock()))
 	return &delivered
-}
-
-// deliverToUnhandled appends a minted handle to the error result mcp-go made
-// without running the handler, such as a failed input validation, which
-// mcp-go builds for this call alone, so it is changed in place.
-func (call callStart) deliverToUnhandled(result *mcp.CallToolResult) {
-	if call.conversation.minted && !call.handled.Load() && result.IsError {
-		result.Content = append(slices.Clip(result.Content), mcp.NewTextContent(call.handleBlock()))
-	}
 }
 
 func (call callStart) handleBlock() string {

@@ -289,19 +289,39 @@ func TestAnOptionalOnlyRawSchemaStaysValid(t *testing.T) {
 	assert.NotContains(t, listed, `"required":null`)
 }
 
-func TestAFailedInputValidationDeliversItsHandle(t *testing.T) {
-	queue := &fakeQueue{}
-	s := newInstrumentedServer(queue, weatherTool(), &weatherHandler{}, func(*config) {})
-	server.WithInputSchemaValidation()(s)
-	c := connectHTTPAs(t, s, "example-client/1.0", "test-client", server.WithStateLess(true))
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "weather"
-	req.Params.Arguments = map[string]any{"context": "Checking the weather"}
-	result, err := c.CallTool(t.Context(), req)
-	require.NoError(t, err)
-	require.True(t, result.IsError, "the call fails validation")
-
-	handle := deliveredHandle(result)
-	require.Regexp(t, conversationHandle, handle)
-	assert.Equal(t, handle, queue.onlyToolCall(t)["$mcp_conversation_id"])
+// A result made before the instrumentation's middleware runs, by input
+// validation or middleware outside Instrument, is not the instrumentation's to
+// change, so it carries no handle and the call records none.
+func TestAResultMadeBeforeTheHandlerGetsNoHandle(t *testing.T) {
+	shared := mcp.NewToolResultError("quota exceeded")
+	shortCircuit := server.WithToolHandlerMiddleware(func(server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) { return shared, nil }
+	})
+	for _, test := range []struct {
+		name      string
+		opts      []server.ServerOption
+		arguments map[string]any
+	}{
+		{name: "failed input validation", opts: []server.ServerOption{server.WithInputSchemaValidation()}, arguments: map[string]any{"context": "Checking the weather"}},
+		{name: "an outer short circuit", opts: []server.ServerOption{shortCircuit}, arguments: map[string]any{"city": "Melbourne"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &fakeQueue{}
+			s := server.NewMCPServer("weather-server", "1.2.3", append(test.opts, Instrument(posthogmcp.New(queue)))...)
+			s.AddTool(weatherTool(), (&weatherHandler{}).handle)
+			c := connectHTTPAs(t, s, "example-client/1.0", "test-client", server.WithStateLess(true))
+			req := mcp.CallToolRequest{}
+			req.Params.Name = "weather"
+			req.Params.Arguments = test.arguments
+			for range 2 {
+				result, err := c.CallTool(t.Context(), req)
+				require.NoError(t, err)
+				assert.Empty(t, deliveredHandle(result))
+			}
+			assert.Len(t, shared.Content, 1, "a shared result is never changed")
+			for _, capture := range queue.toolCalls() {
+				assert.NotContains(t, capture.Properties, "$mcp_conversation_id")
+			}
+		})
+	}
 }
