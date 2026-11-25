@@ -192,12 +192,19 @@ func emailErrorName(status int, code string) EmailErrorName {
 	}
 }
 
+// transportFailed is a request the client couldn't finish: no answer, or an
+// answer cut off mid-body. PostHog's own answer never counts, even one whose
+// code reads "network_error".
+func (e *EmailError) transportFailed() bool {
+	return e.Code == "network_error" && e.cause != nil
+}
+
 // isRetryable says whether waiting can fix the error. A send carries an
 // idempotency key, so a retry can't queue a second email. A network_error is
 // retryable whatever its status: an answer cut off mid-body can't say what
 // PostHog decided, and the retry's full answer does.
 func (e *EmailError) isRetryable() bool {
-	if e.Code == "network_error" {
+	if e.transportFailed() {
 		return true
 	}
 	if e.Code == "attachment_upload_failed" {

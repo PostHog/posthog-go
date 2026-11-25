@@ -625,6 +625,7 @@ func TestEmailsSendRetries(t *testing.T) {
 		{name: "key in flight", first: failed(http.StatusConflict, "idempotency_key_in_flight"), requests: 2},
 		{name: "monthly quota", first: failed(http.StatusTooManyRequests, "quota_limited"), requests: 1},
 		{name: "outdated template", first: failed(http.StatusConflict, "template_outdated"), requests: 1},
+		{name: "a refusal with the SDK's network_error code", first: failed(http.StatusConflict, "network_error"), requests: 1},
 		{name: "suppressed recipient", first: failed(http.StatusUnprocessableEntity, "recipient_suppressed"), requests: 1},
 		{name: "bad request", first: failed(http.StatusBadRequest, "sender_not_verified"), requests: 1},
 		{name: "server error", first: failed(http.StatusInternalServerError, "internal"), requests: 1},
