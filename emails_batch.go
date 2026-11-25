@@ -289,10 +289,11 @@ func (r *batchRun) failAll(err, answered *EmailError) {
 		if answered != nil {
 			kept := *answered
 			kept.Fix = resendWithTheSameKey
-			if kept.Message == noBatchForTheRetry {
-				kept.Message = "PostHog found no batch send for the retry, but an earlier attempt may have queued this email."
-			}
+			kept.Message, kept.Why = refusedRetry(answered, "this email")
 			reason = &kept
+		}
+		if err.StatusCode >= http.StatusMultipleChoices && !err.transportFailed() {
+			err.Message, err.Why = refusedRetry(err, "the emails")
 		}
 	}
 	for i := range r.members {
@@ -330,14 +331,18 @@ func (r *batchRun) settle(i int, slot emailReply) {
 		return
 	}
 	answer := slotError(slot.fields["error"], messageID)
+	undecided := answer.Code == "delivery_unavailable" || answer.Code == "idempotency_key_in_flight" || answer.Code == "api_error"
 	if r.lost {
 		kept := *answer
 		kept.Fix = resendWithTheSameKey
+		if !undecided {
+			kept.Message, kept.Why = refusedRetry(answer, "this email")
+		}
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: &kept})
 		return
 	}
-	switch answer.Code {
-	case "delivery_unavailable", "idempotency_key_in_flight", "api_error":
+	switch {
+	case undecided:
 		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: answer})
 	default:
 		r.set(i, "failed", BatchEmailResult{MessageID: messageID, Error: answer})
@@ -428,6 +433,20 @@ func (s *emailSender) logWarnings(warnings []EmailWarning) {
 	for _, warning := range warnings {
 		s.logger.Warnf("PostHog email warning %s: %s", warning.Code, warning.Message)
 	}
+}
+
+// refusedRetry words PostHog's refusal of a retry after a lost answer. Its
+// detail can say nothing was sent, which holds only for the retry, so the
+// detail moves to Why and the message says what may have gone out.
+func refusedRetry(err *EmailError, what string) (message, why string) {
+	if err.Message == noBatchForTheRetry {
+		return "PostHog found no batch send for the retry, but an earlier attempt may have queued " + what + ".", err.Why
+	}
+	why = "PostHog said: " + err.Message
+	if err.Why != "" {
+		why += " " + err.Why
+	}
+	return "PostHog refused the retry, but an earlier attempt may have queued " + what + ".", why
 }
 
 // noBatchForTheRetry is a bare 404 after a lost answer: it answers only the

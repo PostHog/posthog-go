@@ -97,7 +97,7 @@ type Emails interface {
 	// is too large, which splitting doesn't help. The client checks only the
 	// recipient count, not the size. After a lost answer, recipients stay
 	// "unconfirmed" even when PostHog refuses the retry, since the lost
-	// attempt may have queued them. An "unconfirmed" email's Error says to
+	// attempt may have queued them; PostHog's detail moves to Why. An "unconfirmed" email's Error says to
 	// send it again with the same IdempotencyKey. The error code
 	// "batch_unavailable" (409) means the project can't send batches yet.
 	// "not_found" means PostHog found no template with the TemplateID, or

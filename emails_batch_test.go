@@ -502,7 +502,10 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 			}
 			require.Equal(t, tt.errorCode, got.Error.Code)
 			require.NotEmpty(t, got.MessageID)
-			if strings.Contains(tt.name, "refusal") || strings.Contains(tt.name, "reused") {
+			if (strings.Contains(tt.name, "refusal") || strings.Contains(tt.name, "reused")) && tt.status == "unconfirmed" {
+				require.Equal(t, "PostHog refused the retry, but an earlier attempt may have queued this email.", got.Error.Message, "never that nothing was sent")
+				require.Equal(t, "PostHog said: PostHog said no.", got.Error.Why, "PostHog's detail is kept")
+			} else if strings.Contains(tt.name, "refusal") {
 				require.Equal(t, "PostHog said no.", got.Error.Message, "PostHog's detail is kept")
 			}
 			if tt.status == "unconfirmed" {
@@ -522,22 +525,38 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 }
 
 func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
+	const (
+		refusedEach = "PostHog refused the retry, but an earlier attempt may have queued this email."
+		refusedAll  = "PostHog refused the retry, but an earlier attempt may have queued the emails."
+		noBatchEach = "PostHog found no batch send for the retry, but an earlier attempt may have queued this email."
+		noBatchAll  = "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails."
+	)
 	rateLimited := stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
 	tests := []struct {
-		name, callCode, errorCode, detail string
-		// callMessage is the call error's message, when the case checks it.
-		callMessage string
+		name, callCode, errorCode string
+		// message is each recipient's error message, and callMessage the
+		// call error's, when the case checks it.
+		message, callMessage string
+		// said is PostHog's detail, which the recipient's Why keeps.
+		said string
 		// retries answer the attempts after the first, whose answer is lost.
 		retries []stubReply
 	}{
-		{name: "a rate limit", callCode: "rate_limited", errorCode: "rate_limited", detail: "Slow down.", retries: []stubReply{rateLimited}},
-		{name: "a rate limit, then another lost answer", callCode: "network_error", errorCode: "rate_limited", detail: "Slow down.", retries: []stubReply{rateLimited, {status: dropConnection}}},
-		{name: "a refusal", callCode: "quota_limited", errorCode: "quota_limited", detail: "Over quota.", retries: []stubReply{{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}}},
-		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", retries: []stubReply{failed(http.StatusConflict, "idempotency_key_in_flight")}},
-		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", detail: "PostHog said no.", retries: []stubReply{failed(http.StatusServiceUnavailable, "delivery_unavailable")}},
-		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", detail: "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", callMessage: "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails.", retries: []stubReply{{status: http.StatusNotFound}}},
-		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", detail: "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", callMessage: "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails.", retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
-		{name: "a 404 that names a field", callCode: "not_found", errorCode: "not_found", detail: "PostHog said no.", retries: []stubReply{{status: http.StatusNotFound, body: `{"code":"not_found","attr":"template_id","detail":"PostHog said no."}`}}},
+		{name: "a rate limit", callCode: "rate_limited", errorCode: "rate_limited", message: refusedEach, callMessage: refusedAll, said: "Slow down.", retries: []stubReply{rateLimited}},
+		{name: "a rate limit, then another lost answer", callCode: "network_error", errorCode: "rate_limited", message: refusedEach, said: "Slow down.", retries: []stubReply{rateLimited, {status: dropConnection}}},
+		{name: "a refusal", callCode: "quota_limited", errorCode: "quota_limited", message: refusedEach, callMessage: refusedAll, said: "Over quota.", retries: []stubReply{{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}}},
+		{
+			// PostHog's detail says it sent none of the emails, which holds
+			// only for the retry.
+			name: "batch sends unavailable", callCode: "batch_unavailable", errorCode: "batch_unavailable", message: refusedEach, callMessage: refusedAll,
+			said:    "Batch sends aren't available for this project yet, so PostHog didn't send any of these emails.",
+			retries: []stubReply{{status: http.StatusConflict, body: `{"code":"batch_unavailable","detail":"Batch sends aren't available for this project yet, so PostHog didn't send any of these emails."}`}},
+		},
+		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{failed(http.StatusConflict, "idempotency_key_in_flight")}},
+		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{failed(http.StatusServiceUnavailable, "delivery_unavailable")}},
+		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", message: noBatchEach, callMessage: noBatchAll, retries: []stubReply{{status: http.StatusNotFound}}},
+		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", message: noBatchEach, callMessage: noBatchAll, retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
+		{name: "a 404 that names a field", callCode: "not_found", errorCode: "not_found", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{{status: http.StatusNotFound, body: `{"code":"not_found","attr":"template_id","detail":"PostHog said no."}`}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -560,8 +579,9 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 			for i, got := range result.Results {
 				require.Equal(t, "unconfirmed", got.Status, "the lost send may have queued it")
 				require.Equal(t, tt.errorCode, got.Error.Code)
-				if tt.detail != "" {
-					require.Equal(t, tt.detail, got.Error.Message, "PostHog's refusal is kept")
+				require.Equal(t, tt.message, got.Error.Message, "never that nothing was sent")
+				if tt.said != "" {
+					require.Equal(t, "PostHog said: "+tt.said, got.Error.Why, "PostHog's refusal is kept")
 				}
 				require.Equal(t, wantResendFix, got.Error.Fix)
 				require.Equal(t, fmt.Sprintf("digest:%d", i), got.IdempotencyKey)
