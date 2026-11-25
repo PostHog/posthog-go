@@ -776,6 +776,16 @@ func TestFlagDependencyIsEvaluatedInItsOwnContext(t *testing.T) {
 		require.Equal(t, map[string]UnresolvedFlagReason{"org-parent": UnresolvedFlagReasonMissingContext}, snapshot.UnresolvedFlags())
 	})
 
+	t.Run("a group dependency without its group is false before its prerequisites are evaluated", func(t *testing.T) {
+		needsServer := flagDefinition("needs-server", flagCondition(100, staticCohortFilter))
+		orgParent := orgFlagDefinition("org-parent", flagCondition(100, flagDependencyFilter("needs-server", true, "needs-server")))
+		personChildExpectsFalse := flagDefinition("person-child-expects-false", flagCondition(100, flagDependencyFilter("org-parent", false, "needs-server", "org-parent")))
+		snapshot, remoteCalls := evaluate(t, knownAbsentDefinitions(needsServer, orgParent, personChildExpectsFalse), EvaluateFlagsPayload{FlagKeys: []string{"person-child-expects-false"}})
+		require.Zero(t, remoteCalls)
+		require.Empty(t, snapshot.UnresolvedFlags())
+		require.Equal(t, true, snapshot.GetFlag("person-child-expects-false"))
+	})
+
 	t.Run("a person dependency reads person properties", func(t *testing.T) {
 		personParent := flagDefinition("person-parent", flagCondition(100, `{`+regionIsUS+`, "type": "person"}`))
 		orgChild := orgFlagDefinition("org-child", flagCondition(100, flagDependencyFilter("person-parent", true, "person-parent")))

@@ -719,6 +719,13 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	}
 	dependencyChain := property.DependencyChain
 
+	// A group flag whose group isn't supplied is false whatever its prerequisites
+	// resolve to, so they aren't evaluated.
+	if _, cached := evaluationCache[property.Key]; !cached && poller.dependencyGroupIsMissing(flagsByKey[property.Key], inputs, state) {
+		evaluationCache[property.Key] = false
+		return checkFlagDependencyValue(property.Value, false)
+	}
+
 	// Evaluate all dependencies in the chain order
 	for _, depFlagKey := range dependencyChain {
 		if cached, exists := evaluationCache[depFlagKey]; exists {
@@ -804,6 +811,20 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 		msg:    fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
 		Reason: reason,
 	}
+}
+
+// dependencyGroupIsMissing reports an active referenced flag without experience
+// continuity that is aggregated by a group type absent from the supplied groups.
+func (poller *FeatureFlagsPoller) dependencyGroupIsMissing(flag FeatureFlag, inputs *flagEvaluationInputs, state *flagsState) bool {
+	if !flag.Active || flag.Filters.AggregationGroupTypeIndex == nil || (flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity) {
+		return false
+	}
+	groupType, exists := state.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
+	if !exists {
+		return false
+	}
+	_, hasGroup := inputs.groups[groupType]
+	return !hasGroup
 }
 
 // flagDependencyDefinitionError reports a flag dependency filter that local evaluation
