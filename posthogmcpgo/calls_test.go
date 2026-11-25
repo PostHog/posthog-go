@@ -29,7 +29,7 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 				if i == 0 {
 					at = now.Add(-test.firstAge)
 				}
-				calls.start(requests[i], callStart{at: at})
+				calls.start(requests[i], arrival{headers: uintptr(i + 1)}, callStart{at: at})
 			}
 
 			_, first := calls.finish(requests[0])
@@ -37,6 +37,7 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 			_, last := calls.finish(requests[len(requests)-1])
 			assert.True(t, last, "the newest call is kept")
 			assert.Equal(t, calls.order.Len(), len(calls.started), "the order and the index agree")
+			assert.Equal(t, calls.order.Len(), len(calls.arrivals), "the order and the arrivals agree")
 		})
 	}
 }

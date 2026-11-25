@@ -2,6 +2,7 @@ package posthogmcpgo
 
 import (
 	"context"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	posthog "github.com/posthog/posthog-go/v2"
@@ -56,6 +57,7 @@ type config struct {
 	captureModel      bool
 	serverName        string
 	serverVersion     string
+	now               func() time.Time
 }
 
 func defaultConfig(analytics *posthogmcp.Analytics) *config {
@@ -65,10 +67,13 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 		captureResponses:  true,
 		contextParameter:  true,
 		captureModel:      true,
+		now:               time.Now,
 	}
 }
 
-// WithIdentity configures application-specific identity resolution.
+// WithIdentity configures application-specific identity resolution. The
+// resolver runs once per tools/call as it arrives, before the handler, whose
+// context then carries the distinct ID for custom events.
 func WithIdentity(resolver IdentityResolver) Option {
 	return func(cfg *config) { cfg.identity = resolver }
 }
