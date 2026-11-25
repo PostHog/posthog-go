@@ -17,8 +17,6 @@ var conversationHandle = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{
 
 const echoedHandle = "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f"
 
-// deliveredHandle is the handle in the result's trailing conversation_id text
-// block, or "" when it does not end with one.
 func deliveredHandle(result *mcp.CallToolResult) string {
 	if result == nil || len(result.Content) == 0 {
 		return ""

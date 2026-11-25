@@ -198,8 +198,6 @@ func (in *instrumentation) ours(ctx context.Context) bool {
 	return server.ServerFromContext(ctx) == in.server
 }
 
-// listed leaves conversation_id out of a handle-free client's listing, which
-// names the conversation in _meta instead.
 func (in *instrumentation) listed(ctx context.Context, _ any, req *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
 	defer in.recoverHook(ctx, "after tools/list")
 	if !in.conversationID || !in.ours(ctx) || req == nil || result == nil {
@@ -274,11 +272,6 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool, req mcp
 	return call
 }
 
-// resolveConversation keeps an echoed handle only if it is UUIDv7-shaped,
-// since its derived $session_id would otherwise merge every caller that
-// invents the same string. Without one, a call on no transport session gets a
-// new handle, unless its client sends its own conversation id on every call. A
-// client's conversation id outranks any handle.
 func resolveConversation(session server.ClientSession, arguments toolArguments, client posthogmcp.ClientConversation) conversation {
 	if client.SessionID != "" {
 		return conversation{}
@@ -292,9 +285,6 @@ func resolveConversation(session server.ClientSession, arguments toolArguments, 
 	return conversation{id: uuid.Must(uuid.NewV7()).String(), minted: true}
 }
 
-// requestClient is the client req identifies: from its _meta, a replayed
-// session token, or the initialize of a session that made it, which mcp-go
-// binds to one client.
 func (in *instrumentation) requestClient(session server.ClientSession, header http.Header, meta map[string]any) posthogmcp.Client {
 	token, _ := posthogmcp.ReadSessionToken(header.Get("Mcp-Session-Id"))
 	initialize := posthogmcp.Client{ProtocolVersion: in.protocols.of(session)}
@@ -392,7 +382,7 @@ func (in *instrumentation) captureToolCall(
 		DistinctID:      started.identity.DistinctID,
 		SessionID:       started.session.id,
 		SessionSource:   started.session.source,
-		ConversationID:  started.handle(),
+		ConversationID:  started.recordedHandle(),
 		Groups:          started.identity.Groups,
 		SetProperties:   started.identity.SetProperties,
 		ServerName:      in.serverName,
@@ -535,8 +525,6 @@ func (cfg *config) report(ctx context.Context, err error) {
 	cfg.errorHandler(ctx, err)
 }
 
-// withoutDeliveredHandle is result as the tool returned it, without the
-// handle block the instrumentation appended.
 func withoutDeliveredHandle(result *mcp.CallToolResult, started callStart) *mcp.CallToolResult {
 	if !started.conversation.minted || !started.delivered.Load() || len(result.Content) == 0 {
 		return result

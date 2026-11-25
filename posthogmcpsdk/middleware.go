@@ -241,9 +241,6 @@ func listingMeta(req mcpsdk.Request) mcpsdk.Meta {
 	return nil
 }
 
-// requestClient is the client req identifies: from its _meta, a replayed
-// session token, or the initialize of its go-sdk session, which go-sdk binds to
-// one client (on stateless HTTP it is the request's own).
 func requestClient(req mcpsdk.Request, meta mcpsdk.Meta) posthogmcp.Client {
 	var protocolHeader string
 	var token posthogmcp.SessionToken

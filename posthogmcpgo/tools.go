@@ -27,8 +27,7 @@ const modelParameterDescription = "The exact model identifier you (the assistant
 type analyticsArgument struct {
 	name        string
 	description string
-	// optional leaves the argument out of the schema's required list.
-	optional bool
+	optional    bool
 }
 
 const conversationParameterDescription = "The conversation_id this server returned earlier in this conversation, " +
@@ -36,9 +35,8 @@ const conversationParameterDescription = "The conversation_id this server return
 	"developer's analytics."
 
 var (
-	contextParameter = analyticsArgument{name: contextArgument, description: contextParameterDescription}
-	modelParameter   = analyticsArgument{name: modelArgument, description: modelParameterDescription}
-	// The agent has no handle on its first call.
+	contextParameter      = analyticsArgument{name: contextArgument, description: contextParameterDescription}
+	modelParameter        = analyticsArgument{name: modelArgument, description: modelParameterDescription}
 	conversationParameter = analyticsArgument{name: conversationArgument, description: conversationParameterDescription, optional: true}
 )
 
@@ -93,9 +91,9 @@ func inputSchema(tool mcp.Tool) json.RawMessage {
 	return encoded
 }
 
-// withArguments returns tool with arguments added to its input schema,
-// required unless optional, in the representation the tool uses. schema is the decoded raw
-// schema, which it may change.
+// withArguments returns tool with arguments added to its input schema, in the
+// representation the tool uses. schema is the decoded raw schema, which it may
+// change.
 func withArguments(tool mcp.Tool, schema map[string]any, arguments []analyticsArgument) (mcp.Tool, error) {
 	if tool.RawInputSchema != nil {
 		properties, _ := schema["properties"].(map[string]any)
@@ -217,8 +215,6 @@ func extensibleSchema(raw json.RawMessage) (map[string]any, bool) {
 	return schema, true
 }
 
-// withoutConversationArgument returns advertised without the conversation_id
-// argument the instrumentation added, for a handle-free client's listing.
 func withoutConversationArgument(advertised mcp.Tool) mcp.Tool {
 	if advertised.RawInputSchema != nil {
 		var schema map[string]any

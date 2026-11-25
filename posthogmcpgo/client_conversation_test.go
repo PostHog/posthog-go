@@ -291,8 +291,6 @@ func TestAHandlerWithNoMatchingCallGetsNoScope(t *testing.T) {
 	assert.Equal(t, chatGPTSession, queue.onlyToolCall(t)["$session_id"], "the call itself is still captured")
 }
 
-// tokenSessions issues a PostHog session token as every Mcp-Session-Id, as a
-// server in another language behind the same endpoint would.
 type tokenSessions struct{ token string }
 
 func (s tokenSessions) Generate() string             { return s.token }

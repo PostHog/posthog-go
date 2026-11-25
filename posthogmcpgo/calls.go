@@ -59,13 +59,11 @@ func arrivalOf(ctx context.Context, req mcp.CallToolRequest) arrival {
 // then, since the handler may unregister the tool and the session may close or
 // sit past its inactivity timeout before the call ends.
 type callStart struct {
-	at       time.Time
-	client   posthogmcp.Client
-	session  callSession
-	identity Identity
-	tool     toolInfo
-	// conversation is the call's handle; delivered says whether the result
-	// carried one minted for this call.
+	at           time.Time
+	client       posthogmcp.Client
+	session      callSession
+	identity     Identity
+	tool         toolInfo
 	conversation conversation
 	delivered    *atomic.Bool
 	// end finishes the call's session, once: from the handler middleware when
@@ -79,24 +77,18 @@ func newCallStart(end func()) callStart {
 	return callStart{end: func() { once.Do(end) }, delivered: new(atomic.Bool)}
 }
 
-// conversation is a call's conversation handle, and whether the
-// instrumentation minted it for this call, so the agent has yet to receive it.
 type conversation struct {
 	id     string
 	minted bool
 }
 
-// handle is the call's conversation handle as its events record it: an echoed
-// one, or a minted one once its result delivered it.
-func (call callStart) handle() string {
+func (call callStart) recordedHandle() string {
 	if call.conversation.minted && !call.delivered.Load() {
 		return ""
 	}
 	return call.conversation.id
 }
 
-// deliver appends a handle minted for this call to the result the agent
-// receives, which cannot carry it alongside an error.
 func (call callStart) deliver(result *mcp.CallToolResult, err error) *mcp.CallToolResult {
 	if !call.conversation.minted || err != nil || result == nil {
 		return result
@@ -113,9 +105,8 @@ type callSession struct {
 	source posthogmcp.SessionSource
 }
 
-// scoped returns ctx carrying the call's session and identity. A handle minted
-// for this call counts as delivered: that is known only once the handler
-// returns, and the host's client sends a custom event at once.
+// A handle minted for this call counts as delivered: that is known only once
+// the handler returns, and the host's client sends the custom event at once.
 func (call callStart) scoped(ctx context.Context) context.Context {
 	session := call.session
 	if session.source != posthogmcp.SessionSourceClientMetadata && call.conversation.id != "" {
