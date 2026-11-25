@@ -175,3 +175,11 @@ func TestResolveClient(t *testing.T) {
 		})
 	}
 }
+
+func TestASessionTokenIgnoresOptionalFieldsThatAreNotStrings(t *testing.T) {
+	for _, payload := range []string{`{"sid":"ses_x","cn":5}`, `{"sid":"ses_x","pv":20251125}`, `{"sid":"ses_x","cv":{"a":1}}`} {
+		got, ok := ReadSessionToken(base64.RawURLEncoding.EncodeToString([]byte(payload)))
+		assert.True(t, ok, payload)
+		assert.Equal(t, SessionToken{SessionID: "ses_x"}, got, payload)
+	}
+}

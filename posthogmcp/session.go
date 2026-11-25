@@ -204,20 +204,19 @@ func ReadSessionToken(value string) (SessionToken, bool) {
 	if err != nil {
 		return SessionToken{}, false
 	}
-	var fields struct {
-		SessionID       any    `json:"sid"`
-		ClientName      string `json:"cn"`
-		ClientVersion   string `json:"cv"`
-		ProtocolVersion string `json:"pv"`
-	}
+	var fields map[string]any
 	if json.Unmarshal(decoded, &fields) != nil {
 		return SessionToken{}, false
 	}
-	id, _ := fields.SessionID.(string)
+	text := func(key string) string {
+		value, _ := fields[key].(string)
+		return value
+	}
+	id := text("sid")
 	if id == "" || utf8.RuneCountInString(id) > maxSessionTokenIDLength {
 		return SessionToken{}, false
 	}
-	return SessionToken{SessionID: id, ClientName: fields.ClientName, ClientVersion: fields.ClientVersion, ProtocolVersion: fields.ProtocolVersion}, true
+	return SessionToken{SessionID: id, ClientName: text("cn"), ClientVersion: text("cv"), ProtocolVersion: text("pv")}, true
 }
 
 // TransportSessionID is the $session_id of a transport session id: a PostHog
