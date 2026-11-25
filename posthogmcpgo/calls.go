@@ -22,23 +22,34 @@ const maxCallsInFlight = 1024
 type callsInFlight struct {
 	mu       sync.Mutex
 	started  map[*mcp.CallToolRequest]*list.Element
-	arrivals map[arrival]*list.Element
-	// latest is the latest call in each session, for a handler whose headers
-	// middleware outside Instrument replaced.
-	latest map[server.ClientSession]*list.Element
-	order  *list.List
+	arrivals map[headersKey]*list.Element
+	// requests finds a call whose headers middleware outside Instrument
+	// replaced, by its request's Done channel.
+	requests map[<-chan struct{}]*list.Element
+	order    *list.List
 }
 
 // arrival tells a call apart from the others in flight by what mcp-go shares
 // between a call's request and the copy its handler gets: the session and the
-// headers map, which mcp-go makes for each message, with or without HTTP.
+// headers map, which mcp-go makes for each message, with or without HTTP, and
+// the Done channel of the context mcp-go makes for each message, which a
+// handler's context shares unless middleware outside Instrument adds a
+// deadline. Either finds the call, so middleware may replace one of them.
 type arrival struct {
+	headers headersKey
+	done    <-chan struct{}
+}
+
+type headersKey struct {
 	session server.ClientSession
 	headers uintptr
 }
 
 func arrivalOf(ctx context.Context, req mcp.CallToolRequest) arrival {
-	return arrival{session: server.ClientSessionFromContext(ctx), headers: reflect.ValueOf(req.Header).Pointer()}
+	return arrival{
+		headers: headersKey{session: server.ClientSessionFromContext(ctx), headers: reflect.ValueOf(req.Header).Pointer()},
+		done:    ctx.Done(),
+	}
 }
 
 // callStart is what a call's capture needs from when it arrived. It is read
@@ -79,8 +90,8 @@ type trackedCall struct {
 func newCallsInFlight() *callsInFlight {
 	return &callsInFlight{
 		started:  map[*mcp.CallToolRequest]*list.Element{},
-		arrivals: map[arrival]*list.Element{},
-		latest:   map[server.ClientSession]*list.Element{},
+		arrivals: map[headersKey]*list.Element{},
+		requests: map[<-chan struct{}]*list.Element{},
 		order:    list.New(),
 	}
 }
@@ -93,16 +104,18 @@ func (c *callsInFlight) start(req *mcp.CallToolRequest, arrived arrival, call ca
 	}
 	element := c.order.PushBack(trackedCall{req: req, arrival: arrived, start: call})
 	c.started[req] = element
-	c.arrivals[arrived] = element
-	c.latest[arrived.session] = element
+	c.arrivals[arrived.headers] = element
+	if arrived.done != nil {
+		c.requests[arrived.done] = element
+	}
 }
 
 func (c *callsInFlight) startOf(arrived arrival) (callStart, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	element, ok := c.arrivals[arrived]
-	if !ok {
-		element, ok = c.latest[arrived.session]
+	element, ok := c.arrivals[arrived.headers]
+	if !ok && arrived.done != nil {
+		element, ok = c.requests[arrived.done]
 	}
 	if !ok {
 		return callStart{}, false
@@ -123,11 +136,11 @@ func (c *callsInFlight) finish(req *mcp.CallToolRequest) (callStart, bool) {
 func (c *callsInFlight) remove(element *list.Element) callStart {
 	call := c.order.Remove(element).(trackedCall)
 	delete(c.started, call.req)
-	if c.arrivals[call.arrival] == element {
-		delete(c.arrivals, call.arrival)
+	if c.arrivals[call.arrival.headers] == element {
+		delete(c.arrivals, call.arrival.headers)
 	}
-	if c.latest[call.arrival.session] == element {
-		delete(c.latest, call.arrival.session)
+	if c.requests[call.arrival.done] == element {
+		delete(c.requests, call.arrival.done)
 	}
 	return call.start
 }

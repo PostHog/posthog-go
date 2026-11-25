@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -215,4 +216,74 @@ func TestCustomEventsKeepTheirCallsSessionWhenMiddlewareReplacesHeaders(t *testi
 
 	assert.Equal(t, chatGPTSession, scope.SessionId)
 	assert.Equal(t, queue.onlyToolCall(t)["$session_id"], scope.SessionId)
+}
+
+// Two overlapping calls in one session behind middleware that replaces the
+// headers: call A looks itself up after call B arrived, and still gets its own
+// session.
+func TestOverlappingCallsKeepTheirOwnScopeWhenMiddlewareReplacesHeaders(t *testing.T) {
+	queue := &fakeQueue{}
+	bArrived := make(chan struct{})
+	outer := server.WithToolHandlerMiddleware(func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			req.Header = req.Header.Clone()
+			if req.GetString("city", "") == "A" {
+				<-bArrived
+			} else {
+				close(bArrived)
+			}
+			return next(ctx, req)
+		}
+	})
+	s := server.NewMCPServer("weather-server", "1.2.3", outer, Instrument(posthogmcp.New(queue)))
+	var mu sync.Mutex
+	scopes := map[string]posthog.RequestContext{}
+	s.AddTool(weatherTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		scope, _ := posthog.RequestContextFromContext(ctx)
+		mu.Lock()
+		scopes[req.GetString("city", "")] = scope
+		mu.Unlock()
+		return mcp.NewToolResultText("sunny"), nil
+	})
+	c := connectHTTPAs(t, s, "codex-mcp-client/0.50.0", "test-client")
+	call := func(city, sessionID string) error {
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "weather"
+		req.Params.Arguments = map[string]any{"city": city}
+		req.Params.Meta = &mcp.Meta{AdditionalFields: map[string]any{"sessionId": sessionID}}
+		_, err := c.CallTool(t.Context(), req)
+		return err
+	}
+	const a, b = "019a4f2e-1c3d-7b8a-9e0f-1a2b3c4d5e6f", "019a4f2e-1c3d-7b8a-9e0f-1a2b3c4d5e70"
+	done := make(chan error)
+	go func() { done <- call("A", a) }()
+	go func() { done <- call("B", b) }()
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+
+	assert.Equal(t, codexSession, scopes["A"].SessionId, "call A keeps its own session")
+	assert.Equal(t, posthogmcp.ReadClientConversation("codex-mcp-client/0.50.0", "", map[string]any{"sessionId": b}).SessionID, scopes["B"].SessionId)
+}
+
+func TestAHandlerWithNoMatchingCallGetsNoScope(t *testing.T) {
+	queue := &fakeQueue{}
+	outer := server.WithToolHandlerMiddleware(func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			req.Header = req.Header.Clone()
+			ctx, cancel := context.WithTimeout(ctx, time.Minute)
+			defer cancel()
+			return next(ctx, req)
+		}
+	})
+	s := server.NewMCPServer("weather-server", "1.2.3", outer, Instrument(posthogmcp.New(queue)))
+	var scoped bool
+	s.AddTool(weatherTool(), func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		_, scoped = posthog.RequestContextFromContext(ctx)
+		return mcp.NewToolResultText("sunny"), nil
+	})
+	c := connectHTTPAs(t, s, chatGPTUserAgent, "test-client", server.WithStateLess(true))
+	require.NoError(t, callWithMeta(t, c, map[string]any{"openai/session": "v1/conv-example-0001"}))
+
+	assert.False(t, scoped, "no call scope rather than another call's")
+	assert.Equal(t, chatGPTSession, queue.onlyToolCall(t)["$session_id"], "the call itself is still captured")
 }

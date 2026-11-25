@@ -32,7 +32,7 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 				}
 				start := newCallStart(func() {})
 				start.at = at
-				calls.start(requests[i], arrival{headers: uintptr(i + 1)}, start)
+				calls.start(requests[i], arrival{headers: headersKey{headers: uintptr(i + 1)}}, start)
 			}
 
 			_, first := calls.finish(requests[0])
@@ -41,7 +41,7 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 			assert.True(t, last, "the newest call is kept")
 			assert.Equal(t, calls.order.Len(), len(calls.started), "the order and the index agree")
 			assert.Equal(t, calls.order.Len(), len(calls.arrivals), "the order and the arrivals agree")
-			assert.LessOrEqual(t, len(calls.latest), calls.order.Len(), "the latest calls are bounded")
+			assert.LessOrEqual(t, len(calls.requests), calls.order.Len(), "the requests are bounded")
 		})
 	}
 }
@@ -50,7 +50,7 @@ func TestEvictingACallDoesNotEndIt(t *testing.T) {
 	calls := newCallsInFlight()
 	var ended atomic.Int32
 	for i := range maxCallsInFlight + 1 {
-		calls.start(&mcp.CallToolRequest{}, arrival{headers: uintptr(i + 1)}, newCallStart(func() { ended.Add(1) }))
+		calls.start(&mcp.CallToolRequest{}, arrival{headers: headersKey{headers: uintptr(i + 1)}}, newCallStart(func() { ended.Add(1) }))
 	}
 	assert.Equal(t, int32(0), ended.Load(), "an evicted call may still be running")
 }
