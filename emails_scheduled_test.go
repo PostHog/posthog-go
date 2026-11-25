@@ -372,6 +372,19 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 			wantCode: "schedule_not_confirmed",
 		},
 		{
+			// An earlier request still holds the key, so it may have queued the
+			// email before this send's retry.
+			name:  "keys in flight, then a replay close to the time",
+			after: 80 * time.Second,
+			attempts: []attempt{
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader(`{"code":"idempotency_key_in_flight","detail":"Try again."}`)), Header: http.Header{}}
+				}, takes: 30 * time.Second},
+				{reply: queuedNow("true"), takes: time.Second},
+			},
+			wantCode: "schedule_not_confirmed",
+		},
+		{
 			// A rate limit queued nothing, so the send that queued is the second.
 			name:  "a rate limit, then a send close to the time",
 			after: 80 * time.Second,
