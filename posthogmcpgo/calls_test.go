@@ -41,6 +41,7 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 			assert.True(t, last, "the newest call is kept")
 			assert.Equal(t, calls.order.Len(), len(calls.started), "the order and the index agree")
 			assert.Equal(t, calls.order.Len(), len(calls.arrivals), "the order and the arrivals agree")
+			assert.LessOrEqual(t, len(calls.latest), calls.order.Len(), "the latest calls are bounded")
 		})
 	}
 }

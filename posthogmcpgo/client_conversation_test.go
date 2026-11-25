@@ -195,3 +195,24 @@ func TestAnonymousCustomEventsUseTheCallsDistinctID(t *testing.T) {
 		})
 	}
 }
+
+func TestCustomEventsKeepTheirCallsSessionWhenMiddlewareReplacesHeaders(t *testing.T) {
+	queue := &fakeQueue{}
+	cloneHeaders := server.WithToolHandlerMiddleware(func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			req.Header = req.Header.Clone()
+			return next(ctx, req)
+		}
+	})
+	s := server.NewMCPServer("weather-server", "1.2.3", cloneHeaders, Instrument(posthogmcp.New(queue)))
+	var scope posthog.RequestContext
+	s.AddTool(weatherTool(), func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		scope, _ = posthog.RequestContextFromContext(ctx)
+		return mcp.NewToolResultText("sunny"), nil
+	})
+	c := connectHTTPAs(t, s, chatGPTUserAgent, "test-client", server.WithStateLess(true))
+	require.NoError(t, callWithMeta(t, c, map[string]any{"openai/session": "v1/conv-example-0001"}))
+
+	assert.Equal(t, chatGPTSession, scope.SessionId)
+	assert.Equal(t, queue.onlyToolCall(t)["$session_id"], scope.SessionId)
+}

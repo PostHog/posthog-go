@@ -23,7 +23,10 @@ type callsInFlight struct {
 	mu       sync.Mutex
 	started  map[*mcp.CallToolRequest]*list.Element
 	arrivals map[arrival]*list.Element
-	order    *list.List
+	// latest is the latest call in each session, for a handler whose headers
+	// middleware outside Instrument replaced.
+	latest map[server.ClientSession]*list.Element
+	order  *list.List
 }
 
 // arrival tells a call apart from the others in flight by what mcp-go shares
@@ -77,6 +80,7 @@ func newCallsInFlight() *callsInFlight {
 	return &callsInFlight{
 		started:  map[*mcp.CallToolRequest]*list.Element{},
 		arrivals: map[arrival]*list.Element{},
+		latest:   map[server.ClientSession]*list.Element{},
 		order:    list.New(),
 	}
 }
@@ -90,12 +94,16 @@ func (c *callsInFlight) start(req *mcp.CallToolRequest, arrived arrival, call ca
 	element := c.order.PushBack(trackedCall{req: req, arrival: arrived, start: call})
 	c.started[req] = element
 	c.arrivals[arrived] = element
+	c.latest[arrived.session] = element
 }
 
 func (c *callsInFlight) startOf(arrived arrival) (callStart, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	element, ok := c.arrivals[arrived]
+	if !ok {
+		element, ok = c.latest[arrived.session]
+	}
 	if !ok {
 		return callStart{}, false
 	}
@@ -117,6 +125,9 @@ func (c *callsInFlight) remove(element *list.Element) callStart {
 	delete(c.started, call.req)
 	if c.arrivals[call.arrival] == element {
 		delete(c.arrivals, call.arrival)
+	}
+	if c.latest[call.arrival.session] == element {
+		delete(c.latest, call.arrival.session)
 	}
 	return call.start
 }
