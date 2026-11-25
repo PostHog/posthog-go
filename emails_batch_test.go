@@ -536,7 +536,8 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", retries: []stubReply{failed(http.StatusConflict, "idempotency_key_in_flight")}},
 		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", detail: "PostHog said no.", retries: []stubReply{failed(http.StatusServiceUnavailable, "delivery_unavailable")}},
 		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", detail: "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", callMessage: "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails.", retries: []stubReply{{status: http.StatusNotFound}}},
-		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", detail: "PostHog said no.", retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
+		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", detail: "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", callMessage: "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails.", retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
+		{name: "a 404 that names a field", callCode: "not_found", errorCode: "not_found", detail: "PostHog said no.", retries: []stubReply{{status: http.StatusNotFound, body: `{"code":"not_found","attr":"template_id","detail":"PostHog said no."}`}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -660,35 +661,68 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testi
 }
 
 func TestEmailsBatchUnavailable(t *testing.T) {
+	const (
+		noTemplate   = "PostHog found no template with this TemplateID, or batch sends aren't available for this project, so it sent no email of this request."
+		checkID      = "Check TemplateID. If it's right, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+		noCodeBatch  = "Batch sends from code aren't available for this project, so PostHog sent no email of this request."
+		sendEachCode = "Send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+	)
+	codeBatch := CodeEmailBatch{TemplateKey: "price-change", Subject: "s", Text: "t", Recipients: recipientsTo(2)}
 	tests := []struct {
 		name    string
+		batch   EmailBatch
 		reply   stubReply
 		code    string
 		errName EmailErrorName
-		why     string
+		message string
 		fix     string
 	}{
 		{
 			name:    "batch_unavailable",
+			batch:   templateBatch(recipientsTo(2)...),
 			reply:   stubReply{status: http.StatusConflict, body: `{"code":"batch_unavailable","detail":"Batch sends aren't available for this project yet.","fix":"Send each email on its own."}`},
 			code:    "batch_unavailable",
 			errName: EmailErrorApplication,
+			message: "Batch sends aren't available for this project yet.",
 			fix:     "Until batch sends are on for the project, send each email the batch didn't queue with Emails.Send and its recipient's IdempotencyKey.",
 		},
 		{
+			// PostHog answers an unknown template ID and batch sends being off
+			// with the same 404, so the error names both.
+			name:    "an unknown template ID",
+			batch:   templateBatch(recipientsTo(2)...),
+			reply:   stubReply{status: http.StatusNotFound, body: `{"code":"not_found","attr":null,"detail":"Not found."}`},
+			code:    "not_found",
+			errName: EmailErrorNotFound,
+			message: noTemplate,
+			fix:     checkID,
+		},
+		{
+			name:    "a server without the batch route",
+			batch:   templateBatch(recipientsTo(2)...),
+			reply:   stubReply{status: http.StatusNotFound, body: `{"code":"not_found","detail":"Endpoint not found."}`},
+			code:    "not_found",
+			errName: EmailErrorNotFound,
+			message: noTemplate,
+			fix:     checkID,
+		},
+		{
 			name:    "a 404 without a body",
+			batch:   templateBatch(recipientsTo(2)...),
 			reply:   stubReply{status: http.StatusNotFound, body: `<html>Not found</html>`},
 			code:    "not_found",
 			errName: EmailErrorNotFound,
-			why:     "The template doesn't exist, or batch sends are off for this project or this PostHog version.",
-			fix:     "Check TemplateID, or send each email the batch didn't queue with Emails.Send and its recipient's IdempotencyKey.",
+			message: noTemplate,
+			fix:     checkID,
 		},
 		{
-			name:    "a 404 with PostHog's error body",
-			reply:   stubReply{status: http.StatusNotFound, body: `{"code":"not_found","detail":"Not found."}`},
+			name:    "a code batch",
+			batch:   codeBatch,
+			reply:   stubReply{status: http.StatusNotFound, body: `{"code":"not_found","attr":null,"detail":"Not found."}`},
 			code:    "not_found",
 			errName: EmailErrorNotFound,
-			fix:     "Check TemplateID, or send each email the batch didn't queue with Emails.Send and its recipient's IdempotencyKey.",
+			message: noCodeBatch,
+			fix:     sendEachCode,
 		},
 	}
 	for _, tt := range tests {
@@ -696,13 +730,14 @@ func TestEmailsBatchUnavailable(t *testing.T) {
 			server := newBatchServer(t, func(int, batchRequest) stubReply { return tt.reply })
 			client := newEmailClientFor(t, server.URL)
 
-			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+			result, err := client.Emails().Batch(context.Background(), tt.batch)
 
 			emailErr := requireEmailError(t, err)
 			require.Equal(t, tt.code, emailErr.Code)
 			require.Equal(t, tt.errName, emailErr.Name)
-			require.Equal(t, tt.why, emailErr.Why)
+			require.Equal(t, tt.message, emailErr.Message)
 			require.Equal(t, tt.fix, emailErr.Fix)
+			require.NotContains(t, emailErr.Why, "version", "the same 404 never means PostHog needs an update")
 			require.Len(t, server.received(), 1, "not retried")
 			require.Equal(t, []string{"failed", "failed"}, statuses(result))
 		})

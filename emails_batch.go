@@ -199,6 +199,7 @@ type batchMember struct {
 // and what PostHog answered for each.
 type batchRun struct {
 	members    []batchMember
+	isTemplate bool
 	body       []byte
 	maxRetries *int
 	// lost is true once an attempt went out and PostHog may have queued the
@@ -219,7 +220,7 @@ func newBatchRun(recipients []BatchRecipient, isTemplate bool, maxRetries *int) 
 	if err := checkMaxRetries(maxRetries); err != nil {
 		return nil, err
 	}
-	run := &batchRun{maxRetries: maxRetries, results: make([]BatchEmailResult, len(recipients)), warnings: []EmailWarning{}}
+	run := &batchRun{isTemplate: isTemplate, maxRetries: maxRetries, results: make([]BatchEmailResult, len(recipients)), warnings: []EmailWarning{}}
 	firstWithKey := map[string]int{}
 	for i, recipient := range recipients {
 		member, err := newBatchMember(i, recipient, isTemplate)
@@ -307,7 +308,7 @@ func (r *batchRun) result() *SendBatchResult {
 // request failed as a whole.
 func (r *batchRun) answer(reply emailReply) *EmailError {
 	if !reply.accepted() {
-		return batchReplyError(reply, len(r.members), r.lost)
+		return batchReplyError(reply, len(r.members), r.isTemplate, r.lost)
 	}
 	slots, _ := reply.fields["results"].([]interface{})
 	if len(slots) != len(r.members) {
@@ -435,7 +436,7 @@ const noBatchForTheRetry = "PostHog found no batch send for the retry, but an ea
 
 // batchReplyError is a batch request that failed as a whole. lost says an
 // earlier attempt may have queued the emails.
-func batchReplyError(reply emailReply, recipients int, lost bool) *EmailError {
+func batchReplyError(reply emailReply, recipients int, isTemplate, lost bool) *EmailError {
 	err := reply.error()
 	if reply.status == http.StatusRequestEntityTooLarge {
 		// Splitting can't shrink a batch of one, whatever PostHog advises.
@@ -445,13 +446,23 @@ func batchReplyError(reply emailReply, recipients int, lost bool) *EmailError {
 			err.Fix = "Split the recipients into smaller batches."
 		}
 	}
-	if reply.status == http.StatusNotFound && reply.text("code") == "" {
-		err.Code, err.Name = "not_found", EmailErrorNotFound
-		err.Message = "PostHog found no batch send for this request, so no email was sent."
-		if lost {
+	if code := reply.text("code"); reply.status == http.StatusNotFound && (code == "" || code == "not_found") && reply.text("attr") == "" {
+		// PostHog answers an unknown template, batch sends being off and a
+		// server without the route with this same 404, so the error can't
+		// pick one. After launch a wrong template ID is the likely cause.
+		err.Code, err.Name, err.Why = "not_found", EmailErrorNotFound, ""
+		switch {
+		case lost:
 			err.Message = noBatchForTheRetry
+		case isTemplate:
+			err.Message = "PostHog found no template with this TemplateID, or batch sends aren't available for this project, so it sent no email of this request."
+		default:
+			err.Message = "Batch sends from code aren't available for this project, so PostHog sent no email of this request."
 		}
-		err.Why = "The template doesn't exist, or batch sends are off for this project or this PostHog version."
+		err.Fix = "Send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+		if isTemplate {
+			err.Fix = "Check TemplateID. If it's right, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+		}
 	}
 	if err.Code == "not_found" && err.Fix == "" {
 		err.Fix = "Check TemplateID, or send each email the batch didn't queue with Emails.Send and its recipient's IdempotencyKey."

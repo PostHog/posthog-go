@@ -99,11 +99,12 @@ type Emails interface {
 	// "unconfirmed" even when PostHog refuses the retry, since the lost
 	// attempt may have queued them. An "unconfirmed" email's Error says to
 	// send it again with the same IdempotencyKey. The error code
-	// "batch_unavailable" (409) means the project can't send batches yet,
-	// and "not_found" that the template doesn't exist or batch sends are off
-	// for the project: send each email the batch didn't queue with Send and
-	// its recipient's IdempotencyKey, within 24 hours of the first request
-	// that used the key, so it goes out once. A result is nil
+	// "batch_unavailable" (409) means the project can't send batches yet.
+	// "not_found" means PostHog found no template with the TemplateID, or
+	// batch sends aren't available for the project: check TemplateID, and if
+	// it's right, send each email the batch didn't queue with Send and its
+	// recipient's IdempotencyKey, within 24 hours of the first request that
+	// used the key, so it goes out once. A result is nil
 	// only when the client sent nothing, such as for an argument it refuses
 	// before any request.
 	Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error)
