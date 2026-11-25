@@ -64,12 +64,7 @@ arguments. Middleware given after it sees them removed.
   with their error type, as `Tool <name> returned an error`.
   The text of an `IsError` result, including the ones mcp-go sends when schema validation fails, is also part of `$mcp_response`, so
   turn responses off as well.
-- The session as `$session_id`, always set, and what chose it as
-  `$mcp_session_source`. A conversation id the client sends in `_meta` comes
-  first: ChatGPT's `openai/session`, Codex's `sessionId`, and VS Code's
-  `vscode.conversationId`, each read only from the client that defines it, as
-  recognized by its `User-Agent` or client name. The id itself is never sent.
-  Otherwise, on stateful streamable HTTP, the
+- The session as `$session_id`, always set. On stateful streamable HTTP, the
   `Mcp-Session-Id` becomes `ses_` plus a hash every PostHog MCP SDK computes
   the same way, so replicas and SDKs in other languages agree. On stateless
   streamable HTTP, each call gets its own `ses_<UUIDv7>`. On SSE, the
@@ -92,12 +87,6 @@ Use `WithIdentity` to attach a distinct ID, groups, and person properties,
 options, such as turning off person processing, and `WithErrorHandler` to see
 instrumentation failures. Analytics errors and panics never change the MCP
 response.
-
-The tool handler's context carries the call's session and identity as a
-`posthog.RequestContext`. Capture with `posthog.EnqueueWithContext(ctx, client,
-message)` inside a tool, or in work it starts with that context, and the event
-gets the call's `$session_id`, `$mcp_session_source`, and the identity
-`WithIdentity` resolved, even while other clients' calls run.
 
 ```go
 posthogmcpgo.Instrument(analytics,

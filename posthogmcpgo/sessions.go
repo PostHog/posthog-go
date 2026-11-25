@@ -32,9 +32,6 @@ type sessionResolver struct {
 type generatedSession struct {
 	id           string
 	lastActivity time.Time
-	// running counts the calls in flight, during which the session never
-	// expires: the timeout counts from when the last call ended.
-	running int
 }
 
 func newSessionResolver() *sessionResolver {
@@ -58,11 +55,10 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) c
 	if entry.id == "" && len(r.generated) >= maxGeneratedSessions {
 		r.evictOldest()
 	}
-	if entry.id == "" || entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+	if entry.id == "" || now.Sub(entry.lastActivity) > sessionInactivityTimeout {
 		entry.id = newGeneratedSessionID()
 	}
 	entry.lastActivity = now
-	entry.running++
 	r.generated[session] = entry
 	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}
 }
@@ -113,7 +109,7 @@ func (r *sessionResolver) sweep(now time.Time) {
 	}
 	r.lastSweep = now
 	for session, entry := range r.generated {
-		if entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+		if now.Sub(entry.lastActivity) > sessionInactivityTimeout {
 			delete(r.generated, session)
 		}
 	}
@@ -173,14 +169,13 @@ func (p *protocolVersions) forget(session server.ClientSession) {
 	delete(p.versions, session)
 }
 
-// finish records the end of a call that resolve started on a one-client
-// session.
-func (r *sessionResolver) finish(session server.ClientSession, now time.Time) {
+// touch records a call's completion as activity on a one-client session, so a
+// call that runs past the timeout does not rotate the session it started in.
+func (r *sessionResolver) touch(session server.ClientSession, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if entry, ok := r.generated[session]; ok {
 		entry.lastActivity = now
-		entry.running = max(entry.running-1, 0)
 		r.generated[session] = entry
 	}
 }
