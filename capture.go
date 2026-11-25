@@ -26,10 +26,12 @@ type SendFeatureFlagsOptions struct {
 	GroupProperties map[string]Properties
 	// PersonPropertyKeysKnownAbsent lists person property keys known to be absent.
 	// See FeatureFlagPayload.PersonPropertyKeysKnownAbsent. A list over the limit is
-	// logged as an error, and the event is sent without feature flag properties.
+	// logged as an error, and the event is sent without $feature/<key> properties
+	// and with an empty $active_feature_flags.
 	PersonPropertyKeysKnownAbsent []string
 	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys known to be absent.
-	// See FeatureFlagPayload.GroupPropertyKeysKnownAbsent.
+	// See FeatureFlagPayload.GroupPropertyKeysKnownAbsent. An over-limit list is handled
+	// like PersonPropertyKeysKnownAbsent.
 	GroupPropertyKeysKnownAbsent map[string][]string
 }
 

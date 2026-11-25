@@ -528,27 +528,37 @@ func TestKnownAbsentLimitValidation(t *testing.T) {
 	}
 }
 
-func TestKnownAbsentCaptureOverLimitSendsEventWithoutFlags(t *testing.T) {
-	definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, unknownOperatorFilter)))
-	server := newKnownAbsentServer(t, definitions)
-	c, capture, _ := newEvalClient(t, server.server, func(cfg *Config) { cfg.PersonalApiKey = "personal-key" })
-	waitForFlagDefinitions(t, c)
-
+func TestKnownAbsentCaptureOverLimitSendsEventWithoutFlagValues(t *testing.T) {
 	tooMany := make([]string, maxKnownAbsentPropertyKeys+1)
 	for i := range tooMany {
 		tooMany[i] = fmt.Sprintf("key-%d", i)
 	}
-	require.NoError(t, c.Enqueue(Capture{
-		Event:            "signed_up",
-		DistinctId:       "user-1",
-		SendFeatureFlags: &SendFeatureFlagsOptions{PersonPropertyKeysKnownAbsent: tooMany},
-	}))
+	for name, opts := range map[string]*SendFeatureFlagsOptions{
+		"person list": {PersonPropertyKeysKnownAbsent: tooMany},
+		"group list":  {GroupPropertyKeysKnownAbsent: map[string][]string{"organization": tooMany}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, unknownOperatorFilter)))
+			server := newKnownAbsentServer(t, definitions)
+			c, capture, _ := newEvalClient(t, server.server, func(cfg *Config) { cfg.PersonalApiKey = "personal-key" })
+			waitForFlagDefinitions(t, c)
 
-	events := waitForEventCount(capture, 1, 5*time.Second)
-	require.Len(t, events, 1)
-	require.Equal(t, "signed_up", events[0].Event)
-	require.NotContains(t, events[0].Properties, "$feature/profile-incomplete")
-	require.Empty(t, server.requests(), "an over-limit list must not reach /flags")
+			require.NoError(t, c.Enqueue(Capture{
+				Event:            "signed_up",
+				DistinctId:       "user-1",
+				Groups:           Groups{"organization": "acme"},
+				SendFeatureFlags: opts,
+			}))
+
+			events := waitForEventCount(capture, 1, 5*time.Second)
+			require.Len(t, events, 1)
+			require.Equal(t, "signed_up", events[0].Event)
+			require.NotContains(t, events[0].Properties, "$feature/profile-incomplete")
+			require.Equal(t, []string{}, events[0].Properties["$active_feature_flags"],
+				"an over-limit list still attaches an empty $active_feature_flags")
+			require.Empty(t, server.requests(), "an over-limit list must not reach /flags")
+		})
+	}
 }
 
 func TestKnownAbsentCohortLeafKeepsItsGroupScope(t *testing.T) {
