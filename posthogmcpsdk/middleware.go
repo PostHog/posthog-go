@@ -112,7 +112,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				m.report(ctx, errors.New("posthogmcpsdk: tools/call received an unexpected request type"))
 				return next(ctx, method, req)
 			}
-			session, release := m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
+			session, release := m.transportSession(toolRequest)
 			defer release()
 			call := m.prepare(ctx, next, toolRequest, session)
 			started := time.Now()
@@ -564,6 +564,18 @@ func (m *middleware) eventContext(ctx context.Context, prepared preparedCall, st
 		event.VendorClient = extra.Header.Get("X-Anthropic-Client")
 	}
 	return event
+}
+
+// transportSession is a replayed PostHog session token's session, read from
+// the header since go-sdk v1.8 drops it on stateless HTTP, else the session
+// the resolver gives, with the resolver's release func.
+func (m *middleware) transportSession(req *mcpsdk.CallToolRequest) (callSession, func()) {
+	if req.Extra != nil {
+		if token, ok := posthogmcp.ReadSessionToken(req.Extra.Header.Get("Mcp-Session-Id")); ok {
+			return callSession{id: token.SessionID, source: posthogmcp.SessionSourceTransport}, func() {}
+		}
+	}
+	return m.sessions.resolve(req.Session, !carriesSession(req))
 }
 
 func (m *middleware) resolveIdentity(ctx context.Context, req *mcpsdk.CallToolRequest) Identity {

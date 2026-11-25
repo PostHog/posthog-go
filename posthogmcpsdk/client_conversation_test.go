@@ -373,3 +373,28 @@ func TestATransportSessionTokenGivesItsSessionUnchanged(t *testing.T) {
 	assert.Equal(t, "ses_first", properties["$session_id"])
 	assert.Equal(t, "transport", properties["$mcp_session_source"])
 }
+
+func TestAReplayedTokenKeepsItsSessionOnAStatelessServer(t *testing.T) {
+	queue := &fakeQueue{}
+	server := newSessionlessServer()
+	Instrument(server, posthogmcp.New(queue), WithConversationID(false))
+	addWeatherTool(server, nil)
+	httpServer := httptest.NewServer(mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return server },
+		&mcpsdk.StreamableHTTPOptions{Stateless: true},
+	))
+	t.Cleanup(httpServer.Close)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{
+		Endpoint:   httpServer.URL,
+		HTTPClient: &http.Client{Transport: headerTransport{http.Header{"Mcp-Session-Id": {"eyJzaWQiOiJzZXNfZmlyc3QifQ"}}}},
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+
+	_, err = session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
+	require.NoError(t, err)
+	properties := queue.onlyToolCall(t)
+	assert.Equal(t, "ses_first", properties["$session_id"])
+	assert.Equal(t, "transport", properties["$mcp_session_source"])
+}
