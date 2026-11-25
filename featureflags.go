@@ -818,7 +818,7 @@ func (poller *FeatureFlagsPoller) dependencyGroupIsMissing(flag FeatureFlag, inp
 	if !exists {
 		return false
 	}
-	_, hasGroup := inputs.groups[groupType]
+	_, hasGroup := inputs.groupKey(groupType)
 	return !hasGroup
 }
 
@@ -1660,6 +1660,13 @@ type flagEvaluationInputs struct {
 // such as through a cycle the chains don't report, makes the evaluation inconclusive.
 const maxFlagDependencyDepth = 100
 
+// groupKey returns the key supplied for a group type. An empty key counts as no
+// group key, as the flags service treats it.
+func (inputs *flagEvaluationInputs) groupKey(groupType string) (string, bool) {
+	key := inputs.groups[groupType]
+	return key, key != ""
+}
+
 var errDependencyDepthLimit = &InconclusiveMatchError{
 	msg:    fmt.Sprintf("Flag dependency evaluation is nested deeper than the limit of %d", maxFlagDependencyDepth),
 	Reason: UnresolvedFlagReasonUnresolvedDependency,
@@ -1727,7 +1734,7 @@ func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 			return nil, errors.New(errMessage)
 		}
 
-		groupKey, exists := inputs.groups[groupType]
+		groupKey, exists := inputs.groupKey(groupType)
 
 		if !exists {
 			return false, nil
@@ -1865,7 +1872,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 				if !exists {
 					continue
 				}
-				groupKey, hasGroup := inputs.groups[groupType]
+				groupKey, hasGroup := inputs.groupKey(groupType)
 				if !hasGroup {
 					continue
 				}
