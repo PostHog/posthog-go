@@ -62,11 +62,12 @@ var (
 // self-hosted PostHog, a reverse proxy or a custom domain, Send returns an
 // error with code "scheduling_requires_cloud" before any request. Get reads
 // "scheduled" until the email goes out. Send can't cancel or move a
-// scheduled email. To stop one before it goes out, disable its template's
-// workflow in PostHog until the email reaches a final status. A CodeEmail
-// uses the workflow of the saved template with its TemplateKey. Without
-// one, it goes through a workflow PostHog keeps out of the workflow list,
-// so once scheduled it goes out.
+// scheduled email. To stop one before it goes out, disable its workflow in
+// PostHog until the email reaches a final status. A TemplateEmail, and a
+// CodeEmail whose TemplateKey names a saved template, use that template's
+// workflow. Any other CodeEmail goes through a workflow PostHog keeps out of
+// the workflow list. The code emails API names it for each key, and the
+// workflows API can disable it by that ID.
 type Emails interface {
 	// Send queues one email, from a TemplateEmail made in PostHog or from a
 	// CodeEmail your code rendered, or schedules it when it has a
