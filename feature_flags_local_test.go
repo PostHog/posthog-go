@@ -379,7 +379,7 @@ func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing
 		},
 	)
 
-	if matchedVariant != nil {
+	if matchedVariant != false {
 		t.Error("Should not match")
 	}
 
@@ -403,7 +403,7 @@ func TestFeatureFlagsDontFallbackToFlagsWhenOnlyLocalEvaluationIsTrue(t *testing
 		},
 	)
 
-	if matchedVariant != nil {
+	if matchedVariant != false {
 		t.Error("Should not match")
 	}
 

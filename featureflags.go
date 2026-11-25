@@ -760,7 +760,7 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			// Evaluate the dependency as if it were evaluated directly with the same inputs,
 			// so it uses its own aggregation, properties and bucketing identifier.
 			inputs.dependencyDepth++
-			result, err := poller.computeFlagFromInputs(depFlag, inputs, evaluationCache, true, state)
+			result, err := poller.computeFlagFromInputs(depFlag, inputs, evaluationCache, state)
 			inputs.dependencyDepth--
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
@@ -1692,7 +1692,7 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 		knownAbsent:      knownAbsent,
 		cohorts:          cohorts,
 	}
-	result, err := poller.computeFlagFromInputs(flag, &inputs, evaluationCache, false, state)
+	result, err := poller.computeFlagFromInputs(flag, &inputs, evaluationCache, state)
 	if inputs.dependencyDepthLimitReached && !isServerEvalError(err) {
 		return nil, errDependencyDepthLimit
 	}
@@ -1700,13 +1700,12 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 }
 
 // computeFlagFromInputs evaluates flag with its own aggregation. A dependency shares
-// evaluationCache with the flag that references it, and a dependency aggregated by a
-// group type without a supplied group is false, as the flags service resolves it.
+// evaluationCache with the flag that references it. A flag aggregated by a group type
+// without a supplied group is false, as the flags service resolves it.
 func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 	flag FeatureFlag,
 	inputs *flagEvaluationInputs,
 	evaluationCache map[string]interface{},
-	isDependency bool,
 	state *flagsState,
 ) (interface{}, error) {
 	if !flag.Active {
@@ -1719,7 +1718,6 @@ func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 
 	// Use pre-built flagsByKey index (built once when flags are fetched, not per evaluation)
 	flagsByKey := state.flagsByKey
-	cohorts := inputs.cohorts
 
 	if flag.Filters.AggregationGroupTypeIndex != nil {
 		groupType, exists := state.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
@@ -1732,15 +1730,7 @@ func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 		groupKey, exists := inputs.groups[groupType]
 
 		if !exists {
-			if isDependency {
-				return false, nil
-			}
-			// No condition can be checked without the group key, so a cause in the
-			// definition outranks the missing key.
-			return nil, &InconclusiveMatchError{
-				msg:    fmt.Sprintf("[FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key),
-				Reason: pickUnresolvedReason(definitionUnresolvedReason(flag, flagsByKey, cohorts, state.propertyMatchingVersion), UnresolvedFlagReasonMissingContext),
-			}
+			return false, nil
 		}
 
 		focusedGroupProperties := inputs.groupProperties[groupType]

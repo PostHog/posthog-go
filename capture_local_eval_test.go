@@ -219,24 +219,25 @@ func TestCaptureSendFeatureFlagsLocalEvaluation(t *testing.T) {
 // a static cohort still triggers the remote /flags fallback during capture enrichment.
 func TestCaptureSendFeatureFlagsFallsBackForStaticCohort(t *testing.T) {
 	t.Parallel()
-	assertCaptureFeatureFlagFallback(t, `{
+	assertCaptureFeatureFlag(t, `{
 		"flags": [{"id": 1, "key": "static-cohort-flag", "active": true, "filters": {"groups": [{"properties": [{"key": "id", "value": 999, "type": "cohort"}], "rollout_percentage": 100}]}}],
 		"cohorts": {}
-	}`, `{"featureFlags": {"static-cohort-flag": true}}`, "$feature/static-cohort-flag", true)
+	}`, `{"featureFlags": {"static-cohort-flag": true}}`, "$feature/static-cohort-flag", true, 1)
 }
 
-// TestCaptureSendFeatureFlagsFallsBackForGroupFlagWithoutGroups verifies that a
-// group-aggregated flag captured without the relevant group context defers to /flags.
-func TestCaptureSendFeatureFlagsFallsBackForGroupFlagWithoutGroups(t *testing.T) {
+// TestCaptureSendFeatureFlagsResolvesGroupFlagWithoutGroupsAsFalse verifies that a
+// group-aggregated flag captured without the relevant group context is false locally,
+// as the flags service resolves it.
+func TestCaptureSendFeatureFlagsResolvesGroupFlagWithoutGroupsAsFalse(t *testing.T) {
 	t.Parallel()
-	assertCaptureFeatureFlagFallback(t, `{
+	assertCaptureFeatureFlag(t, `{
 		"flags": [{"id": 1, "key": "group-flag", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [{"properties": [], "rollout_percentage": 100}]}}],
 		"group_type_mapping": {"0": "company"},
 		"cohorts": {}
-	}`, `{"featureFlags": {"group-flag": "group-value"}}`, "$feature/group-flag", "group-value")
+	}`, `{"featureFlags": {"group-flag": "group-value"}}`, "$feature/group-flag", false, 0)
 }
 
-func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, featureProperty string, want interface{}) {
+func assertCaptureFeatureFlag(t *testing.T, definitions, flagsResponse, featureProperty string, want interface{}, wantDecideCalls int32) {
 	t.Helper()
 	var decideCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -265,10 +266,10 @@ func assertCaptureFeatureFlagFallback(t *testing.T, definitions, flagsResponse, 
 	if event == nil {
 		t.Fatal("timed out waiting for captured event")
 	}
-	if got := decideCalls.Load(); got != 1 {
-		t.Errorf("expected exactly 1 remote /flags fallback, got %d", got)
+	if got := decideCalls.Load(); got != wantDecideCalls {
+		t.Errorf("expected %d remote /flags calls, got %d", wantDecideCalls, got)
 	}
 	if event.Properties[featureProperty] != want {
-		t.Errorf("expected %s=%v from remote fallback, got %v", featureProperty, want, event.Properties[featureProperty])
+		t.Errorf("expected %s=%v, got %v", featureProperty, want, event.Properties[featureProperty])
 	}
 }

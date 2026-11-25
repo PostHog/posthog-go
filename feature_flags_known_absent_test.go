@@ -770,10 +770,11 @@ func TestFlagDependencyIsEvaluatedInItsOwnContext(t *testing.T) {
 		require.Equal(t, false, snapshot.GetFlag("person-child"))
 		require.Equal(t, true, snapshot.GetFlag("person-child-expects-false"))
 
-		// Evaluated directly, the group flag without its group stays inconclusive.
+		// Evaluated directly, the group flag without its group is false too.
 		snapshot, remoteCalls = evaluate(t, definitions, EvaluateFlagsPayload{FlagKeys: []string{"org-parent"}, GroupPropertyKeysKnownAbsent: orgTierAbsent, OnlyEvaluateLocally: true})
 		require.Zero(t, remoteCalls)
-		require.Equal(t, map[string]UnresolvedFlagReason{"org-parent": UnresolvedFlagReasonMissingContext}, snapshot.UnresolvedFlags())
+		require.Empty(t, snapshot.UnresolvedFlags())
+		require.Equal(t, false, snapshot.GetFlag("org-parent"))
 	})
 
 	t.Run("a group dependency without its group is false before its prerequisites are evaluated", func(t *testing.T) {

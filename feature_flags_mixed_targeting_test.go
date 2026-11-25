@@ -130,6 +130,13 @@ func TestMixedTargetingLocalEvaluation(t *testing.T) {
 			expectVal: false,
 		},
 		{
+			name:      "group condition skipped without its group key, then person condition fails: returns false",
+			flagJSON:  mixedTargetingFlagJSON,
+			flagKey:   "mixed-flag",
+			opts:      opts{personProperties: Properties{"email": "nope@example.com"}},
+			expectVal: false,
+		},
+		{
 			name:      "only group conditions, no groups passed: returns false without server fallback",
 			flagJSON:  onlyGroupConditionFlagJSON,
 			flagKey:   "only-group-flag",
