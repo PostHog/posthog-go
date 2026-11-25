@@ -108,7 +108,9 @@ func withArguments(tool mcp.Tool, schema map[string]any, arguments []analyticsAr
 				required = append(required, argument.name)
 			}
 		}
-		schema["required"] = required
+		if len(required) > 0 {
+			schema["required"] = required
+		}
 		encoded, err := json.Marshal(schema)
 		tool.RawInputSchema = encoded
 		return tool, err

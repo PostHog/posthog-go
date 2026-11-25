@@ -315,7 +315,8 @@ func (in *instrumentation) afterCall(ctx context.Context, _ any, req *mcp.CallTo
 	if ok {
 		started.end()
 	}
-	if toolResult, isToolResult := result.(*mcp.CallToolResult); ok && isToolResult {
+	if toolResult, isToolResult := result.(*mcp.CallToolResult); ok && isToolResult && toolResult != nil {
+		started.deliverToUnhandled(toolResult)
 		in.observe(ctx, *req, toolResult, nil, started)
 	}
 }

@@ -275,3 +275,33 @@ func TestAHandleFreeListingKeepsLargeIntegers(t *testing.T) {
 	assert.Contains(t, string(body), `"const":9007199254740993`)
 	assert.NotContains(t, string(body), "conversation_id")
 }
+
+func TestAnOptionalOnlyRawSchemaStaysValid(t *testing.T) {
+	s := server.NewMCPServer("weather-server", "1.2.3", server.WithToolCapabilities(true),
+		Instrument(posthogmcp.New(&fakeQueue{}), WithContextParameter(false), WithCaptureModel(false)))
+	s.AddTool(mcp.NewToolWithRawSchema("lookup", "", json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)),
+		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText("ok"), nil
+		})
+
+	listed := jsonString(t, s.HandleMessage(t.Context(), json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	assert.Contains(t, listed, "conversation_id")
+	assert.NotContains(t, listed, `"required":null`)
+}
+
+func TestAFailedInputValidationDeliversItsHandle(t *testing.T) {
+	queue := &fakeQueue{}
+	s := newInstrumentedServer(queue, weatherTool(), &weatherHandler{}, func(*config) {})
+	server.WithInputSchemaValidation()(s)
+	c := connectHTTPAs(t, s, "example-client/1.0", "test-client", server.WithStateLess(true))
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "weather"
+	req.Params.Arguments = map[string]any{"context": "Checking the weather"}
+	result, err := c.CallTool(t.Context(), req)
+	require.NoError(t, err)
+	require.True(t, result.IsError, "the call fails validation")
+
+	handle := deliveredHandle(result)
+	require.Regexp(t, conversationHandle, handle)
+	assert.Equal(t, handle, queue.onlyToolCall(t)["$mcp_conversation_id"])
+}
