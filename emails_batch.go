@@ -385,7 +385,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if err == nil {
 			err = run.answer(reply)
 		}
-		if err != nil && mayHaveQueued(err) {
+		if err != nil && (mayHaveQueued(err) || unreadConflict(err)) {
 			run.lost = true
 		}
 		if err != nil && err.StatusCode >= http.StatusMultipleChoices {
@@ -402,6 +402,12 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		return run.result(), err
 	}
 	return run.result(), nil
+}
+
+// unreadConflict is a 409 without a code the client could read. It may be
+// PostHog's answer that an earlier request still holds the keys.
+func unreadConflict(err *EmailError) bool {
+	return err.StatusCode == http.StatusConflict && err.Code == "api_error"
 }
 
 func (s *emailSender) batchAttemptTimeout() time.Duration {

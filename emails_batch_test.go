@@ -623,20 +623,30 @@ func TestEmailsBatchTakesKeysInFlightOnlyFromA409(t *testing.T) {
 }
 
 func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testing.T) {
-	server := newBatchServer(t, func(int, batchRequest) stubReply {
-		return failed(http.StatusConflict, "idempotency_key_in_flight")
-	})
-	client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(0) })
-
-	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
-
-	require.Equal(t, "idempotency_key_in_flight", requireEmailError(t, err).Code)
-	require.Equal(t, []string{"unconfirmed", "unconfirmed"}, statuses(result), "an earlier request with these keys may still queue them")
-	for _, r := range result.Results {
-		require.Equal(t, http.StatusConflict, r.Error.StatusCode)
-		require.Equal(t, wantResendFix, r.Error.Fix)
+	tests := []struct {
+		name, code string
+		reply      stubReply
+	}{
+		{name: "PostHog's answer", code: "idempotency_key_in_flight", reply: failed(http.StatusConflict, "idempotency_key_in_flight")},
+		{name: "an answer without a readable code", code: "api_error", reply: stubReply{status: http.StatusConflict, body: "<html>Conflict</html>"}},
 	}
-	require.Len(t, server.received(), 1)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newBatchServer(t, func(int, batchRequest) stubReply { return tt.reply })
+			client := newEmailClientFor(t, server.URL, func(config *Config) { config.EmailRequestMaxRetries = Ptr(0) })
+
+			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+
+			require.Equal(t, tt.code, requireEmailError(t, err).Code)
+			require.Equal(t, []string{"unconfirmed", "unconfirmed"}, statuses(result), "an earlier request with these keys may still queue them")
+			for i, r := range result.Results {
+				require.Equal(t, http.StatusConflict, r.Error.StatusCode)
+				require.Equal(t, wantResendFix, r.Error.Fix)
+				require.Equal(t, fmt.Sprintf("digest:%d", i), r.IdempotencyKey)
+			}
+			require.Len(t, server.received(), 1)
+		})
+	}
 }
 
 func TestEmailsBatchUnavailable(t *testing.T) {
