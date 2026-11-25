@@ -1764,17 +1764,20 @@ func (c *client) sendBatch(l *lane, batch preparedBatch) bool {
 	batch.done = l.trackDelivery()
 	l.inFlight.Add(1)
 
+	// Try without a timer first: select picks randomly among ready cases, so an
+	// already-fired timer could otherwise drop a batch the queue has room for.
+	select {
+	case l.batches <- batch:
+		go c.processBatch(l)
+		return true
+	default:
+	}
+
 	// Negative timeout = non-blocking (immediate drop when queue is full)
 	if c.BatchSubmitTimeout < 0 {
-		select {
-		case l.batches <- batch:
-			go c.processBatch(l)
-			return true
-		default:
-			l.inFlight.Add(-1)
-			l.completeDelivery(batch.done)
-			return false
-		}
+		l.inFlight.Add(-1)
+		l.completeDelivery(batch.done)
+		return false
 	}
 
 	// Blocking send with timeout - allows in-flight requests to complete during latency spikes

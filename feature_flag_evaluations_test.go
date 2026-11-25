@@ -272,12 +272,37 @@ func TestEvaluateFlagsWithContext_MissingDistinctIdReturnsError(t *testing.T) {
 	}
 }
 
-func flushEvaluationEvents(t *testing.T, client Client) {
+// flushAndWaitForEvents flushes, waits for every batch to finish sending, and
+// returns what reached the callback.
+func flushAndWaitForEvents(t *testing.T, cli Client, capture *eventCapture) []CaptureInApi {
+	t.Helper()
+	flushEvaluationEvents(t, cli)
+	return snapshotCapturedEvents(capture)
+}
+
+// flushEvaluationEvents flushes, then waits until every batch has finished
+// sending. FlushWithContext returns once a failed capture POST starts its retry
+// backoff, before the retry delivers it.
+func flushEvaluationEvents(t *testing.T, cli Client) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := client.FlushWithContext(ctx); err != nil {
+	if err := cli.FlushWithContext(ctx); err != nil {
 		t.Fatalf("flush event observations: %v", err)
+	}
+	c := cli.(*client)
+	lanes := []*lane{c.analytics}
+	if ai := c.ai.Load(); ai != nil {
+		lanes = append(lanes, ai)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, l := range lanes {
+		for l.inFlight.Load() > 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: batches still sending after 5s", l.cfg.name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }
 
@@ -317,9 +342,8 @@ func TestIsEnabled_FiresEventWithFullMetadataAndDedupes(t *testing.T) {
 	}
 	// Second call should be deduped.
 	snap.IsEnabled("enabled-flag")
-	flushEvaluationEvents(t, client)
+	events := flushAndWaitForEvents(t, client, capture)
 
-	events := waitForEventCount(capture, 1, 5*time.Second)
 	matching := 0
 	var event *CaptureInApi
 	for i := range events {
@@ -1081,8 +1105,7 @@ func TestRefactor_LegacyAndSnapshotPathsDedupeIdentically(t *testing.T) {
 	snap, _ := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
 	snap.IsEnabled("enabled-flag")
 
-	flushEvaluationEvents(t, client)
-	events := snapshotCapturedEvents(capture)
+	events := flushAndWaitForEvents(t, client, capture)
 
 	count := countFlagCalledEvents(events, "enabled-flag")
 	if count != 1 {
@@ -1123,8 +1146,7 @@ func TestCaptureFlagCalled_DedupesByFlagValue(t *testing.T) {
 		})
 	}
 
-	flushEvaluationEvents(t, clientIface)
-	events := snapshotCapturedEvents(capture)
+	events := flushAndWaitForEvents(t, clientIface, capture)
 
 	count := countFlagCalledEvents(events, "changing-flag")
 	if count != len(testCases) {
@@ -1219,11 +1241,9 @@ func TestCaptureFlagCalled_DedupesAcrossSameGroupContext(t *testing.T) {
 
 			// Wait for the first (and only) event to arrive, then briefly
 			// pause to catch any stragglers that would indicate broken dedup.
-			flushEvaluationEvents(t, client)
-			capture.mu.Lock()
-			defer capture.mu.Unlock()
+			events := flushAndWaitForEvents(t, client, capture)
 			count := 0
-			for _, ev := range capture.events {
+			for _, ev := range events {
 				if ev.Event == "$feature_flag_called" && ev.Properties["$feature_flag"] == "enabled-flag" {
 					count++
 				}
@@ -1476,8 +1496,7 @@ func newUnresolvedFlagsClient(t *testing.T, definitions, remote string) (Client,
 
 func flagCalledError(t *testing.T, client Client, capture *eventCapture, key string) string {
 	t.Helper()
-	flushEvaluationEvents(t, client)
-	event := findEvent(snapshotCapturedEvents(capture), "$feature_flag_called", key)
+	event := findEvent(flushAndWaitForEvents(t, client, capture), "$feature_flag_called", key)
 	require.NotNil(t, event, "expected $feature_flag_called for %s", key)
 	errorString, _ := event.Properties["$feature_flag_error"].(string)
 	return errorString
@@ -1723,8 +1742,7 @@ func TestEvaluateFlags_RemoteFallbackResolvesUnresolvedFlag(t *testing.T) {
 	require.Empty(t, snapshot.UnresolvedFlags())
 
 	require.True(t, snapshot.IsEnabled("checkout"))
-	flushEvaluationEvents(t, client)
-	event := findEvent(snapshotCapturedEvents(capture), "$feature_flag_called", "checkout")
+	event := findEvent(flushAndWaitForEvents(t, client, capture), "$feature_flag_called", "checkout")
 	require.NotNil(t, event)
 	require.Equal(t, true, event.Properties["$feature_flag_response"])
 	require.NotContains(t, event.Properties, "$feature_flag_error")

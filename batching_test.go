@@ -322,6 +322,27 @@ func TestBatchSubmitTimeout_WaitsForWorkers(t *testing.T) {
 	require.Empty(t, l.deliveries)
 }
 
+func TestBatchSubmitTimeout_ExpiredTimerDoesNotDropWhenQueueHasRoom(t *testing.T) {
+	var delivered atomic.Int64
+	transport := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		delivered.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"results":{}}`)), Header: http.Header{}}, nil
+	})
+	// A 1ns timeout has often fired by the time sendBatch selects, so the
+	// timer and the free queue slot are both ready.
+	c := newCaptureTestClient(t, "http://posthog.invalid", nil, 0, func(cfg *Config) {
+		cfg.BatchSubmitTimeout = time.Nanosecond
+		cfg.Transport = transport
+	})
+	const batches = 20000
+	l := newLane(analyticsLaneConfig(c.Config), batches, transport)
+	for i := 0; i < batches; i++ {
+		require.True(t, c.sendBatch(l, captureBatch(t, cap1(uuidA))), "batch %d dropped with room in the queue", i)
+	}
+	require.Eventually(t, func() bool { return l.inFlight.Load() == 0 }, 10*time.Second, time.Millisecond)
+	require.Equal(t, int64(batches), delivered.Load())
+}
+
 func TestBatchSubmitTimeout_FullQueue(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
