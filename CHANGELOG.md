@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 2.2.1
+
+### Patch Changes
+
+- 0323f6d: Stop dropping a capture batch when its submit timeout has already expired but the batch queue still has room.
+
 ## 2.2.0
 
 ### Minor Changes
