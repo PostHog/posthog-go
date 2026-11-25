@@ -110,7 +110,7 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 		}
 		tool, _ := in.registeredTool(ctx, req.Params.Name)
 		started := in.startCall(ctx, tool, req)
-		defer func() { in.sessions.finish(server.ClientSessionFromContext(ctx), in.now()) }()
+		defer started.end()
 		result, err := next(started.scoped(ctx), dispatch)
 		in.observe(ctx, req, result, err, started)
 		return result, err
@@ -119,13 +119,15 @@ func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHa
 
 // endPanickingCall ends the call a panicking handler leaves behind, since
 // neither call hook runs once a transport recovers the panic, and panics again.
+// The call stays tracked for the hooks, which run when a recovery middleware
+// outside Instrument turns the panic into an error.
 func (in *instrumentation) endPanickingCall(ctx context.Context, arrived arrival) {
 	recovered := recover()
 	if recovered == nil {
 		return
 	}
-	if in.calls.abandon(arrived) {
-		in.sessions.finish(arrived.session, in.now())
+	if started, ok := in.calls.startOf(arrived); ok {
+		started.end()
 	}
 	panic(recovered)
 }
@@ -239,13 +241,12 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool, req mcp
 	session := server.ClientSessionFromContext(ctx)
 	now := time.Now()
 	_, info := present(tool, in.inject)
-	call := callStart{
-		at:              now,
-		protocolVersion: in.protocols.of(session),
-		session:         in.sessions.resolve(session, in.now()),
-		identity:        in.resolveIdentity(ctx, req),
-		tool:            info,
-	}
+	call := newCallStart(func() { in.sessions.finish(session, in.now()) })
+	call.at = now
+	call.protocolVersion = in.protocols.of(session)
+	call.session = in.sessions.resolve(session, in.now())
+	call.identity = in.resolveIdentity(ctx, req)
+	call.tool = info
 	var meta map[string]any
 	if req.Params.Meta != nil {
 		meta = req.Params.Meta.AdditionalFields
@@ -282,7 +283,7 @@ func (in *instrumentation) afterCall(ctx context.Context, _ any, req *mcp.CallTo
 	defer in.recoverHook(ctx, "after tools/call")
 	started, ok := in.calls.finish(req)
 	if ok {
-		in.sessions.finish(server.ClientSessionFromContext(ctx), in.now())
+		started.end()
 	}
 	if toolResult, isToolResult := result.(*mcp.CallToolResult); ok && isToolResult {
 		in.observe(ctx, *req, toolResult, nil, started)
@@ -300,7 +301,7 @@ func (in *instrumentation) callFailed(ctx context.Context, _ any, method mcp.MCP
 	}
 	started, ok := in.calls.finish(req)
 	if ok {
-		in.sessions.finish(server.ClientSessionFromContext(ctx), in.now())
+		started.end()
 		// mcp-go wraps the handler's error in its own request error.
 		if handlerErr := errors.Unwrap(err); handlerErr != nil {
 			err = handlerErr

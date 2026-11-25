@@ -47,6 +47,14 @@ type callStart struct {
 	session         callSession
 	identity        Identity
 	tool            toolInfo
+	// end finishes the call's session, once, from whichever of the hooks,
+	// the middleware, or eviction gets there first.
+	end func()
+}
+
+func newCallStart(end func()) callStart {
+	var once sync.Once
+	return callStart{end: func() { once.Do(end) }}
 }
 
 type callSession struct {
@@ -76,7 +84,7 @@ func (c *callsInFlight) start(req *mcp.CallToolRequest, arrived arrival, call ca
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.started) >= maxCallsInFlight {
-		c.remove(c.order.Front())
+		c.remove(c.order.Front()).end()
 	}
 	element := c.order.PushBack(trackedCall{req: req, arrival: arrived, start: call})
 	c.started[req] = element
@@ -91,17 +99,6 @@ func (c *callsInFlight) startOf(arrived arrival) (callStart, bool) {
 		return callStart{}, false
 	}
 	return element.Value.(trackedCall).start, true
-}
-
-// abandon forgets the call in flight that arrived as arrived.
-func (c *callsInFlight) abandon(arrived arrival) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	element, ok := c.arrivals[arrived]
-	if ok {
-		c.remove(element)
-	}
-	return ok
 }
 
 func (c *callsInFlight) finish(req *mcp.CallToolRequest) (callStart, bool) {

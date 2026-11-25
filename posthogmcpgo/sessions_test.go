@@ -226,3 +226,32 @@ func TestAPanickingCallStillEndsItsSession(t *testing.T) {
 	assert.NotEqual(t, captures[0].Properties["$session_id"], captures[1].Properties["$session_id"],
 		"a call after the timeout starts a new session")
 }
+
+// server.WithRecovery outside Instrument turns a handler's panic into an
+// error the call hooks see, so the call is still captured, and ended once.
+func TestAPanicRecoveredOutsideInstrumentIsCaptured(t *testing.T) {
+	queue := &fakeQueue{}
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	s := server.NewMCPServer("weather-server", "1.2.3", server.WithRecovery(),
+		Instrument(posthogmcp.New(queue), func(cfg *config) { cfg.now = clock.Now }))
+	var calls atomic.Int32
+	s.AddTool(weatherTool(), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if calls.Add(1) == 1 {
+			panic("boom")
+		}
+		return mcp.NewToolResultText("sunny"), nil
+	})
+	c := connectInProcess(t, s)
+
+	_, err := callTool(t, c, "weather", map[string]any{"city": "Melbourne"})
+	require.Error(t, err)
+	clock.advance(sessionInactivityTimeout + time.Minute)
+	_, err = callTool(t, c, "weather", map[string]any{"city": "Melbourne"})
+	require.NoError(t, err)
+
+	captures := queue.toolCalls()
+	require.Len(t, captures, 2, "the recovered panic is a failed call")
+	assert.Equal(t, true, captures[0].Properties["$mcp_is_error"])
+	assert.NotEqual(t, captures[0].Properties["$session_id"], captures[1].Properties["$session_id"],
+		"the failed call ended, so the next one past the timeout rotates")
+}
