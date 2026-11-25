@@ -328,6 +328,75 @@ func TestEmailsSendChecksTheScheduleAgainstTheClockWhenTheAnswerArrives(t *testi
 	require.Equal(t, "schedule_not_confirmed", requireEmailError(t, err).Code)
 }
 
+func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T) {
+	queuedNow := `{"message_id":"` + testMessageID + `","replayed":true,"status":"queued","scheduled_at":null}`
+	type attempt struct {
+		reply func() *http.Response
+		takes time.Duration
+	}
+	tests := []struct {
+		name     string
+		after    time.Duration
+		attempts []attempt
+		wantCode string
+	}{
+		{
+			// The cut-off first answer may have sent the email at once, 90 seconds
+			// before ScheduledAt minus the allowed skew.
+			name:  "a lost answer, then a replay close to the time",
+			after: 3 * time.Minute,
+			attempts: []attempt{
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusAccepted, Body: cutOffBody{strings.NewReader(`{"message_id":"`)}, Header: http.Header{}}
+				}, takes: 30 * time.Second},
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(queuedNow)), Header: http.Header{}}
+				}, takes: 2 * time.Minute},
+			},
+			wantCode: "schedule_not_confirmed",
+		},
+		{
+			// A rate limit queued nothing, so the send that queued is the second.
+			name:  "a rate limit, then a send close to the time",
+			after: 150 * time.Second,
+			attempts: []attempt{
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(`{"code":"rate_limited","detail":"Slow down."}`)), Header: http.Header{}}
+				}, takes: 30 * time.Second},
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(queuedNow)), Header: http.Header{}}
+				}, takes: 90 * time.Second},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := testClientNow
+			n := 0
+			client := newCloudEmailClient(t, newEmailServer(t), func(config *Config) {
+				config.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					next := tt.attempts[n]
+					n++
+					clock = clock.Add(next.takes)
+					return next.reply(), nil
+				})
+			})
+			senderOf(client).now = func() time.Time { return clock }
+			email := templateEmail()
+			email.ScheduledAt = testClientNow.Add(tt.after)
+
+			_, err := client.Emails().Send(context.Background(), email)
+
+			require.Equal(t, len(tt.attempts), n)
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Equal(t, tt.wantCode, requireEmailError(t, err).Code)
+		})
+	}
+}
+
 func TestEmailsSendSurfacesARefusedScheduleWithoutSendingNow(t *testing.T) {
 	server := newEmailServer(t, stubReply{status: http.StatusBadRequest, body: `{"type":"validation_error","code":"scheduled_too_far","detail":"` + "`scheduled_at`" + ` is more than 7 days away, so PostHog didn't send the email.","attr":"scheduled_at","why":"PostHog holds a scheduled email for at most 7 days after the request.","fix":"Pick a time within 7 days, or send the email closer to the time."}`})
 	client := newCloudEmailClient(t, server)

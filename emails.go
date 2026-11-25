@@ -60,9 +60,11 @@ var (
 // PostHog Cloud schedules emails: on any other app host, such as a
 // self-hosted PostHog, a reverse proxy or a custom domain, Send returns an
 // error with code "scheduling_requires_cloud" before any request. Get reads
-// "scheduled" until the email goes out. To stop scheduled emails before they
-// go out, disable the email's workflow in PostHog until they have reached a
-// final status.
+// "scheduled" until the email goes out. Send can't cancel or move a
+// scheduled email. To stop a scheduled TemplateEmail before it goes out,
+// disable its template's workflow in PostHog until the email reaches a final
+// status. A CodeEmail goes through a workflow PostHog keeps out of the
+// workflow list, so once scheduled it goes out.
 type Emails interface {
 	// Send queues one email, from a TemplateEmail made in PostHog or from a
 	// CodeEmail your code rendered, or schedules it when it has a
@@ -111,7 +113,8 @@ type TemplateEmail struct {
 	// millisecond. A time that has passed sends the email now. The zero time
 	// sends now. When PostHog sends it now for a time more than a minute
 	// ahead of this client's clock, also on a replay, Send returns
-	// "schedule_not_confirmed". Work out a relative time, such as an hour
+	// "schedule_not_confirmed". After a lost answer, that minute counts from
+	// the attempt that may have sent it, not from the retry. Work out a relative time, such as an hour
 	// from now, once, and send the same time when you send again with the
 	// same IdempotencyKey: another time with the same key is refused with
 	// "idempotency_key_reused".
@@ -579,11 +582,25 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	header := s.header()
 	header.Set("Content-Type", "application/json")
 	header.Set("Idempotency-Key", send.idempotencyKey)
-	reply, err := s.request(ctx, maxRetries, http.MethodPost, s.appHost+emailSendPath, header, send.body)
+	var reply emailReply
+	// queuedBy is when the first attempt that may have queued the email
+	// ended: PostHog chose to send it now or later by then, and a replay
+	// repeats that choice.
+	var queuedBy time.Time
+	err = s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
+		var err *EmailError
+		reply, err = s.do(ctx, http.MethodPost, s.appHost+emailSendPath, header, send.body)
+		if err == nil && !reply.accepted() {
+			err = reply.error()
+		}
+		if queuedBy.IsZero() && (err == nil || mayHaveQueued(err)) {
+			queuedBy = s.now()
+		}
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	answeredAt := s.now()
 	result, err := reply.sendResult()
 	if err != nil {
 		return nil, err
@@ -592,7 +609,7 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 		s.logger.Warnf("PostHog email warning %s: %s", warning.Code, warning.Message)
 	}
 	if !send.scheduledAt.IsZero() {
-		if err := reply.checkSchedule(result, send.scheduledAt, answeredAt); err != nil {
+		if err := reply.checkSchedule(result, send.scheduledAt, queuedBy); err != nil {
 			return nil, err
 		}
 	}
@@ -729,6 +746,18 @@ func (s *emailSender) retryDelay(err *EmailError, attempt, maxRetries int) (time
 		delay = err.RetryAfter
 	}
 	return delay, true
+}
+
+// keysInFlight is PostHog's 409 for keys an earlier request still holds.
+func keysInFlight(err *EmailError) bool {
+	return err.Code == "idempotency_key_in_flight" && err.StatusCode == http.StatusConflict
+}
+
+// mayHaveQueued is an attempt's error after which PostHog may still have
+// queued the email: no answer, a cut-off answer, a 5xx, a 2xx the client
+// couldn't read, or a key an earlier request still holds.
+func mayHaveQueued(err *EmailError) bool {
+	return err.Code == "network_error" || keysInFlight(err) || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
 }
 
 // asksForALongerWaitThanWeRetry is a Retry-After past the longest retry wait.
@@ -882,11 +911,11 @@ func (r emailReply) sendResult() (*SendEmailResult, *EmailError) {
 // checkSchedule accepts the answer to a scheduled send only when it confirms
 // the requested time, or says the email goes out now for a time that has
 // passed. A PostHog that dropped the time answers "queued" too, so a
-// "queued" for a time more than maxEmailClockSkew ahead of the client's
-// clock is unconfirmed, on a first send and a replay alike. Within that
-// minute, "queued" with a null scheduled_at is accepted, because PostHog's
-// clock may already be past it.
-func (r emailReply) checkSchedule(result *SendEmailResult, requested, now time.Time) *EmailError {
+// "queued" for a time more than maxEmailClockSkew ahead of queuedBy is
+// unconfirmed, on a first send and a replay alike. Within that minute,
+// "queued" with a null scheduled_at is accepted, because PostHog's clock may
+// already have been past it.
+func (r emailReply) checkSchedule(result *SendEmailResult, requested, queuedBy time.Time) *EmailError {
 	answered, hasTime := r.fields["scheduled_at"]
 	switch r.text("status") {
 	case "scheduled":
@@ -897,7 +926,7 @@ func (r emailReply) checkSchedule(result *SendEmailResult, requested, now time.T
 			return nil
 		}
 	case "queued":
-		if hasTime && answered == nil && !requested.After(now.Add(maxEmailClockSkew)) {
+		if hasTime && answered == nil && !requested.After(queuedBy.Add(maxEmailClockSkew)) {
 			return nil
 		}
 	}
