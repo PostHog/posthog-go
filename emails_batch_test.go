@@ -609,17 +609,26 @@ func TestEmailsBatchLeavesUnconfirmedEmailsToAResendWithTheirKeys(t *testing.T) 
 	})
 }
 
-func TestEmailsBatchTakesKeysInFlightOnlyFromA409(t *testing.T) {
-	server := newBatchServer(t, func(int, batchRequest) stubReply {
-		return failed(http.StatusUnauthorized, "idempotency_key_in_flight")
-	})
-	client := newEmailClientFor(t, server.URL)
+func TestEmailsBatchFailsRecipientsOfARefusalWithoutKeysInFlight(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply stubReply
+	}{
+		{name: "a 401 with the in-flight code", reply: failed(http.StatusUnauthorized, "idempotency_key_in_flight")},
+		{name: "a 409 with a readable code", reply: failed(http.StatusConflict, "api_error")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newBatchServer(t, func(int, batchRequest) stubReply { return tt.reply })
+			client := newEmailClientFor(t, server.URL)
 
-	result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
+			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
 
-	require.Equal(t, http.StatusUnauthorized, requireEmailError(t, err).StatusCode)
-	require.Len(t, server.received(), 1)
-	require.Equal(t, []string{"failed", "failed"}, statuses(result), "a 401 refused the request before PostHog queued anything")
+			require.Equal(t, tt.reply.status, requireEmailError(t, err).StatusCode)
+			require.Len(t, server.received(), 1)
+			require.Equal(t, []string{"failed", "failed"}, statuses(result), "PostHog refused the request before it queued anything")
+		})
+	}
 }
 
 func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testing.T) {
