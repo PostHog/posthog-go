@@ -673,16 +673,41 @@ func TestFlagDependencyDepthLimit(t *testing.T) {
 		_, err := computeDefinedFlag(t, dependencyChainDefinitions(maxFlagDependencyDepth+2), fmt.Sprintf("flag-%d", maxFlagDependencyDepth+1), nil)
 		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
 	})
-	t.Run("a flag reached at the limit still resolves from a shallower reference", func(t *testing.T) {
+	t.Run("reaching the limit makes the whole evaluation inconclusive", func(t *testing.T) {
 		length := maxFlagDependencyDepth + 2
 		flags := strings.TrimSuffix(strings.TrimPrefix(dependencyChainDefinitions(length), `{"flags": [`), `], "group_type_mapping": {}, "cohorts": {}}`)
 		top := fmt.Sprintf("flag-%d", length-1)
 		target := flagDefinition("target",
 			flagCondition(100, flagDependencyFilter(top, true, top)),
 			flagCondition(100, flagDependencyFilter("flag-50", true, "flag-50")))
-		got, err := computeDefinedFlag(t, localDefinitions(flags, target), "target", nil)
-		require.NoError(t, err)
-		require.Equal(t, true, got)
+		_, err := computeDefinedFlag(t, localDefinitions(flags, target), "target", nil)
+		require.False(t, isServerEvalError(err), "%v", err)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
+	})
+	t.Run("reaching the limit keeps a server-required dependency", func(t *testing.T) {
+		length := maxFlagDependencyDepth + 2
+		flags := strings.TrimSuffix(strings.TrimPrefix(dependencyChainDefinitions(length), `{"flags": [`), `], "group_type_mapping": {}, "cohorts": {}}`)
+		top := fmt.Sprintf("flag-%d", length-1)
+		dependency := flagDefinition("dependency", flagCondition(100, staticCohortFilter, flagDependencyFilter(top, true, top)))
+		target := flagDefinition("target",
+			flagCondition(100, flagDependencyFilter("dependency", true, "dependency")),
+			flagCondition(100))
+		_, err := computeDefinedFlag(t, localDefinitions(flags, dependency, target), "target", nil)
+		require.True(t, isServerEvalError(err), "%v", err)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
+	})
+	t.Run("an unreported cycle with two references per flag finishes", func(t *testing.T) {
+		var flags []string
+		for i := 0; i < 3; i++ {
+			next := fmt.Sprintf("cycle-%d", (i+1)%3)
+			flags = append(flags, flagDefinition(fmt.Sprintf("cycle-%d", i),
+				flagCondition(100, flagDependencyFilter(next, true, next)),
+				flagCondition(100, flagDependencyFilter(next, false, next))))
+		}
+		start := time.Now()
+		_, err := computeDefinedFlag(t, localDefinitions(flags...), "cycle-0", nil)
+		require.Less(t, time.Since(start), time.Second)
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
 	})
 	t.Run("a cycle the dependency chains don't report is inconclusive", func(t *testing.T) {
 		definitions := localDefinitions(
