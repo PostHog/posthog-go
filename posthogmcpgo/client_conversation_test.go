@@ -91,7 +91,7 @@ func TestClientConversationIDs(t *testing.T) {
 			case generated:
 				assert.Regexp(t, generatedSessionID, properties["$session_id"])
 			case "transport":
-				assert.Equal(t, deterministicSessionID(c.GetSessionId()), properties["$session_id"])
+				assert.Equal(t, posthogmcp.TransportSessionID(c.GetSessionId()), properties["$session_id"])
 			default:
 				assert.Equal(t, test.wantSession, properties["$session_id"])
 			}
@@ -286,4 +286,40 @@ func TestAHandlerWithNoMatchingCallGetsNoScope(t *testing.T) {
 
 	assert.False(t, scoped, "no call scope rather than another call's")
 	assert.Equal(t, chatGPTSession, queue.onlyToolCall(t)["$session_id"], "the call itself is still captured")
+}
+
+// tokenSessions issues a PostHog session token as every Mcp-Session-Id, as a
+// server in another language behind the same endpoint would.
+type tokenSessions struct{ token string }
+
+func (s tokenSessions) Generate() string             { return s.token }
+func (tokenSessions) Validate(string) (bool, error)  { return false, nil }
+func (tokenSessions) Terminate(string) (bool, error) { return false, nil }
+
+func TestASessionTokenGivesItsSessionAndClient(t *testing.T) {
+	const token = "eyJzaWQiOiJzZXNfeCIsImNuIjoiQ29kZXgiLCJjdiI6IjAuNTAuMCIsInB2IjoiMjAyNS0xMS0yNSJ9"
+	queue := &fakeQueue{}
+	s := newInstrumentedServer(queue, weatherTool(), &weatherHandler{})
+	c := connectHTTPAs(t, s, "example-client/1.0", "", server.WithSessionIdManager(tokenSessions{token}))
+	require.NoError(t, callWithMeta(t, c, nil))
+
+	properties := queue.onlyToolCall(t)
+	assert.Equal(t, "ses_x", properties["$session_id"])
+	assert.Equal(t, "transport", properties["$mcp_session_source"])
+	assert.Equal(t, "Codex", properties["$mcp_client_name"])
+}
+
+func TestTheRequestsOwnClientInfoIdentifiesTheClient(t *testing.T) {
+	queue := &fakeQueue{}
+	s := newInstrumentedServer(queue, weatherTool(), &weatherHandler{})
+	c := connectHTTPAs(t, s, "example-client/1.0", "test-client", server.WithStateLess(true))
+	require.NoError(t, callWithMeta(t, c, map[string]any{
+		"io.modelcontextprotocol/clientInfo": map[string]any{"name": "Visual Studio Code", "version": "1.105.0"},
+		"vscode.conversationId":              "3f1c2b7e-8d4a-4c6b-9a1e-5f2d7c8b9a0e",
+	}))
+
+	properties := queue.onlyToolCall(t)
+	assert.Equal(t, "Visual Studio Code", properties["$mcp_client_name"])
+	assert.Equal(t, "1.105.0", properties["$mcp_client_version"])
+	assert.Equal(t, vsCodeSession, properties["$session_id"])
 }

@@ -54,7 +54,7 @@ func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped b
 		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}, func() {}
 	}
 	if session != nil && session.ID() != "" {
-		return callSession{id: deterministicSessionID(session.ID()), source: posthogmcp.SessionSourceTransport}, func() {}
+		return callSession{id: posthogmcp.TransportSessionID(session.ID()), source: posthogmcp.SessionSourceTransport}, func() {}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

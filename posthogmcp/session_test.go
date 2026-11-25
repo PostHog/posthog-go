@@ -2,6 +2,7 @@ package posthogmcp
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -109,6 +110,68 @@ func TestWithCallContext(t *testing.T) {
 			assert.Equal(t, test.want.SessionId, got.SessionId)
 			assert.Equal(t, test.want.Properties, got.Properties)
 			assert.Equal(t, test.want.Options, got.Options)
+		})
+	}
+}
+
+func TestReadSessionToken(t *testing.T) {
+	long := strings.Repeat("a", 129)
+	encode := func(payload string) string { return base64.RawURLEncoding.EncodeToString([]byte(payload)) }
+	for _, test := range []struct {
+		name  string
+		value string
+		want  SessionToken
+		ok    bool
+	}{
+		{name: "the spec's token", value: "eyJzaWQiOiJzZXNfZmlyc3QifQ", want: SessionToken{SessionID: "ses_first"}, ok: true},
+		{name: "padding is accepted", value: "eyJzaWQiOiJzZXNfZmlyc3QifQ==", want: SessionToken{SessionID: "ses_first"}, ok: true},
+		{name: "client fields", value: "eyJzaWQiOiJzZXNfeCIsImNuIjoiQ29kZXgiLCJjdiI6IjAuNTAuMCIsInB2IjoiMjAyNS0xMS0yNSJ9", want: SessionToken{SessionID: "ses_x", ClientName: "Codex", ClientVersion: "0.50.0", ProtocolVersion: "2025-11-25"}, ok: true},
+		{name: "a go-sdk session id", value: "0P4SNSPWCF2KFZ4RSWDUKDIGRX"},
+		{name: "a uuid", value: "019a4f2e-1c3d-7b8a-9e0f-1a2b3c4d5e6f"},
+		{name: "no sid", value: encode(`{"cn":"Codex"}`)},
+		{name: "an empty sid", value: encode(`{"sid":""}`)},
+		{name: "a non-string sid", value: encode(`{"sid":5}`)},
+		{name: "a sid over 128 characters", value: encode(`{"sid":"` + long + `"}`)},
+		{name: "not an object", value: encode(`["ses_first"]`)},
+		{name: "over 4096 characters", value: encode(`{"sid":"ses_first","cn":"` + strings.Repeat("a", 4096) + `"}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := ReadSessionToken(test.value)
+			assert.Equal(t, test.ok, ok)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestTransportSessionID(t *testing.T) {
+	assert.Equal(t, "ses_first", TransportSessionID("eyJzaWQiOiJzZXNfZmlyc3QifQ"), "a token gives its sid unchanged")
+	assert.Equal(t, "ses_346bdc9a6b5cb06913bb476a65021eb5", TransportSessionID("session-123"), "any other id is derived")
+}
+
+func TestResolveClient(t *testing.T) {
+	initialize := Client{Name: "initialize", Version: "1", ProtocolVersion: "2025-06-18"}
+	token := SessionToken{SessionID: "s", ClientName: "token", ClientVersion: "2", ProtocolVersion: "2025-11-25"}
+	meta := map[string]any{
+		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "claude-code", "version": "2.1.0"},
+		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+	}
+	for _, test := range []struct {
+		name       string
+		meta       map[string]any
+		header     string
+		token      SessionToken
+		initialize Client
+		want       Client
+	}{
+		{name: "the request's _meta wins", meta: meta, header: "2025-11-25", token: token, initialize: initialize, want: Client{Name: "claude-code", Version: "2.1.0", ProtocolVersion: "2026-07-28"}},
+		{name: "then the protocol header and the token", header: "2025-11-25", token: token, initialize: initialize, want: Client{Name: "token", Version: "2", ProtocolVersion: "2025-11-25"}},
+		{name: "then the token", token: token, initialize: initialize, want: Client{Name: "token", Version: "2", ProtocolVersion: "2025-11-25"}},
+		{name: "then initialize", initialize: initialize, want: initialize},
+		{name: "a client's name and version come from one source", meta: map[string]any{"io.modelcontextprotocol/clientInfo": map[string]any{"name": "claude-code"}}, token: token, want: Client{Name: "claude-code", ProtocolVersion: "2025-11-25"}},
+		{name: "a malformed clientInfo is skipped", meta: map[string]any{"io.modelcontextprotocol/clientInfo": "claude-code"}, initialize: initialize, want: initialize},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, ResolveClient(test.meta, test.header, test.token, test.initialize))
 		})
 	}
 }

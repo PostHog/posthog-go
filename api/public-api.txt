@@ -1671,6 +1671,8 @@ can change either.
 
 FUNCTIONS
 
+func TransportSessionID(id string) string
+
 func WithCallContext(ctx context.Context, sessionID string, source SessionSource, distinctID string) context.Context
 
 
@@ -1689,6 +1691,14 @@ func (a *Analytics) CaptureToolCall(ctx context.Context, call ToolCall) error
 
 
 func (a *Analytics) CaptureUnknownTool(ctx context.Context, event UnknownTool) error
+
+type Client struct {
+	Name            string
+	Version         string
+	ProtocolVersion string
+}
+
+func ResolveClient(meta map[string]any, protocolHeader string, token SessionToken, initialize Client) Client
 
 type ClientConversation struct {
 	SessionID string
@@ -1760,6 +1770,15 @@ const (
 	SessionSourceTransport SessionSource = "transport"
 	SessionSourceGenerated SessionSource = "generated"
 )
+type SessionToken struct {
+	SessionID       string
+	ClientName      string
+	ClientVersion   string
+	ProtocolVersion string
+}
+
+func ReadSessionToken(value string) (SessionToken, bool)
+
 type ToolCall struct {
 	ToolName string
 	ToolDescription string

@@ -56,11 +56,11 @@ func arrivalOf(ctx context.Context, req mcp.CallToolRequest) arrival {
 // then, since the handler may unregister the tool and the session may close or
 // sit past its inactivity timeout before the call ends.
 type callStart struct {
-	at              time.Time
-	protocolVersion string
-	session         callSession
-	identity        Identity
-	tool            toolInfo
+	at       time.Time
+	client   posthogmcp.Client
+	session  callSession
+	identity Identity
+	tool     toolInfo
 	// end finishes the call's session, once: from the handler middleware when
 	// the handler returns or panics, else from the hooks for a call the
 	// handler never ran, such as one that failed validation.

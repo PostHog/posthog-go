@@ -71,15 +71,16 @@ arguments. Middleware given after it sees them removed.
   recognized by its `User-Agent` or client name. The id itself is never sent.
   Otherwise, on stateful streamable HTTP, the
   `Mcp-Session-Id` becomes `ses_` plus a hash every PostHog MCP SDK computes
-  the same way, so replicas and SDKs in other languages agree. On stateless
+  the same way, so replicas and SDKs in other languages agree, and a PostHog
+  session token another SDK issued gives its session unchanged. On stateless
   streamable HTTP, each call gets its own `ses_<UUIDv7>`. On SSE, the
   transport's session id is hashed the same way. On a one-client connection
   (stdio, in-process), the adapter generates `ses_<UUIDv7>` per mcp-go session
-  and starts a new one after 30 minutes without a tool call.
-- The client name and version from the `initialize` handshake, when the call
-  arrives on the session that made it.
-- The protocol version: on HTTP from the `MCP-Protocol-Version` header, and on
-  other transports the version the session negotiated in `initialize`.
+  and starts a new one when a call arrives 30 minutes or more after the last
+  call ended.
+- The client name, version, and protocol version, from the request's own
+  `_meta` first, then the `MCP-Protocol-Version` header and a replayed PostHog
+  session token, then the `initialize` handshake of the session that made it.
 - On HTTP, the `User-Agent` and `X-Anthropic-Client` headers.
 - The tool's description and `_meta.category`, read from the registered tool.
 - The agent's intent, from the injected `context` argument described below.
