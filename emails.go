@@ -114,9 +114,9 @@ type TemplateEmail struct {
 	// millisecond. A time that has passed sends the email now. The zero time
 	// sends now. When PostHog sends it now for a time more than a minute
 	// ahead of this client's clock, also on a replay, Send returns
-	// "schedule_not_confirmed". When a retry gets a replay after a lost
-	// answer, that minute counts from the attempt that may have sent it, not
-	// from the retry. Work out a relative time, such as an hour from now,
+	// "schedule_not_confirmed". On the client's own retries, that minute
+	// counts from the first attempt that may have sent the email, such as a
+	// lost answer or a 5xx. Work out a relative time, such as an hour from now,
 	// once, and send the same time when you send again with the
 	// same IdempotencyKey: another time with the same key is refused with
 	// "idempotency_key_reused".
@@ -585,20 +585,20 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 	header.Set("Content-Type", "application/json")
 	header.Set("Idempotency-Key", send.idempotencyKey)
 	var reply emailReply
-	// PostHog chooses to send now or later when it first accepts the key, and
-	// a replay repeats that choice. So a first answer is checked against the
-	// attempt that got it, and a replay against the first attempt that may
-	// have queued the email.
-	var queuedBy, answeredAt time.Time
+	// queuedBy is when the first attempt that may have queued the email
+	// began, the earliest PostHog could have chosen to send it now. A later
+	// answer can't move it, a first answer neither, since PostHog answers a
+	// retry as a first send when its key lookup runs late.
+	var queuedBy time.Time
 	err = s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
 		var err *EmailError
+		began := s.now()
 		reply, err = s.do(ctx, http.MethodPost, s.appHost+emailSendPath, header, send.body)
 		if err == nil && !reply.accepted() {
 			err = reply.error()
 		}
-		answeredAt = s.now()
 		if queuedBy.IsZero() && (err == nil || mayHaveQueued(err)) {
-			queuedBy = answeredAt
+			queuedBy = began
 		}
 		return err
 	})
@@ -613,9 +613,6 @@ func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, 
 		s.logger.Warnf("PostHog email warning %s: %s", warning.Code, warning.Message)
 	}
 	if !send.scheduledAt.IsZero() {
-		if !result.Replayed {
-			queuedBy = answeredAt
-		}
 		if err := reply.checkSchedule(result, send.scheduledAt, queuedBy); err != nil {
 			return nil, err
 		}
@@ -761,10 +758,12 @@ func keysInFlight(err *EmailError) bool {
 }
 
 // mayHaveQueued is an attempt's error after which PostHog may still have
-// queued the email: no answer, a cut-off answer, a 5xx, a 2xx the client
-// couldn't read, or a key an earlier request still holds.
+// queued the email: no answer, a 5xx, a 2xx the client couldn't read, or a
+// key an earlier request still holds. A cut-off 4xx other than a 409 is
+// still a refusal.
 func mayHaveQueued(err *EmailError) bool {
-	return err.Code == "network_error" || keysInFlight(err) || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
+	cutOff := err.Code == "network_error" && (err.StatusCode < http.StatusBadRequest || err.StatusCode == http.StatusConflict)
+	return cutOff || keysInFlight(err) || err.StatusCode >= http.StatusInternalServerError || (err.StatusCode >= 200 && err.StatusCode < 300)
 }
 
 // asksForALongerWaitThanWeRetry is a Retry-After past the longest retry wait.

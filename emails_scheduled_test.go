@@ -359,9 +359,22 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 			wantCode: "schedule_not_confirmed",
 		},
 		{
+			// PostHog chose to send at once when the attempt began, 70 seconds
+			// early, not when its answer timed out.
+			name:  "a slow lost answer, then a replay",
+			after: 70 * time.Second,
+			attempts: []attempt{
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusAccepted, Body: cutOffBody{strings.NewReader(`{"message_id":"`)}, Header: http.Header{}}
+				}, takes: 15 * time.Second},
+				{reply: queuedNow("true"), takes: time.Second},
+			},
+			wantCode: "schedule_not_confirmed",
+		},
+		{
 			// A rate limit queued nothing, so the send that queued is the second.
 			name:  "a rate limit, then a send close to the time",
-			after: 150 * time.Second,
+			after: 80 * time.Second,
 			attempts: []attempt{
 				{reply: func() *http.Response {
 					return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(`{"code":"rate_limited","detail":"Slow down."}`)), Header: http.Header{}}
@@ -370,9 +383,9 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 			},
 		},
 		{
-			// A first answer, not a replay, says this attempt queued the email, so a
-			// 503 before it doesn't move the minute back.
-			name:  "a 503, then a first answer after the time",
+			// PostHog answers a retry as a first send when its key lookup runs late,
+			// so replayed false doesn't prove the 503 queued nothing.
+			name:  "a 503, then a first answer close to the time",
 			after: 100 * time.Second,
 			attempts: []attempt{
 				{reply: func() *http.Response {
@@ -380,14 +393,37 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 				}, takes: 30 * time.Second},
 				{reply: queuedNow("false"), takes: 2 * time.Minute},
 			},
+			wantCode: "schedule_not_confirmed",
+		},
+		{
+			// A cut-off 429 still says PostHog refused the attempt, so the send that
+			// may have queued is the second, after the time.
+			name:  "a cut-off rate limit, then a lost answer after the time",
+			after: 80 * time.Second,
+			attempts: []attempt{
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusTooManyRequests, Body: cutOffBody{strings.NewReader(`{"code":"rate`)}, Header: http.Header{}}
+				}, takes: 30 * time.Second},
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusAccepted, Body: cutOffBody{strings.NewReader(`{"message_id":"`)}, Header: http.Header{}}
+				}, takes: 2 * time.Minute},
+				{reply: queuedNow("true"), takes: 10 * time.Second},
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clock := testClientNow
 			n := 0
+			var key string
 			client := newCloudEmailClient(t, newEmailServer(t), func(config *Config) {
 				config.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					// PostHog replays only a retry with the first attempt's key.
+					if n == 0 {
+						key = r.Header.Get("Idempotency-Key")
+					}
+					require.NotEmpty(t, key)
+					require.Equal(t, key, r.Header.Get("Idempotency-Key"))
 					next := tt.attempts[n]
 					n++
 					clock = clock.Add(next.takes)
