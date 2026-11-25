@@ -738,10 +738,11 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 				evaluationCache[depFlagKey] = nil
 				return false, &InconclusiveMatchError{msg: "Flag dependency has experience continuity enabled", Reason: UnresolvedFlagReasonUnresolvedDependency}
 			}
-			// A cycle the dependency chains don't report, or a very long chain, would
-			// otherwise recurse without bound.
+			// A cycle the dependency chains don't report, or a malformed chain, would
+			// otherwise recurse without bound. The result depends on the path that
+			// reached the limit, so it isn't cached.
 			if inputs.dependencyDepth >= maxFlagDependencyDepth {
-				evaluationCache[depFlagKey] = nil
+				inputs.dependencyDepthLimitHits++
 				return false, &InconclusiveMatchError{
 					msg:    fmt.Sprintf("Flag dependency chain is deeper than the limit of %d", maxFlagDependencyDepth),
 					Reason: UnresolvedFlagReasonUnresolvedDependency,
@@ -749,9 +750,16 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			}
 			// Evaluate the dependency as if it were evaluated directly with the same inputs,
 			// so it uses its own aggregation, properties and bucketing identifier.
+			depthLimitHits := inputs.dependencyDepthLimitHits
 			inputs.dependencyDepth++
 			result, err := poller.computeFlagFromInputs(depFlag, inputs, evaluationCache, true, state)
 			inputs.dependencyDepth--
+			if err != nil && inputs.dependencyDepthLimitHits != depthLimitHits {
+				return false, &InconclusiveMatchError{
+					msg:    fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+					Reason: UnresolvedFlagReasonUnresolvedDependency,
+				}
+			}
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
@@ -1622,13 +1630,18 @@ type flagEvaluationInputs struct {
 	groupProperties  map[string]Properties
 	knownAbsent      *knownAbsentPropertyKeys
 	cohorts          map[string]PropertyGroup
-	// dependencyDepth counts the flag dependencies being evaluated, so a chain is
-	// capped at maxFlagDependencyDepth.
+	// dependencyDepth counts the nested flag dependency evaluations in progress, so
+	// recursion stops at maxFlagDependencyDepth.
 	dependencyDepth int
+	// dependencyDepthLimitHits counts the times recursion stopped at the limit, so
+	// results that depend on the path that reached it aren't cached.
+	dependencyDepthLimitHits int
 }
 
-// maxFlagDependencyDepth caps nested flag dependency evaluation. A deeper chain is
-// inconclusive.
+// maxFlagDependencyDepth is a recursion guard for nested flag dependency evaluation,
+// not a limit on the depth of the dependency graph. Server chains list every
+// prerequisite first, so their evaluation stays shallow. Recursion past the guard,
+// such as through a cycle the chains don't report, is inconclusive.
 const maxFlagDependencyDepth = 100
 
 func (poller *FeatureFlagsPoller) computeFlagLocally(

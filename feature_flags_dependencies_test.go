@@ -673,6 +673,17 @@ func TestFlagDependencyDepthLimit(t *testing.T) {
 		_, err := computeDefinedFlag(t, dependencyChainDefinitions(maxFlagDependencyDepth+2), fmt.Sprintf("flag-%d", maxFlagDependencyDepth+1), nil)
 		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnresolvedDependency)
 	})
+	t.Run("a flag reached at the limit still resolves from a shallower reference", func(t *testing.T) {
+		length := maxFlagDependencyDepth + 2
+		flags := strings.TrimSuffix(strings.TrimPrefix(dependencyChainDefinitions(length), `{"flags": [`), `], "group_type_mapping": {}, "cohorts": {}}`)
+		top := fmt.Sprintf("flag-%d", length-1)
+		target := flagDefinition("target",
+			flagCondition(100, flagDependencyFilter(top, true, top)),
+			flagCondition(100, flagDependencyFilter("flag-50", true, "flag-50")))
+		got, err := computeDefinedFlag(t, localDefinitions(flags, target), "target", nil)
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
 	t.Run("a cycle the dependency chains don't report is inconclusive", func(t *testing.T) {
 		definitions := localDefinitions(
 			flagDefinition("first", flagCondition(100, flagDependencyFilter("second", true, "second"))),
