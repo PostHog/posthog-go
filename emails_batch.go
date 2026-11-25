@@ -288,8 +288,7 @@ func (r *batchRun) failAll(err, answered *EmailError) {
 		if answered != nil {
 			kept := *answered
 			kept.Fix = resendWithTheSameKey
-			if kept.StatusCode == http.StatusNotFound {
-				// The 404 answered only the retry, not the attempt that may have queued.
+			if kept.Message == noBatchForTheRetry {
 				kept.Message = "PostHog found no batch send for the retry, but an earlier attempt may have queued this email."
 			}
 			reason = &kept
@@ -308,7 +307,7 @@ func (r *batchRun) result() *SendBatchResult {
 // request failed as a whole.
 func (r *batchRun) answer(reply emailReply) *EmailError {
 	if !reply.accepted() {
-		return batchReplyError(reply, len(r.members))
+		return batchReplyError(reply, len(r.members), r.lost)
 	}
 	slots, _ := reply.fields["results"].([]interface{})
 	if len(slots) != len(r.members) {
@@ -436,8 +435,13 @@ func (s *emailSender) logWarnings(warnings []EmailWarning) {
 	}
 }
 
-// batchReplyError is a batch request that failed as a whole.
-func batchReplyError(reply emailReply, recipients int) *EmailError {
+// noBatchForTheRetry is a bare 404 after a lost answer: it answers only the
+// retry, and the lost attempt may have queued the emails.
+const noBatchForTheRetry = "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails."
+
+// batchReplyError is a batch request that failed as a whole. lost says an
+// earlier attempt may have queued the emails.
+func batchReplyError(reply emailReply, recipients int, lost bool) *EmailError {
 	err := reply.error()
 	if reply.status == http.StatusRequestEntityTooLarge {
 		// Splitting can't shrink a batch of one, whatever PostHog advises.
@@ -450,6 +454,9 @@ func batchReplyError(reply emailReply, recipients int) *EmailError {
 	if reply.status == http.StatusNotFound && reply.text("code") == "" {
 		err.Code, err.Name = "not_found", EmailErrorNotFound
 		err.Message = "PostHog found no batch send for this request, so no email was sent."
+		if lost {
+			err.Message = noBatchForTheRetry
+		}
 		err.Why = "The template doesn't exist, or batch sends are off for this project or this PostHog version."
 	}
 	if err.Code == "not_found" && err.Fix == "" {

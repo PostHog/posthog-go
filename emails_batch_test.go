@@ -525,6 +525,8 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 	rateLimited := stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
 	tests := []struct {
 		name, callCode, errorCode, detail string
+		// callMessage is the call error's message, when the case checks it.
+		callMessage string
 		// retries answer the attempts after the first, whose answer is lost.
 		retries []stubReply
 	}{
@@ -533,7 +535,8 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 		{name: "a refusal", callCode: "quota_limited", errorCode: "quota_limited", detail: "Over quota.", retries: []stubReply{{status: http.StatusTooManyRequests, body: `{"code":"quota_limited","detail":"Over quota."}`}}},
 		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", retries: []stubReply{failed(http.StatusConflict, "idempotency_key_in_flight")}},
 		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", detail: "PostHog said no.", retries: []stubReply{failed(http.StatusServiceUnavailable, "delivery_unavailable")}},
-		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", detail: "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", retries: []stubReply{{status: http.StatusNotFound}}},
+		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", detail: "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", callMessage: "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails.", retries: []stubReply{{status: http.StatusNotFound}}},
+		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", detail: "PostHog said no.", retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -547,7 +550,11 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 
 			result, err := client.Emails().Batch(context.Background(), templateBatch(recipientsTo(2)...))
 
-			require.Equal(t, tt.callCode, requireEmailError(t, err).Code)
+			callErr := requireEmailError(t, err)
+			require.Equal(t, tt.callCode, callErr.Code)
+			if tt.callMessage != "" {
+				require.Equal(t, tt.callMessage, callErr.Message, "the lost attempt may have queued the emails")
+			}
 			require.Len(t, server.received(), 1+len(tt.retries), "a send and its retries, nothing more")
 			for i, got := range result.Results {
 				require.Equal(t, "unconfirmed", got.Status, "the lost send may have queued it")

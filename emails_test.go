@@ -831,6 +831,7 @@ func TestEmailsErrorNames(t *testing.T) {
 		{http.StatusNotFound, "not_found", EmailErrorNotFound},
 		{http.StatusConflict, "template_outdated", EmailErrorValidation},
 		{http.StatusConflict, "idempotency_key_in_flight", EmailErrorConcurrentIdempotentRequests},
+		{http.StatusConflict, "batch_unavailable", EmailErrorApplication},
 		{http.StatusUnprocessableEntity, "idempotency_key_reused", EmailErrorInvalidIdempotentRequest},
 		{http.StatusUnprocessableEntity, "recipient_suppressed", EmailErrorValidation},
 		{http.StatusTooManyRequests, "quota_limited", EmailErrorMonthlyQuotaExceeded},
@@ -1037,6 +1038,29 @@ func TestEmailsGetErrors(t *testing.T) {
 
 			require.Equal(t, tt.code, requireEmailError(t, err).Code)
 			require.Len(t, server.received(), tt.requests)
+		})
+	}
+}
+
+func TestEmailsGetNamesA409ByItsCode(t *testing.T) {
+	tests := []struct {
+		code string
+		want EmailErrorName
+	}{
+		{"batch_unavailable", EmailErrorApplication},
+		{"conflict", EmailErrorConcurrentIdempotentRequests},
+	}
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			server := newEmailServer(t, failed(http.StatusConflict, tt.code))
+			client := newEmailClient(t, server)
+
+			_, err := client.Emails().Get(context.Background(), testMessageID)
+
+			emailErr := requireEmailError(t, err)
+			require.Equal(t, tt.code, emailErr.Code)
+			require.Equal(t, tt.want, emailErr.Name)
+			require.Len(t, server.received(), 1)
 		})
 	}
 }
