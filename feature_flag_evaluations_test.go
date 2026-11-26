@@ -1633,7 +1633,7 @@ func TestEvaluateFlags_GroupFlagWithoutGroupKey(t *testing.T) {
 	}
 }
 
-// A group flag without its group key resolves false locally, as the flags service resolves it.
+// A group flag with only conditions on its group resolves false locally without its group key, as the flags service resolves it.
 func TestLegacyGettersGroupFlagWithoutGroupKey(t *testing.T) {
 	t.Parallel()
 	payload := FeatureFlagPayload{Key: "checkout", DistinctId: "user-123"}

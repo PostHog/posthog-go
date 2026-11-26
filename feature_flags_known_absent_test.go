@@ -787,7 +787,7 @@ func TestFlagDependencyIsEvaluatedInItsOwnContext(t *testing.T) {
 		require.Equal(t, false, snapshot.GetFlag("org-parent"))
 	})
 
-	t.Run("a group dependency without its group is false before its prerequisites are evaluated", func(t *testing.T) {
+	t.Run("a group dependency with only conditions on its missing group is false before its prerequisites are evaluated", func(t *testing.T) {
 		needsServer := flagDefinition("needs-server", flagCondition(100, staticCohortFilter))
 		orgParent := orgFlagDefinition("org-parent", flagCondition(100, flagDependencyFilter("needs-server", true, "needs-server")))
 		personChildExpectsFalse := flagDefinition("person-child-expects-false", flagCondition(100, flagDependencyFilter("org-parent", false, "needs-server", "org-parent")))

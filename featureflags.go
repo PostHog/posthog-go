@@ -44,6 +44,7 @@ var (
 	errMissingConditionValue    = &InconclusiveMatchError{msg: "Can't match a known-absent property without a condition value", Reason: UnresolvedFlagReasonUnsupportedDefinition}
 	errCohortPropertyValue      = newInconclusiveSentinels("Can't match cohort without a given cohort property value")
 	errHoldoutMissingDeviceID   = newInconclusiveSentinels("Can't evaluate a device-bucketed holdout without a device id")
+	errHoldoutMissingGroupKey   = newInconclusiveSentinels("Can't evaluate a group flag's holdout without the group key")
 	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation", Reason: UnresolvedFlagReasonUnsupportedDefinition}
 )
 
@@ -267,6 +268,23 @@ type flagsState struct {
 	// definitions is the payload these fields were decoded from, republished to the
 	// cache provider on 304 responses.
 	definitions json.RawMessage
+	// personConditions maps a flag key to the indexes of its conditions with an explicit
+	// JSON null aggregation_group_type_index, which target the person even on a flag
+	// aggregated by a group.
+	personConditions map[string]map[int]struct{}
+}
+
+// conditionAggregation returns the group type index a flag's condition aggregates on, nil
+// for the person. A condition without its own aggregation_group_type_index uses the flag's.
+func (state *flagsState) conditionAggregation(flag FeatureFlag, conditionIndex int) *uint8 {
+	condition := flag.Filters.Groups[conditionIndex]
+	if condition.AggregationGroupTypeIndex != nil {
+		return condition.AggregationGroupTypeIndex
+	}
+	if _, person := state.personConditions[flag.Key][conditionIndex]; person {
+		return nil
+	}
+	return flag.Filters.AggregationGroupTypeIndex
 }
 
 // FeatureFlagsPoller periodically loads feature flag definitions for local evaluation.
@@ -726,9 +744,9 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	}
 	dependencyChain := property.DependencyChain
 
-	// A group flag whose group isn't supplied is false whatever its prerequisites
-	// resolve to, so they aren't evaluated.
-	if poller.dependencyGroupIsMissing(flagsByKey[property.Key], inputs, state) {
+	// A group flag that only targets a group that isn't supplied is false whatever its
+	// prerequisites resolve to, so they aren't evaluated.
+	if poller.dependencyOnlyTargetsMissingGroup(flagsByKey[property.Key], inputs, state) {
 		evaluationCache[property.Key] = false
 		return checkFlagDependencyValue(property.Value, false)
 	}
@@ -815,18 +833,24 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 	}
 }
 
-// dependencyGroupIsMissing reports an active referenced flag without experience
-// continuity or feature enrollment that is aggregated by a group type absent from the supplied groups.
-func (poller *FeatureFlagsPoller) dependencyGroupIsMissing(flag FeatureFlag, inputs *flagEvaluationInputs, state *flagsState) bool {
-	if !flag.Active || flag.Filters.FeatureEnrollment || flag.Filters.AggregationGroupTypeIndex == nil || (flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity) {
+// dependencyOnlyTargetsMissingGroup reports an active referenced flag without experience
+// continuity or feature enrollment that is aggregated by a group type without a usable
+// key, whose conditions all aggregate on that group and whose holdout excludes no one.
+// Evaluated directly, such a flag skips every condition and is false.
+func (poller *FeatureFlagsPoller) dependencyOnlyTargetsMissingGroup(flag FeatureFlag, inputs *flagEvaluationInputs, state *flagsState) bool {
+	flagAggregation := flag.Filters.AggregationGroupTypeIndex
+	if !flag.Active || flag.Filters.FeatureEnrollment || flagAggregation == nil || (flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity) {
 		return false
 	}
-	groupType, exists := state.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
-	if !exists {
+	if !inputs.flagGroupKeyIsMissing(flag, state) || holdoutExcludesAnyone(flag) {
 		return false
 	}
-	_, hasGroup := inputs.groupKey(groupType)
-	return !hasGroup
+	for i := range flag.Filters.Groups {
+		if !uint8PtrEqual(state.conditionAggregation(flag, i), flagAggregation) {
+			return false
+		}
+	}
+	return true
 }
 
 // flagDependencyDefinitionError reports a flag dependency filter that local evaluation
@@ -1049,6 +1073,8 @@ type flagDefinitions struct {
 	FeatureFlagsResponse
 	// Only 2 enables explicit matching; missing and unknown versions stay legacy.
 	PropertyMatchingVersion int `json:"property_matching_version"`
+	// personConditions is flagsState.personConditions.
+	personConditions map[string]map[int]struct{}
 }
 
 // decodeFlagDefinitions rejects payloads that would crash preprocessing.
@@ -1062,7 +1088,48 @@ func decodeFlagDefinitions(data json.RawMessage) (flagDefinitions, error) {
 			return flagDefinitions{}, err
 		}
 	}
+	personConditions, err := findPersonConditions(data, decoded.Flags)
+	if err != nil {
+		return flagDefinitions{}, err
+	}
+	decoded.personConditions = personConditions
 	return decoded, nil
+}
+
+// findPersonConditions finds the conditions whose aggregation_group_type_index is an
+// explicit JSON null, which decoding into a pointer can't tell from an omitted one.
+func findPersonConditions(data json.RawMessage, flags []FeatureFlag) (map[string]map[int]struct{}, error) {
+	var aggregations struct {
+		Flags []struct {
+			Filters struct {
+				Groups []struct {
+					AggregationGroupTypeIndex json.RawMessage `json:"aggregation_group_type_index"`
+				} `json:"groups"`
+			} `json:"filters"`
+		} `json:"flags"`
+	}
+	if err := json.Unmarshal(data, &aggregations); err != nil {
+		return nil, err
+	}
+	var personConditions map[string]map[int]struct{}
+	for i, flag := range aggregations.Flags {
+		if i >= len(flags) {
+			break
+		}
+		for j, condition := range flag.Filters.Groups {
+			if !bytes.Equal(bytes.TrimSpace(condition.AggregationGroupTypeIndex), []byte("null")) {
+				continue
+			}
+			if personConditions == nil {
+				personConditions = map[string]map[int]struct{}{}
+			}
+			if personConditions[flags[i].Key] == nil {
+				personConditions[flags[i].Key] = map[int]struct{}{}
+			}
+			personConditions[flags[i].Key][j] = struct{}{}
+		}
+	}
+	return personConditions, nil
 }
 
 // validateVariants rejects the one shape known to panic during preprocessing.
@@ -1102,6 +1169,7 @@ func (poller *FeatureFlagsPoller) applyFlagDefinitions(data json.RawMessage, dec
 		minimalFlagCalledEvents: decoded.MinimalFlagCalledEvents,
 		propertyMatchingVersion: decoded.PropertyMatchingVersion,
 		definitions:             data,
+		personConditions:        decoded.personConditions,
 	}
 	poller.state.Store(state)
 	poller.warnAboutUnresolvableFlags(state)
@@ -1769,8 +1837,8 @@ func (poller *FeatureFlagsPoller) computeFlagLocally(
 }
 
 // computeFlagFromInputs evaluates flag with its own aggregation. A dependency shares
-// evaluationCache with the flag that references it. A flag aggregated by a group type
-// without a supplied group is false, as the flags service resolves it.
+// evaluationCache with the flag that references it. Without a usable key for the flag's
+// group type, its conditions on that group are skipped, as the flags service skips them.
 func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 	flag FeatureFlag,
 	inputs *flagEvaluationInputs,
@@ -1809,7 +1877,7 @@ func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 		groupKey, exists := inputs.groupKey(groupType)
 
 		if !exists {
-			return false, nil
+			return poller.matchFeatureFlagProperties(flag, "", nil, nil, nil, flagsByKey, evaluationCache, inputs, state)
 		}
 
 		focusedGroupProperties := inputs.groupProperties[groupType]
@@ -1818,25 +1886,46 @@ func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 		}
 		return poller.matchFeatureFlagProperties(flag, groupKey, nil, focusedGroupProperties, inputs.knownAbsent.groupSet(groupType), flagsByKey, evaluationCache, inputs, state)
 	} else {
-		personProperties := inputs.personProperties
-		localPersonProperties := personProperties
 		// Only add distinct_id if the flag has conditions that check person properties.
 		// For simple flags (no property conditions), this avoids creating a map that's never read.
+		localPersonProperties := inputs.personProperties
 		if flagHasPersonProperties(flag) {
-			if _, ok := localPersonProperties["distinct_id"]; !ok {
-				if personProperties == nil {
-					localPersonProperties = Properties{"distinct_id": inputs.distinctId}
-				} else {
-					localPersonProperties = make(Properties, len(personProperties)+1)
-					localPersonProperties["distinct_id"] = inputs.distinctId
-					for k, v := range personProperties {
-						localPersonProperties[k] = v
-					}
-				}
-			}
+			localPersonProperties = inputs.personPropertiesWithDistinctId()
 		}
 		return poller.matchFeatureFlagProperties(flag, inputs.distinctId, inputs.deviceId, localPersonProperties, inputs.knownAbsent.personSet(), flagsByKey, evaluationCache, inputs, state)
 	}
+}
+
+// personPropertiesWithDistinctId returns the person properties with distinct_id added
+// when the caller didn't pass it.
+func (inputs *flagEvaluationInputs) personPropertiesWithDistinctId() Properties {
+	personProperties := inputs.personProperties
+	if _, ok := personProperties["distinct_id"]; ok {
+		return personProperties
+	}
+	if personProperties == nil {
+		return Properties{"distinct_id": inputs.distinctId}
+	}
+	localPersonProperties := make(Properties, len(personProperties)+1)
+	localPersonProperties["distinct_id"] = inputs.distinctId
+	for k, v := range personProperties {
+		localPersonProperties[k] = v
+	}
+	return localPersonProperties
+}
+
+// flagGroupKeyIsMissing reports a flag aggregated by a mapped group type that has no
+// usable key.
+func (inputs *flagEvaluationInputs) flagGroupKeyIsMissing(flag FeatureFlag, state *flagsState) bool {
+	if flag.Filters.AggregationGroupTypeIndex == nil {
+		return false
+	}
+	groupType, exists := state.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
+	if !exists {
+		return false
+	}
+	_, hasGroup := inputs.groupKey(groupType)
+	return !hasGroup
 }
 
 func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
@@ -1906,6 +1995,12 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	// Holdouts precede release conditions: a held-out identifier is excluded from
 	// the flag's targeting entirely rather than bucketed into one of its variants.
 	// Per-condition aggregation below never changes holdout membership.
+	flagGroupKeyIsMissing := inputs.flagGroupKeyIsMissing(flag, state)
+	if flagGroupKeyIsMissing && holdoutExcludesAnyone(flag) {
+		// The flags service would hash an empty group key, so the holdout can't be decided locally.
+		reason := pickUnresolvedReason(definitionUnresolvedReason(flag, flagsByKey, cohorts, state.propertyMatchingVersion), UnresolvedFlagReasonMissingContext)
+		return nil, errHoldoutMissingGroupKey.withReason(reason)
+	}
 	holdoutVariant, held, err := getHoldoutVariant(flag, distinctId, deviceId)
 	if err != nil {
 		// No condition can be checked without the bucketing value, so a cause in the
@@ -1922,24 +2017,28 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 	groupTypeMapping := state.groups
 	var inconclusiveReason UnresolvedFlagReason
 
-	for _, condition := range conditions {
-		// Per-condition aggregation overrides only when the condition explicitly
-		// sets its own AggregationGroupTypeIndex that differs from the flag level
-		// (mixed targeting). When absent, fall back to the flag-level aggregation
-		// so existing pure person and pure group flags keep their original behavior.
-		conditionAggregation := condition.AggregationGroupTypeIndex
-		if conditionAggregation == nil {
-			conditionAggregation = flagAggregation
-		}
+	for conditionIndex, condition := range conditions {
+		conditionAggregation := state.conditionAggregation(flag, conditionIndex)
 
 		effectiveProperties := properties
 		effectiveKnownAbsent := propertiesKnownAbsent
 		effectiveBucketingId := bucketingId
 
-		// Mixed-override path: condition-level aggregation differs from flag-level.
-		// This assumes flag-level aggregation is nil for mixed flags.
-		if !uint8PtrEqual(conditionAggregation, flagAggregation) {
-			if conditionAggregation != nil {
+		if uint8PtrEqual(conditionAggregation, flagAggregation) {
+			// A condition on the flag's group type without a usable key can't match.
+			if flagGroupKeyIsMissing {
+				continue
+			}
+		} else {
+			// Mixed targeting: the condition's aggregation differs from the flag's.
+			if conditionAggregation == nil {
+				effectiveProperties = inputs.personProperties
+				if len(condition.Properties) > 0 {
+					effectiveProperties = inputs.personPropertiesWithDistinctId()
+				}
+				effectiveKnownAbsent = inputs.knownAbsent.personSet()
+				effectiveBucketingId = getBucketingID(flag, inputs.distinctId, inputs.deviceId)
+			} else {
 				groupType, exists := groupTypeMapping[fmt.Sprintf("%d", *conditionAggregation)]
 				if !exists {
 					continue
@@ -1964,7 +2063,7 @@ func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
 			}
 		}
 
-		matchResult, err := poller.isConditionMatch(flag, effectiveBucketingId, condition, effectiveProperties, effectiveKnownAbsent, cohorts, flagsByKey, evaluationCache, inputs, state)
+		matchResult, err := poller.isConditionMatch(flag, effectiveBucketingId, condition, conditionAggregation, effectiveProperties, effectiveKnownAbsent, cohorts, flagsByKey, evaluationCache, inputs, state)
 		if err != nil {
 			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
 			// Our error types are returned directly (not wrapped), so type assertion suffices.
@@ -2051,6 +2150,7 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	flag FeatureFlag,
 	bucketingId string,
 	condition FeatureFlagCondition,
+	aggregationGroupTypeIndex *uint8,
 	properties Properties,
 	knownAbsent propertyKeySet,
 	cohorts map[string]PropertyGroup,
@@ -2064,10 +2164,6 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 			isMatch bool
 			err     error
 		)
-		aggregationGroupTypeIndex := condition.AggregationGroupTypeIndex
-		if aggregationGroupTypeIndex == nil {
-			aggregationGroupTypeIndex = flag.Filters.AggregationGroupTypeIndex
-		}
 		// Filters in a condition have no defined order, so an inconclusive filter does not
 		// stop the loop: a later filter can still rule the condition out or carry a
 		// higher-precedence reason.
@@ -3397,6 +3493,18 @@ func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (v
 		}
 	}
 	return "holdout-" + holdoutID, true, nil
+}
+
+// holdoutExcludesAnyone reports a usable holdout whose exclusion percentage is above 0.
+func holdoutExcludesAnyone(flag FeatureFlag) bool {
+	holdout := flag.Filters.Holdout
+	if holdout == nil || holdout.ID == nil || holdout.ExclusionPercentage == nil {
+		return false
+	}
+	if _, ok := holdoutIDToString(holdout.ID); !ok {
+		return false
+	}
+	return *holdout.ExclusionPercentage > 0
 }
 
 // holdoutIDToString renders a holdout id for the synthetic variant key. The API

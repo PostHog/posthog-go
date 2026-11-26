@@ -226,7 +226,7 @@ func TestCaptureSendFeatureFlagsFallsBackForStaticCohort(t *testing.T) {
 }
 
 // TestCaptureSendFeatureFlagsResolvesGroupFlagWithoutGroupsAsFalse verifies that a
-// group-aggregated flag captured without the relevant group context is false locally,
+// group-aggregated flag with only group conditions captured without the relevant group context is false locally,
 // as the flags service resolves it.
 func TestCaptureSendFeatureFlagsResolvesGroupFlagWithoutGroupsAsFalse(t *testing.T) {
 	t.Parallel()
@@ -235,6 +235,20 @@ func TestCaptureSendFeatureFlagsResolvesGroupFlagWithoutGroupsAsFalse(t *testing
 		"group_type_mapping": {"0": "company"},
 		"cohorts": {}
 	}`, `{"featureFlags": {"group-flag": "group-value"}}`, "$feature/group-flag", false, 0)
+}
+
+// A person condition on a group-aggregated flag is still evaluated when the capture has
+// no group context, as the flags service evaluates it.
+func TestCaptureSendFeatureFlagsEvaluatesPersonConditionOfGroupFlagWithoutGroups(t *testing.T) {
+	t.Parallel()
+	assertCaptureFeatureFlag(t, `{
+		"flags": [{"id": 1, "key": "group-flag", "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [
+			{"properties": [], "rollout_percentage": 100},
+			{"aggregation_group_type_index": null, "properties": [{"key": "distinct_id", "type": "person", "operator": "exact", "value": "distinct-id"}], "rollout_percentage": 100}
+		]}}],
+		"group_type_mapping": {"0": "company"},
+		"cohorts": {}
+	}`, `{"featureFlags": {"group-flag": "group-value"}}`, "$feature/group-flag", true, 0)
 }
 
 func assertCaptureFeatureFlag(t *testing.T, definitions, flagsResponse, featureProperty string, want interface{}, wantDecideCalls int32) {

@@ -177,3 +177,147 @@ func TestGroupFlagWithUsableGroupKeyIsUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// companyFlagWithConditions defines "checkout", aggregated by company, with the given conditions,
+// and "dependent", a person flag that requires "checkout" to be true.
+func companyFlagWithConditions(holdout string, conditions ...string) string {
+	if holdout != "" {
+		holdout = `"holdout": ` + holdout + `, `
+	}
+	return `{"flags": [
+		{"key": "checkout", "active": true, "filters": {"aggregation_group_type_index": 0, ` + holdout + `"groups": [` + strings.Join(conditions, ",") + `]}},
+		` + flagDefinition("dependent", flagCondition(100, flagDependencyFilter("checkout", true, "checkout"))) + `
+	], "group_type_mapping": {"0": "company"}, "cohorts": {}}`
+}
+
+const (
+	explicitPersonConditionPlanPro = `{"aggregation_group_type_index": null, "properties": [{"key": "plan", "type": "person", "operator": "exact", "value": "pro"}], "rollout_percentage": 100}`
+	companyConditionForEveryone    = `{"properties": [], "rollout_percentage": 100}`
+)
+
+// A condition with "aggregation_group_type_index": null targets the person, even on a flag
+// aggregated by a group. Only conditions on a group without a usable key are skipped.
+func TestGroupFlagWithoutGroupKeyEvaluatesPersonConditions(t *testing.T) {
+	t.Parallel()
+	for name, definitions := range map[string]string{
+		"person condition only":                             companyFlagWithConditions("", explicitPersonConditionPlanPro),
+		"skipped group condition before a person condition": companyFlagWithConditions("", companyConditionForEveryone, explicitPersonConditionPlanPro),
+	} {
+		definitions := definitions
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, groups := range []Groups{nil, {"company": ""}} {
+				for _, plan := range []string{"pro", "free"} {
+					want := plan == "pro"
+					client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, remoteCheckoutEnabled)
+					person := Properties{"plan": plan}
+
+					snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", Groups: groups, PersonProperties: person})
+					require.NoError(t, err)
+					require.Empty(t, snapshot.UnresolvedFlags())
+					require.Equal(t, want, snapshot.GetFlag("checkout"), "groups %v plan %s", groups, plan)
+					require.Equal(t, want, snapshot.GetFlag("dependent"), "groups %v plan %s", groups, plan)
+
+					value, err := client.GetFeatureFlag(FeatureFlagPayload{Key: "checkout", DistinctId: "user-123", Groups: groups, PersonProperties: person})
+					require.NoError(t, err)
+					require.Equal(t, want, value)
+					require.Zero(t, remoteCalls.Load())
+				}
+			}
+		})
+	}
+}
+
+// With a usable group key, a person condition on a group flag still reads person properties.
+func TestGroupFlagWithGroupKeyEvaluatesPersonConditionOnPersonProperties(t *testing.T) {
+	t.Parallel()
+	client, _, remoteCalls := newUnresolvedFlagsClient(t, companyFlagWithConditions("", explicitPersonConditionPlanPro), remoteCheckoutEnabled)
+	for _, plan := range []string{"pro", "free"} {
+		snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{
+			DistinctId:       "user-123",
+			Groups:           Groups{"company": "acme"},
+			PersonProperties: Properties{"plan": plan},
+			GroupProperties:  map[string]Properties{"company": {"plan": "pro"}},
+		})
+		require.NoError(t, err)
+		require.Empty(t, snapshot.UnresolvedFlags())
+		require.Equal(t, plan == "pro", snapshot.GetFlag("checkout"), plan)
+	}
+	require.Zero(t, remoteCalls.Load())
+}
+
+// With only conditions on the missing group, the flag is false.
+func TestGroupFlagWithOnlyGroupConditionsWithoutGroupKeyIsFalse(t *testing.T) {
+	t.Parallel()
+	client, _, remoteCalls := newUnresolvedFlagsClient(t, companyFlagWithConditions("", companyConditionForEveryone), remoteCheckoutEnabled)
+	for _, groups := range []Groups{nil, {"company": ""}} {
+		snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", Groups: groups, PersonProperties: Properties{"plan": "pro"}})
+		require.NoError(t, err)
+		require.Empty(t, snapshot.UnresolvedFlags())
+		require.Equal(t, false, snapshot.GetFlag("checkout"))
+		require.Equal(t, false, snapshot.GetFlag("dependent"))
+	}
+	require.Zero(t, remoteCalls.Load())
+}
+
+// The flags service hashes the flag-level group key for the holdout before any condition,
+// so a holdout that excludes anyone can't be decided without that key.
+func TestGroupFlagHoldoutWithoutGroupKeyIsMissingContext(t *testing.T) {
+	t.Parallel()
+	const holdout50 = `{"id": 7, "exclusion_percentage": 50}`
+	for name, definitions := range map[string]string{
+		"group condition":  companyFlagWithConditions(holdout50, companyConditionForEveryone),
+		"person condition": companyFlagWithConditions(holdout50, explicitPersonConditionPlanPro),
+	} {
+		definitions := definitions
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, groups := range []Groups{nil, {"company": ""}} {
+				client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, remoteCheckoutEnabled)
+				person := Properties{"plan": "pro"}
+
+				snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", Groups: groups, PersonProperties: person, OnlyEvaluateLocally: true})
+				require.NoError(t, err)
+				require.Equal(t, map[string]UnresolvedFlagReason{
+					"checkout":  UnresolvedFlagReasonMissingContext,
+					"dependent": UnresolvedFlagReasonUnresolvedDependency,
+				}, snapshot.UnresolvedFlags())
+				require.Zero(t, remoteCalls.Load())
+
+				value, err := client.GetFeatureFlag(FeatureFlagPayload{Key: "checkout", DistinctId: "user-123", Groups: groups, PersonProperties: person})
+				require.NoError(t, err)
+				require.Equal(t, true, value)
+				require.Equal(t, int32(1), remoteCalls.Load())
+			}
+		})
+	}
+
+	t.Run("usable group key", func(t *testing.T) {
+		t.Parallel()
+		client, _, remoteCalls := newUnresolvedFlagsClient(t, companyFlagWithConditions(holdout50, companyConditionForEveryone), remoteNoFlags)
+		for _, company := range []string{"acme", "globex", "initech", "umbrella"} {
+			var want interface{} = true
+			if holdoutHash(company) <= 0.5 {
+				want = "holdout-7"
+			}
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", Groups: Groups{"company": company}, OnlyEvaluateLocally: true})
+			require.NoError(t, err)
+			require.Empty(t, snapshot.UnresolvedFlags())
+			require.Equal(t, want, snapshot.GetFlag("checkout"), company)
+		}
+		require.Zero(t, remoteCalls.Load())
+	})
+
+	t.Run("holdout excluding no one", func(t *testing.T) {
+		t.Parallel()
+		client, _, remoteCalls := newUnresolvedFlagsClient(t,
+			companyFlagWithConditions(`{"id": 7, "exclusion_percentage": 0}`, companyConditionForEveryone), remoteCheckoutEnabled)
+		for _, groups := range []Groups{nil, {"company": ""}} {
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-123", Groups: groups})
+			require.NoError(t, err)
+			require.Empty(t, snapshot.UnresolvedFlags())
+			require.Equal(t, false, snapshot.GetFlag("checkout"))
+		}
+		require.Zero(t, remoteCalls.Load())
+	})
+}
