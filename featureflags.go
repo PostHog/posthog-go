@@ -2188,6 +2188,8 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, inputs, state)
 			} else if readsOtherGroupType(prop, aggregationGroupTypeIndex) {
 				isMatch, err = inputs.matchGroupFilterOfOtherGroupType(prop, state)
+			} else if isPersonFilterInGroupCondition(prop, aggregationGroupTypeIndex) {
+				isMatch, err = inputs.matchPersonFilter(prop, state)
 			} else {
 				filterKnownAbsent := knownAbsent
 				if !conditionFilterUsesKnownAbsent(prop.Type, aggregationGroupTypeIndex) {
@@ -2272,6 +2274,19 @@ func readsOtherGroupType(property FlagProperty, aggregationGroupTypeIndex *uint8
 		return false
 	}
 	return aggregationGroupTypeIndex == nil || *property.GroupTypeIndex != int(*aggregationGroupTypeIndex)
+}
+
+// isPersonFilterInGroupCondition reports a person filter in a condition aggregated on a
+// group, which reads person properties rather than the group's.
+func isPersonFilterInGroupCondition(property FlagProperty, aggregationGroupTypeIndex *uint8) bool {
+	return property.Type == "person" && aggregationGroupTypeIndex != nil
+}
+
+// matchPersonFilter matches a person filter against the person properties and person
+// known-absent keys whatever the condition aggregates on, as the flags service routes
+// it in PropertyContext::resolve_for_filter.
+func (inputs *flagEvaluationInputs) matchPersonFilter(property FlagProperty, state *flagsState) (bool, error) {
+	return matchPropertyWithKnownAbsent(property, inputs.personPropertiesWithDistinctId(), inputs.knownAbsent.personSet(), state.propertyMatchingVersion)
 }
 
 // matchGroupFilterOfOtherGroupType matches a group filter against the properties and

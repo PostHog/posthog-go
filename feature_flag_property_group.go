@@ -92,6 +92,8 @@ func (poller *FeatureFlagsPoller) matchParsedPropertyGroup(groupType string, par
 				matches, err = poller.matchCohort(*fp, properties, knownAbsent, cohorts, flagsByKey, evaluationCache, inputs, aggregationGroupTypeIndex, state)
 			} else if fp.Type == "flag" {
 				matches, err = poller.evaluateFlagDependency(*fp, flagsByKey, evaluationCache, inputs, state)
+			} else if isPersonFilterInGroupCondition(*fp, aggregationGroupTypeIndex) {
+				matches, err = inputs.matchPersonFilter(*fp, state)
 			} else {
 				leafKnownAbsent := knownAbsent
 				if !pv.usesKnownAbsentOf(aggregationGroupTypeIndex) {

@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	json "github.com/goccy/go-json"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCohortFlagDependencyGroupContext(t *testing.T) {
@@ -177,4 +179,61 @@ func TestGroupContextPersonFlagDependency(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A person filter reads person properties and the person listing whatever the condition
+// aggregates on, as the flags service routes it in PropertyContext::resolve_for_filter.
+func TestPersonFilterInGroupConditionReadsPersonProperties(t *testing.T) {
+	personPlan := func(operator string) string {
+		return fmt.Sprintf(`{"key": "plan", "type": "person", "operator": %q, "value": "pro"}`, operator)
+	}
+	orgFlag := func(key, filter string) string {
+		return fmt.Sprintf(`{"key": %q, "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [{"properties": [%s], "rollout_percentage": 100}]}}`, key, filter)
+	}
+	definitions := `{"flags": [` + strings.Join([]string{
+		orgFlag("org-person", personPlan("exact")),
+		orgFlag("org-person-not-set", `{"key": "plan", "type": "person", "operator": "is_not_set"}`),
+		orgFlag("org-cohort", `{"key": "id", "type": "cohort", "value": 1}`),
+		flagDefinition("dependent", flagCondition(100, flagDependencyFilter("org-person", true, "org-person"))),
+		`{"key": "mixed", "active": true, "filters": {"groups": [{"aggregation_group_type_index": 0, "rollout_percentage": 100, "properties": [` + personPlan("exact") + `]}]}}`,
+	}, ",") + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
+		`, "cohorts": {"1": {"type": "AND", "values": [{"type": "AND", "values": [` + personPlan("exact") + `]}]}}}`
+	client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, "")
+	groups := Groups{"organization": "acme"}
+
+	for _, tt := range []struct {
+		name   string
+		person string
+		org    string
+		want   bool
+	}{
+		{"free person in a pro organization", "free", "pro", false},
+		{"pro person in a free organization", "pro", "free", true},
+	} {
+		for _, key := range []string{"org-person", "org-cohort", "dependent", "mixed"} {
+			t.Run(tt.name+"/"+key, func(t *testing.T) {
+				got, err := client.GetFeatureFlag(FeatureFlagPayload{
+					Key:              key,
+					DistinctId:       "user-123",
+					Groups:           groups,
+					PersonProperties: Properties{"plan": tt.person},
+					GroupProperties:  map[string]Properties{"organization": {"plan": tt.org}},
+				})
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			})
+		}
+	}
+	t.Run("person listing", func(t *testing.T) {
+		got, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key:                           "org-person-not-set",
+			DistinctId:                    "user-123",
+			Groups:                        groups,
+			GroupProperties:               map[string]Properties{"organization": {"plan": "pro"}},
+			PersonPropertyKeysKnownAbsent: []string{"plan"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+	require.Zero(t, remoteCalls.Load())
 }
