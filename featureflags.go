@@ -1258,7 +1258,7 @@ func canonicalJSON(raw json.RawMessage) json.RawMessage {
 // enrollment: true or "true" is enrolled, and any other value that was passed, nil
 // included, is opted out. Without the enrollment property the flag can't be resolved locally.
 func matchFeatureEnrollment(flag FeatureFlag, personProperties Properties) (bool, error) {
-	enrollmentKey := "$feature_enrollment/" + flag.Key
+	enrollmentKey := featureEnrollmentKey(flag)
 	value, ok := personProperties[enrollmentKey]
 	if !ok {
 		return false, &InconclusiveMatchError{
@@ -1267,6 +1267,17 @@ func matchFeatureEnrollment(flag FeatureFlag, personProperties Properties) (bool
 		}
 	}
 	return isEnrolledValue(value), nil
+}
+
+func featureEnrollmentKey(flag FeatureFlag) string {
+	return "$feature_enrollment/" + flag.Key
+}
+
+// enrollmentKnownAbsent reports that the caller lists the flag's enrollment key as a
+// known-absent person property, which outranks a supplied value.
+func (inputs *flagEvaluationInputs) enrollmentKnownAbsent(flag FeatureFlag) bool {
+	_, listed := inputs.knownAbsent.personSet()[featureEnrollmentKey(flag)]
+	return listed
 }
 
 // isEnrolledValue reports whether value is sent to /flags as JSON true or "true". Types with
@@ -1854,8 +1865,9 @@ func (poller *FeatureFlagsPoller) computeFlagFromInputs(
 	}
 
 	// Enrollment is a person property, so it is read from the person properties on
-	// group-aggregated flags too, before the group key is required.
-	if flag.Filters.FeatureEnrollment {
+	// group-aggregated flags too, before the group key is required. A listed enrollment
+	// key is absent, so the person isn't enrolled and ordinary targeting decides the flag.
+	if flag.Filters.FeatureEnrollment && !inputs.enrollmentKnownAbsent(flag) {
 		enrolled, err := matchFeatureEnrollment(flag, inputs.personProperties)
 		if err != nil {
 			return nil, err

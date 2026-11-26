@@ -409,3 +409,33 @@ func TestFeatureEnrollmentMissingOnGroupFlag(t *testing.T) {
 	require.Equal(t, map[string]UnresolvedFlagReason{"beta-feature": UnresolvedFlagReasonMissingContext}, snapshot.UnresolvedFlags())
 	require.Zero(t, remoteCalls.Load())
 }
+
+// A listed enrollment key is absent, so the person isn't enrolled whatever value is supplied
+// and the flag's holdout and release conditions decide it.
+func TestFeatureEnrollmentListedKnownAbsentUsesOrdinaryTargeting(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		groups string
+		want   interface{}
+	}{
+		{"release condition off", everyoneOff, false},
+		{"release condition on", everyoneOn, true},
+	} {
+		for _, supplied := range []Properties{{enrollmentKey: true}, {}} {
+			t.Run(fmt.Sprintf("%s/supplied %v", tt.name, supplied), func(t *testing.T) {
+				client, _, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(enrollmentFlagDefinition(tt.groups), dependentOnBetaFeature()), "")
+				for _, key := range []string{"beta-feature", "dependent"} {
+					got, err := client.GetFeatureFlag(FeatureFlagPayload{
+						Key:                           key,
+						DistinctId:                    "user-123",
+						PersonProperties:              supplied,
+						PersonPropertyKeysKnownAbsent: []string{enrollmentKey},
+					})
+					require.NoError(t, err)
+					require.Equal(t, tt.want, got, key)
+				}
+				require.Zero(t, remoteCalls.Load())
+			})
+		}
+	}
+}
