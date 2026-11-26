@@ -1,0 +1,541 @@
+package posthog
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	emailBatchPath     = "/api/messaging/send/email_batch/"
+	maxBatchRecipients = 100
+	// minBatchAttemptTimeout outlasts the 30 seconds PostHog waits on its
+	// email pipeline for a batch, so the client doesn't give up on an answer
+	// that is still coming.
+	minBatchAttemptTimeout = 45 * time.Second
+)
+
+// EmailBatch is the content of one Emails.Batch call: a TemplateEmailBatch or
+// a CodeEmailBatch.
+type EmailBatch interface {
+	prepareBatch() (*batchRun, *EmailError)
+}
+
+// BatchRecipient is one recipient of Emails.Batch. Each gets its own email.
+type BatchRecipient struct {
+	// To is the recipient's email address.
+	To string
+	// DistinctID is the recipient's distinct ID in your product.
+	DistinctID string
+	// IdempotencyKey is 1 to 255 visible ASCII characters, a different one for
+	// each recipient of the call. Without it, the client makes one that covers
+	// its own retries but not a second call, so pass keys you store when a
+	// batch may be cut off and run again: a rerun within 24 hours replays the
+	// emails that went out instead of sending them twice. A single send and a
+	// batch recipient with the same key and the same email replay each other.
+	// Never reuse a key for another email: PostHog replays the earlier email
+	// or refuses this one with "idempotency_key_reused", and never sends it.
+	IdempotencyKey string
+	// TemplateData is only for a TemplateEmailBatch: values for this
+	// recipient, merged over the batch's TemplateData. A top-level key set
+	// here replaces the same key there.
+	TemplateData map[string]interface{}
+}
+
+// TemplateEmailBatch sends an email template made transactional in PostHog
+// to each recipient.
+type TemplateEmailBatch struct {
+	// TemplateID is the UUID of the template.
+	TemplateID string
+	// TemplateData fills the template's {{ variables.* }} placeholders for
+	// every recipient.
+	TemplateData map[string]interface{}
+	// Recipients are 1 to 100 recipients, sent in one request.
+	Recipients []BatchRecipient
+	// MaxRetries overrides Config.EmailRequestMaxRetries for the batch's
+	// request. Ptr(0) turns retries off.
+	MaxRetries *int
+}
+
+// CodeEmailBatch sends content your code rendered, the same for every
+// recipient. Its fields work as CodeEmail's do. A batch takes no Cc, Bcc,
+// Attachments or ScheduledAt: send those emails with Send. It takes no
+// CaptureEngagement either: use Tracking.
+type CodeEmailBatch struct {
+	TemplateKey string
+	Subject     string
+	HTML        string
+	Text        string
+	From        string
+	ReplyTo     []string
+	Sensitive   *bool
+	Tracking    *EmailTracking
+	// Recipients are 1 to 100 recipients, without TemplateData, sent in one
+	// request.
+	Recipients []BatchRecipient
+	// MaxRetries overrides Config.EmailRequestMaxRetries for the batch's
+	// request. Ptr(0) turns retries off.
+	MaxRetries *int
+}
+
+// BatchEmailResult is what happened to one recipient of Emails.Batch. Status
+// is one of:
+//
+//   - "queued": PostHog accepted the email. Read its status with Emails.Get
+//     to see whether it went out.
+//   - "failed": PostHog didn't queue the email, and Error says why.
+//   - "unconfirmed": the client can't tell whether PostHog queued the email,
+//     such as after a lost answer, even when PostHog refused the retry, or
+//     while another request holds its key. It may still go out. Send it
+//     again with the same IdempotencyKey within 24 hours of the first
+//     request that used it, so it goes out once.
+type BatchEmailResult struct {
+	// Index is the recipient's position in Recipients.
+	Index          int
+	To             string
+	IdempotencyKey string
+	Status         string
+	// MessageID is the email's message ID, when PostHog named it.
+	MessageID string
+	// Replayed is true when an earlier send with the same key had already
+	// queued the email, so no new email was sent.
+	Replayed bool
+	// Error says why the email is not "queued". For an "unconfirmed" email,
+	// its Code is "delivery_unavailable", "idempotency_key_in_flight" or
+	// "api_error", or PostHog's answer to a retry after a lost one, and its
+	// Fix says to send it again with the same key.
+	Error *EmailError
+}
+
+// SendBatchResult is the answer to Emails.Batch.
+type SendBatchResult struct {
+	// Results hold one result per recipient, in the order of Recipients.
+	Results []BatchEmailResult
+	// Warnings are the warnings PostHog returned about the batch. They are
+	// logged through Config.Logger as well.
+	Warnings []EmailWarning
+}
+
+type batchRecipientBody struct {
+	To             string                 `json:"to"`
+	DistinctID     string                 `json:"distinct_id,omitempty"`
+	IdempotencyKey string                 `json:"idempotency_key"`
+	MessageData    map[string]interface{} `json:"message_data,omitempty"`
+}
+
+type templateBatchBody struct {
+	TemplateID  string                 `json:"template_id"`
+	MessageData map[string]interface{} `json:"message_data"`
+	Recipients  []json.RawMessage      `json:"recipients"`
+}
+
+type codeBatchBody struct {
+	TemplateKey string            `json:"template_key"`
+	Subject     string            `json:"subject"`
+	HTML        string            `json:"html,omitempty"`
+	Text        string            `json:"text,omitempty"`
+	From        string            `json:"from,omitempty"`
+	ReplyTo     []string          `json:"reply_to,omitempty"`
+	Sensitive   *bool             `json:"sensitive,omitempty"`
+	Tracking    *EmailTracking    `json:"tracking,omitempty"`
+	Recipients  []json.RawMessage `json:"recipients"`
+}
+
+func (b TemplateEmailBatch) prepareBatch() (*batchRun, *EmailError) {
+	if !isHyphenatedUUID(b.TemplateID) {
+		return nil, invalidEmail("invalid_template_id", "TemplateID", "TemplateID must be the template's UUID.")
+	}
+	messageData := b.TemplateData
+	if messageData == nil {
+		messageData = map[string]interface{}{}
+	}
+	run, err := newBatchRun(b.Recipients, true, b.MaxRetries)
+	if err != nil {
+		return nil, err
+	}
+	body, encodeErr := encodeEmailBody(templateBatchBody{TemplateID: strings.ToLower(b.TemplateID), MessageData: messageData, Recipients: run.wires()})
+	if encodeErr != nil {
+		return nil, invalidEmail("invalid_template_data", "TemplateData", "TemplateData must encode as JSON.")
+	}
+	run.body = body
+	return run, nil
+}
+
+func (b CodeEmailBatch) prepareBatch() (*batchRun, *EmailError) {
+	if err := checkCodeContent("CodeEmailBatch", b.TemplateKey, b.Subject, b.HTML, b.Text, b.ReplyTo); err != nil {
+		return nil, err
+	}
+	run, prepareErr := newBatchRun(b.Recipients, false, b.MaxRetries)
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	body, err := encodeEmailBody(codeBatchBody{
+		TemplateKey: b.TemplateKey,
+		Subject:     b.Subject,
+		HTML:        b.HTML,
+		Text:        b.Text,
+		From:        b.From,
+		ReplyTo:     b.ReplyTo,
+		Sensitive:   b.Sensitive,
+		Tracking:    b.Tracking,
+		Recipients:  run.wires(),
+	})
+	if err != nil {
+		return nil, newEmailError("unexpected_error", "The client could not encode the email.", err)
+	}
+	run.body = body
+	return run, nil
+}
+
+type batchMember struct {
+	to, key string
+	wire    json.RawMessage
+}
+
+// batchRun is one Batch call: its recipients, the request that carries them,
+// and what PostHog answered for each.
+type batchRun struct {
+	members    []batchMember
+	isTemplate bool
+	body       []byte
+	maxRetries *int
+	// lost is true once an attempt went out and PostHog may have queued the
+	// emails without saying so. Only an answer that queues an email settles
+	// it after that.
+	lost     bool
+	results  []BatchEmailResult
+	warnings []EmailWarning
+}
+
+func newBatchRun(recipients []BatchRecipient, isTemplate bool, maxRetries *int) (*batchRun, *EmailError) {
+	if len(recipients) == 0 {
+		return nil, invalidEmail("invalid_recipients", "Recipients", "Recipients must hold at least one recipient.")
+	}
+	if len(recipients) > maxBatchRecipients {
+		return nil, invalidEmail("invalid_recipients", "Recipients", "Recipients holds "+strconv.Itoa(len(recipients))+" recipients, and a batch takes at most 100. Send them in batches of up to 100.")
+	}
+	if err := checkMaxRetries(maxRetries); err != nil {
+		return nil, err
+	}
+	run := &batchRun{isTemplate: isTemplate, maxRetries: maxRetries, results: make([]BatchEmailResult, len(recipients)), warnings: []EmailWarning{}}
+	firstWithKey := map[string]int{}
+	for i, recipient := range recipients {
+		member, err := newBatchMember(i, recipient, isTemplate)
+		if err != nil {
+			return nil, err
+		}
+		if first, seen := firstWithKey[member.key]; seen {
+			where := "Recipients[" + strconv.Itoa(i) + "]"
+			return nil, invalidEmail("invalid_idempotency_key", where+".IdempotencyKey", where+" has the same IdempotencyKey as Recipients["+strconv.Itoa(first)+"]. Give each recipient its own key.")
+		}
+		firstWithKey[member.key] = i
+		run.members = append(run.members, member)
+	}
+	return run, nil
+}
+
+func (r *batchRun) wires() []json.RawMessage {
+	wires := make([]json.RawMessage, len(r.members))
+	for i, member := range r.members {
+		wires[i] = member.wire
+	}
+	return wires
+}
+
+func newBatchMember(i int, recipient BatchRecipient, isTemplate bool) (batchMember, *EmailError) {
+	where := "Recipients[" + strconv.Itoa(i) + "]"
+	atPosition := func(err *EmailError) (batchMember, *EmailError) {
+		err.Field = where + "." + err.Field
+		err.Message = where + ": " + err.Message
+		return batchMember{}, err
+	}
+	if err := checkRecipient(recipient.To); err != nil {
+		return atPosition(err)
+	}
+	key, err := idempotencyKeyOrNew(recipient.IdempotencyKey)
+	if err != nil {
+		return atPosition(err)
+	}
+	if recipient.TemplateData != nil && !isTemplate {
+		return batchMember{}, invalidEmail("invalid_form", where+".TemplateData", where+" has TemplateData, but a CodeEmailBatch sends the same content to every recipient. Send personalized content with a TemplateEmailBatch or with Send.")
+	}
+	wire, encodeErr := encodeEmailBody(batchRecipientBody{To: recipient.To, DistinctID: recipient.DistinctID, IdempotencyKey: key, MessageData: recipient.TemplateData})
+	if encodeErr != nil {
+		return atPosition(invalidEmail("invalid_template_data", "TemplateData", "TemplateData must encode as JSON."))
+	}
+	return batchMember{to: recipient.To, key: key, wire: wire}, nil
+}
+
+func (r *batchRun) set(i int, status string, result BatchEmailResult) {
+	if status == "unconfirmed" && result.Error != nil && result.Error.Fix == "" {
+		withFix := *result.Error
+		withFix.Fix = resendWithTheSameKey
+		result.Error = &withFix
+	}
+	result.Index, result.To, result.IdempotencyKey, result.Status = i, r.members[i].to, r.members[i].key, status
+	r.results[i] = result
+}
+
+// failAll settles every recipient after the request failed as a whole. They
+// stay "unconfirmed" when an attempt that went out may have queued them;
+// answered is PostHog's last answer to an attempt, if any.
+func (r *batchRun) failAll(err, answered *EmailError) {
+	reason, status := err, "failed"
+	if r.lost {
+		status, reason = "unconfirmed", unconfirmedEmail("")
+		if answered != nil {
+			kept := *answered
+			kept.Fix = resendWithTheSameKey
+			kept.Message, kept.Why = unconfirmedAnswer(answered, true)
+			reason = &kept
+		}
+		if err.StatusCode >= http.StatusMultipleChoices && !err.transportFailed() {
+			err.Message, err.Why = unconfirmedAnswer(err, false)
+			err.Fix = "Read each recipient's result, and send each unconfirmed email again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
+		}
+	}
+	for i := range r.members {
+		r.set(i, status, BatchEmailResult{Error: reason})
+	}
+}
+
+func (r *batchRun) result() *SendBatchResult {
+	return &SendBatchResult{Results: r.results, Warnings: r.warnings}
+}
+
+// answer settles each recipient from PostHog's answer, or returns why the
+// request failed as a whole.
+func (r *batchRun) answer(reply emailReply) *EmailError {
+	if !reply.accepted() {
+		return batchReplyError(reply, len(r.members), r.isTemplate, r.lost)
+	}
+	slots, _ := reply.fields["results"].([]interface{})
+	if len(slots) != len(r.members) {
+		return reply.apiError("PostHog answered the batch without a result for each recipient.")
+	}
+	for i := range r.members {
+		fields, _ := slots[i].(map[string]interface{})
+		r.settle(i, emailReply{fields: fields})
+	}
+	r.warnings = append(r.warnings, reply.warnings()...)
+	return nil
+}
+
+func (r *batchRun) settle(i int, slot emailReply) {
+	messageID := slot.text("message_id")
+	if slot.fields["error"] == nil && slot.text("status") == "queued" && messageID != "" {
+		replayed, _ := slot.fields["replayed"].(bool)
+		r.set(i, "queued", BatchEmailResult{MessageID: messageID, Replayed: replayed})
+		return
+	}
+	answer := slotError(slot.fields["error"], messageID)
+	undecided := undecidedCode(answer.Code)
+	if !r.lost && !undecided {
+		r.set(i, "failed", BatchEmailResult{MessageID: messageID, Error: answer})
+		return
+	}
+	kept := *answer
+	kept.Fix = resendWithTheSameKey
+	if kept.Message != notConfirmed {
+		kept.Message, kept.Why = unconfirmedAnswer(answer, true)
+	}
+	r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: &kept})
+}
+
+func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error) {
+	if isNilEmail(batch) {
+		return nil, newEmailError("invalid_form", "Batch needs a TemplateEmailBatch or a CodeEmailBatch.", nil)
+	}
+	run, err := batch.prepareBatch()
+	if err != nil {
+		return nil, err
+	}
+	finish, err := s.start(emailNotSent, "Sending email needs Config.SecretKey, a project secret API key with the transactional_email:write scope.")
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+
+	maxRetries := s.maxRetries
+	if run.maxRetries != nil {
+		maxRetries = *run.maxRetries
+	}
+	if ctx.Err() != nil {
+		return nil, newEmailError("network_error", "The call's context ended, so the batch wasn't sent.", ctx.Err())
+	}
+	header := s.header()
+	header.Set("Content-Type", "application/json")
+	attempts := 0
+	// sent is the outcome of the last attempt that went out. A retry the
+	// client stops before sending it doesn't change what PostHog may have
+	// queued. answered is PostHog's last answer, which a later lost answer
+	// doesn't erase.
+	var sent, answered *EmailError
+	err = s.retry(ctx, maxRetries, func(ctx context.Context) *EmailError {
+		if attempts++; attempts > 1 && s.isClosed() {
+			return newEmailError("client_closed", "The PostHog client is shut down, so it didn't retry the batch.", ErrClosed)
+		}
+		if attempts > 1 && ctx.Err() != nil {
+			// The retry wait and the context can end together. A retry that
+			// never went out leaves PostHog's last answer standing.
+			return sent.interruptedBy(ctx.Err())
+		}
+		reply, err := s.doFor(ctx, s.batchAttemptTimeout(), http.MethodPost, s.appHost+emailBatchPath, header, run.body)
+		if err == nil {
+			err = run.answer(reply)
+		} else if err.transportFailed() && err.StatusCode == http.StatusRequestEntityTooLarge {
+			// The status line already refuses the size, however the body
+			// broke off.
+			err = batchReplyError(emailReply{status: err.StatusCode, retryAfter: err.RetryAfter}, len(run.members), run.isTemplate, run.lost)
+		}
+		if err != nil && (mayHaveQueued(err) || openConflict(reply, err)) {
+			run.lost = true
+		}
+		if err != nil && err.StatusCode >= http.StatusMultipleChoices {
+			answered = err
+		}
+		sent = err
+		return err
+	})
+	if err != nil {
+		run.failAll(err, answered)
+	}
+	s.logWarnings(run.warnings)
+	if err != nil {
+		return run.result(), err
+	}
+	return run.result(), nil
+}
+
+// openConflict is a 409 other than batch_unavailable, the one conflict that
+// says PostHog queued none of the emails. Any other may be an earlier
+// request that still holds the keys.
+func openConflict(reply emailReply, err *EmailError) bool {
+	return err.StatusCode == http.StatusConflict && strings.TrimSpace(reply.text("code")) != "batch_unavailable"
+}
+
+func (s *emailSender) batchAttemptTimeout() time.Duration {
+	if s.timeout > minBatchAttemptTimeout {
+		return s.timeout
+	}
+	return minBatchAttemptTimeout
+}
+
+func (s *emailSender) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *emailSender) logWarnings(warnings []EmailWarning) {
+	for _, warning := range warnings {
+		s.logger.Warnf("PostHog email warning %s: %s", warning.Code, warning.Message)
+	}
+}
+
+// unconfirmedAnswer words PostHog's answer once an attempt may have queued
+// the emails. Its detail can say nothing was sent, which holds only for the
+// attempt it answered, so the detail moves to Why. one is a recipient's error,
+// not the call's.
+func unconfirmedAnswer(err *EmailError, one bool) (message, why string) {
+	why = "PostHog said: " + err.Message
+	if err.Why != "" {
+		why += " " + err.Why
+	}
+	if one {
+		return notConfirmed, why
+	}
+	return "PostHog didn't confirm the emails, so they may still go out.", why
+}
+
+// notConfirmed is the only message an unconfirmed recipient gets. PostHog's
+// own words, which can say the email wasn't sent, go to Why.
+const notConfirmed = "PostHog didn't confirm this email, so it may still go out."
+
+// batchReplyError is a batch request that failed as a whole. lost says an
+// earlier attempt may have queued the emails.
+func batchReplyError(reply emailReply, recipients int, isTemplate, lost bool) *EmailError {
+	err := reply.error()
+	if reply.status == http.StatusRequestEntityTooLarge {
+		if strings.TrimSpace(reply.text("code")) == "" {
+			// A proxy's 413 carries no code, but it still refuses the size.
+			err.Code = "content_too_large"
+			err.Name = emailErrorName(reply.status, err.Code)
+		}
+		// Splitting can't shrink a batch of one, whatever PostHog advises.
+		if recipients == 1 {
+			err.Fix = "Make this recipient's email smaller."
+		} else if err.Fix == "" {
+			err.Fix = "Split the recipients into smaller batches."
+		}
+	}
+	if code := strings.TrimSpace(reply.text("code")); reply.status == http.StatusNotFound && (code == "" || code == "not_found") && reply.text("attr") == "" {
+		// PostHog answers an unknown template, batch sends being off and a
+		// server without the route with this same 404, so the error can't
+		// pick one. After launch a wrong template ID is the likely cause.
+		err.Code, err.Name = "not_found", EmailErrorNotFound
+		switch {
+		case lost:
+			// It answers only the retry, so PostHog's detail stays for
+			// failAll to word as unconfirmed.
+			if reply.text("detail") == "" {
+				err.Message, err.Why = "PostHog found no batch send for the retry.", ""
+			}
+		case isTemplate:
+			err.Message, err.Why = "PostHog found no template with this TemplateID, or batch sends aren't available for this project, so it sent no email of this request.", ""
+			err.Fix = "Check TemplateID. If it's right, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+		default:
+			err.Message, err.Why = "Batch sends from code aren't available for this project, so PostHog sent no email of this request.", ""
+			// PostHog answers this same 404 when email from code is off, and
+			// Send needs it too.
+			err.Fix = "If the project can send email from code, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+		}
+	}
+	if err.Code == "not_found" && err.Fix == "" {
+		err.Fix = "Check TemplateID, or send each email the batch didn't queue with Emails.Send and its recipient's IdempotencyKey."
+	}
+	if err.Code == "batch_unavailable" {
+		err.Fix = "Until batch sends are on for the project, send each email the batch didn't queue with Emails.Send and its recipient's IdempotencyKey."
+	}
+	return err
+}
+
+func slotError(raw interface{}, messageID string) *EmailError {
+	fields, ok := raw.(map[string]interface{})
+	if !ok {
+		return &EmailError{Name: EmailErrorApplication, Code: "api_error", Message: notConfirmed, Why: "PostHog answered without a readable result for this email.", MessageID: messageID}
+	}
+	slot := emailReply{fields: fields}
+	code := strings.TrimSpace(slot.text("code"))
+	if code == "" {
+		code = "api_error"
+	}
+	status := 0
+	if number, ok := fields["status"].(float64); ok && number == float64(int(number)) {
+		status = int(number)
+	}
+	message := slot.text("detail")
+	switch {
+	case message != "":
+	case undecidedCode(code):
+		message = notConfirmed
+	default:
+		message = "PostHog didn't queue this email: " + code + "."
+	}
+	return &EmailError{Name: emailErrorName(status, code), Code: code, Message: message, StatusCode: status, MessageID: messageID}
+}
+
+// undecidedCode is a slot error that leaves the email's fate open, so the
+// recipient stays unconfirmed.
+func undecidedCode(code string) bool {
+	return code == "delivery_unavailable" || code == "idempotency_key_in_flight" || code == "api_error"
+}
+
+const resendWithTheSameKey = "Send it again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
+
+func unconfirmedEmail(messageID string) *EmailError {
+	return &EmailError{Name: EmailErrorServiceUnavailable, Code: "delivery_unavailable", Message: notConfirmed, Fix: resendWithTheSameKey, MessageID: messageID}
+}

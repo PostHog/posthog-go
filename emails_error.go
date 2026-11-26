@@ -170,6 +170,9 @@ func emailErrorName(status int, code string) EmailErrorName {
 		if code == "template_outdated" {
 			return EmailErrorValidation
 		}
+		if code == "batch_unavailable" {
+			return EmailErrorApplication
+		}
 		return EmailErrorConcurrentIdempotentRequests
 	case http.StatusUnprocessableEntity:
 		if code == "idempotency_key_reused" {
