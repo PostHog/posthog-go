@@ -91,7 +91,6 @@ func TestPersonMetadataFilterFallsBackToFlags(t *testing.T) {
 	require.Equal(t, int32(1), remoteCalls.Load())
 }
 
-// A value /flags alone can read must not let a later condition decide the flag.
 // A later condition can still decide the flag after a condition with a person_metadata filter.
 func TestPersonMetadataLaterConditionDecidesTheFlag(t *testing.T) {
 	const cohorts = `{"7": {"type": "AND", "values": [` + firstSeenFilter + `]}}`
