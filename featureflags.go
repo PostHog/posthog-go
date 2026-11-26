@@ -1351,7 +1351,7 @@ func isUnsupportedProperty(property FlagProperty, flagsByKey map[string]FeatureF
 		}
 		return isUnsupportedPropertyGroup(cohort, flagsByKey, cohorts, matchingVersion, visitedCohorts)
 	default:
-		return filterDefinitionError(property, matchingVersion) != nil
+		return propertyFilterTypeError(property) != nil || filterDefinitionError(property, matchingVersion) != nil
 	}
 }
 
@@ -2236,6 +2236,23 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	return conditionMatch, nil
 }
 
+// propertyFilterTypeError rejects a filter type that is not matched against the person or
+// group properties the caller passes. Cohort and flag filters have their own matching. Any
+// other type, such as "person_metadata" (a value /flags reads from the persons table, not
+// from person properties), can't be evaluated locally: matching it against a caller
+// property with the same key could disagree with /flags. A missing, null, or empty type
+// decodes to "" and is a person filter.
+func propertyFilterTypeError(property FlagProperty) *InconclusiveMatchError {
+	switch property.Type {
+	case "", "person", "group":
+		return nil
+	}
+	return &InconclusiveMatchError{
+		msg:    fmt.Sprintf("Can't evaluate a '%s' filter on '%s' locally", property.Type, property.Key),
+		Reason: UnresolvedFlagReasonUnsupportedDefinition,
+	}
+}
+
 // readsOtherGroupType reports a group filter whose group_type_index names a group type
 // other than the condition's aggregation.
 func readsOtherGroupType(property FlagProperty, aggregationGroupTypeIndex *uint8) bool {
@@ -2312,10 +2329,12 @@ func matchProperty(property FlagProperty, properties Properties, matchingVersion
 }
 
 // matchPropertyWithKnownAbsent matches property like matchProperty, except that a key in
-// knownAbsent is absent even when properties has a value for it. Known absence never
-// hides a persons-table field read by a person_metadata filter.
+// knownAbsent is absent even when properties has a value for it.
 func matchPropertyWithKnownAbsent(property FlagProperty, properties Properties, knownAbsent propertyKeySet, matchingVersions ...int) (bool, error) {
-	if _, listed := knownAbsent[property.Key]; listed && property.Type != "person_metadata" {
+	if typeErr := propertyFilterTypeError(property); typeErr != nil {
+		return false, typeErr
+	}
+	if _, listed := knownAbsent[property.Key]; listed {
 		// An operator that local evaluation doesn't implement stays inconclusive.
 		if _, ok := propertyOperators[property.Operator]; !ok {
 			return false, &InconclusiveMatchError{msg: "Unknown operator: " + property.Operator, Reason: UnresolvedFlagReasonUnsupportedDefinition}

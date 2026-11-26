@@ -248,10 +248,10 @@ func TestKnownAbsentPersonMetadataKeyIsIgnored(t *testing.T) {
 	require.Equal(t, []string{"__posthog_person_metadata__created_at", "plan"}, knownAbsent.wirePersonKeys())
 
 	defs := knownAbsentDefinitions(flagDefinition("early-user", flagCondition(100, `{"key": "created_at", "type": "person_metadata", "operator": "is_date_before", "value": "2026-01-01"}`)))
+	// A person_metadata filter needs /flags, whatever the listing says.
 	for _, listedKeys := range [][]string{{"__posthog_person_metadata__created_at"}, {"created_at"}} {
-		got, err := computeKnownAbsentFlag(t, defs, "early-user", nil, Properties{"created_at": "2025-06-01"}, nil, newKnownAbsentPropertyKeys(listedKeys, nil))
-		require.NoError(t, err, "listed %v", listedKeys)
-		require.Equal(t, true, got, "listed %v", listedKeys)
+		_, err := computeKnownAbsentFlag(t, defs, "early-user", nil, Properties{"created_at": "2025-06-01"}, nil, newKnownAbsentPropertyKeys(listedKeys, nil))
+		requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
 	}
 }
 
@@ -600,26 +600,23 @@ func TestKnownAbsentNeverHidesAPersonMetadataField(t *testing.T) {
 	listed := newKnownAbsentPropertyKeys([]string{"created_at"}, nil)
 
 	for level, definitions := range map[string]func(string) string{"flag filter": flagDefinitions, "cohort leaf": cohortDefinitions} {
+		// A person_metadata filter needs /flags, so a listed key never resolves it locally.
 		for _, tt := range []struct {
 			operator string
 			value    string
-			want     bool
 		}{
-			{"is_not_set", `null`, false},
-			{"is_set", `null`, true},
-			{"is_date_before", `"2026-01-01"`, true},
-			{"is_date_after", `"2026-01-01"`, false},
+			{"is_not_set", `null`},
+			{"is_set", `null`},
+			{"is_date_before", `"2026-01-01"`},
+			{"is_date_after", `"2026-01-01"`},
 		} {
 			defs := definitions(fmt.Sprintf(`{"key": "created_at", "type": "person_metadata", "operator": %q, "value": %s}`, tt.operator, tt.value))
-			t.Run(level+"/"+tt.operator+"/value supplied", func(t *testing.T) {
-				got, err := computeKnownAbsentFlag(t, defs, "metadata-flag", nil, Properties{"created_at": "2025-06-01"}, nil, listed)
-				require.NoError(t, err)
-				require.Equal(t, tt.want, got)
-			})
-			t.Run(level+"/"+tt.operator+"/value not supplied", func(t *testing.T) {
-				_, err := computeKnownAbsentFlag(t, defs, "metadata-flag", nil, nil, nil, listed)
-				requireUnresolvedReason(t, err, UnresolvedFlagReasonMissingContext)
-			})
+			for name, personProperties := range map[string]Properties{"value supplied": {"created_at": "2025-06-01"}, "value not supplied": nil} {
+				t.Run(level+"/"+tt.operator+"/"+name, func(t *testing.T) {
+					_, err := computeKnownAbsentFlag(t, defs, "metadata-flag", nil, personProperties, nil, listed)
+					requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+				})
+			}
 		}
 	}
 }
