@@ -1235,7 +1235,7 @@ func isUnsupportedProperty(property FlagProperty, aggregation *uint8, flagsByKey
 		}
 		return isUnsupportedPropertyGroup(cohort, aggregation, flagsByKey, cohorts, matchingVersion, visitedCohorts)
 	default:
-		return filterDefinitionError(property, matchingVersion) != nil
+		return propertyFilterTypeError(property) != nil || filterDefinitionError(property, matchingVersion) != nil
 	}
 }
 
@@ -2011,7 +2011,27 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 	return conditionMatch, nil
 }
 
+// propertyFilterTypeError rejects a filter type that is not matched against the person or
+// group properties the caller passes. Cohort and flag filters have their own matching. Any
+// other type, such as "person_metadata" (a value /flags reads from the persons table, not
+// from person properties), can't be evaluated locally: matching it against a caller
+// property with the same key could disagree with /flags. A missing, null, or empty type
+// decodes to "" and is a person filter.
+func propertyFilterTypeError(property FlagProperty) *InconclusiveMatchError {
+	switch property.Type {
+	case "", "person", "group":
+		return nil
+	}
+	return &InconclusiveMatchError{
+		msg:    fmt.Sprintf("Can't evaluate a '%s' filter on '%s' locally", property.Type, property.Key),
+		Reason: UnresolvedFlagReasonUnsupportedDefinition,
+	}
+}
+
 func matchProperty(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {
+	if typeErr := propertyFilterTypeError(property); typeErr != nil {
+		return false, typeErr
+	}
 	matched, err := matchPropertyValue(property, properties, matchingVersions...)
 	// An unusable filter outranks missing context, so check the filter before blaming the context.
 	if inconclusiveErr, ok := err.(*InconclusiveMatchError); ok && inconclusiveErr.Reason == UnresolvedFlagReasonMissingContext {
