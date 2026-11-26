@@ -24,8 +24,22 @@ Use the [evaluations package](ai/evaluations) to manage AI datasets and scorer
 versions, pin a dataset snapshot, and upload results to an offline experiment.
 It uses a project ID and secret key and acknowledges each operation directly.
 Use HTTPS for remote hosts. An explicit HTTP host sends the secret key in cleartext.
-Personal keys can manage resources with the corresponding scopes. An ingestion
-key can create an experiment, upload results, and complete or fail the run.
+Set `Config.SecretKey` to a project secret API key for that project or a personal API key.
+
+| Operation | Required scopes |
+| --- | --- |
+| Read or manage datasets | `dataset:read` / `dataset:write` |
+| Read or manage scorers | `llm_analytics:read` / `llm_analytics:write` |
+| Create, upload, complete, or fail an experiment | `offline_evaluation_ingestion:write` |
+| Read or replace experiment tags | `evaluation:read` / `evaluation:write` |
+| Read item or result revisions / correct accepted data | `evaluation:read` / `evaluation:write` |
+
+Reading a result revision, changing a result or its payload, and deleting an item also require
+`llm_analytics:read`. To calculate composites from stored inputs, grant ingestion plus
+`evaluation:read` and `llm_analytics:read`. An ingestion-only key must submit every pinned input
+in the same upload. Personal keys also need the user's resource permissions, including evaluation
+editor access for corrections. Dataset exports require a personal API key with `dataset:read`.
+
 See the [Go example](ai/evaluations/example_test.go) for a dataset-backed run
 and the [integration test](ai/evaluations/docs_integration_test.go) for the
 support-agent workflow from the offline evals quickstart.

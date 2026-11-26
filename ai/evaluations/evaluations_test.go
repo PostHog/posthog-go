@@ -29,6 +29,8 @@ const (
 	prefix    = "/proxy/api/projects/42/"
 )
 
+const projectSecretKey = "phs_example_only"
+
 var ctx = context.Background()
 
 type transportFunc func(*http.Request) (*http.Response, error)
@@ -54,7 +56,7 @@ func scripted(t *testing.T, steps ...exchange) *Client {
 		require.Equal(t, "api.example", r.URL.Host)
 		require.Equal(t, prefix+step.path, r.URL.Path)
 		require.Equal(t, step.method, r.Method)
-		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		require.Equal(t, "Bearer "+projectSecretKey, r.Header.Get("Authorization"))
 		var body Fields
 		if r.Body != nil && r.Body != http.NoBody {
 			raw, err := io.ReadAll(r.Body)
@@ -71,7 +73,7 @@ func scripted(t *testing.T, steps ...exchange) *Client {
 		require.NoError(t, err)
 		return &http.Response{StatusCode: step.status, Body: io.NopCloser(strings.NewReader(string(raw))), Header: http.Header{}}, nil
 	}
-	c, err := NewClient(Config{ProjectID: 42, SecretKey: "test-key", Host: "https://api.example/proxy/", Transport: transportFunc(fn)})
+	c, err := NewClient(Config{ProjectID: 42, SecretKey: projectSecretKey, Host: "https://api.example/proxy/", Transport: transportFunc(fn)})
 	require.NoError(t, err)
 	t.Cleanup(func() { c.Close(); require.Equal(t, len(steps), index) })
 	return c
@@ -141,7 +143,7 @@ func TestUncertainCreationAndRecovery(t *testing.T) {
 	require.Equal(t, "sensitive payload", failure.Response["detail"])
 	require.NotContains(t, err.Error(), "sensitive")
 	require.NotContains(t, err.Error(), "private")
-	require.NotContains(t, err.Error(), "test-key")
+	require.NotContains(t, err.Error(), projectSecretKey)
 }
 
 func TestSubmissionReplayAcrossJSON(t *testing.T) {

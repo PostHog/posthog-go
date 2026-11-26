@@ -12,11 +12,12 @@ import (
 
 // Pin the dataset and scorer versions before executing cases. The caller
 // supplies the application and evaluator; each acknowledged result links back
-// to the exact dataset item version that produced it.
+// to the exact dataset item version that produced it. Grant the project secret
+// key dataset:read, llm_analytics:read, and offline_evaluation_ingestion:write.
 func ExampleClient() {
 	client, err := evaluations.NewClient(evaluations.Config{
 		ProjectID: 42,
-		SecretKey: os.Getenv("POSTHOG_PERSONAL_API_KEY"),
+		SecretKey: os.Getenv("POSTHOG_PROJECT_SECRET_API_KEY"),
 	})
 	if err != nil {
 		log.Print(err)

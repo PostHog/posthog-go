@@ -796,6 +796,7 @@ type Filter struct {
 	EarlyExit bool `json:"early_exit"`
 	Multivariate *Variants `json:"multivariate"`
 	Holdout *Holdout `json:"holdout"`
+	FeatureEnrollment bool `json:"feature_enrollment"`
 	Payloads map[string]json.RawMessage `json:"payloads"`
 	DecodedPayloads map[string]string `json:"-"`
 	VariantLookupTable []FlagVariantMeta `json:"-"`
@@ -1174,11 +1175,13 @@ package evaluations // import "github.com/posthog/posthog-go/v2/ai/evaluations"
 Package evaluations manages AI datasets, scorer definitions, and offline
 experiments through the acknowledged PostHog project API.
 
-Use a personal API key to manage datasets and scorers. An ingestion key with
-offline_evaluation_ingestion:write can create runs, submit outcomes and close
-runs using previously saved dataset and scorer version IDs. All network calls
-take a context and return after acknowledgment. Use errors.As to inspect an
-APIError or recover the unfinished portion of a BulkError.
+Set Config.SecretKey to a project secret API key for the configured project or
+a personal API key. Dataset and scorer management use dataset and llm_analytics
+scopes respectively. A key with offline_evaluation_ingestion:write can create
+runs, submit outcomes and close runs using previously saved dataset and scorer
+version IDs. All network calls take a context and return after acknowledgment.
+Use errors.As to inspect an APIError or recover the unfinished portion of a
+BulkError.
 
 The client reads up to 128 MiB for a successful list page and 4 MiB for other
 responses. If a page exceeds the limit, request a smaller page.

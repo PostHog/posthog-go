@@ -1198,7 +1198,7 @@ const (
 ```
 
 ```go
-const Version = "2.2.1"
+const Version = "2.3.0"
 ```
 
 Version of the client.
@@ -2550,6 +2550,10 @@ type Filter struct {
 	Multivariate *Variants `json:"multivariate"`
 	// Holdout contains the experiment holdout configuration, when the flag has one.
 	Holdout *Holdout `json:"holdout"`
+	// FeatureEnrollment marks an early-access feature flag. The person's opt-in, stored in
+	// the person property `$feature_enrollment/<flag key>`, decides the flag before
+	// holdouts and release conditions.
+	FeatureEnrollment bool `json:"feature_enrollment"`
 	// Payloads maps flag values or variant keys to raw JSON payloads.
 	Payloads map[string]json.RawMessage `json:"payloads"`
 	// DecodedPayloads holds pre-decoded string versions of Payloads.
