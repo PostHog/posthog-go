@@ -485,7 +485,9 @@ func batchReplyError(reply emailReply, recipients int, isTemplate, lost bool) *E
 			err.Fix = "Check TemplateID. If it's right, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
 		default:
 			err.Message, err.Why = "Batch sends from code aren't available for this project, so PostHog sent no email of this request.", ""
-			err.Fix = "Send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+			// PostHog answers this same 404 when email from code is off, and
+			// Send needs it too.
+			err.Fix = "If the project can send email from code, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
 		}
 	}
 	if err.Code == "not_found" && err.Fix == "" {

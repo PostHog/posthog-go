@@ -758,7 +758,7 @@ func TestEmailsBatchUnavailable(t *testing.T) {
 		noTemplate   = "PostHog found no template with this TemplateID, or batch sends aren't available for this project, so it sent no email of this request."
 		checkID      = "Check TemplateID. If it's right, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
 		noCodeBatch  = "Batch sends from code aren't available for this project, so PostHog sent no email of this request."
-		sendEachCode = "Send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+		sendEachCode = "If the project can send email from code, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
 	)
 	codeBatch := CodeEmailBatch{TemplateKey: "price-change", Subject: "s", Text: "t", Recipients: recipientsTo(2)}
 	tests := []struct {
