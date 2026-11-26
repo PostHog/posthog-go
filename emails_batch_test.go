@@ -297,6 +297,7 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 		status          int
 		recipients      int
 		header          map[string]string
+		retryAfter      time.Duration
 	}{
 		{
 			name:   "a 413 without a fix",
@@ -333,11 +334,12 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 		{
 			// The status line refuses the size, so a body cut off mid-way
 			// changes nothing a retry could fix.
-			name:   "a 413 whose body is cut off",
-			status: http.StatusRequestEntityTooLarge,
-			body:   `{"code":"content_too`,
-			header: map[string]string{"Content-Length": "500"},
-			fix:    "Split the recipients into smaller batches.",
+			name:       "a 413 whose body is cut off",
+			status:     http.StatusRequestEntityTooLarge,
+			body:       `{"code":"content_too`,
+			header:     map[string]string{"Content-Length": "500", "Retry-After": "120"},
+			fix:        "Split the recipients into smaller batches.",
+			retryAfter: 120 * time.Second,
 		},
 		{
 			name:   "a 413 without a code",
@@ -368,9 +370,11 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 			require.Equal(t, "content_too_large", emailErr.Code)
 			require.Equal(t, tt.status, emailErr.StatusCode)
 			require.Equal(t, tt.fix, emailErr.Fix)
+			require.Equal(t, tt.retryAfter, emailErr.RetryAfter)
 			require.Len(t, server.received(), 1, "the client doesn't split the batch")
-			for _, status := range statuses(result) {
-				require.Equal(t, "failed", status)
+			for _, r := range result.Results {
+				require.Equal(t, "failed", r.Status)
+				require.Equal(t, tt.retryAfter, r.Error.RetryAfter)
 			}
 			require.Len(t, result.Results, count)
 		})
