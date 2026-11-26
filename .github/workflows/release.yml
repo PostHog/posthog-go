@@ -96,7 +96,7 @@ jobs:
           emoji_reaction: "white_check_mark"
       - name: Get GitHub App token
         id: releaser
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_APP_ID }}
           private-key: ${{ secrets.GH_APP_POSTHOG_GO_RELEASER_PRIVATE_KEY }}
@@ -114,7 +114,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup pnpm and Node.js
-        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        uses: pnpm/setup@731dfb6463bbd11c11fd0ee11fe00ed0e36d48a1 # v3.2.0
         with:
           # pnpm/setup installs runtimes via pnpm runtime, which requires pnpm >=11.1.0.
           version: 11.7.0
@@ -123,7 +123,7 @@ jobs:
           install: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.x'
           cache: false
