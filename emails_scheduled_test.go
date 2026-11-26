@@ -407,7 +407,9 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 			wantCode: "schedule_not_confirmed",
 		},
 		{
-			// A rate limit queued nothing, so the send that queued is the second.
+			// The minute counts from the send's first attempt in every SDK, so a
+			// time 80 seconds after it is unconfirmed, though the retry that
+			// queued began 50 seconds before it.
 			name:  "a rate limit, then a send close to the time",
 			after: 80 * time.Second,
 			attempts: []attempt{
@@ -415,6 +417,23 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 					return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(`{"code":"rate_limited","detail":"Slow down."}`)), Header: http.Header{}}
 				}, takes: 30 * time.Second},
 				{reply: queuedNow("false"), takes: 90 * time.Second},
+			},
+			wantCode: "schedule_not_confirmed",
+		},
+		{
+			name:     "a time 62 seconds after the first attempt, answered 3 seconds later",
+			after:    62 * time.Second,
+			attempts: []attempt{{reply: queuedNow("false"), takes: 3 * time.Second}},
+			wantCode: "schedule_not_confirmed",
+		},
+		{
+			name:  "a time 58 seconds after the first attempt, answered by a retry 30 seconds later",
+			after: 58 * time.Second,
+			attempts: []attempt{
+				{reply: func() *http.Response {
+					return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(`{"code":"rate_limited","detail":"Slow down."}`)), Header: http.Header{}}
+				}, takes: 20 * time.Second},
+				{reply: queuedNow("false"), takes: 10 * time.Second},
 			},
 		},
 		{
@@ -431,8 +450,7 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 			wantCode: "schedule_not_confirmed",
 		},
 		{
-			// A cut-off 429 still says PostHog refused the attempt, so the send that
-			// may have queued is the second, after the time.
+			// The minute counts from the first attempt, a cut-off 429 too.
 			name:  "a cut-off rate limit, then a lost answer after the time",
 			after: 80 * time.Second,
 			attempts: []attempt{
@@ -444,6 +462,7 @@ func TestEmailsSendChecksAReplayAgainstTheAttemptThatMayHaveQueued(t *testing.T)
 				}, takes: 2 * time.Minute},
 				{reply: queuedNow("true"), takes: 10 * time.Second},
 			},
+			wantCode: "schedule_not_confirmed",
 		},
 	}
 	for _, tt := range tests {
