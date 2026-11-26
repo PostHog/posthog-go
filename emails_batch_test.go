@@ -296,6 +296,7 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 		name, body, fix string
 		status          int
 		recipients      int
+		header          map[string]string
 	}{
 		{
 			name:   "a 413 without a fix",
@@ -330,6 +331,15 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 			fix:    "Split the recipients into smaller batches.",
 		},
 		{
+			// The status line refuses the size, so a body cut off mid-way
+			// changes nothing a retry could fix.
+			name:   "a 413 whose body is cut off",
+			status: http.StatusRequestEntityTooLarge,
+			body:   `{"code":"content_too`,
+			header: map[string]string{"Content-Length": "500"},
+			fix:    "Split the recipients into smaller batches.",
+		},
+		{
 			name:   "a 413 without a code",
 			status: http.StatusRequestEntityTooLarge,
 			body:   `{"detail":"Too large."}`,
@@ -343,7 +353,9 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := newBatchServer(t, func(int, batchRequest) stubReply { return stubReply{status: tt.status, body: tt.body} })
+			server := newBatchServer(t, func(int, batchRequest) stubReply {
+				return stubReply{status: tt.status, body: tt.body, header: tt.header}
+			})
 			client := newEmailClientFor(t, server.URL)
 			count := tt.recipients
 			if count == 0 {

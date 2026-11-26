@@ -386,6 +386,10 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		reply, err := s.doFor(ctx, s.batchAttemptTimeout(), http.MethodPost, s.appHost+emailBatchPath, header, run.body)
 		if err == nil {
 			err = run.answer(reply)
+		} else if err.transportFailed() && err.StatusCode == http.StatusRequestEntityTooLarge {
+			// The status line already refuses the size, however the body
+			// broke off.
+			err = batchReplyError(emailReply{status: err.StatusCode}, len(run.members), run.isTemplate, run.lost)
 		}
 		if err != nil && (mayHaveQueued(err) || openConflict(reply, err)) {
 			run.lost = true
