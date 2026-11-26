@@ -53,13 +53,22 @@ func TestPersonMetadataFilterMakesTheDefinitionUnsupported(t *testing.T) {
 }
 
 func TestPersonFilterOnCreatedAtIsStillLocal(t *testing.T) {
-	definitions := localDefinitions(flagDefinition("first-seen-flag", flagCondition(100,
-		`{"key": "created_at", "type": "person", "operator": "is_date_after", "value": "2025-01-01"}`)))
+	for name, typeField := range map[string]string{
+		"person":       `"type": "person", `,
+		"omitted type": ``,
+		"null type":    `"type": null, `,
+		"empty type":   `"type": "", `,
+	} {
+		t.Run(name, func(t *testing.T) {
+			definitions := localDefinitions(flagDefinition("first-seen-flag", flagCondition(100,
+				`{"key": "created_at", `+typeField+`"operator": "is_date_after", "value": "2025-01-01"}`)))
 
-	got, err := computeDefinedFlag(t, definitions, "first-seen-flag", Properties{"created_at": "2026-06-01"})
+			got, err := computeDefinedFlag(t, definitions, "first-seen-flag", Properties{"created_at": "2026-06-01"})
 
-	require.NoError(t, err)
-	require.Equal(t, true, got)
+			require.NoError(t, err)
+			require.Equal(t, true, got)
+		})
+	}
 }
 
 func TestPersonMetadataFilterFallsBackToFlags(t *testing.T) {
@@ -83,7 +92,8 @@ func TestPersonMetadataFilterFallsBackToFlags(t *testing.T) {
 }
 
 // A value /flags alone can read must not let a later condition decide the flag.
-func TestPersonMetadataMultiConditionRequiresServerFallback(t *testing.T) {
+// A later condition can still decide the flag after a condition with a person_metadata filter.
+func TestPersonMetadataLaterConditionDecidesTheFlag(t *testing.T) {
 	const cohorts = `{"7": {"type": "AND", "values": [` + firstSeenFilter + `]}}`
 	const cohortFilter = `{"key": "id", "type": "cohort", "value": 7}`
 	cases := []struct {
@@ -92,6 +102,7 @@ func TestPersonMetadataMultiConditionRequiresServerFallback(t *testing.T) {
 		flagKey        string
 		remoteResponse string
 		want           interface{}
+		wantRemote     int32
 	}{
 		{
 			name: "multivariate_ordered_variants",
@@ -103,7 +114,8 @@ func TestPersonMetadataMultiConditionRequiresServerFallback(t *testing.T) {
 				]}}`),
 			flagKey:        "first-seen-mv",
 			remoteResponse: `{"flags": {"first-seen-mv": {"key": "first-seen-mv", "enabled": true, "variant": "new-user", "metadata": {"id": 1, "version": 1}}}}`,
-			want:           "new-user",
+			want:           "existing-user",
+			wantRemote:     0,
 		},
 		{
 			name: "early_exit_exclusion",
@@ -115,7 +127,9 @@ func TestPersonMetadataMultiConditionRequiresServerFallback(t *testing.T) {
 				]}}`),
 			flagKey:        "first-seen-early-exit",
 			remoteResponse: `{"flags": {"first-seen-early-exit": {"key": "first-seen-early-exit", "enabled": false, "metadata": {"id": 2, "version": 1}}}}`,
-			want:           false,
+			// An inconclusive condition doesn't trigger early exit, so the catch-all decides.
+			want:       true,
+			wantRemote: 0,
 		},
 		{
 			name: "flag_dependency",
@@ -129,7 +143,8 @@ func TestPersonMetadataMultiConditionRequiresServerFallback(t *testing.T) {
 					]}}`),
 			flagKey:        "target-flag",
 			remoteResponse: `{"flags": {"target-flag": {"key": "target-flag", "enabled": true, "variant": "a", "metadata": {"id": 3, "version": 1}}}}`,
-			want:           "a",
+			want:           "b",
+			wantRemote:     0,
 		},
 	}
 	for _, tc := range cases {
@@ -149,7 +164,7 @@ func TestPersonMetadataMultiConditionRequiresServerFallback(t *testing.T) {
 				})
 				require.NoError(t, err)
 				require.Equal(t, tc.want, got)
-				require.Equal(t, int32(1), remoteCalls.Load())
+				require.Equal(t, tc.wantRemote, remoteCalls.Load())
 			})
 		}
 	}
@@ -236,7 +251,7 @@ func TestPersonMetadataFilterDoesNotHideADecidedCohort(t *testing.T) {
 	}
 }
 
-func TestPersonMetadataFilterInAnUndecidedCohortNeedsServer(t *testing.T) {
+func TestPersonMetadataFilterInAnUndecidedCohortLetsALaterConditionDecide(t *testing.T) {
 	for _, tc := range []struct{ groupType, plan string }{{"AND", "paid"}, {"OR", "free"}} {
 		for _, values := range []string{planFilter + "," + firstSeenFilter, firstSeenFilter + "," + planFilter} {
 			t.Run(tc.groupType+"/"+values, func(t *testing.T) {
@@ -244,9 +259,9 @@ func TestPersonMetadataFilterInAnUndecidedCohortNeedsServer(t *testing.T) {
 					`{"7": {"type": "`+tc.groupType+`", "values": [`+values+`]}}`,
 					flagDefinition("first-seen-flag", flagCondition(0, `{"key": "id", "type": "cohort", "value": 7}`), flagCondition(100)),
 				)
-				_, err := computeDefinedFlag(t, definitions, "first-seen-flag", Properties{"plan": tc.plan})
-				requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
-				require.True(t, isServerEvalError(err))
+				got, err := computeDefinedFlag(t, definitions, "first-seen-flag", Properties{"plan": tc.plan})
+				require.NoError(t, err)
+				require.Equal(t, true, got)
 			})
 		}
 	}

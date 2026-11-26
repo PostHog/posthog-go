@@ -586,9 +586,6 @@ func (e *InconclusiveMatchError) Error() string {
 // API fallback, unlike InconclusiveMatchError which allows trying other conditions.
 type RequiresServerEvaluationError struct {
 	msg string
-	// singleFilter is set when one filter needs the server. In a cohort another filter can
-	// still make the result certain.
-	singleFilter bool
 	// Reason is why local evaluation could not resolve the flag.
 	Reason UnresolvedFlagReason
 }
@@ -604,7 +601,7 @@ func (e *RequiresServerEvaluationError) withReason(reason UnresolvedFlagReason) 
 	if merged == e.Reason {
 		return e
 	}
-	return &RequiresServerEvaluationError{msg: e.msg, Reason: merged, singleFilter: e.singleFilter}
+	return &RequiresServerEvaluationError{msg: e.msg, Reason: merged}
 }
 
 // isServerEvalError returns true if err is a RequiresServerEvaluationError.
@@ -707,11 +704,10 @@ func (poller *FeatureFlagsPoller) evaluateFlagDependency(
 			if err != nil {
 				// Preserve server-required errors on repeated references instead of
 				// reducing them to a cached inconclusive value that cohorts can negate.
-				if serverErr, ok := err.(*RequiresServerEvaluationError); ok {
+				if isServerEvalError(err) {
 					return false, &RequiresServerEvaluationError{
-						msg:          fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
-						Reason:       UnresolvedFlagReasonUnresolvedDependency,
-						singleFilter: serverErr.singleFilter,
+						msg:    fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+						Reason: UnresolvedFlagReasonUnresolvedDependency,
 					}
 				}
 				evaluationCache[depFlagKey] = nil
@@ -1935,17 +1931,16 @@ func (poller *FeatureFlagsPoller) isConditionMatch(
 // group properties the caller passes. Cohort and flag filters have their own matching. Any
 // other type, such as "person_metadata" (a value /flags reads from the persons table, not
 // from person properties), can't be evaluated locally: matching it against a caller
-// property with the same key could disagree with /flags. No caller can supply the value,
-// so a later condition must not decide the flag either.
-func propertyFilterTypeError(property FlagProperty) *RequiresServerEvaluationError {
+// property with the same key could disagree with /flags. A missing, null, or empty type
+// decodes to "" and is a person filter.
+func propertyFilterTypeError(property FlagProperty) *InconclusiveMatchError {
 	switch property.Type {
 	case "", "person", "group":
 		return nil
 	}
-	return &RequiresServerEvaluationError{
-		msg:          fmt.Sprintf("Can't evaluate a '%s' filter on '%s' locally", property.Type, property.Key),
-		Reason:       UnresolvedFlagReasonUnsupportedDefinition,
-		singleFilter: true,
+	return &InconclusiveMatchError{
+		msg:    fmt.Sprintf("Can't evaluate a '%s' filter on '%s' locally", property.Type, property.Key),
+		Reason: UnresolvedFlagReasonUnsupportedDefinition,
 	}
 }
 
