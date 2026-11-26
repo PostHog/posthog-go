@@ -294,7 +294,7 @@ func (r *batchRun) failAll(err, answered *EmailError) {
 		}
 		if err.StatusCode >= http.StatusMultipleChoices && !err.transportFailed() {
 			err.Message, err.Why = unconfirmedAnswer(err, false)
-			err.Fix = "Send each unconfirmed email again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
+			err.Fix = "Read each recipient's result, and send each unconfirmed email again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
 		}
 	}
 	for i := range r.members {
@@ -333,21 +333,16 @@ func (r *batchRun) settle(i int, slot emailReply) {
 	}
 	answer := slotError(slot.fields["error"], messageID)
 	undecided := undecidedCode(answer.Code)
-	if r.lost {
-		kept := *answer
-		kept.Fix = resendWithTheSameKey
-		if !undecided {
-			kept.Message, kept.Why = unconfirmedAnswer(answer, true)
-		}
-		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: &kept})
+	if !r.lost && !undecided {
+		r.set(i, "failed", BatchEmailResult{MessageID: messageID, Error: answer})
 		return
 	}
-	switch {
-	case undecided:
-		r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: answer})
-	default:
-		r.set(i, "failed", BatchEmailResult{MessageID: messageID, Error: answer})
+	kept := *answer
+	kept.Fix = resendWithTheSameKey
+	if kept.Message != notConfirmed {
+		kept.Message, kept.Why = unconfirmedAnswer(answer, true)
 	}
+	r.set(i, "unconfirmed", BatchEmailResult{MessageID: messageID, Error: &kept})
 }
 
 func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchResult, error) {
@@ -392,7 +387,7 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 		if err == nil {
 			err = run.answer(reply)
 		}
-		if err != nil && (mayHaveQueued(err) || unreadConflict(reply, err)) {
+		if err != nil && (mayHaveQueued(err) || openConflict(reply, err)) {
 			run.lost = true
 		}
 		if err != nil && err.StatusCode >= http.StatusMultipleChoices {
@@ -411,10 +406,11 @@ func (s *emailSender) Batch(ctx context.Context, batch EmailBatch) (*SendBatchRe
 	return run.result(), nil
 }
 
-// unreadConflict is a 409 without a code the client could read. It may be
-// PostHog's answer that an earlier request still holds the keys.
-func unreadConflict(reply emailReply, err *EmailError) bool {
-	return err.StatusCode == http.StatusConflict && strings.TrimSpace(reply.text("code")) == ""
+// openConflict is a 409 other than batch_unavailable, the one conflict that
+// says PostHog queued none of the emails. Any other may be an earlier
+// request that still holds the keys.
+func openConflict(reply emailReply, err *EmailError) bool {
+	return err.StatusCode == http.StatusConflict && strings.TrimSpace(reply.text("code")) != "batch_unavailable"
 }
 
 func (s *emailSender) batchAttemptTimeout() time.Duration {
@@ -441,25 +437,19 @@ func (s *emailSender) logWarnings(warnings []EmailWarning) {
 // attempt it answered, so the detail moves to Why. one is a recipient's error,
 // not the call's.
 func unconfirmedAnswer(err *EmailError, one bool) (message, why string) {
-	if err.Message == noBatchForTheRetry {
-		if one {
-			return "PostHog found no batch send for the retry, but an earlier attempt may have queued this email.", err.Why
-		}
-		return noBatchForTheRetry, err.Why
-	}
 	why = "PostHog said: " + err.Message
 	if err.Why != "" {
 		why += " " + err.Why
 	}
 	if one {
-		return "PostHog didn't confirm this email, so it may still go out.", why
+		return notConfirmed, why
 	}
 	return "PostHog didn't confirm the emails, so they may still go out.", why
 }
 
-// noBatchForTheRetry is a bare 404 after a lost answer: it answers only the
-// retry, and the lost attempt may have queued the emails.
-const noBatchForTheRetry = "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails."
+// notConfirmed is the only message an unconfirmed recipient gets. PostHog's
+// own words, which can say the email wasn't sent, go to Why.
+const notConfirmed = "PostHog didn't confirm this email, so it may still go out."
 
 // batchReplyError is a batch request that failed as a whole. lost says an
 // earlier attempt may have queued the emails.
@@ -477,18 +467,20 @@ func batchReplyError(reply emailReply, recipients int, isTemplate, lost bool) *E
 		// PostHog answers an unknown template, batch sends being off and a
 		// server without the route with this same 404, so the error can't
 		// pick one. After launch a wrong template ID is the likely cause.
-		err.Code, err.Name, err.Why = "not_found", EmailErrorNotFound, ""
+		err.Code, err.Name = "not_found", EmailErrorNotFound
 		switch {
 		case lost:
-			err.Message = noBatchForTheRetry
+			// It answers only the retry, so PostHog's detail stays for
+			// failAll to word as unconfirmed.
+			if reply.text("detail") == "" {
+				err.Message, err.Why = "PostHog found no batch send for the retry.", ""
+			}
 		case isTemplate:
-			err.Message = "PostHog found no template with this TemplateID, or batch sends aren't available for this project, so it sent no email of this request."
-		default:
-			err.Message = "Batch sends from code aren't available for this project, so PostHog sent no email of this request."
-		}
-		err.Fix = "Send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
-		if isTemplate {
+			err.Message, err.Why = "PostHog found no template with this TemplateID, or batch sends aren't available for this project, so it sent no email of this request.", ""
 			err.Fix = "Check TemplateID. If it's right, send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
+		default:
+			err.Message, err.Why = "Batch sends from code aren't available for this project, so PostHog sent no email of this request.", ""
+			err.Fix = "Send each recipient on its own with Emails.Send and its IdempotencyKey until batch sends are available."
 		}
 	}
 	if err.Code == "not_found" && err.Fix == "" {
@@ -503,7 +495,7 @@ func batchReplyError(reply emailReply, recipients int, isTemplate, lost bool) *E
 func slotError(raw interface{}, messageID string) *EmailError {
 	fields, ok := raw.(map[string]interface{})
 	if !ok {
-		return &EmailError{Name: EmailErrorApplication, Code: "api_error", Message: "PostHog answered without a readable result for this email, so it may still go out.", MessageID: messageID}
+		return &EmailError{Name: EmailErrorApplication, Code: "api_error", Message: notConfirmed, Why: "PostHog answered without a readable result for this email.", MessageID: messageID}
 	}
 	slot := emailReply{fields: fields}
 	code := slot.text("code")
@@ -518,7 +510,7 @@ func slotError(raw interface{}, messageID string) *EmailError {
 	switch {
 	case message != "":
 	case undecidedCode(code):
-		message = "PostHog didn't confirm this email, so it may still go out."
+		message = notConfirmed
 	default:
 		message = "PostHog didn't queue this email: " + code + "."
 	}
@@ -534,5 +526,5 @@ func undecidedCode(code string) bool {
 const resendWithTheSameKey = "Send it again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once."
 
 func unconfirmedEmail(messageID string) *EmailError {
-	return &EmailError{Name: EmailErrorServiceUnavailable, Code: "delivery_unavailable", Message: "PostHog didn't confirm this email, so it may still go out.", Fix: resendWithTheSameKey, MessageID: messageID}
+	return &EmailError{Name: EmailErrorServiceUnavailable, Code: "delivery_unavailable", Message: notConfirmed, Fix: resendWithTheSameKey, MessageID: messageID}
 }

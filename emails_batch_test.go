@@ -524,14 +524,18 @@ func TestEmailsBatchSettlesEachRecipient(t *testing.T) {
 	})
 }
 
-func TestEmailsBatchWordsAnUndecidedSlotWithoutDetailAsUnconfirmed(t *testing.T) {
-	slotsWithoutDetail := []struct{ name, code, slot string }{
+func TestEmailsBatchWordsEveryUnconfirmedSlotAsUnconfirmed(t *testing.T) {
+	// why is where PostHog's own words go, since they can say the email
+	// wasn't sent.
+	undecidedSlots := []struct{ name, code, slot, why string }{
 		{name: "an empty error", code: "api_error", slot: `{"message_id":"m-1","error":{}}`},
 		{name: "a 503", code: "delivery_unavailable", slot: `{"message_id":"m-1","error":{"code":"delivery_unavailable","status":503}}`},
 		{name: "keys in flight", code: "idempotency_key_in_flight", slot: `{"message_id":"m-1","error":{"code":"idempotency_key_in_flight","status":409}}`},
+		{name: "a 503 whose detail says it wasn't sent", code: "delivery_unavailable", slot: `{"message_id":"m-1","error":{"code":"delivery_unavailable","detail":"PostHog didn't send this email.","status":503}}`, why: "PostHog said: PostHog didn't send this email."},
+		{name: "a slot that isn't an object", code: "api_error", slot: `{"message_id":"m-1","error":"no"}`, why: "PostHog answered without a readable result for this email."},
 	}
 	for _, lost := range []bool{false, true} {
-		for _, tt := range slotsWithoutDetail {
+		for _, tt := range undecidedSlots {
 			t.Run(fmt.Sprintf("%s, lost answer first: %v", tt.name, lost), func(t *testing.T) {
 				server := newBatchServer(t, func(n int, r batchRequest) stubReply {
 					if lost && n == 0 {
@@ -548,6 +552,7 @@ func TestEmailsBatchWordsAnUndecidedSlotWithoutDetailAsUnconfirmed(t *testing.T)
 				require.Equal(t, "unconfirmed", got.Status)
 				require.Equal(t, tt.code, got.Error.Code)
 				require.Equal(t, "PostHog didn't confirm this email, so it may still go out.", got.Error.Message, "never that nothing was sent")
+				require.Equal(t, tt.why, got.Error.Why)
 				require.Equal(t, wantResendFix, got.Error.Fix)
 			})
 		}
@@ -558,8 +563,6 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 	const (
 		refusedEach = "PostHog didn't confirm this email, so it may still go out."
 		refusedAll  = "PostHog didn't confirm the emails, so they may still go out."
-		noBatchEach = "PostHog found no batch send for the retry, but an earlier attempt may have queued this email."
-		noBatchAll  = "PostHog found no batch send for the retry, but an earlier attempt may have queued the emails."
 	)
 	rateLimited := stubReply{status: http.StatusTooManyRequests, body: `{"code":"rate_limited","detail":"Slow down."}`}
 	tests := []struct {
@@ -584,8 +587,9 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 		},
 		{name: "keys still in flight", callCode: "idempotency_key_in_flight", errorCode: "idempotency_key_in_flight", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{failed(http.StatusConflict, "idempotency_key_in_flight")}},
 		{name: "a 503", callCode: "delivery_unavailable", errorCode: "delivery_unavailable", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{failed(http.StatusServiceUnavailable, "delivery_unavailable")}},
-		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", message: noBatchEach, callMessage: noBatchAll, retries: []stubReply{{status: http.StatusNotFound}}},
-		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", message: noBatchEach, callMessage: noBatchAll, retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
+		{name: "a 404 without a body", callCode: "not_found", errorCode: "not_found", message: refusedEach, callMessage: refusedAll, said: "PostHog found no batch send for the retry.", retries: []stubReply{{status: http.StatusNotFound}}},
+		{name: "a 404 with PostHog's body", callCode: "not_found", errorCode: "not_found", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{failed(http.StatusNotFound, "not_found")}},
+		{name: "a 400", callCode: "invalid_form", errorCode: "invalid_form", message: refusedEach, callMessage: refusedAll, said: "PostHog didn't send any of these emails.", retries: []stubReply{{status: http.StatusBadRequest, body: `{"code":"invalid_form","detail":"PostHog didn't send any of these emails."}`}}},
 		{name: "a 404 that names a field", callCode: "not_found", errorCode: "not_found", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{{status: http.StatusNotFound, body: `{"code":"not_found","attr":"template_id","detail":"PostHog said no."}`}}},
 		{name: "a 413", callCode: "content_too_large", errorCode: "content_too_large", message: refusedEach, callMessage: refusedAll, said: "PostHog said no.", retries: []stubReply{failed(http.StatusRequestEntityTooLarge, "content_too_large")}},
 	}
@@ -608,7 +612,7 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedAfterALostAnswer(t *testing.T) {
 			}
 			require.Len(t, server.received(), 1+len(tt.retries), "a send and its retries, nothing more")
 			if !callErr.transportFailed() {
-				require.Equal(t, "Send each unconfirmed email again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once.", callErr.Fix, "a changed email or key can send it twice")
+				require.Equal(t, "Read each recipient's result, and send each unconfirmed email again with the same IdempotencyKey within 24 hours of the first request that used it, so it goes out once.", callErr.Fix, "a changed email or key can send it twice")
 			}
 			for i, got := range result.Results {
 				require.Equal(t, "unconfirmed", got.Status, "the lost send may have queued it")
@@ -685,8 +689,6 @@ func TestEmailsBatchFailsRecipientsOfARefusalWithoutKeysInFlight(t *testing.T) {
 		reply stubReply
 	}{
 		{name: "a 401 with the in-flight code", reply: failed(http.StatusUnauthorized, "idempotency_key_in_flight")},
-		{name: "a 409 with a readable code", reply: failed(http.StatusConflict, "api_error")},
-		{name: "a 409 with the SDK's network_error code", reply: failed(http.StatusConflict, "network_error")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -710,6 +712,10 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testi
 		{name: "PostHog's answer", code: "idempotency_key_in_flight", reply: failed(http.StatusConflict, "idempotency_key_in_flight")},
 		{name: "an answer without a readable code", code: "api_error", reply: stubReply{status: http.StatusConflict, body: "<html>Conflict</html>"}},
 		{name: "a blank code", code: "api_error", reply: stubReply{status: http.StatusConflict, body: `{"code":" "}`}},
+		// Only batch_unavailable says PostHog queued none of them.
+		{name: "a readable api_error", code: "api_error", reply: failed(http.StatusConflict, "api_error")},
+		{name: "another code", code: "conflict", reply: failed(http.StatusConflict, "conflict")},
+		{name: "the SDK's network_error code", code: "network_error", reply: failed(http.StatusConflict, "network_error")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -722,6 +728,7 @@ func TestEmailsBatchKeepsRecipientsUnconfirmedWhileTheirKeysAreInFlight(t *testi
 			require.Equal(t, []string{"unconfirmed", "unconfirmed"}, statuses(result), "an earlier request with these keys may still queue them")
 			for i, r := range result.Results {
 				require.Equal(t, http.StatusConflict, r.Error.StatusCode)
+				require.Equal(t, "PostHog didn't confirm this email, so it may still go out.", r.Error.Message)
 				require.Equal(t, wantResendFix, r.Error.Fix)
 				require.Equal(t, fmt.Sprintf("digest:%d", i), r.IdempotencyKey)
 			}
