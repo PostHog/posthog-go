@@ -456,6 +456,11 @@ const notConfirmed = "PostHog didn't confirm this email, so it may still go out.
 func batchReplyError(reply emailReply, recipients int, isTemplate, lost bool) *EmailError {
 	err := reply.error()
 	if reply.status == http.StatusRequestEntityTooLarge {
+		if strings.TrimSpace(reply.text("code")) == "" {
+			// A proxy's 413 carries no code, but it still refuses the size.
+			err.Code = "content_too_large"
+			err.Name = emailErrorName(reply.status, err.Code)
+		}
 		// Splitting can't shrink a batch of one, whatever PostHog advises.
 		if recipients == 1 {
 			err.Fix = "Make this recipient's email smaller."
@@ -498,7 +503,7 @@ func slotError(raw interface{}, messageID string) *EmailError {
 		return &EmailError{Name: EmailErrorApplication, Code: "api_error", Message: notConfirmed, Why: "PostHog answered without a readable result for this email.", MessageID: messageID}
 	}
 	slot := emailReply{fields: fields}
-	code := slot.text("code")
+	code := strings.TrimSpace(slot.text("code"))
 	if code == "" {
 		code = "api_error"
 	}

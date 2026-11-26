@@ -324,6 +324,18 @@ func TestEmailsBatchReturnsATooLargeRequestAsTheError(t *testing.T) {
 			recipients: 1,
 		},
 		{
+			name:   "a 413 whose body isn't JSON",
+			status: http.StatusRequestEntityTooLarge,
+			body:   "<html>Request Entity Too Large</html>",
+			fix:    "Split the recipients into smaller batches.",
+		},
+		{
+			name:   "a 413 without a code",
+			status: http.StatusRequestEntityTooLarge,
+			body:   `{"detail":"Too large."}`,
+			fix:    "Split the recipients into smaller batches.",
+		},
+		{
 			name:   "shared content too large, which splitting doesn't help",
 			status: http.StatusBadRequest,
 			body:   `{"code":"content_too_large","detail":"The shared content is larger than PostHog takes."}`,
@@ -533,6 +545,10 @@ func TestEmailsBatchWordsEveryUnconfirmedSlotAsUnconfirmed(t *testing.T) {
 		{name: "keys in flight", code: "idempotency_key_in_flight", slot: `{"message_id":"m-1","error":{"code":"idempotency_key_in_flight","status":409}}`},
 		{name: "a 503 whose detail says it wasn't sent", code: "delivery_unavailable", slot: `{"message_id":"m-1","error":{"code":"delivery_unavailable","detail":"PostHog didn't send this email.","status":503}}`, why: "PostHog said: PostHog didn't send this email."},
 		{name: "a slot that isn't an object", code: "api_error", slot: `{"message_id":"m-1","error":"no"}`, why: "PostHog answered without a readable result for this email."},
+		// A recipient error without a code is unconfirmed whatever its status.
+		{name: "a 400 without a code", code: "api_error", slot: `{"message_id":"m-1","status":"error","error":{"status":400,"detail":"PostHog refused this email."}}`, why: "PostHog said: PostHog refused this email."},
+		{name: "a 422 with a null code", code: "api_error", slot: `{"message_id":"m-1","error":{"code":null,"status":422}}`},
+		{name: "a 400 with a blank code", code: "api_error", slot: `{"message_id":"m-1","error":{"code":" ","status":400}}`},
 	}
 	for _, lost := range []bool{false, true} {
 		for _, tt := range undecidedSlots {
