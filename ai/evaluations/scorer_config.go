@@ -189,9 +189,14 @@ func parseConfig(kind string, f Fields) (ScorerConfig, error) {
 	}
 }
 
+// CompositionInput selects an item scorer version. Experiment formulas also
+// require a statistic and may select a version policy or category.
 type CompositionInput struct {
 	Alias           string `json:"alias"`
 	ScorerVersionID string `json:"scorer_version_id"`
+	Statistic       string `json:"statistic,omitempty"`
+	VersionPolicy   string `json:"version_policy,omitempty"`
+	Category        string `json:"category,omitempty"`
 }
 type Composition struct {
 	Expression string             `json:"expression"`
@@ -203,7 +208,31 @@ var aliasPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 func validAlias(s string) bool {
 	return aliasPattern.MatchString(s) && !enum(s, "number", "min", "max", "abs", "and", "or", "not", "if", "else", "in", "is", "lambda", "for", "await")
 }
-func (c Composition) checked() (Composition, error) {
+func (input CompositionInput) checkStatistic(scope string) error {
+	hasStatistic := input.Statistic != "" || input.VersionPolicy != "" || input.Category != ""
+	if scope != "experiment" && !hasStatistic {
+		return nil
+	}
+	if scope == "item" {
+		return errors.New("evaluations: statistics apply to experiment scorers")
+	}
+	if !enum(input.Statistic, "pass_rate", "mean", "true_rate", "category_rate") {
+		return errors.New("evaluations: invalid experiment score statistic")
+	}
+	if input.VersionPolicy != "" && !enum(input.VersionPolicy, "run", "exact", "combine") {
+		return errors.New("evaluations: invalid experiment score version policy")
+	}
+	if input.Statistic == "category_rate" {
+		if !identifier(strings.TrimSpace(input.Category), 128) {
+			return errors.New("evaluations: category_rate requires a category key")
+		}
+	} else if input.Category != "" {
+		return errors.New("evaluations: only category_rate accepts a category key")
+	}
+	return nil
+}
+
+func (c Composition) checked(scope string) (Composition, error) {
 	if !identifier(c.Expression, 1024) || strings.TrimSpace(c.Expression) == "" || len(c.Inputs) < 1 || len(c.Inputs) > 16 {
 		return Composition{}, errors.New("evaluations: invalid composite expression or input count")
 	}
@@ -215,6 +244,9 @@ func (c Composition) checked() (Composition, error) {
 		}
 		id, err := idString(input.ScorerVersionID)
 		if err != nil {
+			return Composition{}, err
+		}
+		if err := input.checkStatistic(scope); err != nil {
 			return Composition{}, err
 		}
 		c.Inputs[i].ScorerVersionID = id

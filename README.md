@@ -40,6 +40,11 @@ Reading a result revision, changing a result or its payload, and deleting an ite
 in the same upload. Personal keys also need the user's resource permissions, including evaluation
 editor access for corrections. Dataset exports require a personal API key with `dataset:read`.
 
+Create a composite scorer with `Scope: "experiment"` to compute a score for a completed run.
+Its formula inputs reference item scorer versions and select statistics such as `pass_rate` or
+`mean`. Set `ApplyToSuiteKeys` to choose defaults for future runs. Use `suite_key` to select
+the default or pass `experiment_scorer_version_id` to pin a specific version at creation.
+
 See the [Go example](ai/evaluations/example_test.go) for a dataset-backed run
 and the [integration test](ai/evaluations/docs_integration_test.go) for the
 support-agent workflow from the offline evals quickstart.

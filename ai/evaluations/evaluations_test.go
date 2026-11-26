@@ -135,15 +135,40 @@ func TestUncertainCreationAndRecovery(t *testing.T) {
 		exchange{"POST", experimentsPath, func(f Fields, _ url.Values) { original = f }, 0, nil},
 		exchange{"POST", experimentsPath, func(f Fields, _ url.Values) { require.Equal(t, original, f) }, 403, Fields{"code": "permission_denied", "attr": "key", "detail": "sensitive payload", "errors": []string{"sensitive payload"}}},
 	)
-	_, err := c.CreateExperiment(ctx, Fields{"name": "private name", "expected_result_count": int64(1<<60) + 1, "started_at": "2026-10-01T02:00:00+02:00"})
+	_, err := c.CreateExperiment(ctx, Fields{"name": "private name", "experiment_scorer_version_id": versionID, "expected_result_count": int64(1<<60) + 1, "started_at": "2026-10-01T02:00:00+02:00"})
 	failure := apiFailure(t, err, "permission_denied", Unknown)
 	require.Equal(t, original["id"], failure.Submission["id"])
+	require.Equal(t, versionID, original["experiment_scorer_version_id"])
+	require.Equal(t, versionID, failure.Submission["experiment_scorer_version_id"])
 	require.Equal(t, stamp, failure.Submission["started_at"])
 	require.Equal(t, "key", failure.Attr)
 	require.Equal(t, "sensitive payload", failure.Response["detail"])
 	require.NotContains(t, err.Error(), "sensitive")
 	require.NotContains(t, err.Error(), "private")
 	require.NotContains(t, err.Error(), projectSecretKey)
+}
+
+func TestExperimentScorerSuiteDefault(t *testing.T) {
+	c := scripted(t,
+		exchange{"POST", experimentsPath, func(f Fields, _ url.Values) {
+			require.Equal(t, "Agent-CI", f["suite_key"])
+			require.NotContains(t, f, "experiment_scorer_version_id")
+		}, 201, receipt(runID, "uploading")},
+		exchange{"POST", experimentsPath, func(f Fields, _ url.Values) {
+			require.Contains(t, f, "experiment_scorer_version_id")
+			require.Nil(t, f["experiment_scorer_version_id"])
+		}, 201, receipt(runID, "uploading")},
+	)
+	for _, fields := range []Fields{
+		{"id": runID, "name": "Run", "suite_key": "Agent-CI"},
+		{"id": runID, "name": "Run", "suite_key": "Agent-CI", "experiment_scorer_version_id": nil},
+	} {
+		run, err := c.CreateExperiment(ctx, fields)
+		require.NoError(t, err)
+		_, explicit := fields["experiment_scorer_version_id"]
+		_, sent := run.Submission()["experiment_scorer_version_id"]
+		require.Equal(t, explicit, sent)
+	}
 }
 
 func TestSubmissionReplayAcrossJSON(t *testing.T) {

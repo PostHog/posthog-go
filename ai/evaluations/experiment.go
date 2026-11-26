@@ -76,14 +76,17 @@ func (c *Client) ResumeExperiment(id string) (*Experiment, error) {
 
 // CreateExperiment acknowledges a named run. Optional properties include id,
 // started_at, run_source, expected_item_count, expected_result_count, suite_key,
-// dataset_source, dataset_identifier, dataset_revision_identifier, dataset_revision_id,
+// experiment_scorer_version_id, dataset_source, dataset_identifier,
+// dataset_revision_identifier, dataset_revision_id,
 // application_version, model_version and prompt_version.
+// An exact experiment_scorer_version_id overrides the suite default. Omit it
+// or pass nil to use the default chosen by the server at first creation.
 // When reloading a saved submission into Fields, use json.Decoder.UseNumber
 // to preserve integer counts above the safe float64 range.
 func (c *Client) CreateExperiment(ctx context.Context, fields Fields) (*Experiment, error) {
 	body := copyFields(fields)
 	textKeys := []string{"suite_key", "dataset_source", "dataset_identifier", "dataset_revision_identifier", "application_version", "model_version", "prompt_version"}
-	if err := allowed(body, append(textKeys, "id", "name", "started_at", "run_source", "expected_item_count", "expected_result_count", "dataset_revision_id")...); err != nil {
+	if err := allowed(body, append(textKeys, "id", "name", "started_at", "run_source", "expected_item_count", "expected_result_count", "dataset_revision_id", "experiment_scorer_version_id")...); err != nil {
 		return nil, err
 	}
 	if !identifier(body["name"], 400) {
@@ -110,10 +113,12 @@ func (c *Client) CreateExperiment(ctx context.Context, fields Fields) (*Experime
 	if v := body["run_source"]; v != nil && !enum(v, "ci", "local", "scheduled") {
 		return nil, errors.New("evaluations: invalid run source")
 	}
-	if v := body["dataset_revision_id"]; v != nil {
-		body["dataset_revision_id"], err = idString(v)
-		if err != nil {
-			return nil, err
+	for _, key := range []string{"dataset_revision_id", "experiment_scorer_version_id"} {
+		if v := body[key]; v != nil {
+			body[key], err = idString(v)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	for _, k := range []string{"expected_item_count", "expected_result_count"} {
