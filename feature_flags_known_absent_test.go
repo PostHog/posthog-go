@@ -208,36 +208,96 @@ func TestKnownAbsentLocalEvaluation(t *testing.T) {
 
 func TestKnownAbsentOmittedOrNullConditionValueStaysInconclusive(t *testing.T) {
 	listed := newKnownAbsentPropertyKeys([]string{"plan"}, nil)
-	for name, filter := range map[string]string{
-		"is_not omitted": `{"key": "plan", "type": "person", "operator": "is_not"}`,
-		"is_not null":    `{"key": "plan", "type": "person", "operator": "is_not", "value": null}`,
-		"exact null":     `{"key": "plan", "type": "person", "operator": "exact", "value": null}`,
-		"gt null":        `{"key": "plan", "type": "person", "operator": "gt", "value": null}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, filter)))
-			for _, properties := range []Properties{nil, {"plan": "pro"}} {
-				_, err := computeKnownAbsentFlag(t, definitions, "profile-incomplete", nil, properties, nil, listed)
-				requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
-			}
+	conditionValues := map[string]string{"omitted": "", "null": `, "value": null`}
+	for _, operator := range []string{"exact", "is_not", "icontains", "gt", "is_date_before"} {
+		for valueName, value := range conditionValues {
+			t.Run(operator+" "+valueName, func(t *testing.T) {
+				filter := `{"key": "plan", "type": "person", "operator": "` + operator + `"` + value + `}`
+				definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, filter)))
+				for _, properties := range []Properties{nil, {"plan": "pro"}} {
+					_, err := computeKnownAbsentFlag(t, definitions, "profile-incomplete", nil, properties, nil, listed)
+					requireUnresolvedReason(t, err, UnresolvedFlagReasonUnsupportedDefinition)
+				}
 
-			server := newKnownAbsentServer(t, definitions)
-			c, _, _ := newEvalClient(t, server.server, func(cfg *Config) { cfg.PersonalApiKey = "personal-key" })
-			waitForFlagDefinitions(t, c)
-			got, err := c.GetFeatureFlag(FeatureFlagPayload{Key: "profile-incomplete", DistinctId: "user-1", PersonPropertyKeysKnownAbsent: []string{"plan"}})
-			require.NoError(t, err)
-			require.Equal(t, true, got, "the /flags result")
-			require.Len(t, server.requests(), 1, "falls back to /flags")
-		})
+				server := newKnownAbsentServer(t, definitions)
+				c, _, _ := newEvalClient(t, server.server, func(cfg *Config) { cfg.PersonalApiKey = "personal-key" })
+				waitForFlagDefinitions(t, c)
+				for _, properties := range []Properties{nil, {"plan": "pro"}} {
+					evals, err := c.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1", PersonProperties: properties, PersonPropertyKeysKnownAbsent: []string{"plan"}, OnlyEvaluateLocally: true})
+					require.NoError(t, err)
+					require.Equal(t, map[string]UnresolvedFlagReason{"profile-incomplete": UnresolvedFlagReasonUnsupportedDefinition}, evals.UnresolvedFlags())
+
+					got, err := c.GetFeatureFlag(FeatureFlagPayload{Key: "profile-incomplete", DistinctId: "user-1", PersonProperties: properties, PersonPropertyKeysKnownAbsent: []string{"plan"}})
+					require.NoError(t, err)
+					require.Equal(t, true, got, "the /flags result")
+				}
+				require.Len(t, server.requests(), 2, "the default getter falls back to /flags")
+			})
+		}
 	}
 
 	for operator, want := range map[string]bool{"is_not_set": true, "is_set": false} {
-		t.Run(operator+" null keeps the table result", func(t *testing.T) {
-			definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, `{"key": "plan", "type": "person", "operator": "`+operator+`", "value": null}`)))
-			got, err := computeKnownAbsentFlag(t, definitions, "profile-incomplete", nil, Properties{"plan": "pro"}, nil, listed)
-			require.NoError(t, err)
-			require.Equal(t, want, got)
+		for valueName, value := range conditionValues {
+			t.Run(operator+" "+valueName+" keeps the table result", func(t *testing.T) {
+				definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, `{"key": "plan", "type": "person", "operator": "`+operator+`"`+value+`}`)))
+				for _, properties := range []Properties{nil, {"plan": "pro"}} {
+					got, err := computeKnownAbsentFlag(t, definitions, "profile-incomplete", nil, properties, nil, listed)
+					require.NoError(t, err)
+					require.Equal(t, want, got)
+				}
+			})
+		}
+	}
+
+	for _, tt := range []struct {
+		operator, value string
+		want            bool
+	}{
+		{"exact", `"pro"`, false},
+		{"is_not", `"pro"`, true},
+		{"icontains", `"pro"`, false},
+		{"gt", `"10"`, false},
+		{"is_date_before", `"2024-01-01"`, false},
+	} {
+		t.Run(tt.operator+" with a value resolves from the listing", func(t *testing.T) {
+			definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, `{"key": "plan", "type": "person", "operator": "`+tt.operator+`", "value": `+tt.value+`}`)))
+			for _, properties := range []Properties{nil, {"plan": "pro"}} {
+				got, err := computeKnownAbsentFlag(t, definitions, "profile-incomplete", nil, properties, nil, listed)
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			}
 		})
+	}
+}
+
+// Without a listing, an omitted or null condition value keeps the main-branch result.
+func TestOmittedOrNullConditionValueWithoutListingIsUnchanged(t *testing.T) {
+	for _, tt := range []struct {
+		operator string
+		want     interface{}
+		wantErr  bool
+	}{
+		{"exact", false, false},
+		{"is_not", true, false},
+		{"icontains", false, false},
+		{"gt", nil, true},
+		{"is_date_before", nil, true},
+		{"is_set", true, false},
+		{"is_not_set", false, false},
+	} {
+		for valueName, value := range map[string]string{"omitted": "", "null": `, "value": null`} {
+			t.Run(tt.operator+" "+valueName, func(t *testing.T) {
+				filter := `{"key": "plan", "type": "person", "operator": "` + tt.operator + `"` + value + `}`
+				definitions := knownAbsentDefinitions(flagDefinition("profile-incomplete", flagCondition(100, filter)))
+				got, err := computeKnownAbsentFlag(t, definitions, "profile-incomplete", nil, Properties{"plan": "pro"}, nil, newKnownAbsentPropertyKeys([]string{"region"}, nil))
+				if tt.wantErr {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			})
+		}
 	}
 }
 
