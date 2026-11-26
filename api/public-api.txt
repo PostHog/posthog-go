@@ -295,6 +295,8 @@ type Client interface {
 
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
+	GetAllFlagsAndPayloads(FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error)
+
 	EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error)
 
 	ReloadFeatureFlags() error
@@ -757,6 +759,8 @@ type FeatureFlagsPoller struct {
 func (poller *FeatureFlagsPoller) ForceReload()
 
 func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error)
+
+func (poller *FeatureFlagsPoller) GetAllFlagsAndPayloads(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error)
 
 func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error)
 

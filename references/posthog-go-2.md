@@ -44,6 +44,9 @@ tableOfContents:
   - value: "Get feature flags"
     url: get-feature-flags
     depth: 0
+  - value: "Get feature flags and payloads"
+    url: get-feature-flags-and-payloads
+    depth: 0
   - value: "Evaluate flags"
     url: evaluate-flags
     depth: 0
@@ -836,6 +839,16 @@ GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 ```
 
 GetAllFlags evaluates all flags for a user. Returned values are booleans for boolean flags and strings for multivariate variants. It returns ErrNoSecretKey when OnlyEvaluateLocally is true without SecretKey or a FlagDefinitionCacheProvider.
+
+## Get feature flags and payloads
+
+### `Client.GetAllFlagsAndPayloads`
+
+```go
+GetAllFlagsAndPayloads(FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error)
+```
+
+GetAllFlagsAndPayloads evaluates all flags for a user and returns their values alongside the serialized JSON payload of the value each flag resolved to. It is the bulk form of GetFeatureFlagResult: one evaluation fills both maps, so no per-flag payload lookup is needed. Flag values are booleans for boolean flags and strings for multivariate variants; a flag whose value has no payload configured is absent from the payload map. It returns ErrNoSecretKey when OnlyEvaluateLocally is true without SecretKey or a FlagDefinitionCacheProvider.
 
 ## Evaluate flags
 
@@ -2455,6 +2468,14 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 ```
 
 GetAllFlags evaluates every available flag for the configured user. Values are bools for boolean flags or strings for multivariate variants.
+
+#### `FeatureFlagsPoller.GetAllFlagsAndPayloads`
+
+```go
+func (poller *FeatureFlagsPoller) GetAllFlagsAndPayloads(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error)
+```
+
+GetAllFlagsAndPayloads evaluates every flag for one user and returns the flag values together with the serialized payload of the value each flag resolved to. It is the bulk companion of GetFeatureFlagPayload: payloads come from the same local definitions, and when local evaluation falls back to /flags, one response fills both maps. A flag without a payload for its value is absent from the payload map.
 
 #### `FeatureFlagsPoller.GetFeatureFlag`
 
