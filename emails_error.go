@@ -118,6 +118,8 @@ func schedulingRequiresCloud(appHost string) *EmailError {
 	err := invalidEmail("scheduling_requires_cloud", "ScheduledAt", "This client sends email to "+originOf(appHost)+", and only PostHog Cloud schedules emails, so "+emailNotSent+".")
 	err.Why = "A self-hosted PostHog, or a proxy in front of PostHog Cloud, may send the email at once instead of at ScheduledAt."
 	err.Fix = "Send through PostHog Cloud US or EU, or leave out ScheduledAt to send the email now."
+	// Only a local code that starts with invalid_ is a validation error.
+	err.Name = EmailErrorApplication
 	return err
 }
 
