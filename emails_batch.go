@@ -468,7 +468,7 @@ func batchReplyError(reply emailReply, recipients int, isTemplate, lost bool) *E
 			err.Fix = "Split the recipients into smaller batches."
 		}
 	}
-	if code := reply.text("code"); reply.status == http.StatusNotFound && (code == "" || code == "not_found") && reply.text("attr") == "" {
+	if code := strings.TrimSpace(reply.text("code")); reply.status == http.StatusNotFound && (code == "" || code == "not_found") && reply.text("attr") == "" {
 		// PostHog answers an unknown template, batch sends being off and a
 		// server without the route with this same 404, so the error can't
 		// pick one. After launch a wrong template ID is the likely cause.

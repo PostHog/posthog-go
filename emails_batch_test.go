@@ -817,6 +817,24 @@ func TestEmailsBatchUnavailable(t *testing.T) {
 			message: noCodeBatch,
 			fix:     sendEachCode,
 		},
+		{
+			name:    "a blank code",
+			batch:   templateBatch(recipientsTo(2)...),
+			reply:   stubReply{status: http.StatusNotFound, body: `{"code":" ","detail":"Not found."}`},
+			code:    "not_found",
+			errName: EmailErrorNotFound,
+			message: noTemplate,
+			fix:     checkID,
+		},
+		{
+			name:    "a code batch with a padded code",
+			batch:   codeBatch,
+			reply:   stubReply{status: http.StatusNotFound, body: `{"code":" not_found ","detail":"Not found."}`},
+			code:    "not_found",
+			errName: EmailErrorNotFound,
+			message: noCodeBatch,
+			fix:     sendEachCode,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
