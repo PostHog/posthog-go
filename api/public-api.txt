@@ -1262,6 +1262,9 @@ type Composition struct {
 type CompositionInput struct {
 	Alias           string `json:"alias"`
 	ScorerVersionID string `json:"scorer_version_id"`
+	Statistic       string `json:"statistic,omitempty"`
+	VersionPolicy   string `json:"version_policy,omitempty"`
+	Category        string `json:"category,omitempty"`
 }
 
 type Config struct {
@@ -1274,10 +1277,12 @@ type Config struct {
 }
 
 type CreateScorerOptions struct {
-	Calculation string
-	Composition *Composition
-	Description Optional[string]
-	Tags        []string
+	Calculation      string
+	Composition      *Composition
+	Description      Optional[string]
+	Tags             []string
+	Scope            string
+	ApplyToSuiteKeys []string
 }
 
 func (o CreateScorerOptions) MarshalJSON() ([]byte, error)
@@ -1287,6 +1292,7 @@ type CreateVersionOptions struct {
 	Name        *string
 	Description Optional[string]
 	Composition *Composition
+	ApplyToSuiteKeys []string
 }
 
 func (o CreateVersionOptions) MarshalJSON() ([]byte, error)
@@ -1555,6 +1561,7 @@ type Scorer struct {
 	CreatedBy               Fields        `json:"created_by"`
 	InputScorers            []ScorerInput `json:"input_scorers"`
 	DependentCompositeCount int           `json:"dependent_composite_count"`
+	AssignedSuiteKeys       []string      `json:"assigned_suite_keys"`
 }
 
 type ScorerConfig interface {
@@ -1576,7 +1583,7 @@ type ScorerInput struct {
 
 type ScorerListOptions struct {
 	ListOptions
-	Kind, Calculation, InputDefinitionID string
+	Kind, Calculation, InputDefinitionID, Scope string
 }
 
 type ScorerVersion struct {
@@ -1613,8 +1620,12 @@ func (s Scorers) Update(ctx context.Context, id string, fields Fields) (Scorer, 
 
 func (s Scorers) ValidateComposition(ctx context.Context, kind string, composition Composition, config ScorerConfig) (bool, error)
 
+func (s Scorers) ValidateCompositionWithScope(ctx context.Context, scope, kind string, composition Composition, config ScorerConfig) (bool, error)
+
 type Scoring struct {
 	Kind        string       `json:"kind"`
+	Scope       string       `json:"scope"`
+	SuiteKeys   []string     `json:"suite_keys"`
 	Config      ScorerConfig `json:"config"`
 	Calculation string       `json:"calculation"`
 	Composition *Composition `json:"composition"`

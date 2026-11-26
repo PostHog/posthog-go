@@ -162,6 +162,9 @@ func TestReportedScorerAndVersions(t *testing.T) {
 	r, err := s.Create(ctx, "quality", BooleanConfig{TrueIsFailure: Value(false)}, CreateScorerOptions{})
 	require.NoError(t, err)
 	require.Equal(t, "reported", r.Calculation)
+	require.Equal(t, "item", r.Scope)
+	require.Equal(t, []string{}, r.SuiteKeys)
+	require.Nil(t, r.AssignedSuiteKeys)
 	require.Empty(t, r.InputScorers)
 	require.Nil(t, r.Composition)
 	cfg := r.Config.(BooleanConfig)
@@ -228,6 +231,65 @@ func TestCompositeManagement(t *testing.T) {
 	_, err = s.ValidateComposition(ctx, "numeric", comp, nil)
 	require.Error(t, err)
 }
+func TestExperimentScorerManagement(t *testing.T) {
+	formula := Composition{Expression: "quality", Inputs: []CompositionInput{{
+		Alias: "quality", ScorerVersionID: versionID, Statistic: "category_rate", Category: "correct", VersionPolicy: "combine",
+	}}}
+	row := scorerRow()
+	row["kind"] = "numeric"
+	row["config"] = Fields{}
+	row["scope"] = "experiment"
+	row["calculation"] = "composite"
+	row["composition"] = formula
+	row["suite_keys"] = []string{"Agent-CI"}
+	detail := copyFields(row)
+	detail["assigned_suite_keys"] = []string{}
+	version := Fields{"id": versionID, "definition_id": itemID, "version": 1, "kind": "numeric",
+		"scope": "experiment", "calculation": "composite", "composition": formula, "suite_keys": []string{"Agent-CI"},
+		"config": Fields{}, "created_at": stamp, "created_by": nil}
+	wire, err := encode(formula)
+	require.NoError(t, err)
+	base := scorersPath + itemID + "/"
+	c := scripted(t,
+		exchange{"POST", scorersPath, reqBody(t, `{"name":"quality","kind":"numeric","scope":"experiment","calculation":"composite","config":{},"apply_to_suite_keys":["Agent-CI"],"composition":`+string(wire)+`}`), 201, row},
+		exchange{"GET", base, nil, 200, detail},
+		exchange{"POST", base + "new_version/", reqBody(t, `{"config":{},"composition":`+string(wire)+`}`), 200, row},
+		exchange{"POST", base + "new_version/", reqBody(t, `{"config":{},"apply_to_suite_keys":[],"composition":`+string(wire)+`}`), 200, row},
+		exchange{"PATCH", base, reqBody(t, `{"apply_to_suite_keys":[],"suite_version_id":"`+resultID+`"}`), 200, row},
+		exchange{"GET", base + "versions/" + versionID + "/", nil, 200, version},
+		exchange{"POST", scorersPath + "validate_composition/", reqBody(t, `{"kind":"numeric","scope":"experiment","composition":`+string(wire)+`}`), 200, Fields{"valid": true}},
+		exchange{"GET", scorersPath, params(t, url.Values{"limit": {"100"}, "offset": {"0"}, "archived": {"false"}, "scope": {"experiment"}}), 200, page(nil, row)},
+	)
+	s := c.Scorers
+	created, err := s.Create(ctx, "quality", NumericConfig{}, CreateScorerOptions{
+		Scope: "experiment", Calculation: "composite", Composition: &formula, ApplyToSuiteKeys: []string{"Agent-CI"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "experiment", created.Scope)
+	require.Equal(t, []string{"Agent-CI"}, created.SuiteKeys)
+	require.Nil(t, created.AssignedSuiteKeys)
+	got, err := s.Get(ctx, itemID)
+	require.NoError(t, err)
+	require.Equal(t, []string{}, got.AssignedSuiteKeys)
+	require.Equal(t, formula, *got.Composition)
+	_, err = s.CreateVersion(ctx, itemID, NumericConfig{}, CreateVersionOptions{Composition: got.Composition})
+	require.NoError(t, err)
+	_, err = s.CreateVersion(ctx, itemID, NumericConfig{}, CreateVersionOptions{Composition: got.Composition, ApplyToSuiteKeys: []string{}})
+	require.NoError(t, err)
+	_, err = s.Update(ctx, itemID, Fields{"apply_to_suite_keys": []string{}, "suite_version_id": resultID})
+	require.NoError(t, err)
+	v, err := s.GetVersion(ctx, itemID, versionID)
+	require.NoError(t, err)
+	require.Equal(t, formula, *v.Composition)
+	require.Equal(t, []string{"Agent-CI"}, v.SuiteKeys)
+	ok, err := s.ValidateCompositionWithScope(ctx, "experiment", "numeric", formula, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	list, err := s.List(ctx, ScorerListOptions{Scope: "experiment"})
+	require.NoError(t, err)
+	require.Equal(t, formula, *list.Results[0].Composition)
+}
+
 func TestCategoricalConfig(t *testing.T) {
 	cfg := CategoricalConfig{Options: []CategoryOption{{"a", "A"}, {"b", "B"}}, SelectionMode: "multiple", PassingRule: Value(CategoryPassingRule{Categories: []string{}})}
 	b, err := encode(cfg)

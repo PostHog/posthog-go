@@ -14,6 +14,8 @@ const scorersPath = "llm_analytics/score_definitions/"
 type Scorers struct{ client *Client }
 type Scoring struct {
 	Kind        string       `json:"kind"`
+	Scope       string       `json:"scope"`
+	SuiteKeys   []string     `json:"suite_keys"`
 	Config      ScorerConfig `json:"config"`
 	Calculation string       `json:"calculation"`
 	Composition *Composition `json:"composition"`
@@ -44,6 +46,7 @@ type Scorer struct {
 	CreatedBy               Fields        `json:"created_by"`
 	InputScorers            []ScorerInput `json:"input_scorers"`
 	DependentCompositeCount int           `json:"dependent_composite_count"`
+	AssignedSuiteKeys       []string      `json:"assigned_suite_keys"`
 }
 type ScorerVersion struct {
 	Scoring
@@ -54,21 +57,33 @@ type ScorerVersion struct {
 	CreatedBy    Fields    `json:"created_by"`
 }
 
-func validKind(v any) bool { return enum(v, "boolean", "numeric", "categorical") }
+func validKind(v any) bool  { return enum(v, "boolean", "numeric", "categorical") }
+func validScope(v any) bool { return enum(v, "item", "experiment") }
 func (s *Scoring) parse(f Fields) error {
+	if _, ok := f["scope"]; !ok {
+		s.Scope = "item"
+	}
+	if !validScope(s.Scope) {
+		return errRecord
+	}
+	suites, err := responseSuiteKeys(f, "suite_keys", []string{})
+	if err != nil {
+		return err
+	}
+	s.SuiteKeys = suites
 	if _, ok := f["calculation"]; !ok {
 		s.Calculation = "reported"
 	}
 	switch s.Calculation {
 	case "reported":
-		if s.Composition != nil {
+		if s.Scope == "experiment" || s.Composition != nil {
 			return errRecord
 		}
 	case "composite":
 		if s.Composition == nil {
 			return errRecord
 		}
-		c, err := s.Composition.checked()
+		c, err := s.Composition.checked(s.Scope)
 		if err != nil {
 			return err
 		}
@@ -125,6 +140,10 @@ func (s Scorers) scorer(id string) func(Fields) (Scorer, error) {
 				return Scorer{}, err
 			}
 		}
+		r.AssignedSuiteKeys, err = responseSuiteKeys(f, "assigned_suite_keys", nil)
+		if err != nil {
+			return Scorer{}, err
+		}
 		r.InputScorers = []ScorerInput{}
 		if v, ok := f["input_scorers"]; ok {
 			list, ok := v.([]any)
@@ -164,16 +183,26 @@ func versionParser(definitionID, versionID string) func(Fields) (ScorerVersion, 
 }
 
 // CreateScorerOptions adds metadata and, for a composite scorer, its formula
-// and pinned input versions. Calculation defaults to "reported".
+// and its inputs. Calculation defaults to "reported" and scope to "item".
+// ApplyToSuiteKeys assigns suite defaults on an experiment scorer version.
+// A nil slice omits the field, while an empty slice sends an empty selection.
 type CreateScorerOptions struct {
-	Calculation string
-	Composition *Composition
-	Description Optional[string]
-	Tags        []string
+	Calculation      string
+	Composition      *Composition
+	Description      Optional[string]
+	Tags             []string
+	Scope            string
+	ApplyToSuiteKeys []string
 }
 
 func (o CreateScorerOptions) MarshalJSON() ([]byte, error) {
 	fields := Fields{"Calculation": o.Calculation, "Composition": o.Composition, "Tags": o.Tags}
+	if o.Scope != "" {
+		fields["Scope"] = o.Scope
+	}
+	if o.ApplyToSuiteKeys != nil {
+		fields["ApplyToSuiteKeys"] = o.ApplyToSuiteKeys
+	}
 	o.Description.put(fields, "Description")
 	return encode(fields)
 }
@@ -185,16 +214,22 @@ type CreateVersionOptions struct {
 	Name        *string
 	Description Optional[string]
 	Composition *Composition
+	// Nil preserves existing assignments. An empty selection releases defaults
+	// from the previous current version.
+	ApplyToSuiteKeys []string
 }
 
 func (o CreateVersionOptions) MarshalJSON() ([]byte, error) {
 	fields := Fields{"BaseVersion": o.BaseVersion, "Name": o.Name, "Composition": o.Composition}
+	if o.ApplyToSuiteKeys != nil {
+		fields["ApplyToSuiteKeys"] = o.ApplyToSuiteKeys
+	}
 	o.Description.put(fields, "Description")
 	return encode(fields)
 }
 
 // configFields snapshots the exact output configuration for the request.
-func configFields(config ScorerConfig, composition *Composition) (Fields, error) {
+func configFields(config ScorerConfig, composition *Composition, scope string) (Fields, error) {
 	if config == nil {
 		return nil, errors.New("evaluations: scorer config required")
 	}
@@ -208,7 +243,7 @@ func configFields(config ScorerConfig, composition *Composition) (Fields, error)
 	}
 	f := Fields{"config": obj}
 	if composition != nil {
-		c, err := composition.checked()
+		c, err := composition.checked(scope)
 		if err != nil {
 			return nil, err
 		}
@@ -219,7 +254,29 @@ func configFields(config ScorerConfig, composition *Composition) (Fields, error)
 	}
 	return f, nil
 }
+func responseSuiteKeys(f Fields, key string, fallback []string) ([]string, error) {
+	value, ok := f[key]
+	if !ok {
+		return fallback, nil
+	}
+	return stringsOf(value)
+}
+
 func scorerMetadata(f Fields) error {
+	if v, ok := f["apply_to_suite_keys"]; ok {
+		keys, err := stringsOf(v)
+		if err != nil {
+			return err
+		}
+		f["apply_to_suite_keys"] = keys
+	}
+	if v, ok := f["suite_version_id"]; ok {
+		id, err := idString(v)
+		if err != nil {
+			return err
+		}
+		f["suite_version_id"] = id
+	}
 	if v, ok := f["name"]; ok && !identifier(v, 400) {
 		return errors.New("evaluations: invalid scorer name")
 	}
@@ -261,12 +318,25 @@ func (s Scorers) Create(ctx context.Context, name string, config ScorerConfig, o
 	if !enum(selected, "reported", "composite") || (selected == "composite") != (options.Composition != nil) {
 		return Scorer{}, errors.New("evaluations: only composite scorers require a composition")
 	}
-	f, err := configFields(config, options.Composition)
+	scope := options.Scope
+	if scope == "" {
+		scope = "item"
+	}
+	if !validScope(scope) || (scope == "experiment" && selected != "composite") {
+		return Scorer{}, errors.New("evaluations: invalid scorer scope or calculation")
+	}
+	f, err := configFields(config, options.Composition, scope)
 	if err != nil {
 		return Scorer{}, err
 	}
 	f["kind"] = config.Kind()
 	f["name"] = name
+	if scope == "experiment" {
+		f["scope"] = scope
+	}
+	if options.ApplyToSuiteKeys != nil {
+		f["apply_to_suite_keys"] = options.ApplyToSuiteKeys
+	}
 	if selected == "composite" {
 		f["calculation"] = selected
 	}
@@ -279,7 +349,7 @@ func (s Scorers) Create(ctx context.Context, name string, config ScorerConfig, o
 	}
 	return write(ctx, s.client, "POST", scorersPath, f, false, func(f Fields) (Scorer, error) {
 		r, err := s.scorer("")(f)
-		if err != nil || r.Kind != config.Kind() || r.Calculation != selected {
+		if err != nil || r.Kind != config.Kind() || r.Calculation != selected || r.Scope != scope {
 			return Scorer{}, errRecord
 		}
 		return r, nil
@@ -295,13 +365,15 @@ func (s Scorers) Get(ctx context.Context, id string) (Scorer, error) {
 	return call(ctx, s.client, request{method: "GET", path: scorersPath + id + "/"}, s.scorer(id))
 }
 
-// Update replaces the supplied metadata fields name, description, archived and tags.
+// Update replaces the supplied metadata or suite assignments. Set
+// apply_to_suite_keys to an empty list to clear defaults, and optionally set
+// suite_version_id to select a historical version.
 func (s Scorers) Update(ctx context.Context, id string, fields Fields) (Scorer, error) {
 	id, err := idString(id)
 	if err != nil {
 		return Scorer{}, err
 	}
-	if err := allowed(fields, "name", "description", "archived", "tags"); err != nil {
+	if err := allowed(fields, "name", "description", "archived", "tags", "apply_to_suite_keys", "suite_version_id"); err != nil {
 		return Scorer{}, err
 	}
 	f := copyFields(fields)
@@ -311,10 +383,10 @@ func (s Scorers) Update(ctx context.Context, id string, fields Fields) (Scorer, 
 	return write(ctx, s.client, "PATCH", scorersPath+id+"/", f, false, s.scorer(id))
 }
 
-// ScorerListOptions filters definitions by output kind, calculation, or input definition.
+// ScorerListOptions filters definitions by scope, output kind, calculation, or input definition.
 type ScorerListOptions struct {
 	ListOptions
-	Kind, Calculation, InputDefinitionID string
+	Kind, Calculation, InputDefinitionID, Scope string
 }
 
 // List returns one page of matching scorer definitions.
@@ -331,6 +403,12 @@ func (s Scorers) List(ctx context.Context, options ScorerListOptions) (Page[Scor
 			return Page[Scorer]{}, errors.New("evaluations: invalid scorer kind")
 		}
 		q.Set("kind", options.Kind)
+	}
+	if options.Scope != "" {
+		if !validScope(options.Scope) {
+			return Page[Scorer]{}, errors.New("evaluations: invalid scorer scope")
+		}
+		q.Set("scope", options.Scope)
 	}
 	if options.Calculation != "" {
 		if !enum(options.Calculation, "reported", "composite") {
@@ -355,11 +433,14 @@ func (s Scorers) CreateVersion(ctx context.Context, id string, config ScorerConf
 	if err != nil {
 		return Scorer{}, err
 	}
-	f, err := configFields(config, options.Composition)
+	f, err := configFields(config, options.Composition, "")
 	if err != nil {
 		return Scorer{}, err
 	}
 	addDescription(f, options.Description)
+	if options.ApplyToSuiteKeys != nil {
+		f["apply_to_suite_keys"] = options.ApplyToSuiteKeys
+	}
 	if options.Name != nil {
 		f["name"] = *options.Name
 	}
@@ -444,16 +525,25 @@ func (s Scorers) ListVersions(ctx context.Context, id string, options VersionLis
 // ValidateComposition checks a formula with read access. Pass nil config to
 // validate its syntax and types without an output configuration.
 func (s Scorers) ValidateComposition(ctx context.Context, kind string, composition Composition, config ScorerConfig) (bool, error) {
-	if !validKind(kind) {
-		return false, errors.New("evaluations: invalid scorer kind")
+	return s.ValidateCompositionWithScope(ctx, "item", kind, composition, config)
+}
+
+// ValidateCompositionWithScope checks an item or experiment formula with read
+// access. Pass nil config for syntax and type validation alone.
+func (s Scorers) ValidateCompositionWithScope(ctx context.Context, scope, kind string, composition Composition, config ScorerConfig) (bool, error) {
+	if !validKind(kind) || !validScope(scope) {
+		return false, errors.New("evaluations: invalid scorer scope or kind")
 	}
-	c, err := composition.checked()
+	c, err := composition.checked(scope)
 	if err != nil {
 		return false, err
 	}
 	f := Fields{"kind": kind, "composition": c}
+	if scope == "experiment" {
+		f["scope"] = scope
+	}
 	if config != nil {
-		cfg, err := configFields(config, &c)
+		cfg, err := configFields(config, &c, scope)
 		if err != nil {
 			return false, err
 		}
