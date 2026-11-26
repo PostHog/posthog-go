@@ -172,7 +172,7 @@ func TestEmailsSendScheduledAtOnlyOnPostHogCloud(t *testing.T) {
 			}
 			emailErr := requireEmailError(t, err)
 			require.Equal(t, "scheduling_requires_cloud", emailErr.Code)
-			require.Equal(t, EmailErrorValidation, emailErr.Name)
+			require.Equal(t, EmailErrorApplication, emailErr.Name, "a local code that doesn't start with invalid_ is an application error")
 			require.Equal(t, "ScheduledAt", emailErr.Field)
 			require.Equal(t, "This client sends email to "+tt.inError+", and only PostHog Cloud schedules emails, so no email was sent.", emailErr.Message)
 			require.Zero(t, emailErr.StatusCode)
