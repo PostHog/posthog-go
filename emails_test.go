@@ -170,6 +170,7 @@ func TestEmailsSendCode(t *testing.T) {
 		Text:        "Reset and go",
 		From:        "Acme <security@example.com>",
 		ReplyTo:     []string{"support@example.com"},
+		Category:    "account-security",
 		DistinctID:  "user_123",
 	})
 
@@ -182,6 +183,7 @@ func TestEmailsSendCode(t *testing.T) {
 		"text":         "Reset and go",
 		"from":         "Acme <security@example.com>",
 		"reply_to":     []interface{}{"support@example.com"},
+		"category":     "account-security",
 		"distinct_id":  "user_123",
 	}, server.received()[0].Body)
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")
@@ -205,225 +207,6 @@ func TestEmailsSendCodeLeavesOutUnsetFields(t *testing.T) {
 		"subject":      "Your digest",
 		"text":         "Plain text only",
 	}, server.received()[0].Body)
-}
-
-func TestEmailsSendCodeCreatesItsCategory(t *testing.T) {
-	const html = `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`
-	tests := []struct {
-		name             string
-		category         EmailCategory
-		wantCategoryJSON string
-	}{
-		{
-			name:             "marketing with description",
-			category:         MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter", Description: Ptr("Monthly product news")},
-			wantCategoryJSON: `{"key":"newsletter","type":"marketing","name":"Newsletter","description":"Monthly product news"}`,
-		},
-		{
-			name:             "marketing with empty description",
-			category:         MessageCategory{Key: "updates", Type: MessageCategoryMarketing, Name: "Updates", Description: Ptr("")},
-			wantCategoryJSON: `{"key":"updates","type":"marketing","name":"Updates","description":""}`,
-		},
-		{
-			name:             "transactional without description, through a pointer",
-			category:         &MessageCategory{Key: "receipts", Type: MessageCategoryTransactional, Name: "Receipts"},
-			wantCategoryJSON: `{"key":"receipts","type":"transactional","name":"Receipts"}`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := newEmailServer(t, accepted("msg_1"))
-			client := newEmailClient(t, server)
-
-			result, err := client.Emails().Send(context.Background(), CodeEmail{
-				To:          "user@example.com",
-				TemplateKey: "monthly-newsletter",
-				Subject:     "What's new",
-				HTML:        html,
-				Category:    tt.category,
-			})
-
-			require.NoError(t, err)
-			require.Equal(t, &SendEmailResult{ID: "msg_1", Warnings: []EmailWarning{}}, result)
-			requests := server.received()
-			require.Len(t, requests, 1)
-			require.Equal(t, http.MethodPost, requests[0].Method)
-			require.Equal(t, "/api/messaging/send/email/", requests[0].Path)
-			var rawFields map[string]json.RawMessage
-			require.NoError(t, json.Unmarshal([]byte(requests[0].Raw), &rawFields))
-			require.JSONEq(t, tt.wantCategoryJSON, string(rawFields["category"]))
-			require.Equal(t, map[string]interface{}{
-				"to":           "user@example.com",
-				"template_key": "monthly-newsletter",
-				"subject":      "What's new",
-				"html":         html,
-				"category":     requests[0].Body["category"],
-			}, requests[0].Body)
-		})
-	}
-}
-
-func TestEmailsSendCodeRefusesACategoryOfAnotherType(t *testing.T) {
-	server := newEmailServer(t, stubReply{
-		status: http.StatusBadRequest,
-		body:   `{"type":"validation_error","code":"category_mismatch","attr":"category","detail":"The category differs from the stored one."}`,
-	})
-	client := newEmailClient(t, server)
-
-	_, err := client.Emails().Send(context.Background(), CodeEmail{
-		To:          "user@example.com",
-		TemplateKey: "monthly-newsletter",
-		Subject:     "What's new",
-		Text:        "Our news",
-		Category:    MessageCategory{Key: "newsletter", Type: MessageCategoryTransactional, Name: "Newsletter"},
-	})
-
-	emailErr := requireEmailError(t, err)
-	require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
-	require.Equal(t, "category_mismatch", emailErr.Code)
-	require.Equal(t, "category", emailErr.Field)
-	require.Equal(t, EmailErrorValidation, emailErr.Name)
-	requests := server.received()
-	require.Len(t, requests, 1)
-	require.Equal(t, map[string]interface{}{
-		"key":  "newsletter",
-		"type": "transactional",
-		"name": "Newsletter",
-	}, requests[0].Body["category"])
-}
-
-func receiptEmail(category EmailCategory) CodeEmail {
-	return CodeEmail{
-		To:          "user@example.com",
-		TemplateKey: "order-receipt",
-		Subject:     "Your receipt",
-		HTML:        "<p>Thanks for your order</p>",
-		Category:    category,
-	}
-}
-
-func TestEmailsSendCodeWithoutACategoryFollowsTheTemplatesCategory(t *testing.T) {
-	var noCategory *MessageCategory
-	for name, category := range map[string]EmailCategory{"no category": nil, "nil category pointer": noCategory} {
-		t.Run(name, func(t *testing.T) {
-			server := newEmailServer(t, accepted("msg_1"))
-			client := newEmailClient(t, server)
-
-			result, err := client.Emails().Send(context.Background(), receiptEmail(category))
-
-			require.NoError(t, err)
-			require.Equal(t, &SendEmailResult{ID: "msg_1", Warnings: []EmailWarning{}}, result)
-			requests := server.received()
-			require.Len(t, requests, 1)
-			var rawFields map[string]json.RawMessage
-			require.NoError(t, json.Unmarshal([]byte(requests[0].Raw), &rawFields))
-			require.Equal(t, `"order-receipt"`, string(rawFields["template_key"]))
-			_, hasCategory := rawFields["category"]
-			require.False(t, hasCategory, "category key must be absent, not null")
-		})
-	}
-}
-
-func TestEmailsSendCodeRefusesTransactionalForATemplateInACategory(t *testing.T) {
-	server := newEmailServer(t, stubReply{
-		status: http.StatusBadRequest,
-		body:   `{"type":"validation_error","code":"category_mismatch","attr":"category","detail":"The category differs from the template's."}`,
-	})
-	client := newEmailClient(t, server)
-
-	_, err := client.Emails().Send(context.Background(), receiptEmail(EmailCategoryTransactional))
-
-	emailErr := requireEmailError(t, err)
-	require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
-	require.Equal(t, "category_mismatch", emailErr.Code)
-	require.Equal(t, "category", emailErr.Field)
-	require.Equal(t, EmailErrorValidation, emailErr.Name)
-	requests := server.received()
-	require.Len(t, requests, 1)
-	var rawFields map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal([]byte(requests[0].Raw), &rawFields))
-	require.Equal(t, `"order-receipt"`, string(rawFields["template_key"]))
-	require.Equal(t, `"transactional"`, string(rawFields["category"]))
-}
-
-func TestEmailsSendCodeMarketingDoesNotRetryOptedOut(t *testing.T) {
-	server := newEmailServer(t, failed(http.StatusUnprocessableEntity, "recipient_opted_out"), accepted("msg_1"))
-	client := newEmailClient(t, server)
-
-	_, err := client.Emails().Send(context.Background(), CodeEmail{
-		To:          "user@example.com",
-		TemplateKey: "monthly-newsletter",
-		Subject:     "What's new",
-		HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
-		Category:    MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter"},
-	})
-
-	emailErr := requireEmailError(t, err)
-	require.Equal(t, "recipient_opted_out", emailErr.Code)
-	require.Equal(t, EmailErrorValidation, emailErr.Name)
-	require.Equal(t, http.StatusUnprocessableEntity, emailErr.StatusCode)
-	received := server.received()
-	require.Len(t, received, 1)
-	require.Equal(t, map[string]interface{}{
-		"key":  "newsletter",
-		"type": "marketing",
-		"name": "Newsletter",
-	}, received[0].Body["category"])
-}
-
-func TestEmailsSendCodeMarketingDoesNotRetryOrStripCategoryOnPreCategoryServer(t *testing.T) {
-	email := CodeEmail{
-		To:          "user@example.com",
-		TemplateKey: "monthly-newsletter",
-		Subject:     "What's new",
-		HTML:        `<a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
-		Category:    MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing, Name: "Newsletter"},
-	}
-
-	t.Run("old Django invalid_input", func(t *testing.T) {
-		posthog := newFakePostHog(t, newFakeStorage(t, time.Now))
-		client := newEmailClientFor(t, posthog.URL)
-
-		_, err := client.Emails().Send(context.Background(), email)
-
-		emailErr := requireEmailError(t, err)
-		require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
-		require.Equal(t, "invalid_input", emailErr.Code)
-		require.Equal(t, "category", emailErr.Field)
-		require.Equal(t, EmailErrorValidation, emailErr.Name)
-		posthog.mu.Lock()
-		attempts := posthog.sends
-		posthog.mu.Unlock()
-		require.Equal(t, 1, attempts)
-		require.Empty(t, posthog.deliveredEmails())
-	})
-
-	t.Run("mixed-version old CDP field_not_accepted", func(t *testing.T) {
-		server := newEmailServer(
-			t,
-			stubReply{
-				status: http.StatusBadRequest,
-				body:   `{"type":"validation_error","code":"field_not_accepted","attr":"category","detail":"PostHog doesn't accept this field yet."}`,
-			},
-			accepted("msg_1"),
-		)
-		client := newEmailClient(t, server)
-
-		_, err := client.Emails().Send(context.Background(), email)
-
-		emailErr := requireEmailError(t, err)
-		require.Equal(t, http.StatusBadRequest, emailErr.StatusCode)
-		require.Equal(t, "field_not_accepted", emailErr.Code)
-		require.Equal(t, "category", emailErr.Field)
-		require.Equal(t, EmailErrorValidation, emailErr.Name)
-		requests := server.received()
-		require.Len(t, requests, 1)
-		require.Equal(t, map[string]interface{}{
-			"key":  "newsletter",
-			"type": "marketing",
-			"name": "Newsletter",
-		}, requests[0].Body["category"])
-	})
 }
 
 func TestEmailsSendCodeCopies(t *testing.T) {
@@ -794,14 +577,6 @@ func TestEmailsSendChecksArguments(t *testing.T) {
 				e.Attachments = append(e.Attachments, EmailAttachment{Filename: fmt.Sprintf("%d.pdf", i), Content: make([]byte, 10_000_000)})
 			}
 		}), code: "message_too_large", field: "Attachments"},
-		{name: "category without a key", email: code(func(e *CodeEmail) {
-			e.Category = MessageCategory{Key: " ", Type: MessageCategoryMarketing, Name: "Newsletter"}
-		}), code: "invalid_category", field: "Category.Key"},
-		{name: "category without a type", email: code(func(e *CodeEmail) { e.Category = MessageCategory{Key: "newsletter", Name: "Newsletter"} }), code: "invalid_category", field: "Category.Type"},
-		{name: "category of an unknown type", email: code(func(e *CodeEmail) {
-			e.Category = MessageCategory{Key: "newsletter", Type: "promotional", Name: "Newsletter"}
-		}), code: "invalid_category", field: "Category.Type"},
-		{name: "category without a name", email: code(func(e *CodeEmail) { e.Category = &MessageCategory{Key: "newsletter", Type: MessageCategoryMarketing} }), code: "invalid_category", field: "Category.Name"},
 		{name: "code idempotency key", email: code(func(e *CodeEmail) { e.IdempotencyKey = "é" }), code: "invalid_idempotency_key", field: "IdempotencyKey"},
 		{name: "code negative retries", email: code(func(e *CodeEmail) { e.MaxRetries = Ptr(-2) }), code: "invalid_max_retries", field: "MaxRetries"},
 		{name: "more than nine retries", email: template(func(e *TemplateEmail) { e.MaxRetries = Ptr(10) }), code: "invalid_max_retries", field: "MaxRetries"},

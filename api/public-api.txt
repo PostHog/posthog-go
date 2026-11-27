@@ -102,8 +102,6 @@ var (
 
 	ErrSDKDisabled = errors.New("posthog SDK is disabled")
 )
-var EmailCategoryTransactional = transactionalEmailCategory{}
-
 var ErrFlagDefinitionsQuotaLimited = errors.New("feature flag definitions are quota limited")
 
 var ErrFlagNotFound = errors.New("feature flag not found")
@@ -327,7 +325,7 @@ type CodeEmail struct {
 	Sensitive *bool
 	Tracking *EmailTracking
 	CaptureEngagement *bool
-	Category EmailCategory
+	Category string
 	DistinctID string
 	IdempotencyKey string
 	MaxRetries *int
@@ -504,9 +502,6 @@ type EmailAttachment struct {
 	Content []byte
 	ContentType string
 	ContentID string
-}
-
-type EmailCategory interface {
 }
 
 type EmailError struct {
@@ -986,20 +981,6 @@ type Message interface {
 }
 
 
-type MessageCategory struct {
-	Key  string
-	Type MessageCategoryType
-	Name string
-	Description *string
-}
-
-
-type MessageCategoryType string
-
-const (
-	MessageCategoryMarketing MessageCategoryType = "marketing"
-	MessageCategoryTransactional MessageCategoryType = "transactional"
-)
 type Options map[string]interface{}
 
 

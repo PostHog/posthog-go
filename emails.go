@@ -155,17 +155,18 @@ type CodeEmail struct {
 	//
 	// Deprecated: Use Tracking with EmailTrackingOptions.Engagement.
 	CaptureEngagement *bool
-	// Category is EmailCategoryTransactional or a MessageCategory, which
-	// defines the category in code. Without it, when code-send categories are
-	// enabled for the project, the email follows the transactional category of
-	// the template that TemplateKey names, or is transactional with no
-	// category; when categories are disabled for the project, PostHog sends no
-	// per-send category (falling back to the workflow's stored configuration,
-	// while still refusing a sendable saved template in a marketing category
-	// with "marketing_template"). An explicit MessageCategory returns
-	// "categories_not_enabled" when categories are unavailable for the project
-	// (and HTTP 400 on an older PostHog server).
-	Category EmailCategory
+	// Category is the key of one of the project's message categories, such
+	// as "newsletter". A marketing category skips recipients who opted out of
+	// it or of all marketing email, fills {{ unsubscribe_url }} with the
+	// recipient's preferences link, and adds List-Unsubscribe headers. A
+	// marketing email can't have Cc or Bcc. PostHog refuses a send with the
+	// error code "category_not_found" when the project has no category with
+	// this key, and "marketing_copies_unsupported" when a marketing email has
+	// Cc or Bcc. It refuses a marketing email with Attachments with
+	// "workflow_can_wait", and a marketing email from a project without a
+	// verified sending domain, which would go out from the PostHog test
+	// sender, with "sandbox_fields_unsupported".
+	Category string
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
 	// ID is the email address.
@@ -245,83 +246,6 @@ func (t EmailTracking) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.options)
 }
 
-// EmailCategory is the category of a CodeEmail: EmailCategoryTransactional or
-// a MessageCategory.
-type EmailCategory interface {
-	wireValue() (interface{}, *EmailError)
-}
-
-// transactionalEmailCategory has no fields, so EmailCategoryTransactional is
-// the only value it can hold.
-type transactionalEmailCategory struct{}
-
-// EmailCategoryTransactional sends transactional email with no category.
-// Unlike a CodeEmail without a Category, it doesn't follow the category of
-// the template that TemplateKey names: PostHog refuses it with
-// "category_mismatch" when that template is in a transactional category
-// (and "marketing_template" when it is in a marketing category).
-var EmailCategoryTransactional = transactionalEmailCategory{}
-
-// MessageCategoryType is the type of a MessageCategory.
-type MessageCategoryType string
-
-const (
-	// MessageCategoryMarketing: a marketing send honors the recipient's
-	// opt-outs, can't have Cc or Bcc ("copies_not_allowed"), and can't carry
-	// attachments ("workflow_can_wait" on a verified sender because marketing
-	// sending limits can hold delivery, or "sandbox_fields_unsupported" when
-	// using the PostHog test sender). Its HTML body needs a clickable link
-	// whose href points to {{ unsubscribe_url }} (with optional query string
-	// or fragment, such as <a href="{{ unsubscribe_url }}">Unsubscribe</a>),
-	// or its Text body needs {{ unsubscribe_url }} when it has no HTML, which
-	// PostHog fills with the recipient's preferences link.
-	MessageCategoryMarketing MessageCategoryType = "marketing"
-	// MessageCategoryTransactional: the email is sent as transactional and
-	// filed under the category.
-	MessageCategoryTransactional MessageCategoryType = "transactional"
-)
-
-// MessageCategory defines a message category in code. The first send with a
-// Key creates the category with its Name and Description. A later send with
-// that Key keeps the category's name and description, so change them in
-// PostHog.
-//
-// PostHog refuses a send with the error code "categories_not_enabled" when
-// code-send categories are unavailable for the project (and HTTP 400 on an
-// older server), "category_mismatch" when the Key exists with another Type,
-// when TemplateKey names a transactional-enabled saved email template in
-// another transactional category, or when TemplateKey names a
-// transactional-enabled saved email template with no category and the send
-// passes a MessageCategory (marketing callers should use a different
-// TemplateKey; transactional callers can omit Category or pass
-// EmailCategoryTransactional; a saved email template never enabled for
-// transactional sends returns "template_not_transactional" before PostHog
-// checks the category), "marketing_template" when TemplateKey names a
-// transactional-enabled saved email template in a marketing category,
-// "too_many_categories" when the project can't take another category,
-// "unsubscribe_link_required" when a marketing send's HTML has no clickable
-// link whose href points to {{ unsubscribe_url }} (with optional query string
-// or fragment, such as
-// <a href="{{ unsubscribe_url }}?utm_source=email">Unsubscribe</a>; or its
-// Text has no {{ unsubscribe_url }} placeholder when there is no HTML),
-// "copies_not_allowed" when a marketing send has Cc or Bcc,
-// "workflow_can_wait" (or "sandbox_fields_unsupported" when using the PostHog
-// test sender) when a marketing send carries attachments (because marketing
-// sending limits can hold delivery; avoid passing Cc, Bcc or attachments on
-// marketing sends), and "recipient_opted_out" when the recipient opted out of
-// the category or of all marketing.
-type MessageCategory struct {
-	// Key names the category, such as "newsletter". Recipients' opt-outs and
-	// preferences refer to the category by its key.
-	Key  string
-	Type MessageCategoryType
-	// Name is the category's name in the PostHog app, such as "Newsletter".
-	Name string
-	// Description notes which emails belong to the category, such as
-	// Ptr("Monthly product news"). Recipients don't see it.
-	Description *string
-}
-
 // SendEmailResult is an email that PostHog queued.
 type SendEmailResult struct {
 	// ID is the queued email's message ID.
@@ -388,40 +312,7 @@ type codeEmailBody struct {
 	Tracking          *EmailTracking `json:"tracking,omitempty"`
 	CaptureEngagement *bool          `json:"capture_engagement,omitempty"`
 	DistinctID        string         `json:"distinct_id,omitempty"`
-	Category          interface{}    `json:"category,omitempty"`
-}
-
-type messageCategoryBody struct {
-	Key         string              `json:"key"`
-	Type        MessageCategoryType `json:"type"`
-	Name        string              `json:"name"`
-	Description *string             `json:"description,omitempty"`
-}
-
-func (transactionalEmailCategory) wireValue() (interface{}, *EmailError) {
-	return "transactional", nil
-}
-
-func (c MessageCategory) wireValue() (interface{}, *EmailError) {
-	if strings.TrimSpace(c.Key) == "" {
-		return nil, invalidEmail("invalid_category", "Category.Key", "A MessageCategory needs a Key.")
-	}
-	if c.Type != MessageCategoryMarketing && c.Type != MessageCategoryTransactional {
-		return nil, invalidEmail("invalid_category", "Category.Type", "A MessageCategory's Type must be MessageCategoryMarketing or MessageCategoryTransactional.")
-	}
-	if strings.TrimSpace(c.Name) == "" {
-		return nil, invalidEmail("invalid_category", "Category.Name", "A MessageCategory needs a Name.")
-	}
-	return messageCategoryBody{Key: c.Key, Type: c.Type, Name: c.Name, Description: c.Description}, nil
-}
-
-// categoryWireValue is nil when the email has no category, which leaves the
-// field out so the server decides.
-func categoryWireValue(category EmailCategory) (interface{}, *EmailError) {
-	if isNil(category) {
-		return nil, nil
-	}
-	return category.wireValue()
+	Category          string         `json:"category,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -478,10 +369,6 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 	if attachmentsErr != nil {
 		return emailSend{}, attachmentsErr
 	}
-	category, categoryErr := categoryWireValue(e.Category)
-	if categoryErr != nil {
-		return emailSend{}, categoryErr
-	}
 	body, err := encodeEmailBody(codeEmailBody{
 		To:                e.To,
 		TemplateKey:       e.TemplateKey,
@@ -497,7 +384,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		Tracking:          e.Tracking,
 		CaptureEngagement: e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
-		Category:          category,
+		Category:          e.Category,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)
@@ -615,7 +502,7 @@ func isHyphenatedUUID(id string) bool {
 }
 
 func (s *emailSender) Send(ctx context.Context, email Email) (*SendEmailResult, error) {
-	if isNil(email) {
+	if isNilEmail(email) {
 		return nil, newEmailError("invalid_form", "Send needs a TemplateEmail or a CodeEmail.", nil)
 	}
 	send, err := email.prepare()
@@ -690,14 +577,13 @@ func encodeEmailBody(body interface{}) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// isNil reports a nil interface value, including one that holds a nil
-// pointer, such as a nil *CodeEmail or *MessageCategory.
-func isNil(value interface{}) bool {
-	if value == nil {
+// isNilEmail reports a nil Email, including a nil *TemplateEmail or *CodeEmail.
+func isNilEmail(email Email) bool {
+	if email == nil {
 		return true
 	}
-	reflected := reflect.ValueOf(value)
-	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
+	value := reflect.ValueOf(email)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }
 
 // start admits one request into the in-flight set, or says why it can't run.
