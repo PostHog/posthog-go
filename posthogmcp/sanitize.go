@@ -569,10 +569,10 @@ func sanitizeResourceName(value string) string {
 
 // isBase64Like follows the sdk-specs binary check, which reads only the first
 // and last binaryAlphabetSampleBytes so that its cost stays flat as the value
-// grows: a `;base64,` data URL, or text whose two samples, once trailing `=`
+// grows: a `;base64,` data URL whose header ends within the first sample, or text whose two samples, once trailing `=`
 // is set aside, share one alphabet.
 func isBase64Like(value string) bool {
-	if base64DataPrefix.MatchString(value) {
+	if base64DataPrefix.MatchString(prefixUTF8(value, binaryAlphabetSampleBytes)) {
 		return true
 	}
 	value = strings.TrimRight(value, "=")

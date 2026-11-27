@@ -316,6 +316,9 @@ func TestIsBinaryBlobJudgesTheFirstAndLastSamples(t *testing.T) {
 		{"base64url", strings.Repeat("A-_", 4_000), true},
 		{"samples from different alphabets", strings.Repeat("+", 2_000) + strings.Repeat("A", 8_000) + strings.Repeat("_", 2_000), false},
 		{"data url", "data:image/png;base64," + strings.Repeat("!", largeBinaryGateBytes), true},
+		{"data url header ending at the first sample", "data:" + strings.Repeat("x", binaryAlphabetSampleBytes-len("data:;base64,")) + ";base64," + strings.Repeat("!", largeBinaryGateBytes), true},
+		{"data url header longer than the first sample", "data:" + strings.Repeat("x", binaryAlphabetSampleBytes) + ";base64," + strings.Repeat("!", largeBinaryGateBytes), false},
+		{"data url with no comma", "data:" + strings.Repeat("x", 1<<20), false},
 		{"prose", strings.Repeat("find the flag docs ", 1_000), false},
 		{"below the gate", strings.Repeat("A", largeBinaryGateBytes-1), false},
 	} {
