@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 2.4.0
+
+### Minor Changes
+
+- c6d6bcc: Select experiment scorer versions and manage experiment formulas and suite defaults for offline evaluations.
+
 ## 2.3.1
 
 ### Patch Changes
