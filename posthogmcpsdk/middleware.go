@@ -110,8 +110,9 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				m.report(ctx, errors.New("posthogmcpsdk: tools/call received an unexpected request type"))
 				return next(ctx, method, req)
 			}
-			call := m.prepare(ctx, next, toolRequest)
-			defer m.sessions.finish(toolRequest.Session)
+			session, release := m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
+			defer release()
+			call := m.prepare(ctx, next, toolRequest, session)
 			started := time.Now()
 			result, handlerErr := next(call.scoped(ctx), method, call.dispatch)
 			if call.missingCapability {
@@ -270,8 +271,8 @@ func (m *middleware) serverRegistersVirtualName(gen *catalogGeneration, lastPage
 		slices.ContainsFunc(lastPage, func(tool *mcpsdk.Tool) bool { return tool.Name == m.missingCapabilityTool })
 }
 
-func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest) (call preparedCall) {
-	call = preparedCall{request: req, dispatch: req, arguments: parseArguments(req.Params.Arguments)}
+func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req *mcpsdk.CallToolRequest, session callSession) (call preparedCall) {
+	call = preparedCall{request: req, dispatch: req, arguments: parseArguments(req.Params.Arguments), session: session}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			m.report(ctx, fmt.Errorf("posthogmcpsdk: tools/call preparation panic (%T)", recovered))
@@ -288,7 +289,6 @@ func (m *middleware) prepare(ctx context.Context, next mcpsdk.MethodHandler, req
 		call.tool, call.missingCapability = m.virtualInfo, true
 	}
 	call.client = clientConversation(req, req.Params.Meta)
-	call.session = m.sessions.resolve(req.Session, !carriesSession(req))
 	call.identity = m.resolveIdentity(ctx, req)
 	if call.tool.injects(conversationArgument) {
 		call.conversation = resolveConversation(req, call.arguments, call.client)

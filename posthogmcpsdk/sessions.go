@@ -29,7 +29,7 @@ type sessionResolver struct {
 	now func() time.Time
 
 	mu        sync.Mutex
-	generated map[*mcpsdk.ServerSession]generatedSession
+	generated map[*mcpsdk.ServerSession]*generatedSession
 	lastSweep time.Time
 }
 
@@ -42,31 +42,44 @@ type generatedSession struct {
 }
 
 func newSessionResolver(now func() time.Time) *sessionResolver {
-	return &sessionResolver{now: now, generated: map[*mcpsdk.ServerSession]generatedSession{}}
+	return &sessionResolver{now: now, generated: map[*mcpsdk.ServerSession]*generatedSession{}}
 }
 
-func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped bool) callSession {
+// resolve returns the call's session and a release func to call once the call
+// ends. Only a one-client session counts its calls in flight; release is a
+// no-op for the others. It ends the very entry resolve counted the call on, so
+// an entry evicted mid-call never lends its count to a later one.
+func (r *sessionResolver) resolve(session *mcpsdk.ServerSession, requestScoped bool) (callSession, func()) {
 	if requestScoped {
-		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}
+		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}, func() {}
 	}
 	if session != nil && session.ID() != "" {
-		return callSession{id: deterministicSessionID(session.ID()), source: posthogmcp.SessionSourceTransport}
+		return callSession{id: deterministicSessionID(session.ID()), source: posthogmcp.SessionSourceTransport}, func() {}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
 	r.sweep(now)
 	entry := r.generated[session]
-	if entry.id == "" && len(r.generated) >= maxGeneratedSessions {
-		r.evictOldest()
+	if entry == nil {
+		if len(r.generated) >= maxGeneratedSessions {
+			r.evictOldest()
+		}
+		entry = &generatedSession{}
+		r.generated[session] = entry
 	}
-	if entry.id == "" || entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+	if entry.id == "" || entry.running == 0 && r.idleSince(entry, now) {
 		entry.id = newGeneratedSessionID()
 	}
 	entry.lastActivity = now
 	entry.running++
-	r.generated[session] = entry
-	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}
+	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}, func() { r.release(entry) }
+}
+
+// idleSince reports whether the session's last call ended the timeout ago or
+// more, which the spec says starts a new session.
+func (r *sessionResolver) idleSince(entry *generatedSession, now time.Time) bool {
+	return now.Sub(entry.lastActivity) >= sessionInactivityTimeout
 }
 
 // carriesSession reports whether req arrived on a transport session: a
@@ -82,28 +95,36 @@ func newGeneratedSessionID() string {
 	return "ses_" + uuid.Must(uuid.NewV7()).String()
 }
 
-// evictOldest drops the session with the least recent activity. It scans the
-// map, which is fine because it only runs once the map is full.
+// evictOldest drops the idle session with the least recent activity, or the
+// oldest one when every session has a call in flight. It scans the map, which
+// is fine because it only runs once the map is full.
 func (r *sessionResolver) evictOldest() {
 	var oldest *mcpsdk.ServerSession
-	var oldestActivity time.Time
+	var oldestEntry *generatedSession
 	for session, entry := range r.generated {
-		if oldest == nil || entry.lastActivity.Before(oldestActivity) {
-			oldest, oldestActivity = session, entry.lastActivity
+		if oldest == nil || entry.evictsBefore(oldestEntry) {
+			oldest, oldestEntry = session, entry
 		}
 	}
 	delete(r.generated, oldest)
 }
 
+func (e *generatedSession) evictsBefore(other *generatedSession) bool {
+	if (e.running > 0) != (other.running > 0) {
+		return e.running == 0
+	}
+	return e.lastActivity.Before(other.lastActivity)
+}
+
 // sweep drops sessions idle past the timeout, at most once per timeout, so the
 // map cannot grow without bound and no goroutine is needed.
 func (r *sessionResolver) sweep(now time.Time) {
-	if now.Sub(r.lastSweep) <= sessionInactivityTimeout {
+	if now.Sub(r.lastSweep) < sessionInactivityTimeout {
 		return
 	}
 	r.lastSweep = now
 	for session, entry := range r.generated {
-		if entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+		if entry.running == 0 && r.idleSince(entry, now) {
 			delete(r.generated, session)
 		}
 	}
@@ -129,14 +150,10 @@ func fnv1aHex(input string) string {
 	return fmt.Sprintf("%08x%08x", lane1, lane2)
 }
 
-// finish records the end of a call that resolve started on a one-client
-// session.
-func (r *sessionResolver) finish(session *mcpsdk.ServerSession) {
+// release records the end of a call that resolve counted on entry.
+func (r *sessionResolver) release(entry *generatedSession) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if entry, ok := r.generated[session]; ok {
-		entry.lastActivity = r.now()
-		entry.running = max(entry.running-1, 0)
-		r.generated[session] = entry
-	}
+	entry.lastActivity = r.now()
+	entry.running = max(entry.running-1, 0)
 }

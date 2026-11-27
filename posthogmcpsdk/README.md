@@ -50,7 +50,8 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   (`io.modelcontextprotocol/aiInvocation` or `x-codex-turn-metadata`) when it
   names one, else from the `llm_model` argument described below.
 
-Use `WithIdentity` to attach a distinct ID, groups, and person properties,
+Use `WithIdentity` to attach a distinct ID, groups, and person properties
+(the resolver runs before every tool handler, so keep it fast),
 `WithProperties` to add event properties, and `WithEventOptions` to set capture
 options, such as turning off person processing:
 

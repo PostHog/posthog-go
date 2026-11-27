@@ -84,7 +84,8 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 
 // WithIdentity configures application-specific identity resolution. The
 // resolver runs once per tools/call, before the handler, whose context then
-// carries the distinct ID for custom events.
+// carries the distinct ID for custom events. The handler waits for the
+// resolver, so keep it fast.
 func WithIdentity(resolver IdentityResolver) Option {
 	return func(cfg *config) { cfg.identity = resolver }
 }

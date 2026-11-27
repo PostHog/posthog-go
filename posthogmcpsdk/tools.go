@@ -188,7 +188,9 @@ func (c *toolCatalog) present(tool *mcpsdk.Tool, handleFree bool) (*mcpsdk.Tool,
 	if slices.Contains(injected, conversationArgument) {
 		copied.OutputSchema, info.instructions = withInstructions(tool.OutputSchema)
 		if handleFree {
-			delete(schema["properties"].(map[string]any), conversationArgument)
+			if properties, ok := schema["properties"].(map[string]any); ok {
+				delete(properties, conversationArgument)
+			}
 			copied.OutputSchema = tool.OutputSchema
 		}
 	}

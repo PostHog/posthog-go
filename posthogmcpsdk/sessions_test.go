@@ -68,7 +68,7 @@ func TestGeneratedSessionRotatesAfterInactivity(t *testing.T) {
 	}{
 		{name: "first call", sameAsBefore: false},
 		{name: "shortly after", idleBefore: time.Minute, sameAsBefore: true},
-		{name: "exactly at the timeout", idleBefore: sessionInactivityTimeout, sameAsBefore: true},
+		{name: "exactly at the timeout", idleBefore: sessionInactivityTimeout, sameAsBefore: false},
 		{name: "activity extends the session", idleBefore: 29 * time.Minute, sameAsBefore: true},
 		{name: "past the timeout", idleBefore: sessionInactivityTimeout + time.Second, sameAsBefore: false},
 	}
@@ -115,8 +115,8 @@ func TestIdleGeneratedSessionsAreEvicted(t *testing.T) {
 	resolver := newSessionResolver(clock.Now)
 	idle, active := &mcpsdk.ServerSession{}, &mcpsdk.ServerSession{}
 	call := func(session *mcpsdk.ServerSession) {
-		resolver.resolve(session, false)
-		resolver.finish(session)
+		_, release := resolver.resolve(session, false)
+		release()
 	}
 	call(idle)
 	call(active)
@@ -135,7 +135,8 @@ func TestRequestScopedSessionsAreNotRetained(t *testing.T) {
 	resolver := newSessionResolver(time.Now)
 	ids := map[string]bool{}
 	for range 10_000 {
-		id := resolver.resolve(&mcpsdk.ServerSession{}, true).id
+		session, _ := resolver.resolve(&mcpsdk.ServerSession{}, true)
+		id := session.id
 		assert.Regexp(t, generatedSessionID, id)
 		ids[id] = true
 	}
@@ -228,6 +229,8 @@ func TestGeneratedSessionSpansACallStillRunning(t *testing.T) {
 		{name: "a call arriving while another runs past the timeout keeps its session", completedAt: 50 * time.Minute, nextArriveAt: 35 * time.Minute, wantSame: true},
 		{name: "a call that runs past the timeout keeps its session", completedAt: 40 * time.Minute, nextArriveAt: 41 * time.Minute, wantSame: true},
 		{name: "inactivity after a completed call rotates the session", completedAt: time.Minute, nextArriveAt: 32 * time.Minute},
+		{name: "a call arriving exactly the timeout after the last ended rotates the session", completedAt: time.Minute, nextArriveAt: time.Minute + sessionInactivityTimeout},
+		{name: "a call arriving just inside the timeout keeps its session", completedAt: time.Minute, nextArriveAt: time.Minute + sessionInactivityTimeout - time.Nanosecond, wantSame: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			arrived := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
@@ -235,17 +238,56 @@ func TestGeneratedSessionSpansACallStillRunning(t *testing.T) {
 			sessions := newSessionResolver(clock.Now)
 			session := &mcpsdk.ServerSession{}
 
-			first := sessions.resolve(session, false)
+			first, release := sessions.resolve(session, false)
 			if test.nextArriveAt > test.completedAt {
 				clock.advance(test.completedAt)
-				sessions.finish(session)
+				release()
 				clock.advance(test.nextArriveAt - test.completedAt)
 			} else {
 				clock.advance(test.nextArriveAt)
 			}
-			next := sessions.resolve(session, false)
+			next, _ := sessions.resolve(session, false)
 
 			assert.Equal(t, test.wantSame, first == next)
 		})
 	}
+}
+
+func TestEvictionSparesSessionsWithACallInFlight(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	resolver := newSessionResolver(clock.Now)
+	running, idle := &mcpsdk.ServerSession{}, &mcpsdk.ServerSession{}
+	runningCall, releaseRunning := resolver.resolve(running, false)
+	clock.advance(time.Millisecond)
+	_, releaseIdle := resolver.resolve(idle, false)
+	releaseIdle()
+	for range maxGeneratedSessions - 2 {
+		clock.advance(time.Millisecond)
+		_, release := resolver.resolve(&mcpsdk.ServerSession{}, false)
+		release()
+	}
+	clock.advance(time.Millisecond)
+
+	resolver.resolve(&mcpsdk.ServerSession{}, false)
+
+	assert.NotNil(t, resolver.generated[running], "the oldest session has a call in flight")
+	assert.Nil(t, resolver.generated[idle])
+	releaseRunning()
+	again, _ := resolver.resolve(running, false)
+	assert.Equal(t, runningCall, again)
+}
+
+func TestReleaseEndsOnlyTheCallItCounted(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	resolver := newSessionResolver(clock.Now)
+	session := &mcpsdk.ServerSession{}
+	_, releaseEvicted := resolver.resolve(session, false)
+	resolver.mu.Lock()
+	delete(resolver.generated, session)
+	resolver.mu.Unlock()
+	_, _ = resolver.resolve(session, false)
+
+	releaseEvicted()
+
+	assert.Equal(t, 1, resolver.generated[session].running)
 }
