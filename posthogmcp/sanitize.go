@@ -34,6 +34,9 @@ var (
 	// objects, and JSON inside a JSON string, are out of scope.
 	jsonMemberPattern = regexp.MustCompile(`("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:` + jsonScalarValue + `|\[(?:\s*(?:` + jsonScalarValue + `|null)\s*,?)*\s*(?:\]|$))`)
 	base64DataPrefix  = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
+	// A data URL header that runs past the whole sample: its encoding is
+	// unknown, so it is treated as binary rather than read from unbounded text.
+	dataURLHeaderCutPrefix = regexp.MustCompile(`(?i)^data:[^,\s]*$`)
 
 	// Intent-only structured identifiers. Patterns follow the Python and
 	// TypeScript MCP sanitizers: bounded quantifiers, ASCII classes, and
@@ -569,10 +572,13 @@ func sanitizeResourceName(value string) string {
 
 // isBase64Like follows the sdk-specs binary check, which reads only the first
 // and last binaryAlphabetSampleBytes so that its cost stays flat as the value
-// grows: a `;base64,` data URL whose header ends within the first sample, or text whose two samples, once trailing `=`
-// is set aside, share one alphabet.
+// grows: a `;base64,` data URL whose header ends within the first sample, a
+// data URL whose header outruns that sample (judged binary, since the spec's
+// header test would need an unbounded scan), or text whose two samples, once
+// trailing `=` is set aside, share one alphabet.
 func isBase64Like(value string) bool {
-	if base64DataPrefix.MatchString(prefixUTF8(value, binaryAlphabetSampleBytes)) {
+	head := prefixUTF8(value, binaryAlphabetSampleBytes)
+	if base64DataPrefix.MatchString(head) || dataURLHeaderCutPrefix.MatchString(head) {
 		return true
 	}
 	value = strings.TrimRight(value, "=")
