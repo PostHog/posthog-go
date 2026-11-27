@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -34,10 +33,7 @@ var (
 	// is decoded before matching, so `"pass\u0077ord"` counts. Values that nest
 	// objects, and JSON inside a JSON string, are out of scope.
 	jsonMemberPattern = regexp.MustCompile(`("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:` + jsonScalarValue + `|\[(?:\s*(?:` + jsonScalarValue + `|null)\s*,?)*\s*(?:\]|$))`)
-	base64Pattern     = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
-	base64URLPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
 	base64DataPrefix  = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
-	base64DataPayload = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
 
 	// Intent-only structured identifiers. Patterns follow the Python and
 	// TypeScript MCP sanitizers: bounded quantifiers, ASCII classes, and
@@ -502,7 +498,24 @@ func boundedFreeText(value string, limit int) string {
 	}
 	withMargin := sanitizeFreeText(prefixUTF8(value, limit+scanMarginBytes))
 	atLimit := sanitizeFreeText(prefixUTF8(value, limit))
-	return truncateUTF8(commonPrefix(withMargin, atLimit)+truncationSuffix, limit)
+	kept := withoutOpenURLAuthority(commonPrefix(withMargin, atLimit))
+	return truncateUTF8(kept+truncationSuffix, limit)
+}
+
+// withoutOpenURLAuthority drops a trailing URL whose authority runs to the end
+// of value. Both scans cut before such a URL's `@` can show, so neither redacted
+// its user info, and agreeing on a prefix that stops inside an authority proves
+// nothing about the part past the cut.
+func withoutOpenURLAuthority(value string) string {
+	starts := urlAuthority.FindAllStringIndex(value, -1)
+	if len(starts) == 0 {
+		return value
+	}
+	last := starts[len(starts)-1]
+	if urlAuthorityEnd.MatchString(value[last[1]:]) {
+		return value
+	}
+	return value[:last[0]]
 }
 
 func commonPrefix(a, b string) string {
@@ -538,24 +551,43 @@ func sanitizeResourceName(value string) string {
 	return sanitizeURLs(postHogTokenPattern.ReplaceAllString(value, redactedValue), true)
 }
 
+// isBase64Like follows the sdk-specs binary check, which reads only the first
+// and last binaryAlphabetSampleBytes so that its cost stays flat as the value
+// grows: a `;base64,` data URL, or text whose two samples, once trailing `=`
+// is set aside, share one alphabet.
 func isBase64Like(value string) bool {
-	if base64Pattern.MatchString(value) {
+	if base64DataPrefix.MatchString(value) {
 		return true
 	}
-	if strings.ContainsAny(value, "-_") && base64URLPattern.MatchString(value) {
-		return true
+	value = strings.TrimRight(value, "=")
+	if value == "" {
+		return false
 	}
+	sampleLength := min(len(value), binaryAlphabetSampleBytes)
+	first, last := value[:sampleLength], value[len(value)-sampleLength:]
+	return (inAlphabet(first, isBase64Byte) && inAlphabet(last, isBase64Byte)) ||
+		(inAlphabet(first, isBase64URLByte) && inAlphabet(last, isBase64URLByte))
+}
 
-	prefix := base64DataPrefix.FindString(value)
-	if prefix == "" {
-		return false
+func inAlphabet(sample string, member func(byte) bool) bool {
+	for i := 0; i < len(sample); i++ {
+		if !member(sample[i]) {
+			return false
+		}
 	}
-	payload, err := url.PathUnescape(value[len(prefix):])
-	if err != nil {
-		return false
-	}
-	payload = strings.NewReplacer("\r", "", "\n", "").Replace(payload)
-	return base64DataPayload.MatchString(payload)
+	return true
+}
+
+func isBase64Byte(b byte) bool {
+	return isAlphanumeric(b) || b == '+' || b == '/' || b == '\r' || b == '\n'
+}
+
+func isBase64URLByte(b byte) bool {
+	return isAlphanumeric(b) || b == '-' || b == '_'
+}
+
+func isAlphanumeric(b byte) bool {
+	return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || '0' <= b && b <= '9'
 }
 
 func sanitizeResponse(value any) any {

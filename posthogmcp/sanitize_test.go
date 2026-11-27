@@ -280,6 +280,49 @@ func TestCaptureFreeTextNeverKeepsAnIdentifierSplitByAScanCut(t *testing.T) {
 	}
 }
 
+// Both scans of a long intent can end before the `@` that makes a URL's user
+// info recognizable, so agreeing on a prefix says nothing about that URL.
+func TestCaptureToolCallNeverKeepsUserinfoCutOffByBothScans(t *testing.T) {
+	for _, test := range []struct {
+		name, intent string
+	}{
+		{"url at the start", "https://ada:hunter2" + strings.Repeat("x", 3_080) + "@localhost/"},
+		{"url near the limit", strings.Repeat("|", 1_900) + "https://ada:hunter2" + strings.Repeat("x", 1_300) + "@localhost/"},
+		{"complete url", "https://ada:hunter2@localhost/" + strings.Repeat("x", 3_080)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", DistinctID: "user_1", Intent: test.intent}))
+			got := requireCapture(t, client.messages[0]).Properties[propertyIntent].(string)
+			assert.NotContains(t, got, "ada:")
+			assert.NotContains(t, got, "hunter2")
+			assert.LessOrEqual(t, len(got), maxIntentBytes)
+		})
+	}
+}
+
+func TestIsBinaryBlobJudgesTheFirstAndLastSamples(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"base64 samples around a stray byte", strings.Repeat("A", 6_000) + "!" + strings.Repeat("A", 6_000), true},
+		{"stray byte inside the first sample", strings.Repeat("A", 100) + "!" + strings.Repeat("A", 12_000), false},
+		{"padding is set aside", strings.Repeat("A", largeBinaryGateBytes) + "==", true},
+		{"line-wrapped base64", strings.Repeat(strings.Repeat("A", 76)+"\r\n", 200), true},
+		{"base64url", strings.Repeat("A-_", 4_000), true},
+		{"samples from different alphabets", strings.Repeat("+", 2_000) + strings.Repeat("A", 8_000) + strings.Repeat("_", 2_000), false},
+		{"data url", "data:image/png;base64," + strings.Repeat("!", largeBinaryGateBytes), true},
+		{"prose", strings.Repeat("find the flag docs ", 1_000), false},
+		{"below the gate", strings.Repeat("A", largeBinaryGateBytes-1), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, isBinaryBlob(test.value))
+		})
+	}
+}
+
 func TestCaptureToolCallLeavesNonIntentIdentifiersUntouched(t *testing.T) {
 	raw := "Find orders for alice@example.com from 192.0.2.1"
 	client := &fakeEnqueueClient{}

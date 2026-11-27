@@ -36,6 +36,7 @@ var (
 	// only applies to a match that opens with one: a long data uri must pass.
 	urlAuthorityPrefix = regexp.MustCompile(`^` + urlSchemePattern + `://`)
 	urlAuthority       = regexp.MustCompile(urlSchemePattern + `://`)
+	urlAuthorityEnd    = regexp.MustCompile(`[/?#` + pythonWhitespace + `<>"]`)
 
 	// A query key is sensitive when any delimited segment names a credential
 	// (`private_token`, `X-Amz-Security-Token`). The `\n?$` ends mirror
