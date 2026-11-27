@@ -19,6 +19,8 @@ type EventContext struct {
 	DistinctID string
 	// SessionID is captured as $session_id. A valid ConversationID replaces it.
 	SessionID string
+	// SessionSource is captured as $mcp_session_source, as ToolCall.SessionSource.
+	SessionSource SessionSource
 	// Groups is captured as $groups.
 	Groups posthog.Groups
 	// SetProperties is captured as $set, and needs an explicit DistinctID.
@@ -51,6 +53,7 @@ func (c EventContext) toolCall(toolName string) ToolCall {
 		ToolName:        toolName,
 		DistinctID:      c.DistinctID,
 		SessionID:       c.SessionID,
+		SessionSource:   c.SessionSource,
 		Groups:          c.Groups,
 		SetProperties:   c.SetProperties,
 		ServerName:      c.ServerName,
