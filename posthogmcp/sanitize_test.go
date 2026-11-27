@@ -289,6 +289,8 @@ func TestCaptureToolCallNeverKeepsUserinfoCutOffByBothScans(t *testing.T) {
 		{"url at the start", "https://ada:hunter2" + strings.Repeat("x", 3_080) + "@localhost/"},
 		{"url near the limit", strings.Repeat("|", 1_900) + "https://ada:hunter2" + strings.Repeat("x", 1_300) + "@localhost/"},
 		{"complete url", "https://ada:hunter2@localhost/" + strings.Repeat("x", 3_080)},
+		{"encoded url in a query value", "https://outer.test/?next=https%3A%2F%2Fada%3Ahunter2" + strings.Repeat("x", 3_100) + "%40localhost%2F"},
+		{"partly encoded url in a fragment", "https://outer.test/#next=https:%2F%2Fada:hunter2" + strings.Repeat("x", 3_100) + "@localhost/"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeEnqueueClient{}

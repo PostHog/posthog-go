@@ -505,17 +505,33 @@ func boundedFreeText(value string, limit int) string {
 // withoutOpenURLAuthority drops a trailing URL whose authority runs to the end
 // of value. Both scans cut before such a URL's `@` can show, so neither redacted
 // its user info, and agreeing on a prefix that stops inside an authority proves
-// nothing about the part past the cut.
+// nothing about the part past the cut. The URL sanitizer reads a query or
+// fragment value once decoded, so the last word is also checked once decoded,
+// and an encoded URL opened there drops the whole word.
 func withoutOpenURLAuthority(value string) string {
+	if start, open := openURLAuthority(value); open {
+		return value[:start]
+	}
+	wordStart := 0
+	if space := strings.LastIndexFunc(value, isPythonSpace); space >= 0 {
+		_, size := utf8.DecodeRuneInString(value[space:])
+		wordStart = space + size
+	}
+	if _, open := openURLAuthority(string(percentDecode(value[wordStart:]))); open {
+		return value[:wordStart]
+	}
+	return value
+}
+
+// openURLAuthority reports where the last URL in value starts and whether its
+// authority runs to the end of value.
+func openURLAuthority(value string) (start int, open bool) {
 	starts := urlAuthority.FindAllStringIndex(value, -1)
 	if len(starts) == 0 {
-		return value
+		return 0, false
 	}
 	last := starts[len(starts)-1]
-	if urlAuthorityEnd.MatchString(value[last[1]:]) {
-		return value
-	}
-	return value[:last[0]]
+	return last[0], !urlAuthorityEnd.MatchString(value[last[1]:])
 }
 
 func commonPrefix(a, b string) string {
