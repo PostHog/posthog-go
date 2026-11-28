@@ -97,12 +97,20 @@ func (in *instrumentation) advertise(ctx context.Context, tools []mcp.Tool) (adv
 func (in *instrumentation) middleware(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		dispatch := in.strip(ctx, req)
-		if in.runsAsTask(ctx, req) || !in.capturesInMiddleware(ctx) {
+		if in.runsAsTask(ctx, req) {
+			return next(ctx, dispatch)
+		}
+		if !in.capturesInMiddleware(ctx) {
+			if started, ok := in.calls.startOf(arrivalOf(ctx, req)); ok {
+				ctx = started.scoped(ctx)
+				defer started.end()
+			}
 			return next(ctx, dispatch)
 		}
 		tool, _ := in.registeredTool(ctx, req.Params.Name)
-		started := in.startCall(ctx, tool)
-		result, err := next(ctx, dispatch)
+		started := in.startCall(ctx, tool, req)
+		defer started.end()
+		result, err := next(started.scoped(ctx), dispatch)
 		in.observe(ctx, req, result, err, started)
 		return result, err
 	}
@@ -208,21 +216,49 @@ func (in *instrumentation) beforeCall(ctx context.Context, _ any, req *mcp.CallT
 		return
 	}
 	if tool, wrapped := in.registeredTool(ctx, req.Params.Name); wrapped {
-		in.calls.start(req, in.startCall(ctx, tool))
+		in.calls.start(req, arrivalOf(ctx, *req), in.startCall(ctx, tool, *req))
 	}
 }
 
 // startCall records what capture needs from a call to tool as it arrives.
-func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool) callStart {
+func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool, req mcp.CallToolRequest) callStart {
 	session := server.ClientSessionFromContext(ctx)
 	now := time.Now()
 	_, info := present(tool, in.inject)
-	return callStart{
-		at:              now,
-		protocolVersion: in.protocols.of(session),
-		session:         in.sessions.resolve(session, now),
-		tool:            info,
+	call := newCallStart(func() { in.sessions.finish(session, in.now()) })
+	call.at = now
+	call.protocolVersion = in.protocols.of(session)
+	call.session = in.sessions.resolve(session, in.now())
+	call.identity = in.resolveIdentity(ctx, req)
+	call.tool = info
+	var meta map[string]any
+	if req.Params.Meta != nil {
+		meta = req.Params.Meta.AdditionalFields
 	}
+	client := posthogmcp.ReadClientConversation(req.Header.Get("User-Agent"), clientInfo(session).Name, meta)
+	if client.SessionID != "" {
+		call.session = callSession{id: client.SessionID, source: posthogmcp.SessionSourceClientMetadata}
+	}
+	return call
+}
+
+func clientInfo(session server.ClientSession) mcp.Implementation {
+	if session, ok := session.(server.SessionWithClientInfo); ok {
+		return session.GetClientInfo()
+	}
+	return mcp.Implementation{}
+}
+
+func (in *instrumentation) resolveIdentity(ctx context.Context, req mcp.CallToolRequest) Identity {
+	if in.identity == nil {
+		return Identity{}
+	}
+	identity, err := callIdentityResolver(ctx, in.identity, req)
+	if err != nil {
+		in.report(ctx, fmt.Errorf("posthogmcpgo: identity resolver: %w", err))
+		return Identity{}
+	}
+	return identity
 }
 
 // afterCall captures a call with the result mcp-go sends, after input and
@@ -230,6 +266,9 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool) callSta
 func (in *instrumentation) afterCall(ctx context.Context, _ any, req *mcp.CallToolRequest, result any) {
 	defer in.recoverHook(ctx, "after tools/call")
 	started, ok := in.calls.finish(req)
+	if ok {
+		started.end()
+	}
 	if toolResult, isToolResult := result.(*mcp.CallToolResult); ok && isToolResult {
 		in.observe(ctx, *req, toolResult, nil, started)
 	}
@@ -246,6 +285,7 @@ func (in *instrumentation) callFailed(ctx context.Context, _ any, method mcp.MCP
 	}
 	started, ok := in.calls.finish(req)
 	if ok {
+		started.end()
 		// mcp-go wraps the handler's error in its own request error.
 		if handlerErr := errors.Unwrap(err); handlerErr != nil {
 			err = handlerErr
@@ -287,7 +327,6 @@ func (in *instrumentation) captureToolCall(
 	started callStart,
 ) error {
 	session := server.ClientSessionFromContext(ctx)
-	in.sessions.touch(session, time.Now())
 	info := started.tool
 	raw := rawArguments(req.Params)
 	arguments := parseArguments(raw)
@@ -295,8 +334,11 @@ func (in *instrumentation) captureToolCall(
 		ToolName:        req.Params.Name,
 		ToolDescription: info.description,
 		ToolCategory:    info.category,
+		DistinctID:      started.identity.DistinctID,
 		SessionID:       started.session.id,
 		SessionSource:   started.session.source,
+		Groups:          started.identity.Groups,
+		SetProperties:   started.identity.SetProperties,
 		ServerName:      in.serverName,
 		ServerVersion:   in.serverVersion,
 		ProtocolVersion: cmp.Or(req.Header.Get("Mcp-Protocol-Version"), started.protocolVersion),
@@ -305,10 +347,8 @@ func (in *instrumentation) captureToolCall(
 		Duration:        time.Since(started.at),
 		Timestamp:       started.at,
 	}
-	if session, ok := session.(server.SessionWithClientInfo); ok {
-		client := session.GetClientInfo()
-		call.ClientName, call.ClientVersion = client.Name, client.Version
-	}
+	client := clientInfo(session)
+	call.ClientName, call.ClientVersion = client.Name, client.Version
 
 	if intent := arguments.text(contextArgument); info.injects(contextArgument) && intent != "" && intent != emptyJSONObject {
 		call.Intent, call.IntentSource = intent, posthogmcp.IntentSourceContextParameter
@@ -330,14 +370,6 @@ func (in *instrumentation) captureToolCall(
 		call.Error = errors.New(toolResultText(result))
 	}
 
-	if in.identity != nil {
-		identity, err := callIdentityResolver(ctx, in.identity, req)
-		if err != nil {
-			in.report(ctx, fmt.Errorf("posthogmcpgo: identity resolver: %w", err))
-		} else {
-			call.DistinctID, call.Groups, call.SetProperties = identity.DistinctID, identity.Groups, identity.SetProperties
-		}
-	}
 	if in.properties != nil {
 		properties, err := callPropertiesResolver(ctx, in.properties, req, result, handlerErr)
 		if err != nil {
