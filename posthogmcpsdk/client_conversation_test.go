@@ -212,6 +212,45 @@ func TestCustomEventsKeepTheirCallsSession(t *testing.T) {
 	assert.NotEqual(t, scopes[chatGPTUserAgent].SessionId, scopes["example-client/1.0"].SessionId)
 }
 
+func TestCustomEventsCarryTheResolvedIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		identity   Identity
+		wantGroups any
+		wantSet    any
+	}{
+		{
+			name:       "groups and person properties",
+			identity:   Identity{DistinctID: "user_1", Groups: posthog.Groups{"company": "c1"}, SetProperties: posthog.Properties{"plan": "pro"}},
+			wantGroups: posthog.Groups{"company": "c1"},
+			wantSet:    posthog.Properties{"plan": "pro"},
+		},
+		{
+			name:       "groups of an anonymous call, which has no person to set",
+			identity:   Identity{Groups: posthog.Groups{"company": "c1"}, SetProperties: posthog.Properties{"plan": "pro"}},
+			wantGroups: posthog.Groups{"company": "c1"},
+		},
+		{name: "a bare distinct id", identity: Identity{DistinctID: "user_1"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newSessionlessServer()
+			Instrument(server, posthogmcp.New(&fakeQueue{}), WithConversationID(false),
+				WithIdentity(func(context.Context, *mcpsdk.CallToolRequest) (Identity, error) { return test.identity, nil }))
+			var scope posthog.RequestContext
+			server.AddTool(&mcpsdk.Tool{Name: "search_docs", InputSchema: map[string]any{"type": "object"}},
+				func(ctx context.Context, _ *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+					scope, _ = posthog.RequestContextFromContext(ctx)
+					return &mcpsdk.CallToolResult{}, nil
+				})
+			_, err := connectAs(t, server, "example-client/1.0", "http-client", false).
+				CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "search_docs"})
+			require.NoError(t, err)
+			assert.Equal(t, test.wantGroups, scope.Properties["$groups"])
+			assert.Equal(t, test.wantSet, scope.Properties["$set"])
+		})
+	}
+}
+
 func TestHandleFreeClientsGetNoMirroredHandle(t *testing.T) {
 	queue := &fakeQueue{}
 	server := newSessionlessServer()
