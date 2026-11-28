@@ -1899,3 +1899,89 @@ func TestFailedRemoteFlagIsNotADecision(t *testing.T) {
 	require.Equal(t, true, capturedFlags["beta-ui"])
 	require.NotContains(t, capturedFlags, "checkout")
 }
+
+func TestIsEnabledOrDefault_MissingFlagReturnsDefault(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	for _, defaultValue := range []bool{false, true} {
+		if got := snap.IsEnabledOrDefault("missing", defaultValue); got != defaultValue {
+			t.Errorf("expected missing flag to resolve to default %v, got %v", defaultValue, got)
+		}
+	}
+	if snap.IsEnabled("missing") {
+		t.Error("expected IsEnabled to keep resolving a missing flag to false")
+	}
+}
+
+func TestIsEnabledOrDefault_FlagValueWinsOverDefault(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, _, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	if snap.IsEnabledOrDefault("disabled-flag", true) {
+		t.Error("expected a disabled flag to win over a true default")
+	}
+	if !snap.IsEnabledOrDefault("multi-variate-flag", false) {
+		t.Error("expected a variant flag to win over a false default")
+	}
+}
+
+func TestIsEnabledOrDefault_NilSnapshotReturnsDefault(t *testing.T) {
+	t.Parallel()
+	var snap *FeatureFlagEvaluations
+
+	if !snap.IsEnabledOrDefault("missing", true) {
+		t.Error("expected a nil snapshot to resolve to the default")
+	}
+	if snap.IsEnabledOrDefault("missing", false) {
+		t.Error("expected a nil snapshot to resolve to the default")
+	}
+}
+
+func TestIsEnabledOrDefault_FiresEventAndRecordsAccess(t *testing.T) {
+	t.Parallel()
+	fs := newFlagsServer(t, "test-flags-v4.json")
+
+	client, capture, _ := newEvalClient(t, fs.server)
+
+	snap, err := client.EvaluateFlags(EvaluateFlagsPayload{DistinctId: "user-1"})
+	if err != nil {
+		t.Fatalf("EvaluateFlags error: %v", err)
+	}
+
+	if !snap.IsEnabledOrDefault("enabled-flag", false) {
+		t.Fatal("expected enabled-flag to be enabled")
+	}
+	// Second call should be deduped, like IsEnabled.
+	snap.IsEnabledOrDefault("enabled-flag", false)
+	flushEvaluationEvents(t, client)
+
+	events := waitForEventCount(capture, 1, 5*time.Second)
+	matching := 0
+	for i := range events {
+		if events[i].Event == "$feature_flag_called" && events[i].Properties["$feature_flag"] == "enabled-flag" {
+			matching++
+		}
+	}
+	if matching != 1 {
+		t.Fatalf("expected exactly 1 $feature_flag_called for enabled-flag, got %d", matching)
+	}
+
+	if keys := snap.OnlyAccessed().Keys(); len(keys) != 1 || keys[0] != "enabled-flag" {
+		t.Errorf("expected the access to be recorded, got %v", keys)
+	}
+}

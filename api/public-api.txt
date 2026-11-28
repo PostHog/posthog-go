@@ -701,6 +701,9 @@ func (e *FeatureFlagEvaluations) GetFlagPayload(key string) string
 
 func (e *FeatureFlagEvaluations) IsEnabled(key string) bool
 
+func (e *FeatureFlagEvaluations) IsEnabledOrDefault(key string, defaultValue bool) bool
+
+
 func (e *FeatureFlagEvaluations) Keys() []string
 
 func (e *FeatureFlagEvaluations) Only(keys []string) *FeatureFlagEvaluations
