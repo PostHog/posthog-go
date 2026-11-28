@@ -519,12 +519,13 @@ func TestSessionResolverForgetsClosedSessions(t *testing.T) {
 	resolver := newSessionResolver()
 	session := server.NewInProcessSession("closed", nil)
 	now := time.Now()
-	first := resolver.resolve(session, now)
+	first, _ := resolver.resolve(session, now)
 
 	resolver.forget(session)
 
 	assert.Empty(t, resolver.generated)
-	assert.NotEqual(t, first, resolver.resolve(session, now), "a new session id after the session closed")
+	next, _ := resolver.resolve(session, now)
+	assert.NotEqual(t, first, next, "a new session id after the session closed")
 }
 
 // countingSession is a session with its own tools, which counts how often

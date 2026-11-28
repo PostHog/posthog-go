@@ -2,7 +2,9 @@ package posthogmcpgo
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,17 +156,136 @@ func TestGeneratedSessionSpansALongCall(t *testing.T) {
 	}{
 		{name: "a call that runs past the timeout keeps its session", completedAt: 40 * time.Minute, nextArriveAt: 41 * time.Minute, wantSame: true},
 		{name: "inactivity after a completed call rotates the session", completedAt: time.Minute, nextArriveAt: 32 * time.Minute},
+		{name: "a call arriving while another runs past the timeout keeps its session", completedAt: 50 * time.Minute, nextArriveAt: 35 * time.Minute, wantSame: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sessions := newSessionResolver()
 			session := server.NewInProcessSession("in-process", nil)
 			arrived := time.Now()
 
-			first := sessions.resolve(session, arrived)
-			sessions.touch(session, arrived.Add(test.completedAt))
-			next := sessions.resolve(session, arrived.Add(test.nextArriveAt))
+			first, entry := sessions.resolve(session, arrived)
+			if test.nextArriveAt > test.completedAt {
+				sessions.finish(entry, arrived.Add(test.completedAt))
+			}
+			next, _ := sessions.resolve(session, arrived.Add(test.nextArriveAt))
 
 			assert.Equal(t, test.wantSame, first == next)
 		})
 	}
+}
+
+// TestEvictedSessionsOldCallDoesNotEndItsReplacementsCall evicts a running
+// call's session entry, resolves a replacement on the same connection, and ends
+// the old call.
+func TestEvictedSessionsOldCallDoesNotEndItsReplacementsCall(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		endReplacement  bool
+		wantSameSession bool
+	}{
+		{name: "the replacement still runs when the old call ends", wantSameSession: true},
+		{name: "the replacement expires once it ends too", endReplacement: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sessions := newSessionResolver()
+			start := time.Now()
+			evicted := server.NewInProcessSession("evicted", nil)
+			_, oldEntry := sessions.resolve(evicted, start)
+			for i := range maxGeneratedSessions {
+				sessions.resolve(server.NewInProcessSession(fmt.Sprint(i), nil), start.Add(time.Second))
+			}
+			replacement, replacementEntry := sessions.resolve(evicted, start.Add(2*time.Second))
+
+			sessions.finish(oldEntry, start.Add(3*time.Second))
+			if test.endReplacement {
+				sessions.finish(replacementEntry, start.Add(3*time.Second))
+			}
+			next, _ := sessions.resolve(evicted, start.Add(sessionInactivityTimeout+4*time.Second))
+
+			assert.Equal(t, test.wantSameSession, replacement == next)
+		})
+	}
+}
+
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// mcp-go's stdio worker recovers a handler's panic, so neither call hook
+// runs, and the call must still end.
+func TestAPanickingCallStillEndsItsSession(t *testing.T) {
+	queue := &fakeQueue{}
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	s := server.NewMCPServer("weather-server", "1.2.3",
+		Instrument(posthogmcp.New(queue), func(cfg *config) { cfg.now = clock.Now }))
+	var calls atomic.Int32
+	s.AddTool(weatherTool(), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if calls.Add(1) == 1 {
+			panic("boom")
+		}
+		return mcp.NewToolResultText("sunny"), nil
+	})
+	c := connectStdio(t, s)
+
+	// The recovered panic is answered without the request's id, so the client
+	// never sees it.
+	timeout, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	panicking := mcp.CallToolRequest{}
+	panicking.Params.Name = "weather"
+	panicking.Params.Arguments = map[string]any{"city": "Melbourne"}
+	_, err := c.CallTool(timeout, panicking)
+	require.Error(t, err)
+	for range 2 {
+		clock.advance(sessionInactivityTimeout + time.Minute)
+		_, err = callTool(t, c, "weather", map[string]any{"city": "Melbourne"})
+		require.NoError(t, err)
+	}
+
+	captures := queue.toolCalls()
+	require.Len(t, captures, 2)
+	assert.NotEqual(t, captures[0].Properties["$session_id"], captures[1].Properties["$session_id"],
+		"a call after the timeout starts a new session")
+}
+
+// server.WithRecovery outside Instrument turns a handler's panic into an
+// error the call hooks see, so the call is still captured, and ended once.
+func TestAPanicRecoveredOutsideInstrumentIsCaptured(t *testing.T) {
+	queue := &fakeQueue{}
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
+	s := server.NewMCPServer("weather-server", "1.2.3", server.WithRecovery(),
+		Instrument(posthogmcp.New(queue), func(cfg *config) { cfg.now = clock.Now }))
+	var calls atomic.Int32
+	s.AddTool(weatherTool(), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if calls.Add(1) == 1 {
+			panic("boom")
+		}
+		return mcp.NewToolResultText("sunny"), nil
+	})
+	c := connectInProcess(t, s)
+
+	_, err := callTool(t, c, "weather", map[string]any{"city": "Melbourne"})
+	require.Error(t, err)
+	clock.advance(sessionInactivityTimeout + time.Minute)
+	_, err = callTool(t, c, "weather", map[string]any{"city": "Melbourne"})
+	require.NoError(t, err)
+
+	captures := queue.toolCalls()
+	require.Len(t, captures, 2, "the recovered panic is a failed call")
+	assert.Equal(t, true, captures[0].Properties["$mcp_is_error"])
+	assert.NotEqual(t, captures[0].Properties["$session_id"], captures[1].Properties["$session_id"],
+		"the failed call ended, so the next one past the timeout rotates")
 }

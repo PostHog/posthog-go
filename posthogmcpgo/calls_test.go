@@ -1,6 +1,7 @@
 package posthogmcpgo
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +30,9 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 				if i == 0 {
 					at = now.Add(-test.firstAge)
 				}
-				calls.start(requests[i], callStart{at: at})
+				start := newCallStart(func() {})
+				start.at = at
+				calls.start(requests[i], arrival{headers: headersKey{headers: uintptr(i + 1)}}, start)
 			}
 
 			_, first := calls.finish(requests[0])
@@ -37,6 +40,17 @@ func TestCallsInFlightAreBoundedByCount(t *testing.T) {
 			_, last := calls.finish(requests[len(requests)-1])
 			assert.True(t, last, "the newest call is kept")
 			assert.Equal(t, calls.order.Len(), len(calls.started), "the order and the index agree")
+			assert.Equal(t, calls.order.Len(), len(calls.arrivals), "the order and the arrivals agree")
+			assert.LessOrEqual(t, len(calls.requests), calls.order.Len(), "the requests are bounded")
 		})
 	}
+}
+
+func TestEvictingACallDoesNotEndIt(t *testing.T) {
+	calls := newCallsInFlight()
+	var ended atomic.Int32
+	for i := range maxCallsInFlight + 1 {
+		calls.start(&mcp.CallToolRequest{}, arrival{headers: headersKey{headers: uintptr(i + 1)}}, newCallStart(func() { ended.Add(1) }))
+	}
+	assert.Equal(t, int32(0), ended.Load(), "an evicted call may still be running")
 }
