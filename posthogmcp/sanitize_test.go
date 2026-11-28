@@ -205,6 +205,133 @@ func TestCaptureToolCallRedactsIntentBeforeTruncation(t *testing.T) {
 	assert.Equal(t, prefix+redactedValue, capture.Properties[propertyIntent])
 }
 
+func TestCaptureToolCallBoundsALongIntent(t *testing.T) {
+	prose := strings.Repeat("find the flag docs ", 1_000)
+	cjk := strings.Repeat("请帮我查询", 1_000)
+	for _, test := range []struct {
+		name, intent, want string
+	}{
+		{"prose keeps its start", prose, prose[:maxIntentBytes-len(truncationSuffix)] + truncationSuffix},
+		{"cjk keeps its start", cjk, prefixUTF8(cjk, maxIntentBytes-len(truncationSuffix)) + truncationSuffix},
+		{"binary is judged on the whole text", strings.Repeat("A", largeBinaryGateBytes), binaryRedactedValue},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", DistinctID: "user_1", Intent: test.intent}))
+			assert.Equal(t, test.want, requireCapture(t, client.messages[0]).Properties[propertyIntent])
+		})
+	}
+}
+
+// An identifier cut in half by a pre-scan cut no longer matches its pattern.
+// Each start below shrinks when redacted, so text from past the cut can land
+// inside the kept limit.
+func TestCaptureFreeTextNeverKeepsAnIdentifierSplitByAScanCut(t *testing.T) {
+	const shrinkingUnit = "abcdefghijklmnopqrstuvwxyz@example.com "
+	for _, field := range []struct {
+		name    string
+		limit   int
+		capture func(t *testing.T, text string) string
+	}{
+		{"intent", maxIntentBytes, func(t *testing.T, text string) string {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", DistinctID: "user_1", Intent: text}))
+			return requireCapture(t, client.messages[0]).Properties[propertyIntent].(string)
+		}},
+		{"unknown tool name", maxResourceNameBytes, func(t *testing.T, text string) string {
+			return captureOptional(t, func(a *Analytics) error {
+				return a.CaptureUnknownTool(context.Background(), UnknownTool{ToolName: text})
+			}).Properties[propertyToolName].(string)
+		}},
+	} {
+		for _, identifier := range []struct {
+			name, value string
+			keep        int
+		}{
+			{"posthog token", "phc_" + "Ab3dEf6hIj9lMn2pQr5tUv8xYz1bCd", len("phc_Ab3dEf6hIj9lMn")},
+			{"email", "ada.lovelace@example.com", len("ada.lovelace@example.c")},
+			{"card", "4111 1111 1111 1111", len("4111 1111 1111")},
+			{"ssn", "123-45-6789", len("123-45-67")},
+			{"nanp phone", "(415) 555-0142", len("(415) 555-01")},
+			{"url userinfo", "https://ada:hunter2@example.com/", len("https://ada:hunter2@exa")},
+		} {
+			for _, cut := range []struct {
+				name string
+				at   int
+			}{
+				{"limit", field.limit},
+				{"limit plus margin", field.limit + scanMarginBytes},
+				{"twice the limit", 2 * field.limit},
+			} {
+				t.Run(field.name+"/"+identifier.name+"/"+cut.name, func(t *testing.T) {
+					startLength := cut.at - identifier.keep
+					start := strings.Repeat(shrinkingUnit, startLength/len(shrinkingUnit))
+					start += strings.Repeat(" ", startLength-len(start))
+					text := start + identifier.value + strings.Repeat(" and more", 2*maxIntentBytes)
+
+					got := field.capture(t, text)
+
+					assert.True(t, strings.HasPrefix(got, redactedValue+" "), "the start is kept, redacted")
+					// Half of what precedes the cut, so the cut's exact byte does not matter.
+					assert.NotContains(t, got, identifier.value[:identifier.keep/2])
+				})
+			}
+		}
+	}
+}
+
+// Both scans of a long intent can end before the `@` that makes a URL's user
+// info recognizable, so agreeing on a prefix says nothing about that URL.
+func TestCaptureToolCallNeverKeepsUserinfoCutOffByBothScans(t *testing.T) {
+	for _, test := range []struct {
+		name, intent string
+	}{
+		{"url at the start", "https://ada:hunter2" + strings.Repeat("x", 3_080) + "@localhost/"},
+		{"url near the limit", strings.Repeat("|", 1_900) + "https://ada:hunter2" + strings.Repeat("x", 1_300) + "@localhost/"},
+		{"complete url", "https://ada:hunter2@localhost/" + strings.Repeat("x", 3_080)},
+		{"encoded url in a query value", "https://outer.test/?next=https%3A%2F%2Fada%3Ahunter2" + strings.Repeat("x", 3_100) + "%40localhost%2F"},
+		{"partly encoded url in a fragment", "https://outer.test/#next=https:%2F%2Fada:hunter2" + strings.Repeat("x", 3_100) + "@localhost/"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeEnqueueClient{}
+			require.NoError(t, New(client).CaptureToolCall(context.Background(), ToolCall{ToolName: "query", DistinctID: "user_1", Intent: test.intent}))
+			got := requireCapture(t, client.messages[0]).Properties[propertyIntent].(string)
+			assert.NotContains(t, got, "ada:")
+			assert.NotContains(t, got, "hunter2")
+			assert.LessOrEqual(t, len(got), maxIntentBytes)
+		})
+	}
+}
+
+func TestIsBinaryBlobJudgesTheFirstAndLastSamples(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"base64 samples around a stray byte", strings.Repeat("A", 6_000) + "!" + strings.Repeat("A", 6_000), true},
+		{"stray byte inside the first sample", strings.Repeat("A", 100) + "!" + strings.Repeat("A", 12_000), false},
+		{"padding is set aside", strings.Repeat("A", largeBinaryGateBytes) + "==", true},
+		{"line-wrapped base64", strings.Repeat(strings.Repeat("A", 76)+"\r\n", 200), true},
+		{"base64url", strings.Repeat("A-_", 4_000), true},
+		{"samples from different alphabets", strings.Repeat("+", 2_000) + strings.Repeat("A", 8_000) + strings.Repeat("_", 2_000), false},
+		{"data url", "data:image/png;base64," + strings.Repeat("!", largeBinaryGateBytes), true},
+		{"data url header ending at the first sample", "data:" + strings.Repeat("x", binaryAlphabetSampleBytes-len("data:;base64,")) + ";base64," + strings.Repeat("!", largeBinaryGateBytes), true},
+		{"data url header longer than the first sample", "data:" + strings.Repeat("x", binaryAlphabetSampleBytes) + ";base64," + strings.Repeat("!", largeBinaryGateBytes), true},
+		{"data url header longer than the first sample without base64", "data:application/octet-stream;name=" + strings.Repeat("x", 1_100) + "," + strings.Repeat("A", 12_000), true},
+		{"data url with no comma", "data:" + strings.Repeat("x", 1<<20), true},
+		{"data url scheme in capitals with no comma", "DATA:" + strings.Repeat("x", largeBinaryGateBytes), true},
+		{"data url header cut by whitespace", "data:" + strings.Repeat("x", 100) + " " + strings.Repeat("x", largeBinaryGateBytes), false},
+		{"data url with a plain header ending in the first sample", "data:text/plain," + strings.Repeat("!", largeBinaryGateBytes), false},
+		{"prose", strings.Repeat("find the flag docs ", 1_000), false},
+		{"below the gate", strings.Repeat("A", largeBinaryGateBytes-1), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, isBinaryBlob(test.value))
+		})
+	}
+}
+
 func TestCaptureToolCallLeavesNonIntentIdentifiersUntouched(t *testing.T) {
 	raw := "Find orders for alice@example.com from 192.0.2.1"
 	client := &fakeEnqueueClient{}

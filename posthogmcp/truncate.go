@@ -72,9 +72,16 @@ func truncateUTF8(value string, limit int) string {
 		return truncationSuffix[:limit]
 	}
 
-	end := limit - len(truncationSuffix)
-	for end > 0 && !utf8.RuneStart(value[end]) {
-		end--
+	return prefixUTF8(value, limit-len(truncationSuffix)) + truncationSuffix
+}
+
+// prefixUTF8 cuts value to at most limit bytes without splitting a rune.
+func prefixUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
 	}
-	return value[:end] + truncationSuffix
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return value[:limit]
 }

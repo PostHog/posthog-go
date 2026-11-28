@@ -47,19 +47,21 @@ const (
 )
 
 const (
-	maxDepth              = 10
-	maxBreadth            = 100
-	maxStringBytes        = 32_768
-	maxEventBytes         = 102_400
-	maxNormalizeBytes     = 1_048_576
-	maxRedactBytes        = 33_554_432
-	maxRedactBlocks       = 1_000
-	maxIntentBytes        = 2_048
-	maxErrorMessageBytes  = 2_048
-	maxResourceNameBytes  = 256
-	maxMetadataBytes      = 256
-	maxReturnedErrorBytes = 512
-	largeBinaryGateBytes  = 10_240
+	maxDepth                  = 10
+	maxBreadth                = 100
+	maxStringBytes            = 32_768
+	maxEventBytes             = 102_400
+	maxNormalizeBytes         = 1_048_576
+	maxRedactBytes            = 33_554_432
+	maxRedactBlocks           = 1_000
+	maxIntentBytes            = 2_048
+	maxErrorMessageBytes      = 2_048
+	maxResourceNameBytes      = 256
+	maxMetadataBytes          = 256
+	maxReturnedErrorBytes     = 512
+	largeBinaryGateBytes      = 10_240
+	scanMarginBytes           = 1_024
+	binaryAlphabetSampleBytes = 1_024
 )
 
 const (

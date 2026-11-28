@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -34,10 +33,10 @@ var (
 	// is decoded before matching, so `"pass\u0077ord"` counts. Values that nest
 	// objects, and JSON inside a JSON string, are out of scope.
 	jsonMemberPattern = regexp.MustCompile(`("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:` + jsonScalarValue + `|\[(?:\s*(?:` + jsonScalarValue + `|null)\s*,?)*\s*(?:\]|$))`)
-	base64Pattern     = regexp.MustCompile(`^[A-Za-z0-9+/\r\n]+=*$`)
-	base64URLPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]+={0,2}$`)
 	base64DataPrefix  = regexp.MustCompile(`(?i)^data:[^,\s]*;base64,`)
-	base64DataPayload = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
+	// A data URL header that runs past the whole sample: its encoding is
+	// unknown, so it is treated as binary rather than read from unbounded text.
+	dataURLHeaderCutPrefix = regexp.MustCompile(`(?i)^data:[^,\s]*$`)
 
 	// Intent-only structured identifiers. Patterns follow the Python and
 	// TypeScript MCP sanitizers: bounded quantifiers, ASCII classes, and
@@ -485,6 +484,71 @@ func isSecretWord(word string) bool {
 	return word != "" && looksLikeSecret(word)
 }
 
+// boundedFreeText is sanitizeFreeText cut to limit, at a cost that follows the
+// limit rather than the input. Text past limit plus a margin is cut before the
+// passes run, so it is redacted twice, cut there and cut at limit, and only
+// their common prefix is kept: a match split by the cut at limit is redacted in
+// the first result and raw in the second, and one split by the margin cut lies
+// past the end of the second, so neither reaches the event. Cutting once and
+// keeping the first limit bytes would let redactions that shrink the start pull
+// a split match into what is kept.
+func boundedFreeText(value string, limit int) string {
+	if len(value) <= limit+scanMarginBytes {
+		return truncateUTF8(sanitizeFreeText(value), limit)
+	}
+	if isBinaryBlob(value) {
+		return binaryRedactedValue
+	}
+	withMargin := sanitizeFreeText(prefixUTF8(value, limit+scanMarginBytes))
+	atLimit := sanitizeFreeText(prefixUTF8(value, limit))
+	kept := withoutOpenURLAuthority(commonPrefix(withMargin, atLimit))
+	return truncateUTF8(kept+truncationSuffix, limit)
+}
+
+// withoutOpenURLAuthority drops a trailing URL whose authority runs to the end
+// of value. Both scans cut before such a URL's `@` can show, so neither redacted
+// its user info, and agreeing on a prefix that stops inside an authority proves
+// nothing about the part past the cut. The URL sanitizer reads a query or
+// fragment value once decoded, so the last word is also checked once decoded,
+// and an encoded URL opened there drops the whole word.
+func withoutOpenURLAuthority(value string) string {
+	if start, open := openURLAuthority(value); open {
+		return value[:start]
+	}
+	wordStart := 0
+	if space := strings.LastIndexFunc(value, isPythonSpace); space >= 0 {
+		_, size := utf8.DecodeRuneInString(value[space:])
+		wordStart = space + size
+	}
+	if _, open := openURLAuthority(string(percentDecode(value[wordStart:]))); open {
+		return value[:wordStart]
+	}
+	return value
+}
+
+// openURLAuthority reports where the last URL in value starts and whether its
+// authority runs to the end of value.
+func openURLAuthority(value string) (start int, open bool) {
+	starts := urlAuthority.FindAllStringIndex(value, -1)
+	if len(starts) == 0 {
+		return 0, false
+	}
+	last := starts[len(starts)-1]
+	return last[0], !urlAuthorityEnd.MatchString(value[last[1]:])
+}
+
+func commonPrefix(a, b string) string {
+	end := 0
+	for end < len(a) {
+		_, size := utf8.DecodeRuneInString(a[end:])
+		if !strings.HasPrefix(b[end:], a[end:end+size]) {
+			break
+		}
+		end += size
+	}
+	return a[:end]
+}
+
 // sanitizeFreeText sanitizes agent-narrated text such as the intent, in an
 // order where each step protects the next. The binary gate runs first, because
 // a redaction spliced into a base64 blob stops it looking like base64.
@@ -506,24 +570,46 @@ func sanitizeResourceName(value string) string {
 	return sanitizeURLs(postHogTokenPattern.ReplaceAllString(value, redactedValue), true)
 }
 
+// isBase64Like follows the sdk-specs binary check, which reads only the first
+// and last binaryAlphabetSampleBytes so that its cost stays flat as the value
+// grows: a `;base64,` data URL whose header ends within the first sample, a
+// data URL whose header outruns that sample (judged binary, since the spec's
+// header test would need an unbounded scan), or text whose two samples, once
+// trailing `=` is set aside, share one alphabet.
 func isBase64Like(value string) bool {
-	if base64Pattern.MatchString(value) {
+	head := prefixUTF8(value, binaryAlphabetSampleBytes)
+	if base64DataPrefix.MatchString(head) || dataURLHeaderCutPrefix.MatchString(head) {
 		return true
 	}
-	if strings.ContainsAny(value, "-_") && base64URLPattern.MatchString(value) {
-		return true
+	value = strings.TrimRight(value, "=")
+	if value == "" {
+		return false
 	}
+	sampleLength := min(len(value), binaryAlphabetSampleBytes)
+	first, last := value[:sampleLength], value[len(value)-sampleLength:]
+	return (inAlphabet(first, isBase64Byte) && inAlphabet(last, isBase64Byte)) ||
+		(inAlphabet(first, isBase64URLByte) && inAlphabet(last, isBase64URLByte))
+}
 
-	prefix := base64DataPrefix.FindString(value)
-	if prefix == "" {
-		return false
+func inAlphabet(sample string, member func(byte) bool) bool {
+	for i := 0; i < len(sample); i++ {
+		if !member(sample[i]) {
+			return false
+		}
 	}
-	payload, err := url.PathUnescape(value[len(prefix):])
-	if err != nil {
-		return false
-	}
-	payload = strings.NewReplacer("\r", "", "\n", "").Replace(payload)
-	return base64DataPayload.MatchString(payload)
+	return true
+}
+
+func isBase64Byte(b byte) bool {
+	return isAlphanumeric(b) || b == '+' || b == '/' || b == '\r' || b == '\n'
+}
+
+func isBase64URLByte(b byte) bool {
+	return isAlphanumeric(b) || b == '-' || b == '_'
+}
+
+func isAlphanumeric(b byte) bool {
+	return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || '0' <= b && b <= '9'
 }
 
 func sanitizeResponse(value any) any {
