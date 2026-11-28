@@ -240,6 +240,10 @@ type client struct {
 	// closed is set to true when the client is closed, used to fast-fail Enqueue
 	closed atomic.Bool
 
+	// optedOut is set by OptOutCapturing to stop the client accepting new
+	// events. It starts false: a client captures until a caller says otherwise.
+	optedOut atomic.Bool
+
 	// sendMu orders queue sends against shutdown. Senders hold it for read
 	// while handing a message to a lane; Close takes it for write to set
 	// closed, so no send can be in flight when a loop closes its queue.
@@ -688,6 +692,12 @@ func (c *client) enqueueTo(ctx context.Context, msg Message, l *lane) (err error
 	// Fast path: check if client is closed before doing any work
 	if c.closed.Load() {
 		return ErrClosed
+	}
+
+	// Opted out: drop the event silently. Capture is not an error the caller
+	// has to handle once they turned it off themselves.
+	if c.optedOut.Load() {
+		return nil
 	}
 
 	msg = dereferenceMessage(msg)

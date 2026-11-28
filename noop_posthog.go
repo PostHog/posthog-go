@@ -83,3 +83,15 @@ func (c *noopClient) CloseWithContext(context.Context) error {
 
 // Emails returns an email API that sends nothing and fails with the code client_disabled.
 func (c *noopClient) Emails() Emails { return newDisabledEmailSender() }
+
+// OptOutCapturing is a no-op: a client without a project API key never
+// captures anything.
+func (c *noopClient) OptOutCapturing() {}
+
+// OptInCapturing is a no-op: a client without a project API key cannot be
+// turned back on.
+func (c *noopClient) OptInCapturing() {}
+
+// IsOptedOut always returns true because a client without a project API key
+// sends no data.
+func (c *noopClient) IsOptedOut() bool { return true }

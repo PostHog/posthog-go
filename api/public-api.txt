@@ -981,6 +981,16 @@ type Message interface {
 }
 
 
+type OptOutController interface {
+	OptOutCapturing()
+
+	OptInCapturing()
+
+	IsOptedOut() bool
+}
+
+
+
 type Options map[string]interface{}
 
 
