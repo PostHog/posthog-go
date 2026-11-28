@@ -2,6 +2,7 @@ package posthogmcpgo
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -162,13 +163,46 @@ func TestGeneratedSessionSpansALongCall(t *testing.T) {
 			session := server.NewInProcessSession("in-process", nil)
 			arrived := time.Now()
 
-			first := sessions.resolve(session, arrived)
+			first, entry := sessions.resolve(session, arrived)
 			if test.nextArriveAt > test.completedAt {
-				sessions.finish(session, arrived.Add(test.completedAt))
+				sessions.finish(entry, arrived.Add(test.completedAt))
 			}
-			next := sessions.resolve(session, arrived.Add(test.nextArriveAt))
+			next, _ := sessions.resolve(session, arrived.Add(test.nextArriveAt))
 
 			assert.Equal(t, test.wantSame, first == next)
+		})
+	}
+}
+
+// TestEvictedSessionsOldCallDoesNotEndItsReplacementsCall evicts a running
+// call's session entry, resolves a replacement on the same connection, and ends
+// the old call.
+func TestEvictedSessionsOldCallDoesNotEndItsReplacementsCall(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		endReplacement  bool
+		wantSameSession bool
+	}{
+		{name: "the replacement still runs when the old call ends", wantSameSession: true},
+		{name: "the replacement expires once it ends too", endReplacement: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sessions := newSessionResolver()
+			start := time.Now()
+			evicted := server.NewInProcessSession("evicted", nil)
+			_, oldEntry := sessions.resolve(evicted, start)
+			for i := range maxGeneratedSessions {
+				sessions.resolve(server.NewInProcessSession(fmt.Sprint(i), nil), start.Add(time.Second))
+			}
+			replacement, replacementEntry := sessions.resolve(evicted, start.Add(2*time.Second))
+
+			sessions.finish(oldEntry, start.Add(3*time.Second))
+			if test.endReplacement {
+				sessions.finish(replacementEntry, start.Add(3*time.Second))
+			}
+			next, _ := sessions.resolve(evicted, start.Add(sessionInactivityTimeout+4*time.Second))
+
+			assert.Equal(t, test.wantSameSession, replacement == next)
 		})
 	}
 }

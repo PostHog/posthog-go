@@ -25,7 +25,7 @@ const (
 // [sessionInactivityTimeout] without a tool call.
 type sessionResolver struct {
 	mu        sync.Mutex
-	generated map[server.ClientSession]generatedSession
+	generated map[server.ClientSession]*generatedSession
 	lastSweep time.Time
 }
 
@@ -38,33 +38,40 @@ type generatedSession struct {
 }
 
 func newSessionResolver() *sessionResolver {
-	return &sessionResolver{generated: map[server.ClientSession]generatedSession{}}
+	return &sessionResolver{generated: map[server.ClientSession]*generatedSession{}}
 }
 
-func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) callSession {
+// resolve returns the call's session and, for a one-client session, the entry
+// to hand to [sessionResolver.finish]. The entry, not the session, is what a
+// call releases, because eviction may have replaced the session's entry by
+// the time the call ends.
+func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) (callSession, *generatedSession) {
 	if session == nil {
-		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}
+		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}, nil
 	}
 	if !oneClient(session) {
 		if id := session.SessionID(); id != "" {
-			return callSession{id: deterministicSessionID(id), source: posthogmcp.SessionSourceTransport}
+			return callSession{id: deterministicSessionID(id), source: posthogmcp.SessionSourceTransport}, nil
 		}
-		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}
+		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweep(now)
 	entry := r.generated[session]
-	if entry.id == "" && len(r.generated) >= maxGeneratedSessions {
-		r.evictOldest()
+	if entry == nil {
+		if len(r.generated) >= maxGeneratedSessions {
+			r.evictOldest()
+		}
+		entry = &generatedSession{}
+		r.generated[session] = entry
 	}
 	if entry.id == "" || entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
 		entry.id = newGeneratedSessionID()
 	}
 	entry.lastActivity = now
 	entry.running++
-	r.generated[session] = entry
-	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}
+	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}, entry
 }
 
 // stdioSessionType is mcp-go's unexported stdio session, which reports the
@@ -173,14 +180,14 @@ func (p *protocolVersions) forget(session server.ClientSession) {
 	delete(p.versions, session)
 }
 
-// finish records the end of a call that resolve started on a one-client
-// session.
-func (r *sessionResolver) finish(session server.ClientSession, now time.Time) {
+// finish records the end of a call that resolve started, on the entry resolve
+// returned. A nil entry is a call that needs no release.
+func (r *sessionResolver) finish(entry *generatedSession, now time.Time) {
+	if entry == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if entry, ok := r.generated[session]; ok {
-		entry.lastActivity = now
-		entry.running = max(entry.running-1, 0)
-		r.generated[session] = entry
-	}
+	entry.lastActivity = now
+	entry.running = max(entry.running-1, 0)
 }

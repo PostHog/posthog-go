@@ -225,10 +225,11 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool, req mcp
 	session := server.ClientSessionFromContext(ctx)
 	now := time.Now()
 	_, info := present(tool, in.inject)
-	call := newCallStart(func() { in.sessions.finish(session, in.now()) })
+	resolved, entry := in.sessions.resolve(session, in.now())
+	call := newCallStart(func() { in.sessions.finish(entry, in.now()) })
 	call.at = now
 	call.protocolVersion = in.protocols.of(session)
-	call.session = in.sessions.resolve(session, in.now())
+	call.session = resolved
 	call.identity = in.resolveIdentity(ctx, req)
 	call.tool = info
 	var meta map[string]any
