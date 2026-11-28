@@ -1,6 +1,7 @@
 package posthogmcpsdk
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -180,18 +181,20 @@ func (call preparedCall) eventSession() callSession {
 // the handler returns, and the host's client sends the custom event at once.
 func (call preparedCall) scoped(ctx context.Context) context.Context {
 	session := call.eventSession()
+	host, _ := posthog.RequestContextFromContext(ctx)
+	person := cmp.Or(call.identity.DistinctID, host.DistinctId) != ""
 	ctx = posthogmcp.WithCallContext(ctx, session.id, session.source, call.identity.DistinctID)
-	return posthog.WithRequestContext(ctx, posthog.RequestContext{Properties: call.identity.eventProperties()})
+	return posthog.WithRequestContext(ctx, posthog.RequestContext{Properties: call.identity.eventProperties(person)})
 }
 
 // eventProperties are the $groups and $set the call's own events carry. As
-// there, $set needs a distinct ID: without one there is no person to set.
-func (identity Identity) eventProperties() posthog.Properties {
+// there, $set needs a person: the resolved or the host's distinct ID.
+func (identity Identity) eventProperties(person bool) posthog.Properties {
 	properties := posthog.Properties{}
 	if len(identity.Groups) > 0 {
 		properties["$groups"] = identity.Groups
 	}
-	if identity.DistinctID != "" && len(identity.SetProperties) > 0 {
+	if person && len(identity.SetProperties) > 0 {
 		properties["$set"] = identity.SetProperties
 	}
 	return properties

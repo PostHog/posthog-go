@@ -215,10 +215,17 @@ func TestCustomEventsKeepTheirCallsSession(t *testing.T) {
 func TestCustomEventsCarryTheResolvedIdentity(t *testing.T) {
 	for _, test := range []struct {
 		name       string
+		hostID     string
 		identity   Identity
 		wantGroups any
 		wantSet    any
 	}{
+		{
+			name:     "person properties of a call the host already identifies",
+			hostID:   "host_user",
+			identity: Identity{SetProperties: posthog.Properties{"plan": "pro"}},
+			wantSet:  posthog.Properties{"plan": "pro"},
+		},
 		{
 			name:       "groups and person properties",
 			identity:   Identity{DistinctID: "user_1", Groups: posthog.Groups{"company": "c1"}, SetProperties: posthog.Properties{"plan": "pro"}},
@@ -236,6 +243,13 @@ func TestCustomEventsCarryTheResolvedIdentity(t *testing.T) {
 			server := newSessionlessServer()
 			Instrument(server, posthogmcp.New(&fakeQueue{}), WithConversationID(false),
 				WithIdentity(func(context.Context, *mcpsdk.CallToolRequest) (Identity, error) { return test.identity, nil }))
+			if test.hostID != "" {
+				server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+					return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+						return next(posthog.WithRequestContext(ctx, posthog.RequestContext{DistinctId: test.hostID}), method, req)
+					}
+				})
+			}
 			var scope posthog.RequestContext
 			server.AddTool(&mcpsdk.Tool{Name: "search_docs", InputSchema: map[string]any{"type": "object"}},
 				func(ctx context.Context, _ *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
