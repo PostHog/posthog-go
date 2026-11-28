@@ -103,7 +103,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			gen := m.tools.generation()
 			result, err := next(ctx, method, req)
 			if page, ok := result.(*mcpsdk.ListToolsResult); ok && err == nil {
-				return m.advertise(ctx, gen, page, clientConversation(req, nil).HandleFree), nil
+				return m.advertise(ctx, gen, page, clientConversation(req, listingMeta(req)).HandleFree), nil
 			}
 			return result, err
 		case methodCallTool:
@@ -112,7 +112,7 @@ func (m *middleware) receive(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				m.report(ctx, errors.New("posthogmcpsdk: tools/call received an unexpected request type"))
 				return next(ctx, method, req)
 			}
-			session, release := m.sessions.resolve(toolRequest.Session, !carriesSession(toolRequest))
+			session, release := m.transportSession(toolRequest)
 			defer release()
 			call := m.prepare(ctx, next, toolRequest, session)
 			started := time.Now()
@@ -231,28 +231,36 @@ func clientConversation(req mcpsdk.Request, meta mcpsdk.Meta) posthogmcp.ClientC
 	if extra := req.GetExtra(); extra != nil {
 		userAgent = extra.Header.Get("User-Agent")
 	}
-	return posthogmcp.ReadClientConversation(userAgent, clientInfo(req).Name, meta)
+	return posthogmcp.ReadClientConversation(userAgent, requestClient(req, meta).Name, meta)
 }
 
-// clientInfo is the client req names itself, which go-sdk v1.8 and later read
-// from a 2026-07-28 request's _meta, else the one that initialized its session.
-// The accessor is asserted by name so the adapter still builds against
-// go-sdk v1.6.1.
-func clientInfo(req mcpsdk.Request) mcpsdk.Implementation {
-	if request, ok := req.(interface{ ClientInfo() *mcpsdk.Implementation }); ok {
-		if info := request.ClientInfo(); info != nil {
-			return *info
+func listingMeta(req mcpsdk.Request) mcpsdk.Meta {
+	if listing, ok := req.(*mcpsdk.ListToolsRequest); ok && listing.Params != nil {
+		return listing.Params.Meta
+	}
+	return nil
+}
+
+// requestClient is the client req identifies: from its _meta, a replayed
+// session token, or the initialize of its go-sdk session, which go-sdk binds to
+// one client (on stateless HTTP it is the request's own).
+func requestClient(req mcpsdk.Request, meta mcpsdk.Meta) posthogmcp.Client {
+	var protocolHeader string
+	var token posthogmcp.SessionToken
+	if extra := req.GetExtra(); extra != nil {
+		protocolHeader = extra.Header.Get("Mcp-Protocol-Version")
+		token, _ = posthogmcp.ReadSessionToken(extra.Header.Get("Mcp-Session-Id"))
+	}
+	var initialize posthogmcp.Client
+	if session, _ := req.GetSession().(*mcpsdk.ServerSession); session != nil {
+		if params := session.InitializeParams(); params != nil {
+			initialize.ProtocolVersion = params.ProtocolVersion
+			if params.ClientInfo != nil {
+				initialize.Name, initialize.Version = params.ClientInfo.Name, params.ClientInfo.Version
+			}
 		}
-		return mcpsdk.Implementation{}
 	}
-	session, _ := req.GetSession().(*mcpsdk.ServerSession)
-	if session == nil {
-		return mcpsdk.Implementation{}
-	}
-	if initialize := session.InitializeParams(); initialize != nil && initialize.ClientInfo != nil {
-		return *initialize.ClientInfo
-	}
-	return mcpsdk.Implementation{}
+	return posthogmcp.ResolveClient(meta, protocolHeader, token, initialize)
 }
 
 // echoedConversation is the handle the agent sent, if it is UUIDv7-shaped.
@@ -536,30 +544,38 @@ func (m *middleware) captureInputRequired(
 func (m *middleware) eventContext(ctx context.Context, prepared preparedCall, started time.Time) posthogmcp.EventContext {
 	toolRequest := prepared.request
 	session := prepared.eventSession()
-	client := clientInfo(toolRequest)
+	client := requestClient(toolRequest, toolRequest.Params.Meta)
 	event := posthogmcp.EventContext{
-		DistinctID:     prepared.identity.DistinctID,
-		SessionID:      session.id,
-		SessionSource:  session.source,
-		Groups:         prepared.identity.Groups,
-		SetProperties:  prepared.identity.SetProperties,
-		ServerName:     m.serverName,
-		ServerVersion:  m.serverVersion,
-		ClientName:     client.Name,
-		ClientVersion:  client.Version,
-		ConversationID: prepared.conversation.id,
-		Timestamp:      started,
-	}
-	if toolRequest.Session != nil {
-		if initialize := toolRequest.Session.InitializeParams(); initialize != nil {
-			event.ProtocolVersion = initialize.ProtocolVersion
-		}
+		DistinctID:      prepared.identity.DistinctID,
+		SessionID:       session.id,
+		SessionSource:   session.source,
+		Groups:          prepared.identity.Groups,
+		SetProperties:   prepared.identity.SetProperties,
+		ServerName:      m.serverName,
+		ServerVersion:   m.serverVersion,
+		ClientName:      client.Name,
+		ClientVersion:   client.Version,
+		ProtocolVersion: client.ProtocolVersion,
+		ConversationID:  prepared.conversation.id,
+		Timestamp:       started,
 	}
 	if extra := toolRequest.Extra; extra != nil {
 		event.ClientUserAgent = extra.Header.Get("User-Agent")
 		event.VendorClient = extra.Header.Get("X-Anthropic-Client")
 	}
 	return event
+}
+
+// transportSession is a replayed PostHog session token's session, read from
+// the header since go-sdk v1.8 drops it on stateless HTTP, else the session
+// the resolver gives, with the resolver's release func.
+func (m *middleware) transportSession(req *mcpsdk.CallToolRequest) (callSession, func()) {
+	if req.Extra != nil {
+		if token, ok := posthogmcp.ReadSessionToken(req.Extra.Header.Get("Mcp-Session-Id")); ok {
+			return callSession{id: token.SessionID, source: posthogmcp.SessionSourceTransport}, func() {}
+		}
+	}
+	return m.sessions.resolve(req.Session, !carriesSession(req))
 }
 
 func (m *middleware) resolveIdentity(ctx context.Context, req *mcpsdk.CallToolRequest) Identity {

@@ -319,17 +319,82 @@ func TestAnonymousCustomEventsUseTheCallsDistinctID(t *testing.T) {
 	}
 }
 
-// go-sdk v1.8 and later read a 2026-07-28 request's own clientInfo, which can
-// name a different client than the session's initialize did.
-func TestClientConversationPrefersTheRequestsClientInfo(t *testing.T) {
-	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Meta: mcpsdk.Meta{
-		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "Visual Studio Code", "version": "1.105.0"},
-		"vscode.conversationId":                   "3f1c2b7e-8d4a-4c6b-9a1e-5f2d7c8b9a0e",
-	}}}
-	if _, ok := any(req).(interface{ ClientInfo() *mcpsdk.Implementation }); !ok {
-		t.Skip("this go-sdk version reads client info only from initialize")
+func TestRequestClient(t *testing.T) {
+	codexToken := "eyJzaWQiOiJzZXNfeCIsImNuIjoiQ29kZXgiLCJjdiI6IjAuNTAuMCIsInB2IjoiMjAyNS0xMS0yNSJ9"
+	for _, test := range []struct {
+		name   string
+		meta   mcpsdk.Meta
+		header http.Header
+		want   posthogmcp.Client
+	}{
+		{
+			name: "the request's _meta names its client",
+			meta: mcpsdk.Meta{"io.modelcontextprotocol/clientInfo": map[string]any{"name": "Visual Studio Code", "version": "1.105.0"}},
+			want: posthogmcp.Client{Name: "Visual Studio Code", Version: "1.105.0"},
+		},
+		{
+			name:   "a replayed session token names it, with the protocol header",
+			header: http.Header{"Mcp-Session-Id": {codexToken}, "Mcp-Protocol-Version": {"2025-06-18"}},
+			want:   posthogmcp.Client{Name: "Codex", Version: "0.50.0", ProtocolVersion: "2025-06-18"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Meta: test.meta}}
+			if test.header != nil {
+				req.Extra = &mcpsdk.RequestExtra{Header: test.header}
+			}
+			assert.Equal(t, test.want, requestClient(req, test.meta))
+		})
 	}
-	assert.Equal(t, "Visual Studio Code", clientInfo(req).Name)
-	assert.Equal(t, vsCodeSession, clientConversation(req, req.Params.Meta).SessionID)
+}
+
+func TestAVSCodeIDIsReadWithTheRequestsOwnClientInfo(t *testing.T) {
+	meta := mcpsdk.Meta{
+		"io.modelcontextprotocol/clientInfo": map[string]any{"name": "Visual Studio Code"},
+		"vscode.conversationId":              "3f1c2b7e-8d4a-4c6b-9a1e-5f2d7c8b9a0e",
+	}
+	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Meta: meta}}
+	assert.Equal(t, vsCodeSession, clientConversation(req, meta).SessionID)
+}
+
+func TestATransportSessionTokenGivesItsSessionUnchanged(t *testing.T) {
+	queue := &fakeQueue{}
+	server := mcpsdk.NewServer(
+		&mcpsdk.Implementation{Name: "test-server", Version: "1.0.0"},
+		&mcpsdk.ServerOptions{GetSessionID: func() string { return "eyJzaWQiOiJzZXNfZmlyc3QifQ" }},
+	)
+	Instrument(server, posthogmcp.New(queue), WithConversationID(false))
+	addWeatherTool(server, nil)
+	session := connectAs(t, server, "example-client/1.0", "http-client", true)
+	_, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
+	require.NoError(t, err)
+
+	properties := queue.onlyToolCall(t)
+	assert.Equal(t, "ses_first", properties["$session_id"])
+	assert.Equal(t, "transport", properties["$mcp_session_source"])
+}
+
+func TestAReplayedTokenKeepsItsSessionOnAStatelessServer(t *testing.T) {
+	queue := &fakeQueue{}
+	server := newSessionlessServer()
+	Instrument(server, posthogmcp.New(queue), WithConversationID(false))
+	addWeatherTool(server, nil)
+	httpServer := httptest.NewServer(mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return server },
+		&mcpsdk.StreamableHTTPOptions{Stateless: true},
+	))
+	t.Cleanup(httpServer.Close)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "http-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{
+		Endpoint:   httpServer.URL,
+		HTTPClient: &http.Client{Transport: headerTransport{http.Header{"Mcp-Session-Id": {"eyJzaWQiOiJzZXNfZmlyc3QifQ"}}}},
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+
+	_, err = session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "weather", Arguments: map[string]any{"city": "Melbourne"}})
+	require.NoError(t, err)
+	properties := queue.onlyToolCall(t)
+	assert.Equal(t, "ses_first", properties["$session_id"])
+	assert.Equal(t, "transport", properties["$mcp_session_source"])
 }

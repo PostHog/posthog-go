@@ -2,10 +2,13 @@ package posthogmcp
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	posthog "github.com/posthog/posthog-go/v2"
@@ -174,4 +177,91 @@ func WithCallContext(ctx context.Context, sessionID string, source SessionSource
 		scope.Options = posthog.Options{optionProcessProfile: false}
 	}
 	return posthog.WithRequestContext(ctx, scope)
+}
+
+// SessionToken is a PostHog session token: a client's session, carried in the
+// Mcp-Session-Id of a legacy initialize response and replayed by the client,
+// as the unpadded base64url of {"sid":...,"cn":...,"cv":...,"pv":...}.
+type SessionToken struct {
+	SessionID       string
+	ClientName      string
+	ClientVersion   string
+	ProtocolVersion string
+}
+
+const (
+	maxSessionTokenLength   = 4096
+	maxSessionTokenIDLength = 128
+)
+
+// ReadSessionToken decodes value as a PostHog session token. A value that is
+// not one, such as a framework's own session id, is not a token.
+func ReadSessionToken(value string) (SessionToken, bool) {
+	if len(value) > maxSessionTokenLength {
+		return SessionToken{}, false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(value, "="))
+	if err != nil {
+		return SessionToken{}, false
+	}
+	var fields map[string]any
+	if json.Unmarshal(decoded, &fields) != nil {
+		return SessionToken{}, false
+	}
+	text := func(key string) string {
+		value, _ := fields[key].(string)
+		return value
+	}
+	id := text("sid")
+	if id == "" || utf8.RuneCountInString(id) > maxSessionTokenIDLength {
+		return SessionToken{}, false
+	}
+	return SessionToken{SessionID: id, ClientName: text("cn"), ClientVersion: text("cv"), ProtocolVersion: text("pv")}, true
+}
+
+// TransportSessionID is the $session_id of a transport session id: a PostHog
+// session token's sid unchanged, else the id derived the way every PostHog MCP
+// SDK derives it.
+func TransportSessionID(id string) string {
+	if token, ok := ReadSessionToken(id); ok {
+		return token.SessionID
+	}
+	return deriveSessionID(id)
+}
+
+// Client is the MCP client that made a request.
+type Client struct {
+	Name            string
+	Version         string
+	ProtocolVersion string
+}
+
+// ResolveClient is the client a request identifies, from the first source
+// that names it: the request's _meta clientInfo, then a replayed session
+// token, then the initialize handshake, which the caller passes only when it
+// is bound to the request's transport session. The protocol version comes from
+// _meta, then the MCP-Protocol-Version header, then the token, then initialize.
+func ResolveClient(meta map[string]any, protocolHeader string, token SessionToken, initialize Client) Client {
+	info, _ := meta["io.modelcontextprotocol/clientInfo"].(map[string]any)
+	name, _ := info["name"].(string)
+	version, _ := info["version"].(string)
+	protocol, _ := meta["io.modelcontextprotocol/protocolVersion"].(string)
+	client := Client{Name: initialize.Name, Version: initialize.Version}
+	switch {
+	case name != "":
+		client.Name, client.Version = name, version
+	case token.ClientName != "":
+		client.Name, client.Version = token.ClientName, token.ClientVersion
+	}
+	client.ProtocolVersion = firstNonEmpty(protocol, protocolHeader, token.ProtocolVersion, initialize.ProtocolVersion)
+	return client
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -47,7 +47,7 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) c
 	}
 	if !oneClient(session) {
 		if id := session.SessionID(); id != "" {
-			return callSession{id: deterministicSessionID(id), source: posthogmcp.SessionSourceTransport}
+			return callSession{id: posthogmcp.TransportSessionID(id), source: posthogmcp.SessionSourceTransport}
 		}
 		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}
 	}
@@ -58,7 +58,7 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) c
 	if entry.id == "" && len(r.generated) >= maxGeneratedSessions {
 		r.evictOldest()
 	}
-	if entry.id == "" || entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+	if entry.id == "" || entry.running == 0 && now.Sub(entry.lastActivity) >= sessionInactivityTimeout {
 		entry.id = newGeneratedSessionID()
 	}
 	entry.lastActivity = now
@@ -113,28 +113,10 @@ func (r *sessionResolver) sweep(now time.Time) {
 	}
 	r.lastSweep = now
 	for session, entry := range r.generated {
-		if entry.running == 0 && now.Sub(entry.lastActivity) > sessionInactivityTimeout {
+		if entry.running == 0 && now.Sub(entry.lastActivity) >= sessionInactivityTimeout {
 			delete(r.generated, session)
 		}
 	}
-}
-
-// deterministicSessionID is the cross-SDK derivation of a $session_id from a
-// transport session id: "ses_" + H(input) + H(input + "::salt"), so servers
-// in different languages group one MCP session together.
-func deterministicSessionID(input string) string {
-	return "ses_" + fnv1aHex(input) + fnv1aHex(input+"::salt")
-}
-
-// fnv1aHex is two 32-bit FNV-1a lanes with different seeds and primes, each
-// as eight lowercase hexadecimal digits. It is not cryptographic.
-func fnv1aHex(input string) string {
-	lane1, lane2 := uint32(0x84222325), uint32(0xcbf29ce4)
-	for _, char := range input {
-		lane1 = (lane1 ^ uint32(char)) * 0x000001b3
-		lane2 = (lane2 ^ uint32(char)) * 0x00000193
-	}
-	return fmt.Sprintf("%08x%08x", lane1, lane2)
 }
 
 // protocolVersions are the protocol versions negotiated by initialize on

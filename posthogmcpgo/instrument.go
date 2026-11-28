@@ -1,7 +1,6 @@
 package posthogmcpgo
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -227,7 +226,6 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool, req mcp
 	_, info := present(tool, in.inject)
 	call := newCallStart(func() { in.sessions.finish(session, in.now()) })
 	call.at = now
-	call.protocolVersion = in.protocols.of(session)
 	call.session = in.sessions.resolve(session, in.now())
 	call.identity = in.resolveIdentity(ctx, req)
 	call.tool = info
@@ -235,18 +233,25 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool, req mcp
 	if req.Params.Meta != nil {
 		meta = req.Params.Meta.AdditionalFields
 	}
-	client := posthogmcp.ReadClientConversation(req.Header.Get("User-Agent"), clientInfo(session).Name, meta)
+	call.client = in.requestClient(session, req, meta)
+	client := posthogmcp.ReadClientConversation(req.Header.Get("User-Agent"), call.client.Name, meta)
 	if client.SessionID != "" {
 		call.session = callSession{id: client.SessionID, source: posthogmcp.SessionSourceClientMetadata}
 	}
 	return call
 }
 
-func clientInfo(session server.ClientSession) mcp.Implementation {
+// requestClient is the client req identifies: from its _meta, a replayed
+// session token, or the initialize of a session that made it, which mcp-go
+// binds to one client.
+func (in *instrumentation) requestClient(session server.ClientSession, req mcp.CallToolRequest, meta map[string]any) posthogmcp.Client {
+	token, _ := posthogmcp.ReadSessionToken(req.Header.Get("Mcp-Session-Id"))
+	initialize := posthogmcp.Client{ProtocolVersion: in.protocols.of(session)}
 	if session, ok := session.(server.SessionWithClientInfo); ok {
-		return session.GetClientInfo()
+		info := session.GetClientInfo()
+		initialize.Name, initialize.Version = info.Name, info.Version
 	}
-	return mcp.Implementation{}
+	return posthogmcp.ResolveClient(meta, req.Header.Get("Mcp-Protocol-Version"), token, initialize)
 }
 
 func (in *instrumentation) resolveIdentity(ctx context.Context, req mcp.CallToolRequest) Identity {
@@ -326,7 +331,6 @@ func (in *instrumentation) captureToolCall(
 	handlerErr error,
 	started callStart,
 ) error {
-	session := server.ClientSessionFromContext(ctx)
 	info := started.tool
 	raw := rawArguments(req.Params)
 	arguments := parseArguments(raw)
@@ -341,14 +345,14 @@ func (in *instrumentation) captureToolCall(
 		SetProperties:   started.identity.SetProperties,
 		ServerName:      in.serverName,
 		ServerVersion:   in.serverVersion,
-		ProtocolVersion: cmp.Or(req.Header.Get("Mcp-Protocol-Version"), started.protocolVersion),
+		ClientName:      started.client.Name,
+		ClientVersion:   started.client.Version,
+		ProtocolVersion: started.client.ProtocolVersion,
 		ClientUserAgent: req.Header.Get("User-Agent"),
 		VendorClient:    req.Header.Get("X-Anthropic-Client"),
 		Duration:        time.Since(started.at),
 		Timestamp:       started.at,
 	}
-	client := clientInfo(session)
-	call.ClientName, call.ClientVersion = client.Name, client.Version
 
 	if intent := arguments.text(contextArgument); info.injects(contextArgument) && intent != "" && intent != emptyJSONObject {
 		call.Intent, call.IntentSource = intent, posthogmcp.IntentSourceContextParameter

@@ -17,17 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDeterministicSessionIDMatchesTheOtherSDKs(t *testing.T) {
-	for input, want := range map[string]string{
-		"0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f": "ses_6df45f0102a182bcd5e8dd5dad6c65a0",
-		"session-123":                          "ses_346bdc9a6b5cb06913bb476a65021eb5",
-		"":                                     "ses_84222325cbf29ce4805967715e2fab98",
-		"é-ünï":                                "ses_f52aeeca2d955f05d88a791a4ead6a71",
-	} {
-		assert.Equal(t, want, deterministicSessionID(input), "input %q", input)
-	}
-}
-
 func TestSessionIDPerTransport(t *testing.T) {
 	var sseSessionID atomic.Value
 	for _, test := range []struct {
@@ -62,7 +51,7 @@ func TestSessionIDPerTransport(t *testing.T) {
 			},
 			want: func(t *testing.T, _ *client.Client, first, second any) {
 				require.NotEmpty(t, sseSessionID.Load())
-				assert.Equal(t, deterministicSessionID(sseSessionID.Load().(string)), first)
+				assert.Equal(t, posthogmcp.TransportSessionID(sseSessionID.Load().(string)), first)
 				assert.Equal(t, first, second)
 			},
 		},
@@ -71,7 +60,7 @@ func TestSessionIDPerTransport(t *testing.T) {
 			connect: connectHTTP(),
 			want: func(t *testing.T, c *client.Client, first, second any) {
 				require.NotEmpty(t, c.GetSessionId())
-				assert.Equal(t, deterministicSessionID(c.GetSessionId()), first)
+				assert.Equal(t, posthogmcp.TransportSessionID(c.GetSessionId()), first)
 				assert.Equal(t, first, second)
 			},
 		},
@@ -155,6 +144,7 @@ func TestGeneratedSessionSpansALongCall(t *testing.T) {
 	}{
 		{name: "a call that runs past the timeout keeps its session", completedAt: 40 * time.Minute, nextArriveAt: 41 * time.Minute, wantSame: true},
 		{name: "inactivity after a completed call rotates the session", completedAt: time.Minute, nextArriveAt: 32 * time.Minute},
+		{name: "exactly 30 minutes after the last call ended rotates the session", completedAt: time.Minute, nextArriveAt: 31 * time.Minute},
 		{name: "a call arriving while another runs past the timeout keeps its session", completedAt: 50 * time.Minute, nextArriveAt: 35 * time.Minute, wantSame: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

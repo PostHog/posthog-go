@@ -37,11 +37,15 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   `$mcp_session_source`. A client conversation id, described below, comes
   first, then a conversation handle. Next, a transport session ID (streamable HTTP) becomes
   `ses_` plus a hash every PostHog MCP SDK computes the same way, so one
-  session served from several languages groups together. On a one-client
+  session served from several languages groups together; a PostHog session
+  token another SDK issued gives its session unchanged. On a one-client
   connection (stdio, in-memory), the adapter generates `ses_<UUIDv7>` per
-  go-sdk session and starts a new one after 30 minutes without a tool call
-  in that session. A stateless HTTP request with neither gets its own.
-- The client name and version, and the protocol version. On HTTP, also the
+  go-sdk session and starts a new one when a call arrives 30 minutes or more
+  after the last call in that session ended. A stateless HTTP request with
+  neither gets its own.
+- The client name and version, and the protocol version: from the request's
+  own `_meta` first, then the `MCP-Protocol-Version` header and a replayed
+  PostHog session token, then `initialize`. On HTTP, also the
   `User-Agent` and `X-Anthropic-Client` headers, which tell apart the
   products of one vendor that share a client name.
 - The tool's description and `_meta.category`, read from `tools/list`.
