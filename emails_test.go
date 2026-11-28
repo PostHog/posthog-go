@@ -170,6 +170,7 @@ func TestEmailsSendCode(t *testing.T) {
 		Text:        "Reset and go",
 		From:        "Acme <security@example.com>",
 		ReplyTo:     []string{"support@example.com"},
+		Category:    "account-security",
 		DistinctID:  "user_123",
 	})
 
@@ -182,6 +183,7 @@ func TestEmailsSendCode(t *testing.T) {
 		"text":         "Reset and go",
 		"from":         "Acme <security@example.com>",
 		"reply_to":     []interface{}{"support@example.com"},
+		"category":     "account-security",
 		"distinct_id":  "user_123",
 	}, server.received()[0].Body)
 	require.Contains(t, server.received()[0].Raw, `"html":"<p>Reset & go</p>"`, "HTML goes out as written, not escaped")

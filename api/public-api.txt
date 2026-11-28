@@ -325,6 +325,7 @@ type CodeEmail struct {
 	Sensitive *bool
 	Tracking *EmailTracking
 	CaptureEngagement *bool
+	Category string
 	DistinctID string
 	IdempotencyKey string
 	MaxRetries *int

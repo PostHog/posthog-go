@@ -39,8 +39,9 @@ var (
 	}
 )
 
-// Emails sends transactional email, such as a password reset or a receipt, to
-// one recipient per call, and reads the status of an email it sent.
+// Emails sends transactional email, such as a password reset or a receipt,
+// and marketing email in one of the project's message categories, to one
+// recipient per call, and reads the status of an email it sent.
 //
 // It needs Config.SecretKey, a project secret API key (phs_...) with the
 // transactional_email:write scope, the "Send transactional email" preset in
@@ -71,7 +72,9 @@ type Email interface {
 
 // TemplateEmail sends an email template made transactional in PostHog, by its
 // ID. The template sets its own sender, subject and content, and follows the
-// project's engagement setting.
+// project's engagement setting. A template made in PostHog sends transactional
+// email only: PostHog refuses a send of a template in a marketing category with
+// the error code "marketing_template".
 type TemplateEmail struct {
 	// To is one recipient email address.
 	To string
@@ -97,7 +100,8 @@ type TemplateEmail struct {
 // CodeEmail sends content your code rendered, named by a key. PostHog sends
 // the subject and bodies as is and never stores them; it keeps attachments,
 // as Attachments says. To send a React email, render it to HTML in your app
-// and pass the HTML.
+// and pass the HTML. PostHog refuses a send whose TemplateKey names a template
+// in a marketing category with the error code "marketing_template".
 type CodeEmail struct {
 	// To is one recipient email address.
 	To string
@@ -151,6 +155,18 @@ type CodeEmail struct {
 	//
 	// Deprecated: Use Tracking with EmailTrackingOptions.Engagement.
 	CaptureEngagement *bool
+	// Category is the key of one of the project's message categories, such
+	// as "newsletter". A marketing category skips recipients who opted out of
+	// it or of all marketing email, fills {{ unsubscribe_url }} with the
+	// recipient's preferences link, and adds List-Unsubscribe headers. A
+	// marketing email can't have Cc or Bcc. PostHog refuses a send with the
+	// error code "category_not_found" when the project has no category with
+	// this key, and "marketing_copies_unsupported" when a marketing email has
+	// Cc or Bcc. It refuses a marketing email with Attachments with
+	// "workflow_can_wait", and a marketing email from a project without a
+	// verified sending domain, which would go out from the PostHog test
+	// sender, with "sandbox_fields_unsupported".
+	Category string
 	// DistinctID is the recipient's distinct ID in your product. The email's
 	// events go to this person. Without it, they go to a person whose distinct
 	// ID is the email address.
@@ -260,9 +276,10 @@ type EmailStatus struct {
 	CreatedAt time.Time
 	// StatusAt is when the email reached its current status.
 	StatusAt time.Time
-	// Reason says why a failed email was not sent, such as "provider_error" or
-	// "recipient_suppressed", or gives the bounce type of a bounced email:
-	// "hard", "soft" or "unknown". It is empty otherwise.
+	// Reason says why a failed email was not sent, such as "provider_error",
+	// "recipient_suppressed" or "recipient_opted_out", or gives the bounce
+	// type of a bounced email: "hard", "soft" or "unknown". It is empty
+	// otherwise.
 	Reason string
 }
 
@@ -295,6 +312,7 @@ type codeEmailBody struct {
 	Tracking          *EmailTracking `json:"tracking,omitempty"`
 	CaptureEngagement *bool          `json:"capture_engagement,omitempty"`
 	DistinctID        string         `json:"distinct_id,omitempty"`
+	Category          string         `json:"category,omitempty"`
 }
 
 func (e TemplateEmail) prepare() (emailSend, *EmailError) {
@@ -366,6 +384,7 @@ func (e CodeEmail) prepare() (emailSend, *EmailError) {
 		Tracking:          e.Tracking,
 		CaptureEngagement: e.CaptureEngagement,
 		DistinctID:        e.DistinctID,
+		Category:          e.Category,
 	})
 	if err != nil {
 		return emailSend{}, newEmailError("unexpected_error", "The client could not encode the email.", err)

@@ -59,6 +59,34 @@ func ExampleEmails_code() {
 	}
 }
 
+// Marketing email in one of the project's message categories, named by its
+// key. PostHog skips recipients who opted out, and fills {{ unsubscribe_url }}
+// with the recipient's preferences link.
+func ExampleEmails_marketing() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{SecretKey: "phs_..."})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = client.Emails().Send(context.Background(), posthog.CodeEmail{
+		To:          "user@example.com",
+		TemplateKey: "monthly-newsletter",
+		Subject:     "What's new this month",
+		HTML:        `<p>Our news</p><a href="{{ unsubscribe_url }}">Unsubscribe</a>`,
+		Category:    "newsletter",
+		DistinctID:  "user_123",
+	})
+
+	if err != nil {
+		var emailErr *posthog.EmailError
+		if errors.As(err, &emailErr) && emailErr.Code == "category_not_found" {
+			log.Fatal("create the newsletter category in PostHog first")
+		}
+		log.Fatal(err)
+	}
+}
+
 // A receipt with a copy to finance and the PDF attached. Send uploads the PDF
 // to PostHog's file storage unless PostHog already has it, then sends the
 // email.
