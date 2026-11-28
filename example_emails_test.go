@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/posthog/posthog-go/v2"
 )
@@ -146,4 +147,43 @@ func ExampleEmails_Get() {
 	if status.Status == "bounced" {
 		fmt.Println("bounced:", status.Reason)
 	}
+}
+
+// trialEnds stands in for your database, where the time each user's trial
+// ends is stored once, when the trial starts.
+var trialEnds = map[string]time.Time{"user_123": time.Date(2027, time.March, 6, 9, 0, 0, 0, time.UTC)}
+
+func storedTrialEnd(userID string) time.Time {
+	return trialEnds[userID]
+}
+
+// Send a reminder a day before a trial ends. The time comes from a stored
+// fact, so a rerun of the job within 24 hours sends the same time with the
+// same idempotency key and gets the first send's answer. Only a client on
+// PostHog Cloud schedules emails.
+func ExampleEmails_scheduled() {
+	client, err := posthog.NewWithConfig("phc_...", posthog.Config{
+		Endpoint:  "https://eu.i.posthog.com",
+		SecretKey: "phs_...",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	trialEndsAt := storedTrialEnd("user_123")
+	result, err := client.Emails().Send(context.Background(), posthog.TemplateEmail{
+		To:             "user@example.com",
+		TemplateID:     "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+		IdempotencyKey: "trial-ending:user_123",
+		ScheduledAt:    trialEndsAt.Add(-24 * time.Hour),
+	})
+	var emailErr *posthog.EmailError
+	if errors.As(err, &emailErr) && emailErr.Code == "schedule_not_confirmed" {
+		log.Fatalf("read email %s before sending it again: %s", emailErr.MessageID, emailErr.Fix)
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Status, result.ID, result.ScheduledAt)
 }

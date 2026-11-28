@@ -131,7 +131,7 @@ func TestEmailsSendTemplate(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, &SendEmailResult{ID: "msg_1", Warnings: []EmailWarning{}}, result)
+	require.Equal(t, &SendEmailResult{ID: "msg_1", Warnings: []EmailWarning{}, Status: "queued"}, result)
 	requests := server.received()
 	require.Len(t, requests, 1)
 	require.Equal(t, http.MethodPost, requests[0].Method)
@@ -440,6 +440,7 @@ func TestEmailsSendResult(t *testing.T) {
 		ID:       "msg_1",
 		Replayed: true,
 		Warnings: []EmailWarning{{Code: "template_superseded", Message: "A newer version exists.", Fix: "Upload it."}},
+		Status:   "queued",
 	}, result)
 }
 
@@ -624,6 +625,7 @@ func TestEmailsSendRetries(t *testing.T) {
 		{name: "key in flight", first: failed(http.StatusConflict, "idempotency_key_in_flight"), requests: 2},
 		{name: "monthly quota", first: failed(http.StatusTooManyRequests, "quota_limited"), requests: 1},
 		{name: "outdated template", first: failed(http.StatusConflict, "template_outdated"), requests: 1},
+		{name: "a refusal with the SDK's network_error code", first: failed(http.StatusConflict, "network_error"), requests: 1},
 		{name: "suppressed recipient", first: failed(http.StatusUnprocessableEntity, "recipient_suppressed"), requests: 1},
 		{name: "bad request", first: failed(http.StatusBadRequest, "sender_not_verified"), requests: 1},
 		{name: "server error", first: failed(http.StatusInternalServerError, "internal"), requests: 1},

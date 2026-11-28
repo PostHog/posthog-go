@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -72,6 +73,10 @@ type EmailError struct {
 	// RetryAfter is how long PostHog, or file storage for an upload, asked the
 	// client to wait before it tries again, and 0 when it did not ask.
 	RetryAfter time.Duration
+	// MessageID is the message ID of an email PostHog accepted although the
+	// call failed, such as a scheduled send whose time PostHog didn't
+	// confirm, and empty otherwise.
+	MessageID string
 
 	cause error
 }
@@ -104,6 +109,42 @@ func invalidEmail(code, field, message string) *EmailError {
 	err.Name = EmailErrorValidation
 	err.Field = field
 	return err
+}
+
+// schedulingRequiresCloud refuses a scheduled send to a host that may not
+// schedule it: a PostHog from before scheduling would drop ScheduledAt and
+// send the email at once, which no check of the answer can undo.
+func schedulingRequiresCloud(appHost string) *EmailError {
+	err := invalidEmail("scheduling_requires_cloud", "ScheduledAt", "This client sends email to "+originOf(appHost)+", and only PostHog Cloud schedules emails, so "+emailNotSent+".")
+	err.Why = "A self-hosted PostHog, or a proxy in front of PostHog Cloud, may send the email at once instead of at ScheduledAt."
+	err.Fix = "Send through PostHog Cloud US or EU, or leave out ScheduledAt to send the email now."
+	// Only a local code that starts with invalid_ is a validation error.
+	err.Name = EmailErrorApplication
+	return err
+}
+
+// originOf is the scheme and host of a URL, so an error never carries
+// credentials, a path or a query from Config.AppHost.
+func originOf(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return "the configured AppHost"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+// scheduleNotConfirmed is an accepted scheduled send whose answer doesn't
+// confirm the time asked for, so the email may go out at another time.
+func scheduleNotConfirmed(messageID string, status int) *EmailError {
+	return &EmailError{
+		Name:       EmailErrorApplication,
+		Code:       "schedule_not_confirmed",
+		Message:    "PostHog accepted the email " + messageID + " without confirming it waits for ScheduledAt, so it may go out now.",
+		StatusCode: status,
+		Fix:        "Read what happened to the email with Emails.Get(err.MessageID) before you send it again: another send can queue a second email.",
+		Field:      "ScheduledAt",
+		MessageID:  messageID,
+	}
 }
 
 func emailErrorName(status int, code string) EmailErrorName {
@@ -150,12 +191,19 @@ func emailErrorName(status int, code string) EmailErrorName {
 	}
 }
 
+// transportFailed is a request the client couldn't finish: no answer, or an
+// answer cut off mid-body. PostHog's own answer never counts, even one whose
+// code reads "network_error".
+func (e *EmailError) transportFailed() bool {
+	return e.Code == "network_error" && e.cause != nil
+}
+
 // isRetryable says whether waiting can fix the error. A send carries an
 // idempotency key, so a retry can't queue a second email. A network_error is
 // retryable whatever its status: an answer cut off mid-body can't say what
 // PostHog decided, and the retry's full answer does.
 func (e *EmailError) isRetryable() bool {
-	if e.Code == "network_error" {
+	if e.transportFailed() {
 		return true
 	}
 	if e.Code == "attachment_upload_failed" {
