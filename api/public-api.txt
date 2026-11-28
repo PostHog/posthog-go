@@ -593,6 +593,8 @@ type EvaluateFlagsPayload struct {
 	Groups Groups
 	PersonProperties Properties
 	GroupProperties map[string]Properties
+	PersonPropertyKeysKnownAbsent []string
+	GroupPropertyKeysKnownAbsent map[string][]string
 	OnlyEvaluateLocally bool
 	DisableGeoIP *bool
 	FlagKeys []string
@@ -720,6 +722,8 @@ type FeatureFlagPayload struct {
 	Groups Groups
 	PersonProperties Properties
 	GroupProperties map[string]Properties
+	PersonPropertyKeysKnownAbsent []string
+	GroupPropertyKeysKnownAbsent map[string][]string
 	OnlyEvaluateLocally bool
 	SendFeatureFlagEvents *bool
 }
@@ -730,6 +734,8 @@ type FeatureFlagPayloadNoKey struct {
 	Groups Groups
 	PersonProperties Properties
 	GroupProperties map[string]Properties
+	PersonPropertyKeysKnownAbsent []string
+	GroupPropertyKeysKnownAbsent map[string][]string
 	OnlyEvaluateLocally bool
 	SendFeatureFlagEvents *bool
 }
@@ -835,6 +841,7 @@ type FlagProperty struct {
 	Type string `json:"type"`
 	Negation bool `json:"negation"`
 	DependencyChain []string `json:"dependency_chain"`
+	GroupTypeIndex *int `json:"group_type_index,omitempty"`
 }
 
 type FlagReason struct {
@@ -869,6 +876,8 @@ type FlagsRequestData struct {
 	GroupProperties map[string]Properties `json:"group_properties"`
 	DisableGeoIP bool `json:"geoip_disable,omitempty"`
 	FlagKeysToEvaluate []string `json:"flag_keys_to_evaluate,omitempty"`
+	PersonPropertyKeysKnownAbsent []string `json:"person_property_keys_known_absent,omitempty"`
+	GroupPropertyKeysKnownAbsent map[string][]string `json:"group_property_keys_known_absent,omitempty"`
 }
 
 type FlagsResponse struct {
@@ -1062,6 +1071,8 @@ type SendFeatureFlagsOptions struct {
 	DeviceId *string
 	PersonProperties Properties
 	GroupProperties map[string]Properties
+	PersonPropertyKeysKnownAbsent []string
+	GroupPropertyKeysKnownAbsent map[string][]string
 }
 
 func (opts *SendFeatureFlagsOptions) GetOptions() *SendFeatureFlagsOptions

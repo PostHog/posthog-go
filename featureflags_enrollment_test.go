@@ -235,19 +235,20 @@ func TestFeatureEnrollmentOnGroupFlagReadsPersonProperties(t *testing.T) {
 	flag := state.flagsByKey["beta-feature"]
 
 	// No group context: the person's enrollment still decides.
-	got, err := poller.computeFlagLocally(flag, "user-123", nil, Groups{}, Properties{enrollmentKey: true}, nil, state.cohorts, state)
+	got, err := poller.computeFlagLocally(flag, "user-123", nil, Groups{}, Properties{enrollmentKey: true}, nil, nil, state.cohorts, state)
 	require.NoError(t, err)
 	require.Equal(t, true, got)
 
 	// Group properties can't turn the person's opt-out into enrollment.
 	got, err = poller.computeFlagLocally(flag, "user-123", nil, Groups{"company": "acme"}, Properties{enrollmentKey: false},
-		map[string]Properties{"company": {enrollmentKey: true}}, state.cohorts, state)
+		map[string]Properties{"company": {enrollmentKey: true}}, nil, state.cohorts, state)
 	require.NoError(t, err)
 	require.Equal(t, false, got)
 }
 
-// A dependency reuses its caller's properties, and a group-aggregated caller has the group's.
-func TestFeatureEnrollmentDependencyOfGroupFlagNeedsServer(t *testing.T) {
+// A dependency is evaluated in its own context, so an enrollment dependency of a group flag
+// reads the person's enrollment, not the group's properties.
+func TestFeatureEnrollmentDependencyOfGroupFlagReadsPersonEnrollment(t *testing.T) {
 	dependency := flagDependencyFilter("beta-feature", true, "beta-feature")
 	for name, aggregation := range map[string]string{
 		"same group":  `"aggregation_group_type_index": 0, `,
@@ -267,27 +268,35 @@ func TestFeatureEnrollmentDependencyOfGroupFlagNeedsServer(t *testing.T) {
 					"aggregation_group_type_index": 0,
 					"groups": [{"properties": [` + dependency + `], "rollout_percentage": 100}]}}
 			]}`
-			client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions,
-				`{"flags": {"target-multi": {"key": "target-multi", "enabled": true, "variant": "enrolled", "metadata": {"id": 2, "version": 1}}}}`)
+			client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, "")
 			enrolled := Properties{enrollmentKey: true}
 			groupProperties := map[string]Properties{"company": {enrollmentKey: false}}
 
-			for _, groups := range []Groups{{"company": "acme"}, nil} {
-				snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{
-					DistinctId:          "user-123",
-					Groups:              groups,
-					PersonProperties:    enrolled,
-					GroupProperties:     groupProperties,
-					OnlyEvaluateLocally: true,
-				})
-				require.NoError(t, err)
-				require.True(t, snapshot.IsEnabled("beta-feature"))
-				require.Equal(t, UnresolvedFlagReasonUnsupportedDefinition, snapshot.UnresolvedFlags()["target-single"])
-				require.Equal(t, UnresolvedFlagReasonUnsupportedDefinition, snapshot.UnresolvedFlags()["target-multi"])
-			}
-			require.Zero(t, remoteCalls.Load())
+			snapshot, err := client.EvaluateFlags(EvaluateFlagsPayload{
+				DistinctId:          "user-123",
+				Groups:              Groups{"company": "acme"},
+				PersonProperties:    enrolled,
+				GroupProperties:     groupProperties,
+				OnlyEvaluateLocally: true,
+			})
+			require.NoError(t, err)
+			require.True(t, snapshot.IsEnabled("beta-feature"))
+			require.True(t, snapshot.IsEnabled("target-single"))
+			require.Equal(t, "enrolled", snapshot.GetFlag("target-multi"))
+			require.Empty(t, snapshot.UnresolvedFlags())
 
-			// The second condition must not answer instead of /flags.
+			// Without the company key the group conditions are skipped.
+			snapshot, err = client.EvaluateFlags(EvaluateFlagsPayload{
+				DistinctId:          "user-123",
+				PersonProperties:    enrolled,
+				OnlyEvaluateLocally: true,
+			})
+			require.NoError(t, err)
+			require.True(t, snapshot.IsEnabled("beta-feature"))
+			require.False(t, snapshot.IsEnabled("target-single"))
+			require.False(t, snapshot.IsEnabled("target-multi"))
+			require.Empty(t, snapshot.UnresolvedFlags())
+
 			got, err := client.GetFeatureFlag(FeatureFlagPayload{
 				Key:              "target-multi",
 				DistinctId:       "user-123",
@@ -297,7 +306,7 @@ func TestFeatureEnrollmentDependencyOfGroupFlagNeedsServer(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, "enrolled", got)
-			require.Equal(t, int32(1), remoteCalls.Load())
+			require.Zero(t, remoteCalls.Load())
 		})
 	}
 }
@@ -399,4 +408,34 @@ func TestFeatureEnrollmentMissingOnGroupFlag(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]UnresolvedFlagReason{"beta-feature": UnresolvedFlagReasonMissingContext}, snapshot.UnresolvedFlags())
 	require.Zero(t, remoteCalls.Load())
+}
+
+// A listed enrollment key is absent, so the person isn't enrolled whatever value is supplied
+// and the flag's holdout and release conditions decide it.
+func TestFeatureEnrollmentListedKnownAbsentUsesOrdinaryTargeting(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		groups string
+		want   interface{}
+	}{
+		{"release condition off", everyoneOff, false},
+		{"release condition on", everyoneOn, true},
+	} {
+		for _, supplied := range []Properties{{enrollmentKey: true}, {}} {
+			t.Run(fmt.Sprintf("%s/supplied %v", tt.name, supplied), func(t *testing.T) {
+				client, _, remoteCalls := newUnresolvedFlagsClient(t, localDefinitions(enrollmentFlagDefinition(tt.groups), dependentOnBetaFeature()), "")
+				for _, key := range []string{"beta-feature", "dependent"} {
+					got, err := client.GetFeatureFlag(FeatureFlagPayload{
+						Key:                           key,
+						DistinctId:                    "user-123",
+						PersonProperties:              supplied,
+						PersonPropertyKeysKnownAbsent: []string{enrollmentKey},
+					})
+					require.NoError(t, err)
+					require.Equal(t, tt.want, got, key)
+				}
+				require.Zero(t, remoteCalls.Load())
+			})
+		}
+	}
 }

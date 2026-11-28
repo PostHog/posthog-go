@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	json "github.com/goccy/go-json"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCohortFlagDependencyGroupContext(t *testing.T) {
@@ -63,33 +65,26 @@ func TestCohortFlagDependencyGroupContext(t *testing.T) {
 					want := shape != "negated"
 					got, local, err := poller.GetFeatureFlag(config)
 					full := poller.GetFeatureFlagWithPayload(config)
-					if aggregation == "person" {
-						if err != nil || !local || got != want || full.err != nil || !full.locallyEvaluated || full.value != want {
-							t.Errorf("person dependency=%v local=%v err=%v full=%+v; want %v", got, local, err, full, want)
-						}
-					} else {
-						if !isServerEvalError(err) || local || !isServerEvalError(full.err) || full.locallyEvaluated {
-							t.Errorf("dependency=%v local=%v err=%v full=%+v; must require server evaluation", got, local, err, full)
-						}
-						if payload, err := poller.GetFeatureFlagPayload(config); err == nil || payload != "" {
-							t.Errorf("payload=%q error=%v; must remain inconclusive", payload, err)
-						}
-						all, err := poller.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: config.DistinctId, PersonProperties: properties, Groups: config.Groups, GroupProperties: config.GroupProperties, OnlyEvaluateLocally: true})
-						if _, exists := all["target"]; err != nil || exists {
-							t.Errorf("bulk flags=%v err=%v; must omit target", all, err)
-						}
-						c := &client{Config: Config{Logger: newDefaultLogger(false)}, featureFlagsPoller: poller}
-						evaluations, err := c.EvaluateFlags(EvaluateFlagsPayload{DistinctId: config.DistinctId, PersonProperties: properties, Groups: config.Groups, GroupProperties: config.GroupProperties, OnlyEvaluateLocally: true})
-						if err != nil {
-							t.Fatal(err)
-						}
-						if _, exists := evaluations.flags["target"]; exists {
-							t.Error("EvaluateFlags must omit target")
-						}
-						captured, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, properties, config.GroupProperties, true)
-						if _, exists := captured["target"]; err != nil || exists {
-							t.Errorf("capture flags=%v err=%v; must omit target", captured, err)
-						}
+					// The dependency is evaluated in its own context, so every aggregation
+					// resolves locally with the value it has when evaluated directly.
+					if err != nil || !local || got != want || full.err != nil || !full.locallyEvaluated || full.value != want {
+						t.Errorf("dependency=%v local=%v err=%v full=%+v; want %v", got, local, err, full, want)
+					}
+					all, err := poller.GetAllFlags(FeatureFlagPayloadNoKey{DistinctId: config.DistinctId, PersonProperties: properties, Groups: config.Groups, GroupProperties: config.GroupProperties, OnlyEvaluateLocally: true})
+					if err != nil || all["target"] != want {
+						t.Errorf("bulk flags=%v err=%v; want target=%v", all, err, want)
+					}
+					c := &client{Config: Config{Logger: newDefaultLogger(false)}, featureFlagsPoller: poller}
+					evaluations, err := c.EvaluateFlags(EvaluateFlagsPayload{DistinctId: config.DistinctId, PersonProperties: properties, Groups: config.Groups, GroupProperties: config.GroupProperties, OnlyEvaluateLocally: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if record, exists := evaluations.flags["target"]; !exists || record.Enabled != want {
+						t.Errorf("EvaluateFlags target=%+v exists=%v; want %v", record, exists, want)
+					}
+					captured, err := poller.getFeatureFlagVariantsWithFallback(config.DistinctId, nil, config.Groups, properties, config.GroupProperties, nil, true)
+					if err != nil || captured["target"] != want {
+						t.Errorf("capture flags=%v err=%v; want target=%v", captured, err, want)
 					}
 					var raw FeatureFlagsResponse
 					if err := json.Unmarshal([]byte(body), &raw); err != nil {
@@ -97,20 +92,12 @@ func TestCohortFlagDependencyGroupContext(t *testing.T) {
 					}
 					state := poller.state.Load()
 					for _, cohorts := range []map[string]PropertyGroup{raw.Cohorts, state.cohorts} {
-						// Repeated references must preserve server-required errors, even
-						// if a caller already cached a result without group context.
+						inputs := &flagEvaluationInputs{distinctId: config.DistinctId, groups: config.Groups, personProperties: properties, groupProperties: config.GroupProperties, cohorts: cohorts}
 						cache := map[string]interface{}{}
-						if aggregation != "person" && shape != "indirect" {
-							cache["dep"] = false
-						}
 						for i := 0; i < 2; i++ {
-							got, err := poller.matchCohort(FlagProperty{Value: "c"}, properties, cohorts, state.flagsByKey, cache, "person", nil, nil, state)
-							if aggregation == "person" {
-								if err != nil || got != want {
-									t.Errorf("cohort=%v err=%v; want %v", got, err, want)
-								}
-							} else if !isServerEvalError(err) {
-								t.Errorf("cohort=%v err=%v; must require server evaluation on call %d", got, err, i)
+							got, err := poller.matchCohort(FlagProperty{Value: "c"}, properties, nil, cohorts, state.flagsByKey, cache, inputs, nil, state)
+							if err != nil || got != want {
+								t.Errorf("cohort=%v err=%v; want %v on call %d", got, err, want, i)
 							}
 						}
 					}
@@ -159,12 +146,14 @@ func TestGroupContextPersonFlagDependency(t *testing.T) {
 					poller.fetchNewFeatureFlags()
 					close(poller.firstFeatureFlagRequestFinished)
 					config := FeatureFlagPayload{DistinctId: "person", PersonProperties: Properties{"plan": "free"}, Groups: Groups{"company": "acme"}, GroupProperties: map[string]Properties{"company": {"plan": "pro"}}, OnlyEvaluateLocally: true}
+					// The person dependency reads the person's plan, not the company's.
+					want := shape != "negated"
 					for _, key := range []string{"dep", "property-only", "target"} {
 						config.Key = key
 						got, local, err := poller.GetFeatureFlag(config)
 						if key == "target" {
-							if !isServerEvalError(err) || local {
-								t.Errorf("target=%v local=%v err=%v; must require server evaluation", got, local, err)
+							if err != nil || !local || got != want {
+								t.Errorf("target=%v local=%v err=%v; want local %v", got, local, err, want)
 							}
 						} else if err != nil || !local || got != true {
 							t.Errorf("control %s=%v local=%v err=%v; want local true", key, got, local, err)
@@ -177,13 +166,12 @@ func TestGroupContextPersonFlagDependency(t *testing.T) {
 					state := poller.state.Load()
 					for _, cohorts := range []map[string]PropertyGroup{raw.Cohorts, state.cohorts} {
 						groupIndex := uint8(0)
-						for _, cached := range []interface{}{nil, false, true} {
-							cache := map[string]interface{}{"dep": cached}
-							for i := 0; i < 2; i++ {
-								got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], cohorts, state.flagsByKey, cache, "acme", nil, &groupIndex, state)
-								if !isServerEvalError(err) {
-									t.Errorf("cohort=%v err=%v cached=%v; must require server evaluation", got, err, cached)
-								}
+						inputs := &flagEvaluationInputs{distinctId: config.DistinctId, groups: config.Groups, personProperties: config.PersonProperties, groupProperties: config.GroupProperties, cohorts: cohorts}
+						cache := map[string]interface{}{}
+						for i := 0; i < 2; i++ {
+							got, err := poller.matchCohort(FlagProperty{Value: "c"}, config.GroupProperties["company"], nil, cohorts, state.flagsByKey, cache, inputs, &groupIndex, state)
+							if err != nil || got != want {
+								t.Errorf("cohort=%v err=%v; want %v on call %d", got, err, want, i)
 							}
 						}
 					}
@@ -191,4 +179,61 @@ func TestGroupContextPersonFlagDependency(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A person filter reads person properties and the person listing whatever the condition
+// aggregates on, as the flags service routes it in PropertyContext::resolve_for_filter.
+func TestPersonFilterInGroupConditionReadsPersonProperties(t *testing.T) {
+	personPlan := func(operator string) string {
+		return fmt.Sprintf(`{"key": "plan", "type": "person", "operator": %q, "value": "pro"}`, operator)
+	}
+	orgFlag := func(key, filter string) string {
+		return fmt.Sprintf(`{"key": %q, "active": true, "filters": {"aggregation_group_type_index": 0, "groups": [{"properties": [%s], "rollout_percentage": 100}]}}`, key, filter)
+	}
+	definitions := `{"flags": [` + strings.Join([]string{
+		orgFlag("org-person", personPlan("exact")),
+		orgFlag("org-person-not-set", `{"key": "plan", "type": "person", "operator": "is_not_set"}`),
+		orgFlag("org-cohort", `{"key": "id", "type": "cohort", "value": 1}`),
+		flagDefinition("dependent", flagCondition(100, flagDependencyFilter("org-person", true, "org-person"))),
+		`{"key": "mixed", "active": true, "filters": {"groups": [{"aggregation_group_type_index": 0, "rollout_percentage": 100, "properties": [` + personPlan("exact") + `]}]}}`,
+	}, ",") + `], "group_type_mapping": ` + knownAbsentGroupTypeMapping +
+		`, "cohorts": {"1": {"type": "AND", "values": [{"type": "AND", "values": [` + personPlan("exact") + `]}]}}}`
+	client, _, remoteCalls := newUnresolvedFlagsClient(t, definitions, "")
+	groups := Groups{"organization": "acme"}
+
+	for _, tt := range []struct {
+		name   string
+		person string
+		org    string
+		want   bool
+	}{
+		{"free person in a pro organization", "free", "pro", false},
+		{"pro person in a free organization", "pro", "free", true},
+	} {
+		for _, key := range []string{"org-person", "org-cohort", "dependent", "mixed"} {
+			t.Run(tt.name+"/"+key, func(t *testing.T) {
+				got, err := client.GetFeatureFlag(FeatureFlagPayload{
+					Key:              key,
+					DistinctId:       "user-123",
+					Groups:           groups,
+					PersonProperties: Properties{"plan": tt.person},
+					GroupProperties:  map[string]Properties{"organization": {"plan": tt.org}},
+				})
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			})
+		}
+	}
+	t.Run("person listing", func(t *testing.T) {
+		got, err := client.GetFeatureFlag(FeatureFlagPayload{
+			Key:                           "org-person-not-set",
+			DistinctId:                    "user-123",
+			Groups:                        groups,
+			GroupProperties:               map[string]Properties{"organization": {"plan": "pro"}},
+			PersonPropertyKeysKnownAbsent: []string{"plan"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, got)
+	})
+	require.Zero(t, remoteCalls.Load())
 }

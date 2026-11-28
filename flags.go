@@ -33,6 +33,10 @@ type FlagsRequestData struct {
 	DisableGeoIP bool `json:"geoip_disable,omitempty"`
 	// FlagKeysToEvaluate asks the server to evaluate only these flag keys when non-empty.
 	FlagKeysToEvaluate []string `json:"flag_keys_to_evaluate,omitempty"`
+	// PersonPropertyKeysKnownAbsent lists person property keys the caller knows are absent.
+	PersonPropertyKeysKnownAbsent []string `json:"person_property_keys_known_absent,omitempty"`
+	// GroupPropertyKeysKnownAbsent lists, per group type, group property keys the caller knows are absent.
+	GroupPropertyKeysKnownAbsent map[string][]string `json:"group_property_keys_known_absent,omitempty"`
 }
 
 // FlagDetail represents one evaluated feature flag in the v4 /flags response format.
@@ -230,7 +234,7 @@ func (r *FlagsResponse) UnmarshalJSON(data []byte) error {
 // decider defines the interface for making flags requests
 type decider interface {
 	makeFlagsRequest(distinctId string, deviceId *string, groups Groups, personProperties Properties,
-		groupProperties map[string]Properties, disableGeoIP bool, flagKeys []string) (*FlagsResponse, error)
+		groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys, disableGeoIP bool, flagKeys []string) (*FlagsResponse, error)
 }
 
 // flagsClient implements the decider interface
@@ -281,7 +285,7 @@ func newFlagsClient(apiKey string, endpoint string, httpClient http.Client,
 // makeFlagsRequest makes a request to the flags endpoint and deserializes the response
 // into a FlagsResponse struct.
 func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, groups Groups, personProperties Properties,
-	groupProperties map[string]Properties, disableGeoIP bool, flagKeys []string) (*FlagsResponse, error) {
+	groupProperties map[string]Properties, knownAbsent *knownAbsentPropertyKeys, disableGeoIP bool, flagKeys []string) (*FlagsResponse, error) {
 	// Ensure non-nil maps for JSON marshaling (nil marshals as "null", server expects "{}")
 	if groups == nil {
 		groups = Groups{}
@@ -301,6 +305,9 @@ func (d *flagsClient) makeFlagsRequest(distinctId string, deviceId *string, grou
 		GroupProperties:    groupProperties,
 		DisableGeoIP:       disableGeoIP,
 		FlagKeysToEvaluate: flagKeys,
+
+		PersonPropertyKeysKnownAbsent: knownAbsent.wirePersonKeys(),
+		GroupPropertyKeysKnownAbsent:  knownAbsent.wireGroupKeys(),
 	}
 
 	requestDataBytes, err := json.Marshal(requestData)

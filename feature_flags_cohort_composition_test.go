@@ -48,7 +48,7 @@ func TestUnsupportedCohortChildComposition(t *testing.T) {
 							group = preParsePG(group)
 							localCohorts = preParseCohortValues(cohorts)
 						}
-						got, err := poller.matchPropertyGroup(group, Properties{"email": "user@x"}, localCohorts, nil, nil, "user", nil, nil)
+						got, err := poller.matchPropertyGroup(group, Properties{"email": "user@x"}, nil, localCohorts, nil, nil, &flagEvaluationInputs{distinctId: "user"}, nil)
 						if invalidFirst || tc.unresolved {
 							var serverErr *RequiresServerEvaluationError
 							require.ErrorAs(t, err, &serverErr)
