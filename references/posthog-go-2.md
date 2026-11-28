@@ -1198,7 +1198,7 @@ const (
 ```
 
 ```go
-const Version = "2.5.0"
+const Version = "2.6.0"
 ```
 
 Version of the client.
