@@ -129,6 +129,7 @@ func TestReadSessionToken(t *testing.T) {
 		{name: "a go-sdk session id", value: "0P4SNSPWCF2KFZ4RSWDUKDIGRX"},
 		{name: "a uuid", value: "019a4f2e-1c3d-7b8a-9e0f-1a2b3c4d5e6f"},
 		{name: "no sid", value: encode(`{"cn":"Codex"}`)},
+		{name: "a sid key in another case", value: encode(`{"SID":"ses_first"}`)},
 		{name: "an empty sid", value: encode(`{"sid":""}`)},
 		{name: "a non-string sid", value: encode(`{"sid":5}`)},
 		{name: "a sid over 128 characters", value: encode(`{"sid":"` + long + `"}`)},
@@ -182,4 +183,9 @@ func TestASessionTokenIgnoresOptionalFieldsThatAreNotStrings(t *testing.T) {
 		assert.True(t, ok, payload)
 		assert.Equal(t, SessionToken{SessionID: "ses_x"}, got, payload)
 	}
+}
+
+func TestConversationSessionID(t *testing.T) {
+	assert.Equal(t, "ses_6df45f0102a182bcd5e8dd5dad6c65a0", ConversationSessionID("0190F0E8-7A6B-7C3D-9E4F-5A6B7C8D9E0F"))
+	assert.Empty(t, ConversationSessionID("not-a-handle"))
 }

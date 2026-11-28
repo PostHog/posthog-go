@@ -71,6 +71,10 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) c
 // session id "stdio" for any process.
 const stdioSessionType = "*server.stdioSession"
 
+func carriesSession(session server.ClientSession) bool {
+	return session != nil && (oneClient(session) || session.SessionID() != "")
+}
+
 // oneClient is whether a session is a connection with a single client, whose
 // transport has no session id of its own to derive from.
 func oneClient(session server.ClientSession) bool {

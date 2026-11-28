@@ -285,21 +285,21 @@ func TestInstrumentAdvertisesAnalyticsArguments(t *testing.T) {
 		wantRequired   []string
 	}{
 		{
-			name:           "added as required",
+			name:           "added as required, conversation_id as optional",
 			tool:           weatherTool(),
-			wantProperties: []string{"city", "context", "llm_model"},
+			wantProperties: []string{"city", "context", "llm_model", "conversation_id"},
 			wantRequired:   []string{"city", "context", "llm_model"},
 		},
 		{
 			name:           "a tool's own context is left as declared",
 			tool:           weatherTool(mcp.WithString("context")),
-			wantProperties: []string{"city", "context", "llm_model"},
+			wantProperties: []string{"city", "context", "llm_model", "conversation_id"},
 			wantRequired:   []string{"city", "llm_model"},
 		},
 		{
 			name:           "only the enabled arguments",
 			tool:           weatherTool(),
-			opts:           []Option{WithCaptureModel(false)},
+			opts:           []Option{WithCaptureModel(false), WithConversationID(false)},
 			wantProperties: []string{"city", "context"},
 			wantRequired:   []string{"city", "context"},
 		},

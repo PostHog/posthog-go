@@ -176,12 +176,37 @@ before the handler and left off `$mcp_parameters`, while a tool that declares
 its own keeps it as the tool's data. A model named in the client's `_meta` wins over it. Turn
 both sources off with `WithCaptureModel(false)`.
 
+## Conversation anchoring
+
+A stateless streamable HTTP request carries no session, so without help every
+call of one agent conversation lands in its own `$session_id`. The adapter
+adds an optional `conversation_id` string to every tool's input schema. When a
+call arrives with neither a transport session nor a valid handle, it appends
+a new UUIDv7 handle to the result as a final text block,
+`{"conversation_id":"<handle>"}`, and the agent passes it back on later calls.
+A handle the agent sends is used only if it is a UUIDv7. It becomes
+`$mcp_conversation_id`, and `$session_id` is derived from it the way every
+PostHog MCP SDK derives it. A new handle the result cannot carry, as on a
+handler error, is not recorded, and `$mcp_response` is the result the tool
+returned, without the handle.
+
+A client conversation id outranks a handle. ChatGPT sends one on every call,
+so its `tools/list` has no `conversation_id` argument and its calls are minted
+no handle. Leaving it out of the listing needs the hooks `Instrument` adds, so
+pass `Instrument` after `server.WithHooks`, as for capture. A handle counts only
+if the result the client receives carries it, so one that output validation or
+middleware given before `Instrument` drops is not recorded. A call answered
+before the handler runs, by input validation or by such middleware, gets no
+handle: that result is not the adapter's to change. Like `context`, the argument is removed before the handler, and
+tools that declare their own `conversation_id` keep it. Unlike
+`posthogmcpsdk`, the adapter does not mirror the handle into
+`structuredContent`. Turn anchoring off with `WithConversationID(false)`.
+
 ## Not yet supported
 
 `posthogmcpsdk` also sends `$mcp_unknown_tool`, `$mcp_input_required`, and
-`$mcp_missing_capability` events, anchors stateless conversations with a
-`conversation_id` argument, and accepts an intent fallback. This adapter does
-not do these yet.
+`$mcp_missing_capability` events and accepts an intent fallback. This adapter
+does not do these yet.
 
 ## Compatibility and development
 

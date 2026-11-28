@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	methodCallTool  = "tools/call"
-	contextArgument = "context"
-	modelArgument   = "llm_model"
+	methodCallTool       = "tools/call"
+	contextArgument      = "context"
+	modelArgument        = "llm_model"
+	conversationArgument = "conversation_id"
 
 	// emptyJSONObject is what a client sends for an empty context, which is no
 	// intent, as in posthogmcp.

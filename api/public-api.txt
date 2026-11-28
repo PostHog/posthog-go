@@ -1671,6 +1671,8 @@ can change either.
 
 FUNCTIONS
 
+func ConversationSessionID(handle string) string
+
 func TransportSessionID(id string) string
 
 func WithCallContext(ctx context.Context, sessionID string, source SessionSource, distinctID string) context.Context
