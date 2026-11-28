@@ -130,7 +130,8 @@ type Client interface {
 	GetFeatureFlagResult(FeatureFlagPayload) (*FeatureFlagResult, error)
 
 	// GetFeatureFlagPayload returns the payload for the matching flag value, or an
-	// empty string when no payload is configured or the flag is missing/disabled.
+	// empty string when no payload is configured, the configured payload is not
+	// valid JSON, or the flag is missing/disabled.
 	// Deprecated: Use GetFeatureFlagResult instead, which returns both the flag value
 	// and payload while properly tracking feature flag usage.
 	GetFeatureFlagPayload(FeatureFlagPayload) (string, error)
@@ -1095,7 +1096,10 @@ func (c *client) getFeatureFlagResultWithContext(ctx context.Context, flagConfig
 			flagValue = f.GetValue()
 			evalResult.Value = flagValue
 			hasExperiment = f.Metadata.HasExperiment
-			ps := rawMessageToString(f.Metadata.Payload)
+			ps, payloadErr := decodePayload(f.Metadata.Payload)
+			if payloadErr != nil {
+				c.Warnf("[FEATURE FLAGS] Ignoring payload for flag %s - %s", flagConfig.Key, payloadErr)
+			}
 			if ps != "" {
 				payloadStr = ps
 				hasPayload = true
@@ -1448,7 +1452,7 @@ func (c *client) evaluateFlagsWithContext(ctx context.Context, payload EvaluateF
 					if _, alreadyLocal := locallyEvaluated[key]; alreadyLocal {
 						continue
 					}
-					records[key] = recordFromFlagDetail(detail, flagsResponse.MinimalFlagCalledEvents)
+					records[key] = recordFromFlagDetail(detail, flagsResponse.MinimalFlagCalledEvents, c.Logger)
 				}
 			}
 		}
@@ -1555,7 +1559,11 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 				variantKey = *record.Variant
 			}
 			if rawPayload, ok := storedFlag.Filters.Payloads[variantKey]; ok {
-				if s := rawMessageToString(rawPayload); s != "" {
+				s, payloadErr := decodePayload(rawPayload)
+				if payloadErr != nil {
+					c.Warnf("[FEATURE FLAGS] Ignoring payload for flag %s - %s", storedFlag.Key, payloadErr)
+				}
+				if s != "" {
 					payloadStr := s
 					record.Payload = &payloadStr
 				}
@@ -1572,7 +1580,7 @@ func (c *client) populateLocalEvaluations(records map[string]evaluatedFlagRecord
 // recordFromFlagDetail builds an evaluatedFlagRecord from a v4 FlagDetail.
 // minimalFlagCalledEvents is the gate from the /flags response the detail
 // came from.
-func recordFromFlagDetail(detail FlagDetail, minimalFlagCalledEvents bool) evaluatedFlagRecord {
+func recordFromFlagDetail(detail FlagDetail, minimalFlagCalledEvents bool, logger Logger) evaluatedFlagRecord {
 	record := evaluatedFlagRecord{
 		Key:                     detail.Key,
 		Enabled:                 detail.Enabled,
@@ -1593,7 +1601,11 @@ func recordFromFlagDetail(detail FlagDetail, minimalFlagCalledEvents bool) evalu
 		reason := detail.Reason.Description
 		record.Reason = &reason
 	}
-	if s := rawMessageToString(detail.Metadata.Payload); s != "" {
+	s, payloadErr := decodePayload(detail.Metadata.Payload)
+	if payloadErr != nil && logger != nil {
+		logger.Warnf("[FEATURE FLAGS] Ignoring payload for flag %s - %s", detail.Key, payloadErr)
+	}
+	if s != "" {
 		payloadStr := s
 		record.Payload = &payloadStr
 	}

@@ -977,7 +977,7 @@ func TestGetFeatureFlagLocallyEvaluated(t *testing.T) {
 }
 
 func TestGetFeatureFlagPayload(t *testing.T) {
-	assertFeatureFlagPayload(t, newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag-person-prop.json"), FeatureFlagPayload{Key: "test-get-feature", DistinctId: "distinct_id"}, "this is a string")
+	assertFeatureFlagPayload(t, newFeatureFlagsLocalClient(t, "feature_flag/test-simple-flag-person-prop.json"), FeatureFlagPayload{Key: "test-get-feature", DistinctId: "distinct_id"}, `"this is a string"`)
 }
 
 func TestGetRemoteConfigPayload(t *testing.T) {

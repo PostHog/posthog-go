@@ -632,7 +632,8 @@ type FeatureFlagResult struct {
 	Enabled bool
 
 	// RawPayload is the serialized JSON payload associated with the flag variant.
-	// Nil if no payload is configured.
+	// Nil if no payload is configured, or if the configured payload is not valid
+	// JSON, in which case the SDK logs a warning and reports no payload.
 	// Use GetPayloadAs to unmarshal the payload into a specific type.
 	RawPayload *string
 
@@ -1034,7 +1035,7 @@ func (poller *FeatureFlagsPoller) applyFlagDefinitions(data json.RawMessage, dec
 		// A successful API response without flags represents a loaded empty set.
 		flags = []FeatureFlag{}
 	}
-	preDecodePayloads(flags)
+	preDecodePayloads(flags, poller.Logger)
 
 	groups := map[string]string{}
 	if decoded.GroupTypeMapping != nil {
@@ -1542,7 +1543,11 @@ func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFl
 			} else if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
 				result = flagValue
 				if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
-					payload = rawMessageToString(rawPayload)
+					decoded, payloadErr := decodePayload(rawPayload)
+					if payloadErr != nil && poller.Logger != nil {
+						poller.Logger.Warnf("[FEATURE FLAGS] Ignoring payload for flag %s - %s", flagConfig.Key, payloadErr)
+					}
+					payload = decoded
 				}
 				if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
 					hasExperiment = detail.Metadata.HasExperiment
@@ -3325,12 +3330,22 @@ func parseDependencyChain(value any) []string {
 
 // preDecodePayloads converts json.RawMessage payloads to strings once at load time,
 // so evaluations can use the decoded strings directly without per-call allocation.
-func preDecodePayloads(flags []FeatureFlag) {
+func preDecodePayloads(flags []FeatureFlag, logger Logger) {
 	for i := range flags {
 		if len(flags[i].Filters.Payloads) > 0 {
 			decoded := make(map[string]string, len(flags[i].Filters.Payloads))
 			for k, raw := range flags[i].Filters.Payloads {
-				decoded[k] = rawMessageToString(raw)
+				// A payload that is not valid JSON is left out entirely, so the
+				// getters report no payload instead of returning a string the
+				// caller cannot decode.
+				s, payloadErr := decodePayload(raw)
+				if payloadErr != nil {
+					if logger != nil {
+						logger.Warnf("[FEATURE FLAGS] Ignoring payload for flag %s (%s) - %s", flags[i].Key, k, payloadErr)
+					}
+					continue
+				}
+				decoded[k] = s
 			}
 			flags[i].Filters.DecodedPayloads = decoded
 		}
@@ -3580,7 +3595,11 @@ func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId s
 			return "", errFlagEvaluationFailed(key)
 		}
 		if payload, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
-			return rawMessageToString(payload), nil
+			decoded, payloadErr := decodePayload(payload)
+			if payloadErr != nil && poller.Logger != nil {
+				poller.Logger.Warnf("[FEATURE FLAGS] Ignoring payload for flag %s - %s", key, payloadErr)
+			}
+			return decoded, nil
 		}
 	}
 	return "", nil
