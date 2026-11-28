@@ -50,6 +50,10 @@ func (c *noopClient) GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{
 	return map[string]interface{}{}, ErrSDKDisabled
 }
 
+func (c *noopClient) GetAllFlagsAndPayloads(FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error) {
+	return map[string]interface{}{}, map[string]string{}, ErrSDKDisabled
+}
+
 func (c *noopClient) EvaluateFlags(EvaluateFlagsPayload) (*FeatureFlagEvaluations, error) {
 	return emptyFeatureFlagEvaluations, ErrSDKDisabled
 }

@@ -1628,6 +1628,70 @@ func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey
 
 	return response, nil
 }
+
+// GetAllFlagsAndPayloads evaluates every flag for one user and returns the flag
+// values together with the serialized payload of the value each flag resolved
+// to. It is the bulk companion of GetFeatureFlagPayload: payloads come from the
+// same local definitions, and when local evaluation falls back to /flags, one
+// response fills both maps. A flag without a payload for its value is absent
+// from the payload map.
+func (poller *FeatureFlagsPoller) GetAllFlagsAndPayloads(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error) {
+	state, err := poller.getLoadedState()
+	if err != nil {
+		return nil, nil, err
+	}
+	featureFlags := state.featureFlags
+	fallbackToDecide := false
+	cohorts := state.cohorts
+
+	response := make(map[string]interface{}, len(featureFlags))
+	payloads := make(map[string]string, len(featureFlags))
+
+	if len(featureFlags) == 0 {
+		fallbackToDecide = true
+	} else {
+		for _, storedFlag := range featureFlags {
+			result, err := poller.computeFlagLocally(
+				storedFlag,
+				flagConfig.DistinctId,
+				flagConfig.DeviceId,
+				flagConfig.Groups,
+				flagConfig.PersonProperties,
+				flagConfig.GroupProperties,
+				cohorts,
+				state,
+			)
+			if err != nil {
+				poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
+				fallbackToDecide = true
+				continue
+			}
+			response[storedFlag.Key] = result
+			if payload := storedFlag.Filters.DecodedPayloads[variantToString(result)]; payload != "" {
+				payloads[storedFlag.Key] = payload
+			}
+		}
+	}
+
+	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
+		flagsResponse, err := poller.getFeatureFlagVariants(
+			flagConfig.DistinctId,
+			flagConfig.DeviceId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+		)
+
+		if err != nil {
+			return response, payloads, err
+		}
+		copyEvaluatedFlagValues(response, flagsResponse)
+		copyEvaluatedFlagPayloads(payloads, flagsResponse)
+	}
+
+	return response, payloads, nil
+}
+
 func (poller *FeatureFlagsPoller) computeFlagLocally(
 	flag FeatureFlag,
 	distinctId string,

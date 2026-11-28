@@ -144,6 +144,15 @@ type Client interface {
 	// when OnlyEvaluateLocally is true without SecretKey or a FlagDefinitionCacheProvider.
 	GetAllFlags(FeatureFlagPayloadNoKey) (map[string]interface{}, error)
 
+	// GetAllFlagsAndPayloads evaluates all flags for a user and returns their values
+	// alongside the serialized JSON payload of the value each flag resolved to. It is
+	// the bulk form of GetFeatureFlagResult: one evaluation fills both maps, so no
+	// per-flag payload lookup is needed. Flag values are booleans for boolean flags and
+	// strings for multivariate variants; a flag whose value has no payload configured is
+	// absent from the payload map. It returns ErrNoSecretKey when OnlyEvaluateLocally is
+	// true without SecretKey or a FlagDefinitionCacheProvider.
+	GetAllFlagsAndPayloads(FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error)
+
 	// EvaluateFlags returns a snapshot of feature-flag evaluations for the
 	// given distinct_id using at most one /flags request. Returns ErrNoDistinctID
 	// if DistinctId is empty. Pass the returned snapshot to a Capture event via
@@ -1315,6 +1324,49 @@ func (c *client) getAllFlagsWithContext(ctx context.Context, flagConfig FeatureF
 	return flagsValue, err
 }
 
+func (c *client) GetAllFlagsAndPayloads(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error) {
+	return c.getAllFlagsAndPayloadsWithContext(context.Background(), flagConfig)
+}
+
+// getAllFlagsAndPayloadsWithContext returns all flags and their values for a given
+// user, together with the serialized payload of the value each flag resolved to.
+// The context can be used to control timeouts and cancellation.
+func (c *client) getAllFlagsAndPayloadsWithContext(ctx context.Context, flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, map[string]string, error) {
+	// Check context before starting
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	if err := flagConfig.validate(); err != nil {
+		return nil, nil, err
+	}
+	if c.featureFlagsPoller == nil && flagConfig.OnlyEvaluateLocally {
+		c.warnPersonalAPIKeyMissing("GetAllFlagsAndPayloads")
+		return nil, nil, ErrNoSecretKey
+	}
+
+	var flagsValue map[string]interface{}
+	var payloads map[string]string
+	var err error
+
+	if c.featureFlagsPoller != nil {
+		// get feature flags from the local definition poller
+		flagsValue, payloads, err = c.featureFlagsPoller.GetAllFlagsAndPayloads(flagConfig)
+	} else {
+		// if there's no poller, get the feature flags from the flags endpoint
+		c.debugf("getting all feature flags and payloads from flags endpoint")
+		flagsValue, payloads, err = c.getAllFeatureFlagsAndPayloadsFromRemote(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups,
+			flagConfig.PersonProperties, flagConfig.GroupProperties)
+	}
+
+	// Check context after operation
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+
+	return flagsValue, payloads, err
+}
+
 // EvaluateFlagsPayload is the input to Client.EvaluateFlags.
 type EvaluateFlagsPayload struct {
 	// DistinctId is the user distinct ID to evaluate flags for. It is required
@@ -2124,4 +2176,21 @@ func (c *client) getAllFeatureFlagsFromRemote(distinctId string, deviceId *strin
 	values := make(map[string]interface{}, len(flagsResponse.FeatureFlags))
 	copyEvaluatedFlagValues(values, flagsResponse)
 	return values, nil
+}
+
+func (c *client) getAllFeatureFlagsAndPayloadsFromRemote(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (map[string]interface{}, map[string]string, error) {
+	flagsResponse, err := c.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, c.GetDisableGeoIP(), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if c.isFeatureFlagsQuotaLimited(flagsResponse) || flagsResponse.FeatureFlags == nil {
+		return map[string]interface{}{}, map[string]string{}, nil
+	}
+
+	values := make(map[string]interface{}, len(flagsResponse.FeatureFlags))
+	payloads := make(map[string]string, len(flagsResponse.FeatureFlagPayloads))
+	copyEvaluatedFlagValues(values, flagsResponse)
+	copyEvaluatedFlagPayloads(payloads, flagsResponse)
+	return values, payloads, nil
 }

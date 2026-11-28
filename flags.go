@@ -111,6 +111,27 @@ func copyEvaluatedFlagValues(dst map[string]interface{}, resp *FlagsResponse) {
 	}
 }
 
+// copyEvaluatedFlagPayloads fills dst with the serialized payload of every flag
+// the API evaluated successfully, so a payload stays paired with the value
+// copyEvaluatedFlagValues wrote. A flag the API could not evaluate contributes
+// neither, and a successfully evaluated flag without a payload clears a stale
+// one rather than leaving the payload of a value that no longer applies.
+func copyEvaluatedFlagPayloads(dst map[string]string, resp *FlagsResponse) {
+	if resp == nil {
+		return
+	}
+	for key := range resp.FeatureFlags {
+		if remoteFlagFailed(resp, key) {
+			continue
+		}
+		if payload := rawMessageToString(resp.FeatureFlagPayloads[key]); payload != "" {
+			dst[key] = payload
+		} else {
+			delete(dst, key)
+		}
+	}
+}
+
 func errFlagEvaluationFailed(key string) error {
 	return fmt.Errorf("%w: '%s' failed to evaluate due to a transient error", ErrFlagNotFound, key)
 }

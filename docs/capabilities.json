@@ -9,6 +9,7 @@
   "Client.Flush": "flush",
   "Client.FlushWithContext": "flush",
   "Client.GetAllFlags": "get-feature-flags",
+  "Client.GetAllFlagsAndPayloads": "get-feature-flags-and-payloads",
   "Client.GetFeatureFlag": "get-feature-flag",
   "Client.GetFeatureFlagPayload": "get-feature-flag-payload",
   "Client.GetFeatureFlagResult": "get-feature-flag-result",
