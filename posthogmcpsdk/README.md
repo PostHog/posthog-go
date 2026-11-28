@@ -33,8 +33,9 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   with their error type, as `Tool <name> returned an error`.
   The text of an `IsError` result, including the ones go-sdk builds from a typed handler's error or a failed validation, is also part of `$mcp_response`, so
   turn responses off as well.
-- The session as `$session_id`, always set. A conversation handle, described
-  below, comes first. Next, a transport session ID (streamable HTTP) becomes
+- The session as `$session_id`, always set, and what chose it as
+  `$mcp_session_source`. A client conversation id, described below, comes
+  first, then a conversation handle. Next, a transport session ID (streamable HTTP) becomes
   `ses_` plus a hash every PostHog MCP SDK computes the same way, so one
   session served from several languages groups together. On a one-client
   connection (stdio, in-memory), the adapter generates `ses_<UUIDv7>` per
@@ -49,7 +50,8 @@ posthogmcpsdk.Instrument(server, posthogmcp.New(client), posthogmcpsdk.WithServe
   (`io.modelcontextprotocol/aiInvocation` or `x-codex-turn-metadata`) when it
   names one, else from the `llm_model` argument described below.
 
-Use `WithIdentity` to attach a distinct ID, groups, and person properties,
+Use `WithIdentity` to attach a distinct ID, groups, and person properties
+(the resolver runs before every tool handler, so keep it fast),
 `WithProperties` to add event properties, and `WithEventOptions` to set capture
 options, such as turning off person processing:
 
@@ -198,6 +200,29 @@ Like `context`, the argument is removed before the handler and validation
 and left off `$mcp_parameters`, tools that declare their own `conversation_id`
 keep it, and schemas built from `$ref`, `allOf`, `anyOf`, or `oneOf` are not
 changed. Turn it off with `WithConversationID(false)`.
+
+## Client conversation ids
+
+Some clients name the conversation themselves in each `tools/call`'s `_meta`:
+ChatGPT as `openai/session`, Codex as `sessionId`, and VS Code as
+`vscode.conversationId`. The adapter reads each key only from the client that
+defines it, recognized by its `User-Agent` or client name, and derives
+`$session_id` from it with `$mcp_session_source` `client_metadata`, whether or
+not anchoring is on. It outranks a handle and a transport session, and such a
+call has no `$mcp_conversation_id`. The id itself is never sent. ChatGPT sends
+its id on every call, so its `tools/list` has no `conversation_id` argument
+or `_mcp_instructions` output property, and its calls are minted no handle. Over legacy stateless HTTP, go-sdk keeps no
+client name, so Codex and VS Code are recognized there by `User-Agent` only.
+
+## Custom events
+
+The handler's context carries the call's session and identity as a
+`posthog.RequestContext`. Capture with `posthog.EnqueueWithContext(ctx, client,
+message)` inside a tool, or in work it starts with that context, and the event
+gets the call's `$session_id`, `$mcp_session_source`, and the identity
+`WithIdentity` resolved, even while other clients' calls run. A call minted a
+new handle carries the handle's session, which its own event uses only if the
+result delivers the handle.
 
 ## Reporting a missing capability
 

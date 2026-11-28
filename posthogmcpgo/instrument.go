@@ -220,7 +220,7 @@ func (in *instrumentation) startCall(ctx context.Context, tool mcp.Tool) callSta
 	return callStart{
 		at:              now,
 		protocolVersion: in.protocols.of(session),
-		sessionID:       in.sessions.resolve(session, now),
+		session:         in.sessions.resolve(session, now),
 		tool:            info,
 	}
 }
@@ -295,7 +295,8 @@ func (in *instrumentation) captureToolCall(
 		ToolName:        req.Params.Name,
 		ToolDescription: info.description,
 		ToolCategory:    info.category,
-		SessionID:       started.sessionID,
+		SessionID:       started.session.id,
+		SessionSource:   started.session.source,
 		ServerName:      in.serverName,
 		ServerVersion:   in.serverVersion,
 		ProtocolVersion: cmp.Or(req.Header.Get("Mcp-Protocol-Version"), started.protocolVersion),

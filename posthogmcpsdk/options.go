@@ -82,7 +82,12 @@ func defaultConfig(analytics *posthogmcp.Analytics) *config {
 	}
 }
 
-// WithIdentity configures application-specific identity resolution.
+// WithIdentity configures application-specific identity resolution. The
+// resolver runs once per tools/call, before the handler, whose context then
+// carries the distinct ID, groups, and person properties for custom events.
+// The call's own events redact credential-named keys from the groups and
+// person properties, and custom events carry them as given, so keep
+// credentials out of both. The handler waits for the resolver, so keep it fast.
 func WithIdentity(resolver IdentityResolver) Option {
 	return func(cfg *config) { cfg.identity = resolver }
 }
@@ -139,7 +144,9 @@ func WithCaptureModel(enabled bool) Option {
 // session nor a valid handle gets a new UUIDv7 handle, appended to its result
 // as a {"conversation_id": ...} text block, and the agent echoes it on later
 // calls. A valid handle sets $mcp_conversation_id and the $session_id derived
-// from it, also over a transport session. The handle is mirrored into
+// from it, also over a transport session. A client conversation id, such as
+// ChatGPT's openai/session, outranks the handle, and ChatGPT, which sends one on
+// every call, is advertised no conversation_id and minted no handle. The handle is mirrored into
 // structuredContent under _mcp_instructions for tools whose output schema can
 // declare it. The argument is removed before the tool's handler and input
 // validation see the call, and tools that declare their own conversation_id

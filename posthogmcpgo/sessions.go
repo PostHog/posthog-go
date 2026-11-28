@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 const (
@@ -37,15 +38,15 @@ func newSessionResolver() *sessionResolver {
 	return &sessionResolver{generated: map[server.ClientSession]generatedSession{}}
 }
 
-func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) string {
+func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) callSession {
 	if session == nil {
-		return newGeneratedSessionID()
+		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}
 	}
 	if !oneClient(session) {
 		if id := session.SessionID(); id != "" {
-			return deterministicSessionID(id)
+			return callSession{id: deterministicSessionID(id), source: posthogmcp.SessionSourceTransport}
 		}
-		return newGeneratedSessionID()
+		return callSession{id: newGeneratedSessionID(), source: posthogmcp.SessionSourceGenerated}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -59,7 +60,7 @@ func (r *sessionResolver) resolve(session server.ClientSession, now time.Time) s
 	}
 	entry.lastActivity = now
 	r.generated[session] = entry
-	return entry.id
+	return callSession{id: entry.id, source: posthogmcp.SessionSourceGenerated}
 }
 
 // stdioSessionType is mcp-go's unexported stdio session, which reports the

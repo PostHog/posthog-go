@@ -192,6 +192,7 @@ func TestInstrumentCapturesToolCallEndToEnd(t *testing.T) {
 		"$mcp_protocol_version": "2025-11-25",
 		"$mcp_resource_name": "weather",
 		"$mcp_response": {"content": [{"type": "text", "text": "Sunny, 22C"}]},
+		"$mcp_session_source": "generated",
 		"$mcp_server_name": "weather-server",
 		"$mcp_server_version": "1.2.3",
 		"$mcp_source": "posthog_mcp_analytics",

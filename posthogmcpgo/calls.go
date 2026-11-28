@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/posthog/posthog-go/v2/posthogmcp"
 )
 
 // maxCallsInFlight bounds the calls remembered at once. mcp-go reports every
@@ -27,8 +28,13 @@ type callsInFlight struct {
 type callStart struct {
 	at              time.Time
 	protocolVersion string
-	sessionID       string
+	session         callSession
 	tool            toolInfo
+}
+
+type callSession struct {
+	id     string
+	source posthogmcp.SessionSource
 }
 
 type trackedCall struct {

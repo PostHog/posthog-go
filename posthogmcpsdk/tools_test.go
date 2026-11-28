@@ -40,7 +40,7 @@ func TestCatalogListingDuringWalkDoesNotStartAnother(t *testing.T) {
 	var lookups sync.WaitGroup
 	lookups.Go(func() { _, _ = catalog.lookup(t.Context(), next, callRequest("first")) })
 	<-walkStarted
-	catalog.advertise(catalog.generation(), listing("known").Tools)
+	catalog.advertise(catalog.generation(), listing("known").Tools, false)
 	lookups.Go(func() { _, _ = catalog.lookup(t.Context(), next, callRequest("second")) })
 	close(release)
 	lookups.Wait()
@@ -182,7 +182,7 @@ func TestCatalogRelearnsKnownToolsAfterTenSeconds(t *testing.T) {
 			catalog := newToolCatalog([]analyticsArgument{contextParameter}, time.Now)
 			now := time.Unix(1_700_000_000, 0)
 			catalog.now = func() time.Time { return now }
-			catalog.advertise(catalog.generation(), listing("plan").Tools)
+			catalog.advertise(catalog.generation(), listing("plan").Tools, false)
 
 			var lists atomic.Int32
 			next := func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
@@ -213,7 +213,7 @@ func TestCatalogListingKeepsRememberedMisses(t *testing.T) {
 
 	for range 3 {
 		_, _ = catalog.lookup(t.Context(), next, callRequest("removed"))
-		catalog.advertise(catalog.generation(), listing("known").Tools)
+		catalog.advertise(catalog.generation(), listing("known").Tools, false)
 	}
 
 	assert.Equal(t, int32(1), lists.Load())
